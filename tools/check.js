@@ -1,0 +1,401 @@
+#!/usr/bin/env node
+// =============================================================================
+// check.js - validate isa/fructus.toml against the invariants in its header
+// =============================================================================
+//
+//   npm run check
+//
+// Checks the six encoding invariants the spec documents, plus the internal
+// consistency of the operand types, aliases and coalesce rules, then prints the
+// opcode map.  Exits non-zero on any failure.
+//
+// This is the tool that keeps an evolving opcode map honest: invariants 5 and 6
+// are the ones that catch a new instruction quietly colliding with an old one.
+// =============================================================================
+
+import { parse } from 'smol-toml';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const specPath = process.argv[2] ?? join(root, 'isa/fructus.toml');
+
+const spec = parse(readFileSync(specPath, 'utf8'));
+const errors = [];
+const err = (m) => errors.push(m);
+
+// --- operand types -----------------------------------------------------------
+const types = spec.optype;
+for (const [name, t] of Object.entries(types)) {
+  const dup = (xs, what) => {
+    if (new Set(xs).size !== xs.length)
+      err(`optype ${name}: duplicate ${what}, reverse lookup is ambiguous`);
+  };
+  if (t.kind === 'table') {
+    // Invariant 4a: a table is a complete, distinct value set.
+    if (t.values.length !== 2 ** t.bits)
+      err(`optype ${name}: ${t.values.length} values for ${t.bits} bits`);
+    dup(t.values, 'values');
+  } else if (t.kind === 'reg' || t.kind === 'enum') {
+    if (t.names.length !== 2 ** t.bits)
+      err(`optype ${name}: ${t.names.length} names for ${t.bits} bits`);
+    dup(t.names, 'names');
+    for (const [spelling, target] of Object.entries(t.aliases ?? {})) {
+      if (!t.names.includes(target)) err(`optype ${name}: alias ${spelling} -> unknown ${target}`);
+      if (t.names.includes(spelling)) err(`optype ${name}: alias ${spelling} shadows a real name`);
+    }
+    for (const [spelling, target] of Object.entries(t.swapped ?? {})) {
+      if (!t.names.includes(target)) err(`optype ${name}: swapped ${spelling} -> unknown ${target}`);
+      if (t.names.includes(spelling)) err(`optype ${name}: swapped ${spelling} shadows a real name`);
+    }
+  } else if (t.kind === 'combo') {
+    // A combo may be shorter than 2^bits while the table is being designed.
+    if (t.values.length > 2 ** t.bits)
+      err(`optype ${name}: ${t.values.length} entries exceeds ${2 ** t.bits}`);
+    for (const v of t.values)
+      if (v.length !== t.parts.length)
+        err(`optype ${name}: entry [${v}] has ${v.length} values for ${t.parts.length} parts`);
+    dup(t.values.map((v) => v.join(' ')), 'entries');
+  }
+}
+
+// =============================================================================
+// Combo tables: every entry must mean something no other entry means
+// =============================================================================
+// A combo entry is a PREDICATE on a register, and two entries that denote the
+// same predicate waste a slot even when their spellings differ - because for
+// integers `x <= k` is `x < k+1` and `x > k` is `x >= k+1`.  The distinctness
+// check above compares (condition, constant) pairs and cannot see that, so the
+// test here is semantic: evaluate each entry over every register value it could
+// see and compare the truth sets.
+//
+// THE COMPARISON WIDTH MATTERS.  br8 compares low bytes, br16 whole words, and
+// both index the SAME table - so two entries only waste a slot if they agree at
+// BOTH widths.  Differing at either width means both are earning their place.
+const WIDTHS = [8, 16];
+
+// The truth set of one predicate, as a packed bitmap over all 2^w register
+// values.  Returns null for a condition this evaluator does not model.
+function truthSet(cond, k, w) {
+  const mask = (1 << w) - 1, half = 1 << (w - 1);
+  const sgn = (v) => ((v & mask) >= half ? (v & mask) - (1 << w) : (v & mask));
+  const kw = k & mask, ks = sgn(kw);
+  const bits = Buffer.alloc((mask + 1) / 8);
+  for (let x = 0; x <= mask; x++) {
+    const xs = sgn(x), d = xs - ks;
+    let r;
+    switch (cond) {
+      case 'eq': r = x === kw;            break;
+      case 'ne': r = x !== kw;            break;
+      case 'lt': r = xs <  ks;            break;   // signed
+      case 'le': r = xs <= ks;            break;
+      case 'gt': r = xs >  ks;            break;
+      case 'ge': r = xs >= ks;            break;
+      case 'lo': r = x  <  kw;            break;   // unsigned
+      case 'ls': r = x  <= kw;            break;
+      case 'hi': r = x  >  kw;            break;
+      case 'hs': r = x  >= kw;            break;
+      case 'vs': r = d < -half || d >= half; break; // signed overflow of x - k
+      case 'vc': r = !(d < -half || d >= half); break;
+      default:   return null;
+    }
+    if (r) bits[x >> 3] |= 1 << (x & 7);
+  }
+  return bits;
+}
+
+for (const [name, t] of Object.entries(types)) {
+  if (t.kind !== 'combo') continue;
+
+  // Each part may declare the optype it draws its values from.  That is what
+  // makes the LUT's output width computable, and it is worth stating: a table
+  // whose entries wander outside those domains needs wider control signals than
+  // the parts suggest.
+  if (t.domain) {
+    let outBits = 0;
+    const shape = [];
+    for (const part of t.parts) {
+      const dn = t.domain[part];
+      if (!dn) { err(`optype ${name}: part '${part}' has no domain`); continue; }
+      const d = types[dn];
+      if (!d) { err(`optype ${name}: part '${part}' names unknown domain '${dn}'`); continue; }
+      const i = t.parts.indexOf(part);
+
+      // An enum reached through `swapped` needs one extra bit of output: the
+      // operand order the swap stands for.
+      const swap = d.kind === 'enum' && d.swapped ? 1 : 0;
+      outBits += d.bits + swap;
+      shape.push(`${dn} ${d.bits}${swap ? ' + order 1' : ''}`);
+
+      for (const entry of t.values) {
+        const v = entry[i];
+        let ok;
+        if (d.kind === 'enum' || d.kind === 'reg')
+          ok = d.names.includes(v) || v in (d.aliases ?? {}) || v in (d.swapped ?? {});
+        else if (d.kind === 'table') ok = d.values.includes(v);
+        else if (d.kind === 'int')   ok = Number.isInteger(v);
+        else ok = true;
+        if (!ok) err(`optype ${name}: '${v}' is not in ${dn}, so part '${part}' escapes its domain`);
+      }
+    }
+    console.log(`${name}: ${t.values.length} entries selecting ${outBits} bits of output ` +
+                `(${shape.join(', ')})`);
+  }
+
+  // The semantic check.  Only meaningful for the (condition, constant) shape.
+  const ci = t.values[0]?.findIndex((v) => typeof v === 'string');
+  const ki = t.values[0]?.findIndex((v) => typeof v === 'number');
+  if (ci === undefined || ci < 0 || ki < 0) continue;
+
+  const seen = new Map();
+  let unmodelled = 0;
+  for (const entry of t.values) {
+    const cond = entry[ci], k = entry[ki];
+    const sets = WIDTHS.map((w) => truthSet(cond, k, w));
+    if (sets.some((s) => s === null)) { unmodelled++; continue; }
+    const key = sets.map((s) => s.toString('base64')).join('|');
+    const prior = seen.get(key);
+    if (prior)
+      err(`optype ${name}: '${cond} #${k}' means exactly what '${prior}' means, ` +
+          `at both ${WIDTHS.join(' and ')} bits - one of the two is a wasted slot`);
+    else seen.set(key, `${cond} #${k}`);
+  }
+  if (unmodelled)
+    err(`optype ${name}: ${unmodelled} entries use a condition check.js cannot evaluate`);
+
+  // Rewrites: spellings the assembler accepts and canonicalises onto an entry
+  // that IS in the table.  Each must be a genuine identity - checked the same
+  // way the duplicates are, by comparing truth sets - with a source that is not
+  // encodable and a target that is.  Getting this wrong would silently assemble
+  // the wrong branch.
+  const inTable = (c, k) => t.values.some(([a, b]) => a === c && b === k);
+  for (const rw of t.rewrite ?? []) {
+    const [fc, fk] = rw.from, [tc, tk] = rw.to;
+    if (inTable(fc, fk))
+      err(`optype ${name}: rewrite source '${fc} #${fk}' is already in the table, so it rewrites nothing`);
+    if (!inTable(tc, tk))
+      err(`optype ${name}: rewrite target '${tc} #${tk}' is not in the table`);
+    const identical = WIDTHS.every((w) => {
+      const a = truthSet(fc, fk, w), b = truthSet(tc, tk, w);
+      return a && b && a.equals(b);
+    });
+    if (!identical)
+      err(`optype ${name}: rewrite '${fc} #${fk}' -> '${tc} #${tk}' is NOT an identity`);
+  }
+}
+
+const FIELD_RE = /^([A-Za-z_]\w*):([A-Za-z_]\w*)(?:\[(\d+)(?::(\d+))?\])?$/;
+const forms = [];
+
+for (const insn of spec.insn) {
+  const ops = insn.operands ?? [];
+  const opByName = Object.fromEntries(ops.map((o) => [o.name, o]));
+
+  for (const form of insn.form) {
+    const tag = `${insn.mnemonic}/${form.name ?? form.encoding}`;
+    const chars = form.encoding.replace(/[\s_]/g, '').split('');
+    const n = chars.length;
+
+    // Invariant 1: whole bytes.
+    if (n % 8) { err(`${tag}: ${n} bits is not a whole number of bytes`); continue; }
+
+    // Fixed bits -> mask/match.  Letters -> positions within the instruction.
+    let mask = 0n, match = 0n;
+    const letters = new Map();
+    chars.forEach((c, i) => {
+      const w = 1n << BigInt(n - 1 - i);
+      if (c === '0') mask |= w;
+      else if (c === '1') { mask |= w; match |= w; }
+      else if (/[a-z]/.test(c)) {
+        if (!letters.has(c)) letters.set(c, []);
+        letters.get(c).push(i);
+      } else err(`${tag}: bad character '${c}' in encoding`);
+    });
+
+    // Resolve each letter to (operand, encoded type, which bits of it).
+    const covered = new Map(); // operand name -> Set of covered bit indices
+    const encType = new Map(); // operand name -> encoded type name
+    for (const [letter, positions] of letters) {
+      const explicit = form.fields?.[letter];
+      let opName, typeName, bitIdx;
+
+      if (explicit) {
+        const m = FIELD_RE.exec(explicit);
+        if (!m) { err(`${tag}: cannot parse field spec '${explicit}'`); continue; }
+        opName = m[1]; typeName = m[2];
+        if (m[3] !== undefined) {
+          const hi = +m[3], lo = m[4] !== undefined ? +m[4] : +m[3];
+          bitIdx = [];
+          if (hi >= lo) for (let b = hi; b >= lo; b--) bitIdx.push(b);
+          else for (let b = hi; b <= lo; b++) bitIdx.push(b);
+        }
+      } else {
+        const cands = ops.filter((o) => o.name.startsWith(letter));
+        if (cands.length !== 1) {
+          err(`${tag}: letter '${letter}' matches ${cands.length} operands; needs an explicit fields entry`);
+          continue;
+        }
+        opName = cands[0].name;
+        typeName = cands[0].type;
+      }
+
+      const op = opByName[opName];
+      if (!op) { err(`${tag}: letter '${letter}' names unknown operand '${opName}'`); continue; }
+      const t = types[typeName];
+      if (!t) { err(`${tag}: unknown type '${typeName}'`); continue; }
+
+      // Default bit selection: this letter carries the whole field, MSB first.
+      if (!bitIdx) bitIdx = Array.from({ length: positions.length }, (_, k) => positions.length - 1 - k);
+      if (bitIdx.length !== positions.length)
+        err(`${tag}: letter '${letter}' occupies ${positions.length} bits but selects ${bitIdx.length}`);
+
+      const prev = encType.get(opName);
+      if (prev && prev !== typeName)
+        err(`${tag}: operand '${opName}' encoded as both ${prev} and ${typeName}`);
+      encType.set(opName, typeName);
+
+      if (!covered.has(opName)) covered.set(opName, new Set());
+      const set = covered.get(opName);
+      for (const b of bitIdx) {
+        if (set.has(b)) err(`${tag}: operand '${opName}' bit ${b} assigned twice`);
+        set.add(b);
+      }
+    }
+
+    // Invariant 2: the encoded bits exactly cover the encoded type.
+    for (const [opName, set] of covered) {
+      const t = types[encType.get(opName)];
+      if (!t) continue;
+      for (let b = 0; b < t.bits; b++)
+        if (!set.has(b)) err(`${tag}: operand '${opName}' bit ${b} is never encoded`);
+      for (const b of set)
+        if (b >= t.bits) err(`${tag}: operand '${opName}' bit ${b} is outside ${encType.get(opName)}`);
+    }
+
+    // Invariant 3: every operand is determined - by a field, by fix, or by a
+    // tie to something itself determined.
+    const fix = form.fix ?? {}, tie = form.tie ?? {};
+    for (const op of ops) {
+      const determined = covered.has(op.name) || op.name in fix ||
+        (op.name in tie && (covered.has(tie[op.name]) || tie[op.name] in fix));
+      if (!determined) err(`${tag}: operand '${op.name}' is not determined by this form`);
+    }
+
+    // Invariant 4: fix and tie name real operands.
+    for (const opName of Object.keys(fix))
+      if (!opByName[opName]) err(`${tag}: fix names unknown operand '${opName}'`);
+    for (const [a, b] of Object.entries(tie))
+      if (!opByName[a] || !opByName[b]) err(`${tag}: tie ${a}=${b} names an unknown operand`);
+
+    forms.push({ tag, insn, form, n, nbytes: n / 8, mask, match,
+                 mask0: Number((mask >> BigInt(n - 8)) & 0xffn),
+                 match0: Number((match >> BigInt(n - 8)) & 0xffn) });
+  }
+}
+
+// --- invariant 5: length is determined by byte 0 -----------------------------
+const table = Array.from({ length: 256 }, () => []);
+for (const f of forms)
+  for (let b = 0; b < 256; b++)
+    if ((b & f.mask0) === f.match0) table[b].push(f);
+
+for (let b = 0; b < 256; b++) {
+  const lens = new Set(table[b].map((f) => f.nbytes));
+  if (lens.size > 1)
+    err(`byte 0x${b.toString(16).padStart(2, '0')}: ambiguous length ${[...lens]} ` +
+        `(${table[b].map((f) => f.tag).join(', ')})`);
+}
+
+// --- invariant 6: no two forms overlap ---------------------------------------
+for (let i = 0; i < forms.length; i++)
+  for (let j = i + 1; j < forms.length; j++) {
+    const A = forms[i], B = forms[j];
+    if (A.n !== B.n) continue;
+    if (((A.match ^ B.match) & (A.mask & B.mask)) === 0n)
+      err(`forms overlap: ${A.tag} and ${B.tag}`);
+  }
+
+// --- aliases: no encodings, but the rewrite must land on something real ------
+const byMnemonic = {};
+for (const i of spec.insn) (byMnemonic[i.mnemonic] ??= []).push(i);
+
+for (const al of spec.alias ?? []) {
+  const tag = `alias ${al.mnemonic}`;
+  const targets = byMnemonic[al.expand.mnemonic];
+  if (!targets) { err(`${tag}: expands to unknown mnemonic '${al.expand.mnemonic}'`); continue; }
+  const args = al.expand.args;
+  const mine = new Set(al.operands.map((o) => o.name));
+  // An argument is a reference when it names one of the alias's own operands,
+  // and a literal otherwise - a number, or an enum/reg spelling.
+  const isRef = (v) => typeof v === 'string' && mine.has(v.replace(/^-/, ''));
+  // Exactly one target entry must have precisely the operands the rewrite fills.
+  const keys = new Set(Object.keys(args));
+  const fits = targets.filter((t) => {
+    const names = new Set(t.operands.map((o) => o.name));
+    return names.size === keys.size && [...keys].every((k) => names.has(k));
+  });
+  if (fits.length !== 1)
+    err(`${tag}: rewrite matches ${fits.length} '${al.expand.mnemonic}' entries, need exactly 1`);
+
+  // A preferred alias is run BACKWARDS by the disassembler, so the rewrite has
+  // to be invertible: each of its own operands used exactly once, no repeats.
+  if (al.prefer) {
+    const refs = Object.values(args).filter(isRef).map((v) => v.replace(/^-/, ''));
+    if (new Set(refs).size !== refs.length)
+      err(`${tag}: prefer requires distinct operand references, got ${refs.join(', ')}`);
+    for (const o of al.operands)
+      if (!refs.includes(o.name))
+        err(`${tag}: prefer requires every operand used; '${o.name}' is not`);
+  }
+}
+
+// --- coalesce rules: mnemonics resolve, args fill the merged operands --------
+for (const c of spec.coalesce ?? []) {
+  const tag = `coalesce ${c.from.join(' + ')}`;
+  const sources = c.from.map((slot) => slot.split('|'));
+  for (const alts of sources)
+    for (const m of alts)
+      if (!byMnemonic[m]) err(`${tag}: unknown source mnemonic '${m}'`);
+  const targets = byMnemonic[c.to];
+  if (!targets) { err(`${tag}: unknown target mnemonic '${c.to}'`); continue; }
+  if (targets.length !== 1) { err(`${tag}: target '${c.to}' is ambiguous`); continue; }
+
+  const want = new Set(targets[0].operands.map((o) => o.name));
+  const got = new Set(Object.keys(c.args));
+  for (const o of want) if (!got.has(o)) err(`${tag}: target operand '${o}' unfilled`);
+  for (const o of got) if (!want.has(o)) err(`${tag}: '${o}' is not an operand of ${c.to}`);
+
+  for (const ref of Object.values(c.args)) {
+    const m = /^([01])\.(\w+)$/.exec(String(ref));
+    if (!m) { err(`${tag}: cannot parse argument '${ref}'`); continue; }
+    const [, slot, name] = m;
+    for (const src of sources[+slot]) {
+      const insn = byMnemonic[src]?.[0];
+      if (!insn) continue;
+      const has = insn.operands.some((o) => o.name === name) || name in (insn.traits ?? {});
+      if (!has) err(`${tag}: '${src}' has no operand or trait '${name}'`);
+    }
+  }
+}
+
+// --- report ------------------------------------------------------------------
+console.log('opcode  len  instruction');
+console.log('------  ---  -----------');
+const rows = [...forms].sort((a, b) => a.match0 - b.match0);
+for (const f of rows) {
+  const lo = [...Array(256).keys()].filter((b) => (b & f.mask0) === f.match0);
+  const range = lo.length === 1
+    ? `0x${lo[0].toString(16).padStart(2, '0')}     `
+    : `0x${lo[0].toString(16).padStart(2, '0')}-${lo[lo.length - 1].toString(16).padStart(2, '0')}`;
+  console.log(`${range}  ${f.nbytes}    ${f.tag.padEnd(18)} ${f.form.encoding}`);
+}
+const used = table.filter((l) => l.length).length;
+console.log(`\n${forms.length} forms, ${used}/256 first-byte opcodes used, ${256 - used} free`);
+
+if (errors.length) {
+  console.log('\nFAIL:');
+  for (const e of errors) console.log('  ' + e);
+  process.exit(1);
+}
+console.log('\nAll invariants hold.');

@@ -1,0 +1,15 @@
+{
+  "name": "fructus",
+  "version": "0.1.0",
+  "description": "Fructus - a 16-bit retrocomputer: instruction set spec and toolchain",
+  "type": "module",
+  "license": "ISC",
+  "scripts": {
+    "check": "node tools/check.js",
+    "gen": "mkdir -p build && node tools/gen-customasm.js > build/fructus.asm && node tools/gen-customasm.js --noat > build/fructus-noat.asm",
+    "test": "sh tests/run.sh"
+  },
+  "dependencies": {
+    "smol-toml": "^1.8.0"
+  }
+}

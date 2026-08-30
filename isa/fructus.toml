@@ -1,0 +1,2000 @@
+# =============================================================================
+# Fructus - a 16-bit retrocomputer instruction set.
+#
+# This file is the single source of truth for the encoding.  The assembler,
+# the disassembler and the simulator are all generated from / driven by it, so
+# they cannot drift apart.
+#
+# ---------------------------------------------------------------------------
+# HOW TO READ AN ENCODING
+# ---------------------------------------------------------------------------
+# An `encoding` is a bit map written most-significant-bit first, byte 0 first.
+#   `0` / `1`  a fixed opcode bit
+#   a letter   one bit of an operand field
+#   `_` / ` `  ignored, purely for readability
+#
+# By default a letter binds to the operand whose name starts with that letter,
+# and its bits are gathered most-significant first in the order they appear.
+# With operands `d`, `a` and `off`, the letters are `d`, `a` and `o`.
+#
+# A form's `fields` map overrides that default:
+#
+#   fields = { o = "off:imm5" }        letter `o` carries operand `off`,
+#                                      encoded as type imm5
+#
+#   fields = { i = "off:imm3[0]",      operand `off` is SPLIT: letter `i`
+#              j = "off:imm3[2:1]" }   carries its bit 0, letter `j` carries
+#                                      bits 2 then 1
+#
+# The `[..]` selector is needed whenever a field's bits are not in descending
+# significance across the instruction as a whole - which is exactly what
+# happens when a field bleeds into the low bits of the opcode byte.
+#
+# ---------------------------------------------------------------------------
+# LOGICAL TYPE vs ENCODED TYPE
+# ---------------------------------------------------------------------------
+# An operand's `type` is its LOGICAL domain - what a programmer is allowed to
+# write.  A form may encode it far more narrowly.  `ld8`'s displacement is
+# logically a signed 16-bit `disp`; one form squeezes it into a signed 5-bit
+# field and another into a 3-bit table index.  The assembler's job is to pick a
+# form whose encoding can actually represent the value that was written.
+#
+# ---------------------------------------------------------------------------
+# HOW ONE INSTRUCTION HAS SEVERAL ENCODINGS
+# ---------------------------------------------------------------------------
+# An instruction declares its operands and its assembly syntax ONCE.  It then
+# declares one or more `[[insn.form]]` encodings.  A form may pin operands that
+# do not appear in its bit map:
+#
+#   fix = { d = 0 }        operand `d` is implicitly 0 in this form
+#   tie = { d = "a" }      operand `d` shares the bits of operand `a`
+#
+# Every operand must be determined by every form - as a field in the bit map,
+# by `fix`, or by `tie` to something itself determined.  A validator should
+# reject a form where that is not true.
+#
+# Two `[[insn]]` blocks may share a mnemonic when the operands differ in KIND
+# rather than merely in encoding.  `add rd, ra, rb` and `add rd, ra, #imm` put
+# a register and an immediate in the same slot, which no single operand list
+# can describe, so they are separate entries with separate syntax.  The
+# assembler tries each in turn, and the `#` in the source is what tells them
+# apart.
+#
+# The assembler picks the *first form whose constraints the operands satisfy*,
+# with forms tried shortest-first, so `ld8 r0, [r0, #0]` automatically becomes
+# the one-byte encoding while `ld8 r3, [r3, #-2]` becomes the two-byte one.
+# The disassembler prints both through the same syntax template, so text ->
+# bytes -> text round-trips.
+#
+# ---------------------------------------------------------------------------
+# OPERAND TYPE KINDS
+# ---------------------------------------------------------------------------
+#   int     a number, `bits` wide, `signed` or not.  `wrap` additionally
+#           accepts the unsigned spelling of the same pattern.
+#   reg     the register file: `names`, plus `aliases` for extra spellings.
+#   table   the field holds an INDEX into `values`; "fits" means "is in the
+#           table".  Exactly 2^bits entries, all distinct.
+#   enum    the field holds an index into `names`.  `aliases` gives extra
+#           spellings; `swapped` gives spellings reached by EXCHANGING two
+#           operands of the instruction, which is how eight encoded branch
+#           conditions accept twelve written ones.  An instruction that allows
+#           this declares the exchangeable pair with `swap_operands`.
+#   combo   one field carrying SEVERAL values at once.  `parts` names them and
+#           each entry of `values` supplies one per part.  A syntax template
+#           reaches them as `{k.cond}`, `{k.imm}` for an operand named `k`, so
+#           a single field parses and prints as two operands.  `values` may be
+#           shorter than 2^bits while a table is still being designed.
+#
+# `fix` takes a name for reg, enum and combo operands, and a number otherwise.
+#
+# ---------------------------------------------------------------------------
+# ALIASES
+# ---------------------------------------------------------------------------
+# An `[[alias]]` is assembler-only sugar: a mnemonic the assembler accepts and
+# rewrites into a real instruction before encoding.  It has no encoding of its
+# own, consumes no opcode, and is invisible to the invariants below.
+#
+# The rewrite names a target mnemonic and maps its arguments by name.  A STRING
+# names one of the alias's own operands, optionally negated; an INTEGER is a
+# literal constant:
+#
+#   expand = { mnemonic = "rsb", args = { d = "d", a = "b", b = "a" } }
+#   expand = { mnemonic = "add", args = { d = "d", a = "a", imm = "-imm" } }
+#   expand = { mnemonic = "or",  args = { d = "d", a = "s", imm = 0 } }
+#
+# A mnemonic may be shared between an `[[insn]]` and an `[[alias]]` in exactly
+# the way two `[[insn]]` entries may share one - `mov rd, #imm` is a real
+# instruction and `mov rd, rs` is an alias onto `or`.
+#
+# By default the disassembler does NOT print an alias; it prints the real
+# instruction that was encoded, so `sub r1, r2, r3` comes back as
+# `rsb r1, r3, r2`.  Round-trip tests must compare against the rewritten text.
+#
+# `prefer = true` reverses that for one alias.  Before printing, the
+# disassembler checks whether that alias's rewrite would produce exactly the
+# instruction and operand values in hand, and if so prints the alias instead -
+# so `or r0, r1, #0` comes out as `mov r0, r1`.
+#
+# A preferred alias must be INVERTIBLE: every rewrite argument is either a
+# literal or a distinct operand of the alias, and every operand of the alias is
+# used exactly once.  Otherwise the rewrite cannot be run backwards.  Where
+# several preferred aliases match, the first in file order wins.
+#
+# `prefer` does not endanger round-tripping - `mov r0, r1` re-assembles to the
+# bytes it was printed from - but it does mean the mnemonic in a listing may
+# not be the one in the opcode map.
+#
+# ---------------------------------------------------------------------------
+# INVARIANTS A VALIDATOR SHOULD ENFORCE
+# ---------------------------------------------------------------------------
+#  1. Every encoding is a whole number of bytes.
+#  2. The bits a form devotes to an operand - summed over every letter that
+#     carries it - exactly cover that operand's encoded type, each bit once.
+#     A split field must name every bit and no bit twice.
+#  3. Every operand of an instruction is determined by every one of its forms.
+#  4. Every `fix` value is representable in the operand's encoded type.
+#  4a. A `table` type's `values` are distinct, so that the assembler's reverse
+#     lookup from written value to field index is unambiguous.
+#  5. LENGTH IS DETERMINED BY BYTE 0: all forms that can match a given first
+#     byte have the same total length.
+#  6. NO TWO FORMS OVERLAP: for any two forms A and B,
+#     (A.match ^ B.match) & (A.mask & B.mask) != 0.
+#     This is the check that keeps an evolving opcode map honest - run it on
+#     every build.
+# =============================================================================
+
+
+[cpu]
+name       = "fructus"
+word_bits  = 16          # register and ALU width
+addr_bits  = 16          # 64 KiB address space
+byte_bits  = 8
+endian     = "little"    # byte order of 16-bit values in *data* memory
+                         # (instruction bytes are always stored in the order
+                         # they are written in `encoding`, byte 0 lowest)
+
+# DESIGN RULE.  Instructions are byte-granular and variable length, and the
+# length of an instruction is determined entirely by its FIRST BYTE.  The fetch
+# unit therefore never has to look ahead or backtrack, and the whole decoder is
+# a 256-entry table indexed by byte 0.  This is a real commitment about the
+# shape of the opcode map, not just a lint - invariant 5 above enforces it, and
+# it will reject an otherwise reasonable encoding that violates it.
+length_from_first_byte = true
+
+
+# =============================================================================
+# Operand types
+# =============================================================================
+
+# The register file.  Eight 16-bit registers.
+[optype.reg]
+kind  = "reg"
+bits  = 3
+names = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7"]
+# Extra spellings the assembler accepts for the same register numbers.
+aliases = { sp = "r6", lr = "r7" }
+# Which spelling the disassembler emits: "names" or "aliases".
+# Flip to "aliases" if you would rather read `sp` and `lr` in listings.
+print = "names"
+
+# The logical domain of any written signed value - a memory displacement, an
+# ALU immediate.  No form encodes all of it; `int16` is what the programmer may
+# WRITE, and the forms below narrow it to imm5, imm3 or imm10.  Intent is
+# carried by the operand's NAME (`off`, `imm`), not by having several identical
+# logical types.
+[optype.int16]
+kind   = "int"
+bits   = 16
+signed = true
+# `wrap` accepts either spelling of a 16-bit pattern - -32768..32767 and
+# 0..65535 both - and takes the value modulo 2^16.  A register is 16 bits, so
+# #-1 and #0xffff are the same thing and rejecting either would only be
+# annoying.  This is what makes `and rd, ra, #0xff00` work: it wraps to -256,
+# which is inside imm10's range.
+wrap = true
+
+# Signed 5-bit displacement, -16..+15.  Used by the ld8/st8 address forms.
+[optype.imm5]
+kind   = "int"
+bits   = 5
+signed = true
+
+# Signed 10-bit displacement, -512..+511.  Wide enough that the assembler
+# essentially never has to refuse a displacement, at the cost of a third byte.
+[optype.imm10]
+kind   = "int"
+bits   = 10
+signed = true
+
+# One bit: does an 8-bit pop sign extend, or zero extend?
+[optype.sxflag]
+kind   = "int"
+bits   = 1
+signed = false
+
+# Signed 8-bit branch displacement, relative to the address of the NEXT
+# instruction.  Operands using it are marked `pcrel`, so the programmer writes
+# an absolute label and the assembler encodes the difference.
+[optype.off8]
+kind   = "int"
+bits   = 8
+signed = true
+
+# Single-bit masks and their complements.  Four bits choose a bit position and
+# the fifth inverts, so the 32 entries are 1<<n for n = 0..15 followed by the
+# sixteen ~(1<<n).  Five bits, 32 distinct 16-bit constants, no gaps.
+#
+# This started life as brset and brclear's 4-bit index.  A 16-bit word needs
+# only four bits to name a bit, brset and brclear used the fifth to say which
+# of the two they were - and that made the whole field a 1<<n generator that
+# only two instructions could reach.  Promoting it to an operand type spends
+# the fifth bit on inversion instead and hands the generator to the ALU:
+#
+#     and rd, rd, #~(1<<n)     clear a bit
+#     or  rd, rd, #1<<n        set a bit
+#     mov rd, #1<<n            any single-bit constant, in two bytes
+#
+# The hardware is a 4-to-16 decoder and sixteen XOR gates on the invert bit,
+# which is the cheapest 5-bit window onto the 16-bit constants that exists -
+# and it is already built, because brset needed it.
+#
+# The complements are not padding.  `and rd, rd, #0x7fff` clears the sign bit,
+# which is the renormalisation step in every floating-point routine in
+# snippets/, and 0x7fff is the largest positive 16-bit value.
+#
+# Note what is NOT here: 0, -1, and everything with two or more bits set.  Those
+# still come from imm5, imm3 and imm10, which is why this is an ADDITION to the
+# ALU groups and not a replacement for one.  Where the two overlap - 1, 2, 4, 8
+# and -2, -3, -5, -9 are in imm5's range too - the assembler prefers the form
+# listed first and drops the duplicate entries here, so nothing is ambiguous.
+[optype.immbit5]
+kind   = "table"
+bits   = 5
+values = [
+  0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080,
+  0x0100, 0x0200, 0x0400, 0x0800, 0x1000, 0x2000, 0x4000, 0x8000,
+  0xfffe, 0xfffd, 0xfffb, 0xfff7, 0xffef, 0xffdf, 0xffbf, 0xff7f,
+  0xfeff, 0xfdff, 0xfbff, 0xf7ff, 0xefff, 0xdfff, 0xbfff, 0x7fff,
+]
+
+# Branch conditions.  Three bits, eight encoded, twelve spellings accepted.
+#
+# The encoded eight are the four ordered comparisons - signed and unsigned, in
+# their `<` and `<=` senses - plus equality both ways and overflow both ways.
+# Reversing the two source registers turns each ordered comparison into its
+# mirror, so `gt`, `ge`, `hi` and `hs` need no encoding of their own: they are
+# `lt`, `le`, `lo` and `ls` with the operands exchanged.  An instruction that
+# permits the exchange says so with `swap_operands`.
+#
+# THERE IS NO `al`.  An unconditional branch is a register compared for
+# equality with itself, which is why the two-byte form at 0x87 pins `eq, r0,
+# r0` rather than spending a condition slot on "always".  `nv` is not encoded
+# either - a branch that never happens is a nop the assembler can just not
+# emit.  Both slots go to the overflow conditions instead.
+#
+# Against ARM's sixteen, only `mi` and `pl` are absent, and deliberately.  `mi`
+# is N=1 while `lt` is N!=V: they differ only when the subtraction overflows,
+# and in that case `lt` is the correct signed comparison and `mi` is the broken
+# one.  Sign-testing a single value - `mi`'s real use - is `lt` against #0 in
+# the condimm5 table, or `brset ra, #0x8000` on the sign bit directly.  Subtracting
+# zero cannot overflow, so those are provably identical to `mi`.
+[optype.cond3]
+kind    = "enum"
+bits    = 3
+names   = ["lt", "lo", "le", "ls", "eq", "ne", "vs", "vc"]
+aliases = { cc = "lo" }
+swapped = { gt = "lt", ge = "le", hi = "lo", hs = "ls", cs = "ls" }
+
+# The 32-entry condition-plus-constant table used by the single-register branch
+# forms.
+#
+# A `combo` type packs SEVERAL values into one field: the field holds an index,
+# and each table entry supplies one value per name in `parts`.  In a syntax
+# template the parts are reached as `{k.cond}` and `{k.imm}` for an operand
+# named `k`, so one 5-bit field prints and parses as two operands.
+#
+# This form has only one register, so the operand-swapping trick is unavailable
+# and both directions of every comparison must appear in the table explicitly.
+# That is most of why it wants 32 entries rather than 16.
+#
+# Note what that implies about the hardware: since entries name `gt` and `hs`,
+# which cond3 has no encoding for, the LUT's output is not simply a cond3 value
+# and a constant.  It must also carry the operand order - whether the compare
+# is `ra - imm` or `imm - ra`.  A 32-entry lookup can emit whatever control
+# signals it likes, so this costs nothing, but the table is (condition,
+# constant, order) rather than (condition, constant).
+#
+# ---------------------------------------------------------------------------
+# WHY THESE CONSTANTS
+# ---------------------------------------------------------------------------
+# The signed and equality conditions compare against 0, 1, -1 and 2.
+# Comparisons against zero dominate, then its two neighbours, then 2.
+#
+# THE UNSIGNED BOUNDS ARE THE imm3 TABLE, and that is not a coincidence.  The
+# reason to test `lo` or `hs` against a constant is almost always the carry out
+# of a widened add, and the constant that test needs is the one that was ADDED:
+#
+#       add     r1, r1, #k              ; XL += k
+#       br16    hs, r1, #k, no_carry    ; sum >= k means no carry
+#
+# `k` there is drawn from imm3, so the useful unsigned bounds are exactly imm3 -
+# not powers of two.  Under powers of two, 3 and 6 were addable but not
+# testable, so `+= 3` and `+= 6` cost eight bytes and a scratch register while
+# `+= 1, 2, 4, 8` cost six.  See snippets/add32.s.
+#
+# imm3 has eight values but contributes only six pairs, because two are
+# degenerate unsigned: `lo #0` is never true and `hs #0` always is, while
+# `hs #-1` means "equals 0xffff", which `eq #-1` already says.
+#
+# ---------------------------------------------------------------------------
+# NO ENTRY MAY MEAN WHAT ANOTHER ENTRY MEANS
+# ---------------------------------------------------------------------------
+# Distinct (condition, constant) spellings are NOT distinct predicates.  For
+# integers `x <= k` is `x < k+1` and `x > k` is `x >= k+1`, and an unsigned
+# lower bound of 1 is a zero test - so six of the entries this table used to
+# hold were duplicates of six others:
+#
+#       le #0  ==  lt #1          lo #1  ==  eq #0
+#       gt #0  ==  ge #1          hs #1  ==  ne #0
+#       le #1  ==  lt #2
+#       gt #1  ==  ge #2
+#
+# check.js proves this the only way that is actually sound: it evaluates every
+# entry over every register value it could see, at BOTH comparison widths, and
+# compares the truth sets.  Two entries are only wasteful if they agree at 8
+# bits AND at 16, since br8 and br16 share this table.
+#
+# Those six are now `rewrite` entries below rather than table slots.  Nothing is
+# lost at the source level - the assembler still accepts `br16 hs, r1, #1` and
+# quietly encodes `ne #0`, which matters because that spelling is exactly the
+# carry test for `+= 1` and should keep looking like the general pattern.
+#
+# WHAT THE SIX FREED SLOTS BOUGHT
+#   vs #-1, vs #1     overflow of x+1 and x-1, so a raw counter can test
+#                     "does x++ overflow" and "does x-- underflow" directly
+#   vs #2             the same underflow test for a tagged smallint, where a
+#                     decrement of one is two in the representation
+#   lt #4, ge #8      two signed bounds past 2, which is where ordinary counted
+#                     loops live.  Deliberately DIFFERENT bounds rather than a
+#                     complementary pair: the corpus should say which bound
+#                     matters before a second one is spent.  They also bring
+#                     `le #3` and `gt #7` with them, by the identity above.
+#
+# ONE SLOT IS FREE, and there is a known claim on it.  `vs #-2` would complete
+# the tagged pair - overflow of x+2, the tagged increment - but -2 is not in
+# imm3, so it cannot be had without widening the constant field to four bits and
+# taking the LUT output to eight.  Deliberately not done: the tagged case is
+# asymmetric as a result, covering decrement but not increment.
+[optype.condimm5]
+kind   = "combo"
+bits   = 5
+parts  = ["cond", "imm"]
+
+# Where each part draws its values from.  This is the point of the table: its
+# output is not five bits of index but SEVEN bits of control -
+#
+#     3 bits   which of the eight cond3 comparisons
+#     1 bit    the operand order, which is what turns `lt` into `gt` and `lo`
+#              into `hi`; with it, four bits select one of the twelve
+#              comparisons the ISA actually has
+#     3 bits   which of the eight imm3 constants
+#
+# so these 32 entries are a hand-picked 32 of the 96 combinations available.
+# check.js verifies that no entry escapes those domains, because one that did
+# would need wider control signals than this and quietly cost hardware, and that
+# no two entries mean the same thing - which spelling distinctness alone does
+# not catch, since `x <= k` and `x < k+1` are the same predicate.
+domain = { cond = "cond3", imm = "imm3" }
+values = [
+  # signed and equality, against 0, 1, -1 and 2
+  ["eq",  0], ["ne",  0], ["lt",  0], ["ge",  0],
+  ["eq",  1], ["ne",  1], ["lt",  1], ["ge",  1],
+  ["eq", -1], ["ne", -1], ["lt", -1], ["ge", -1],
+  ["eq",  2], ["ne",  2], ["lt",  2], ["ge",  2],
+  # two signed bounds past 2, where counted loops live
+  ["lt",  4], ["ge",  8],
+  # overflow: does x++ overflow, does x-- underflow, and the tagged decrement
+  ["vs", -1], ["vs",  1], ["vs",  2],
+  # unsigned, against the imm3 constants an `add` can actually use.  1 is absent
+  # because `lo #1` and `hs #1` are zero tests; they are rewrites below.
+  ["lo",  2], ["hs",  2], ["lo",  3], ["hs",  3],
+  ["lo",  4], ["hs",  4], ["lo",  6], ["hs",  6],
+  ["lo",  8], ["hs",  8],
+  # one slot free - see the note on vs #-2 above
+]
+
+# Spellings the assembler accepts and canonicalises onto an entry that IS in the
+# table.  Each is an exact identity at both comparison widths, and check.js
+# verifies that rather than taking it on trust: `from` must be absent from the
+# table, `to` must be present, and the two must have the same truth set.
+#
+# The rule is simple - every spelling one identity away from an encoded entry.
+# Since `lt` is encoded at -1, 0, 1, 2 and 4, `le` follows at -2, -1, 0, 1 and
+# 3; likewise `gt` from `ge`.  These cost no table slots at all.
+#
+# `ls` and `hi` could be completed the same way against the `lo` and `hs`
+# entries (`lo #k` is `ls #k-1` for k >= 1) and deliberately are not, until
+# something wants them.
+rewrite = [
+  { from = ["le", -2], to = ["lt", -1] },
+  { from = ["le", -1], to = ["lt",  0] },
+  { from = ["le",  0], to = ["lt",  1] },
+  { from = ["le",  1], to = ["lt",  2] },
+  { from = ["le",  3], to = ["lt",  4] },
+  { from = ["gt", -2], to = ["ge", -1] },
+  { from = ["gt", -1], to = ["ge",  0] },
+  { from = ["gt",  0], to = ["ge",  1] },
+  { from = ["gt",  1], to = ["ge",  2] },
+  { from = ["gt",  7], to = ["ge",  8] },
+  # an unsigned lower bound of 1 is a zero test
+  { from = ["lo",  1], to = ["eq",  0] },
+  { from = ["hs",  1], to = ["ne",  0] },
+]
+
+# The 3-bit table immediate.
+#
+# The field does NOT hold the value; it holds an INDEX into `values`.  So a
+# written `#6` assembles to field index 6, `#8` to index 7, and `#5` does not
+# encode at all.  "Fits" for a table type means "appears in the table", which
+# drops straight into the same form-selection test that range checks provide
+# for ordinary integers - the assembler needs no special case.
+#
+# The table is deliberately not an arithmetic sequence.  It spends its eight
+# slots on the displacements that actually occur in code, and because pointers
+# are tagged that means BOTH parities:
+#
+#   -1, 1, 3        the first three words of an object reached through a
+#                   pointer carrying a tag of 1 - the displacement absorbs the
+#                   tag, so these offsets are odd
+#   0, 2, 4, 6, 8   the same words through an untagged pointer, plus array and
+#                   structure stepping
+#
+# So -1 is not a general-purpose small negative.  It is the header word of a
+# tagged object, and it is plausibly the most common displacement in the entire
+# instruction set.  There is no slack in this table to reclaim.
+[optype.imm3]
+kind   = "table"
+bits   = 3
+values = [-1, 0, 1, 2, 3, 4, 6, 8]
+
+# The same three bits in the same positions, read for a shift count.
+#
+# A shift looks only at the low 4 bits of its operand, so the slot that reads
+# -1 for an ALU instruction reads 15 for a shift - 0xffff masked to 4 bits is
+# 15.  This is a different TABLE, not a different encoding: identical bit
+# patterns, identical field layout, no extra hardware.  Only the assembler's
+# value-to-index mapping and the disassembler's printing differ, so the
+# programmer writes `shl r1, r2, #15` and never has to think about it.
+[optype.shift3]
+kind   = "table"
+bits   = 3
+values = [15, 0, 1, 2, 3, 4, 6, 8]
+
+# When branches arrive, their displacement operands should be marked
+# `pcrel = true`.  That makes the assembler accept an absolute label or address
+# and encode the difference from the address of the *next* instruction, and
+# makes the disassembler print the absolute target back - so listings stay
+# readable and text -> bytes -> text still round-trips.
+
+
+# =============================================================================
+# Opcode map  (PROVISIONAL - this is the part to argue about)
+# =============================================================================
+#
+#   --- the one-byte region, 0000_xxxx ---------------------------------------
+#   This region has NO structure: no operation field, no register field, no
+#   form field.  It is a hand-picked table of fully implicit encodings, chosen
+#   by how often the exact instruction occurs rather than by any decomposition.
+#   That freedom is the whole reason the first byte is a flat 256-entry table
+#   instead of a set of bit fields, and it is why an ALU operation cannot be
+#   decoded from a fixed position.
+#
+#   0000_0000                nop                        1 byte
+#   0000_0001                halt                       1 byte
+#   0000_0010                ld8  r0, [r0, #0]          1 byte
+#   0000_0011                ld16 r0, [r0, #0]          1 byte
+#   0000_0100                add  r0, r0, #1            1 byte
+#   0000_0101                add  r0, r0, #-1           1 byte
+#   0000_0110                add  r0, r0, #2            1 byte
+#   0000_0111                add  r0, r0, r1            1 byte
+#   0000_1000                add  r1, r1, r0            1 byte
+#   0000_1001                or   r0, r1, #0  = mov     1 byte
+#   0000_1010                or   r1, r0, #0  = mov     1 byte
+#   0000_1011 .. 0000_1111   -- free, 5 one-byte slots
+#   ------------------------------------------------------------------------
+#
+#   0001_0000                mov  rd, #imm5             2 bytes
+#   0001_0001                mov  rd, #immbit5          2 bytes
+#   0001_001s                unary ops, 8 in TWO opcodes 2 bytes
+#   0001_0100 .. 0001_0111   -- free, 4 slots
+#   0001_1ddd                mov  rd, #imm16            3 bytes
+#
+#   That last block is the general wide-immediate shape - destination in the
+#   opcode byte, a full 16-bit value behind it - and jmp and call will reuse
+#   it.  Eight opcodes buys an addressing form, not just a mov.
+#
+#   --- the memory block, 001T_Sfff -----------------------------------------
+#   Three independent bit fields, which is what keeps the decoder small:
+#
+#     T    0 = load, 1 = store
+#     S    0 = 8-bit, 1 = 16-bit
+#     fff  addressing form - and it means the same thing on both sides:
+#
+#       000   rN, [rN, #off5]    2 bytes  one register, tied   LOADS ONLY
+#       001   -- free
+#       01i   rN, [ra, #imm3]    2 bytes  two registers, TWO opcodes
+#       100   rN, [ra, #imm10]   3 bytes  two registers, wide offset
+#       101   -- free
+#       110   -- free
+#       111   -- free
+#
+#   Because fff means the same thing for loads and stores, byte 1 has an
+#   identical layout across all eight memory instructions - register, address
+#   register, then whatever the form leaves over.
+#
+#   Form 000 has no store counterpart on purpose.  It pays for itself on a load
+#   because the destination can usefully double as the address register (`ld8
+#   r3, [r3, #4]` chases a pointer in place); tying a store's source to its
+#   address register would only overwrite the pointer.
+#
+#     0010_0000  ld8  rd,[rd,#off5]    0011_0000  -- free
+#     0010_001i  ld8  rd,[ra,#imm3]    0011_001i  st8  rs,[ra,#imm3]
+#     0010_0100  ld8  rd,[ra,#imm10]   0011_0100  st8  rs,[ra,#imm10]
+#     0010_1000  ld16 rd,[rd,#off5]    0011_1000  -- free
+#     0010_101i  ld16 rd,[ra,#imm3]    0011_101i  st16 rs,[ra,#imm3]
+#     0010_1100  ld16 rd,[ra,#imm10]   0011_1100  st16 rs,[ra,#imm10]
+#   ------------------------------------------------------------------------
+#
+#   --- the ALU block --------------------------------------------------------
+#   WHICH OPERATION IS NOT A BIT FIELD.  Single-byte encodings with an implicit
+#   operation are coming, and those have no room for a selector at a fixed
+#   offset - so nothing downstream may decode an ALU operation by extracting
+#   bits at a known position.  The first-byte table is the only authority.  The
+#   aligned groups of eight below are a convenience for reading the map, not a
+#   contract the decoder may rely on.
+#
+#   Every ALU operation is 16-bit only, and takes the same four forms in the
+#   same six opcodes.  Relative to the base of its group:
+#
+#       +0   rd, rd, #imm5     2 bytes  dest doubles as source, wide imm
+#       +1   rd, rd, #immbit5  2 bytes  same shape, single-bit constants
+#       +2   rd, ra, #imm3     2 bytes  two regs + table imm, TWO opcodes
+#       +3     "
+#       +4   rd, ra, #imm10    3 bytes  two regs + wide imm
+#       +5   -- free
+#       +6   rd, ra, rb        2 bytes  THREE registers, TWO opcodes
+#       +7     "
+#
+#   Forms +0, +2 and +4 are the memory block's 000 / 01i / 100 shapes reused
+#   unchanged.  Form +6 is the one the memory block has no use for: it spends
+#   the stolen opcode bit on a third register rather than an immediate bit.
+#
+#   Form +1 exists only for `and` and `or`, where it is bit-clear and bit-set.
+#   The other four operations leave it free: xor's single-bit case is already
+#   covered because imm5 and imm3 hold the values that matter to it, and a
+#   single-bit add or subtract is just an add.  Nothing stops a later operation
+#   from claiming its own +1.
+#
+#     0x40  add      0x48  rsb      0x50  xor      0x58  or      0x60  and
+#
+#   0x59 and 0x61 are the two +1 slots in use: `or rd, rd, #1<<n` (bit set) and
+#   `and rd, rd, #~(1<<n)` (bit clear).
+#
+#   The shifts take the same group shape but only three of the forms: no imm10
+#   (a shift count never needs ten bits) and no one-byte encodings.  Five
+#   opcodes each, and +1, +4 and +5 go unused in their groups.
+#
+#     0x68  shl      0x70  asr      0x78  lsr
+#
+#   Their imm3 slot is read through the `shift3` table instead of `imm3`, so it
+#   spells 15 where an ALU instruction spells -1.  Same bits, same positions.
+#
+#   That fills 0x40..0x7f.  Nothing about the layout is load-bearing - decode
+#   is a flat 256-entry table - so a later operation can go wherever it fits.
+#
+#   The two free slots in each group are NOT where the single-byte implicit
+#   forms live; those are up in the unstructured one-byte region, where `add`
+#   already holds 0x04..0x08.  There is deliberately no general one-byte
+#   `add rd, rs`: covering all 64 register pairs would cost a quarter of the
+#   map, while the two pairs that actually dominate cost two opcodes.
+#   ------------------------------------------------------------------------
+#
+#   0110_1000 .. 0111_1111   -- free, room for 3 more grouped operations
+#   --- the branch block -----------------------------------------------------
+#   Every one of these is 3 bytes except the unconditional form, which is 2.
+#
+#   1000_0000                br8   <cond,#imm>, ra, target
+#   1000_0001                br16  <cond,#imm>, ra, target
+#   1000_001b                br8   <cond>, ra, rb, target    TWO opcodes
+#   1000_010b                br16  <cond>, ra, rb, target    TWO opcodes
+#   1000_011e                brclear / brset ra, #mask, target  e = eq / ne
+#   ------------------------------------------------------------------------
+#
+#   --- push / pop -----------------------------------------------------------
+#   Separate state machines, separate opcodes, no register masks.  Only the
+#   single-register mnemonics are hand written; the assembler coalesces.
+#
+#   1000_1000                push8  ra                  2 bytes
+#   1000_1001                push16 ra                  2 bytes
+#   1000_1010 .. 1000_1101   push pairs, 8_8 8_16 16_8 16_16
+#   1000_1110                br    target        = br8 eq, r0, r0     2 bytes
+#   1000_1111                -- free
+#   1001_0000                pop8 / pop8s ra            2 bytes, sx bit in b1
+#   1001_0001                pop16 ra                   2 bytes
+#   1001_0100 .. 1001_0111   pop pairs, sx bits in byte 1
+#   1001_0010 .. 1001_0011   -- free
+#   ------------------------------------------------------------------------
+#
+#   --- control flow ---------------------------------------------------------
+#   1001_1000                jmpr  target               3 bytes, pc relative
+#   1001_1001                jmp   target               3 bytes, absolute
+#   1001_1010                callr target               3 bytes, pc relative
+#   1001_1011                call  target               3 bytes, absolute
+#   1001_1100                ret                        1 byte
+#   1001_1101 .. 1011_1111   -- free, 35 slots
+#   ------------------------------------------------------------------------
+#
+#   11xx_xxxx                -- free, a quarter of the map
+#
+# Note how cheap the one-byte two-register block is: `01dddsss` costs a quarter
+# of the opcode space and buys a fully general reg,reg operation.  That trade -
+# a few dense one-byte ops against a large sparse two-byte space - is the main
+# thing to tune while the map is still soft.
+# =============================================================================
+
+
+# =============================================================================
+# Instructions
+# =============================================================================
+
+# --- ld8 --------------------------------------------------------------------
+# Load an 8-bit value, zero-extended into a 16-bit register.
+#
+# Four encodings, in increasing size.  The assembler tries them in the order
+# listed and takes the first whose constraints the written operands satisfy:
+#
+#   implicit    1 byte   everything pinned: dest r0, address r0, offset 0
+#   reg_off5    2 bytes  wide offset, but destination is TIED to the address
+#   reg_reg     2 bytes  separate destination and address, but the offset must
+#                        come from the 8-entry imm3 table
+#   reg_reg10   3 bytes  separate registers AND a -512..+511 offset
+#
+# The two-byte forms trade against each other rather than one dominating: one
+# buys offset range at the cost of a register, the other buys a register at the
+# cost of offset range.  The three-byte form buys both.
+#
+# imm10 is deliberately where the ladder stops.  If a displacement will not fit
+# in -512..+511, the compiler computes the address into a spare register first;
+# with eight registers that is cheap, and it saves the encoding from growing a
+# four-byte tier that would earn its keep only rarely.  So the assembler CAN
+# legitimately reject an `ld8` - a displacement out of imm10 range is a source
+# error, not a missing form.
+[[insn]]
+mnemonic = "ld8"
+summary  = "load 8-bit, zero extended"
+operands = [
+  { name = "d",   type = "reg"  },   # destination register
+  { name = "a",   type = "reg"  },   # address register
+  { name = "off", type = "int16" },   # signed byte displacement (logical)
+]
+syntax   = "{d}, [{a}, #{off}]"
+
+  [[insn.form]]
+  name     = "implicit"
+  encoding = "0000_0010"
+  fix      = { d = 0, a = 0, off = 0 }
+
+  [[insn.form]]
+  name     = "reg_off5"
+  encoding = "0010_0000  aaao_oooo"
+  fields   = { o = "off:imm5" }
+  tie      = { d = "a" }             # one field serves as address and dest
+
+  # The 3-bit table immediate is split across the instruction: its LOW bit is
+  # the low bit of the opcode byte, so this form burns two adjacent opcodes
+  # (0x22 and 0x23).  Its other two bits sit at the bottom of byte 1.
+  #
+  #     byte 0:  0 0 1 0 0 0 1 i     7-bit opcode, then off bit 0
+  #     byte 1:  d d d a a a j j     dest, address, then off bits 2 and 1
+  #
+  # Paying an opcode bit to widen the register fields is the whole trick here:
+  # it is what makes room for a separate destination and address in two bytes.
+  [[insn.form]]
+  name     = "reg_reg"
+  encoding = "0010_001i  ddda_aajj"
+  fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
+
+  # Three bytes, and in exchange everything is independent and nothing is
+  # scattered: a whole opcode byte, then dest, address and a signed 10-bit
+  # displacement laid out in significance order.
+  #
+  #     byte 0:  0 0 1 0 0 1 0 0   full 8-bit opcode
+  #     byte 1:  d d d a a a i i   dest, address, off bits 9..8
+  #     byte 2:  i i i i i i i i   off bits 7..0
+  [[insn.form]]
+  name     = "reg_reg10"
+  encoding = "0010_0100  ddda_aaii  iiii_iiii"
+  fields   = { i = "off:imm10" }
+
+
+# --- ld16 -------------------------------------------------------------------
+# Load a 16-bit value.  Structurally identical to ld8 - same four addressing
+# forms, same operand shape, same field layouts - differing only in opcode bit
+# 3, which is the width bit for the whole load block.
+#
+# DECIDED: displacements count BYTES and are NOT scaled by the access width,
+# for ld16 and st16 alike.  Scaling would have doubled the reach of the off5
+# and imm10 forms for almost no hardware cost, and it is still rejected,
+# because POINTERS ARE TAGGED.  A heap reference carries a tag in its low bit,
+# so the displacement is what removes it:
+#
+#     ld16 rd, [rp, #-1]     first word of an object behind a tag-1 pointer
+#     ld16 rd, [rp, #1]      second word
+#     ld16 rd, [rp, #3]      third
+#
+# Those displacements are ODD.  A scaled offset cannot express them at all, and
+# would put a shift or an add in front of every single field access.  Byte
+# displacements are not a conservative default here; they are load bearing.
+#
+# ALSO DECIDED: unaligned accesses are allowed.  An odd effective address reads
+# or writes two consecutive bytes, in the `endian` order declared at the top,
+# with no fault and no penalty visible to software.  Given that displacements
+# do the tag arithmetic, a correct field access lands aligned anyway - this
+# just means the hardware never has to say no.
+[[insn]]
+mnemonic = "ld16"
+summary  = "load 16-bit"
+operands = [
+  { name = "d",   type = "reg"  },
+  { name = "a",   type = "reg"  },
+  { name = "off", type = "int16" },
+]
+syntax   = "{d}, [{a}, #{off}]"
+
+  [[insn.form]]
+  name     = "implicit"
+  encoding = "0000_0011"
+  fix      = { d = 0, a = 0, off = 0 }
+
+  [[insn.form]]
+  name     = "reg_off5"
+  encoding = "0010_1000  aaao_oooo"
+  fields   = { o = "off:imm5" }
+  tie      = { d = "a" }
+
+  [[insn.form]]
+  name     = "reg_reg"
+  encoding = "0010_101i  ddda_aajj"
+  fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
+
+  [[insn.form]]
+  name     = "reg_reg10"
+  encoding = "0010_1100  ddda_aaii  iiii_iiii"
+  fields   = { i = "off:imm10" }
+
+
+# --- st8 / st16 -------------------------------------------------------------
+# Stores get exactly two forms each - the two-register forms from the load
+# block, and nothing else.  There is no tied form (a store's source register is
+# not usefully its own address register) and no implicit one-byte form (storing
+# r0 through r0 at offset 0 is not a shape that occurs).
+#
+# So a store is always at least two bytes, and its byte 1 is laid out exactly
+# like a load's: register, address register, then the immediate remainder.
+[[insn]]
+mnemonic = "st8"
+summary  = "store low 8 bits"
+operands = [
+  { name = "s",   type = "reg"  },   # source register
+  { name = "a",   type = "reg"  },   # address register
+  { name = "off", type = "int16" },
+]
+syntax   = "{s}, [{a}, #{off}]"
+
+  [[insn.form]]
+  name     = "reg_reg"
+  encoding = "0011_001i  sssa_aajj"
+  fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
+
+  [[insn.form]]
+  name     = "reg_reg10"
+  encoding = "0011_0100  sssa_aaii  iiii_iiii"
+  fields   = { i = "off:imm10" }
+
+
+[[insn]]
+mnemonic = "st16"
+summary  = "store 16 bits"
+operands = [
+  { name = "s",   type = "reg"  },
+  { name = "a",   type = "reg"  },
+  { name = "off", type = "int16" },
+]
+syntax   = "{s}, [{a}, #{off}]"
+
+  [[insn.form]]
+  name     = "reg_reg"
+  encoding = "0011_101i  sssa_aajj"
+  fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
+
+  [[insn.form]]
+  name     = "reg_reg10"
+  encoding = "0011_1100  sssa_aaii  iiii_iiii"
+  fields   = { i = "off:imm10" }
+
+
+# --- mov --------------------------------------------------------------------
+# Two forms.  The short one is a register and a signed 5-bit immediate, laid
+# out exactly like an ALU +0 form.  The wide one carries a full 16-bit value.
+#
+# The wide form costs EIGHT opcodes, and that is the cheap option rather than
+# the expensive one.  Three bytes is 24 bits; 16 of immediate plus 3 of
+# register leave only 5 for the opcode, so the destination has to live in the
+# opcode byte.  Giving it a full 8-bit opcode instead would push the
+# instruction to four bytes to say the same thing.
+#
+# The imm16 field is the general wide-immediate form, and jmp and call will
+# want it too - so those eight opcodes buy an addressing shape, not just a mov.
+#
+# There is no register-to-register mov opcode; that is a preferred alias onto
+# `or`, defined at the end of this file.
+[[insn]]
+mnemonic = "mov"
+summary  = "rd = immediate"
+operands = [
+  { name = "d",   type = "reg"   },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, #{imm}"
+
+  [[insn.form]]
+  name     = "reg_imm5"
+  encoding = "0001_0000  dddi_iiii"
+  fields   = { i = "imm:imm5" }
+
+  # The same two-byte shape, the same five bits, read through immbit5 instead
+  # of as a signed integer.  That is what puts every power of two - and every
+  # value one bit short of all-ones - into two bytes rather than three.
+  #
+  # imm5 already reaches 1, 2, 4 and 8, so the assembler drops those entries
+  # from this form; what it is really buying is 16 upwards, 0x8000, and the
+  # complements from -17 down.  `mov rd, #16` was three bytes before this form
+  # existed, which is a bad cliff to have one past the end of a signed 5-bit
+  # field.
+  [[insn.form]]
+  name     = "reg_immbit5"
+  encoding = "0001_0001  dddi_iiii"
+  fields   = { i = "imm:immbit5" }
+
+  # Destination in the opcode byte, then a whole 16-bit immediate.  No
+  # narrowing happens here - the encoded type is the logical type - which is
+  # the one case where a form can represent everything the programmer writes.
+  #
+  # The immediate is stored LOW BYTE FIRST, matching `endian`, so the fetch
+  # unit assembles a 16-bit instruction immediate exactly the way it assembles
+  # a 16-bit data word.  The bit map is written most-significant-first, so
+  # saying that takes an explicit split: `i` carries bits 7..0 and `j` carries
+  # bits 15..8.
+  [[insn.form]]
+  name     = "reg_imm16"
+  encoding = "0001_1ddd  iiii_iiii  jjjj_jjjj"
+  fields   = { i = "imm:int16[7:0]", j = "imm:int16[15:8]" }
+
+
+# --- add ---------------------------------------------------------------------
+# Six opcodes, four forms, split across two entries because the second source
+# is a register in one shape and an immediate in the others.
+#
+# All ALU operations are 16-bit only; there is no width bit in this block and
+# no 8-bit add.
+#
+# Entry 1 of 2: the three-register form.  It buys its third register the same
+# way the imm3 forms buy their bottom immediate bit - by stealing the low bit
+# of the opcode byte, so it occupies an adjacent pair.
+#
+#     byte 0:  0 1 0 0 0 1 1 b   7-bit opcode, then rb bit 0
+#     byte 1:  d d d a a a c c   dest, first source, rb bits 2 and 1
+[[insn]]
+mnemonic = "add"
+summary  = "rd = ra + rb"
+operands = [
+  { name = "d", type = "reg" },   # destination
+  { name = "a", type = "reg" },   # first source
+  { name = "b", type = "reg" },   # second source, split across both bytes
+]
+syntax   = "{d}, {a}, {b}"
+
+  # Two fully implicit one-byte encodings for the two register triples that
+  # dominate in practice.  Listed first only for readability - forms are tried
+  # shortest-first regardless of the order they appear here.
+  [[insn.form]]
+  name     = "r0_r0_r1"
+  encoding = "0000_0111"
+  fix      = { d = 0, a = 0, b = 1 }
+
+  [[insn.form]]
+  name     = "r1_r1_r0"
+  encoding = "0000_1000"
+  fix      = { d = 1, a = 1, b = 0 }
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "0100_011b  ddda_aacc"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+
+# Entry 2 of 2: the immediate forms.  These are exactly the memory block's
+# 000 / 01i / 100 shapes, reused unchanged - a tied register with a wide 5-bit
+# immediate, two registers with a table immediate, two registers with imm10.
+[[insn]]
+mnemonic = "add"
+summary  = "rd = ra + immediate"
+operands = [
+  { name = "d",   type = "reg"   },
+  { name = "a",   type = "reg"   },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, {a}, #{imm}"
+
+  # Increment, decrement and step-by-two on r0, in one byte each.  Everything
+  # is pinned, so these carry no fields at all.
+  [[insn.form]]
+  name     = "inc_r0"
+  encoding = "0000_0100"
+  fix      = { d = 0, a = 0, imm = 1 }
+
+  [[insn.form]]
+  name     = "dec_r0"
+  encoding = "0000_0101"
+  fix      = { d = 0, a = 0, imm = -1 }
+
+  [[insn.form]]
+  name     = "inc2_r0"
+  encoding = "0000_0110"
+  fix      = { d = 0, a = 0, imm = 2 }
+
+  # Destination doubles as the first source, which frees five bits for the
+  # immediate.  Prints as `add r3, r3, #20`.
+  [[insn.form]]
+  name     = "reg_imm5"
+  encoding = "0100_0000  dddi_iiii"
+  fields   = { i = "imm:imm5" }
+  tie      = { a = "d" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm3"
+  encoding = "0100_001i  ddda_aajj"
+  fields   = { i = "imm:imm3[0]", j = "imm:imm3[2:1]" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm10"
+  encoding = "0100_0100  ddda_aaii  iiii_iiii"
+  fields   = { i = "imm:imm10" }
+
+
+# --- rsb / xor / or / and ---------------------------------------------------
+# Structurally identical to `add`, group base by group base.  See the `add`
+# comments above for the field layouts; only the opcode group and the meaning
+# of the operation change.
+#
+# There is no subtract.  `rsb` computes SECOND minus FIRST, which is what lets
+# a single opcode cover both `a - b` (swap the operands) and `imm - a` (the
+# shape you actually want for an immediate subtract-from).  The `sub` mnemonic
+# is an assembler alias, defined at the end of this file.
+#
+# The bitwise operations take the same int16 immediates as the arithmetic ones,
+# and because int16 wraps, a mask is written in whichever spelling reads best.
+# What decides the cost is the value's SIGNED reading: 0xff00 wraps to -256 and
+# fits imm10, so `and rd, ra, #0xff00` is three bytes.  A mask that lands
+# outside -512..511 either way - 0x0fff, say - needs `mov rd, #imm16` and the
+# three-register form.
+
+[[insn]]
+mnemonic = "rsb"
+summary  = "rd = rb - ra   (reverse subtract)"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "0100_111b  ddda_aacc"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+[[insn]]
+mnemonic = "rsb"
+summary  = "rd = immediate - ra"
+operands = [
+  { name = "d",   type = "reg"   },
+  { name = "a",   type = "reg"   },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, {a}, #{imm}"
+
+  [[insn.form]]
+  name     = "reg_imm5"
+  encoding = "0100_1000  dddi_iiii"
+  fields   = { i = "imm:imm5" }
+  tie      = { a = "d" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm3"
+  encoding = "0100_101i  ddda_aajj"
+  fields   = { i = "imm:imm3[0]", j = "imm:imm3[2:1]" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm10"
+  encoding = "0100_1100  ddda_aaii  iiii_iiii"
+  fields   = { i = "imm:imm10" }
+
+
+[[insn]]
+mnemonic = "xor"
+summary  = "rd = ra ^ rb"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "0101_011b  ddda_aacc"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+[[insn]]
+mnemonic = "xor"
+summary  = "rd = ra ^ immediate"
+operands = [
+  { name = "d",   type = "reg"   },
+  { name = "a",   type = "reg"   },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, {a}, #{imm}"
+
+  [[insn.form]]
+  name     = "reg_imm5"
+  encoding = "0101_0000  dddi_iiii"
+  fields   = { i = "imm:imm5" }
+  tie      = { a = "d" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm3"
+  encoding = "0101_001i  ddda_aajj"
+  fields   = { i = "imm:imm3[0]", j = "imm:imm3[2:1]" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm10"
+  encoding = "0101_0100  ddda_aaii  iiii_iiii"
+  fields   = { i = "imm:imm10" }
+
+
+[[insn]]
+mnemonic = "or"
+summary  = "rd = ra | rb"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "0101_111b  ddda_aacc"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+[[insn]]
+mnemonic = "or"
+summary  = "rd = ra | immediate"
+operands = [
+  { name = "d",   type = "reg"   },
+  { name = "a",   type = "reg"   },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, {a}, #{imm}"
+
+  # One-byte register moves.  `or rd, ra, #0` is a copy, so pinning the two
+  # hot registers both ways gives single-byte `mov r0, r1` and `mov r1, r0`
+  # without a mov opcode existing at all.  The `mov` alias rewrites to `or`,
+  # and shortest-first selection lands on these.
+  [[insn.form]]
+  name     = "mov_r0_r1"
+  encoding = "0000_1001"
+  fix      = { d = 0, a = 1, imm = 0 }
+
+  [[insn.form]]
+  name     = "mov_r1_r0"
+  encoding = "0000_1010"
+  fix      = { d = 1, a = 0, imm = 0 }
+
+  [[insn.form]]
+  name     = "reg_imm5"
+  encoding = "0101_1000  dddi_iiii"
+  fields   = { i = "imm:imm5" }
+  tie      = { a = "d" }
+
+  # BIT SET.  `or rd, rd, #1<<n` for any n, in two bytes.
+  [[insn.form]]
+  name     = "reg_immbit5"
+  encoding = "0101_1001  dddi_iiii"
+  fields   = { i = "imm:immbit5" }
+  tie      = { a = "d" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm3"
+  encoding = "0101_101i  ddda_aajj"
+  fields   = { i = "imm:imm3[0]", j = "imm:imm3[2:1]" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm10"
+  encoding = "0101_1100  ddda_aaii  iiii_iiii"
+  fields   = { i = "imm:imm10" }
+
+
+[[insn]]
+mnemonic = "and"
+summary  = "rd = ra & rb"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "0110_011b  ddda_aacc"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+[[insn]]
+mnemonic = "and"
+summary  = "rd = ra & immediate"
+operands = [
+  { name = "d",   type = "reg"   },
+  { name = "a",   type = "reg"   },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, {a}, #{imm}"
+
+  [[insn.form]]
+  name     = "reg_imm5"
+  encoding = "0110_0000  dddi_iiii"
+  fields   = { i = "imm:imm5" }
+  tie      = { a = "d" }
+
+  # BIT CLEAR.  `and rd, rd, #~(1<<n)` for any n, in two bytes.  This is the
+  # half of immbit5 that would have gone to waste if the fifth bit had stayed a
+  # set/clear selector, and it is the more useful half: masking the sign bit
+  # off a value is one instruction now instead of a shl/lsr pair.
+  [[insn.form]]
+  name     = "reg_immbit5"
+  encoding = "0110_0001  dddi_iiii"
+  fields   = { i = "imm:immbit5" }
+  tie      = { a = "d" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm3"
+  encoding = "0110_001i  ddda_aajj"
+  fields   = { i = "imm:imm3[0]", j = "imm:imm3[2:1]" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm10"
+  encoding = "0110_0100  ddda_aaii  iiii_iiii"
+  fields   = { i = "imm:imm10" }
+
+
+# --- shl / asr / lsr --------------------------------------------------------
+# Three forms each, five opcodes each: a tied register with imm5, three
+# registers, and two registers with a table immediate.  No imm10 form - ten
+# bits of shift count would be absurd - and no one-byte encodings.
+#
+# Every shift uses only the low 4 bits of its count, whether that count comes
+# from a register or an immediate.  So a shift by 16 is a shift by 0, and a
+# shift by -1 is a shift by 15.  The `shift3` table spells that last one as 15
+# directly; the imm5 form does NOT translate, so `shl r0, r0, #-1` assembles
+# and means 15, which is legal but not a spelling to encourage.  Tightening
+# the imm5 form to an unsigned 0..15 would remove the trap at the cost of
+# rejecting counts the hardware would have accepted.
+[[insn]]
+mnemonic = "shl"
+summary  = "rd = ra << (rb & 15)"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "0110_111b  ddda_aacc"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+[[insn]]
+mnemonic = "shl"
+summary  = "rd = ra << (imm & 15)"
+operands = [
+  { name = "d",   type = "reg"   },
+  { name = "a",   type = "reg"   },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, {a}, #{imm}"
+
+  [[insn.form]]
+  name     = "reg_imm5"
+  encoding = "0110_1000  dddi_iiii"
+  fields   = { i = "imm:imm5" }
+  tie      = { a = "d" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm3"
+  encoding = "0110_101i  ddda_aajj"
+  fields   = { i = "imm:shift3[0]", j = "imm:shift3[2:1]" }
+
+
+[[insn]]
+mnemonic = "asr"
+summary  = "rd = ra >> (rb & 15), sign propagating"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "0111_011b  ddda_aacc"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+[[insn]]
+mnemonic = "asr"
+summary  = "rd = ra >> (imm & 15), sign propagating"
+operands = [
+  { name = "d",   type = "reg"   },
+  { name = "a",   type = "reg"   },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, {a}, #{imm}"
+
+  [[insn.form]]
+  name     = "reg_imm5"
+  encoding = "0111_0000  dddi_iiii"
+  fields   = { i = "imm:imm5" }
+  tie      = { a = "d" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm3"
+  encoding = "0111_001i  ddda_aajj"
+  fields   = { i = "imm:shift3[0]", j = "imm:shift3[2:1]" }
+
+
+[[insn]]
+mnemonic = "lsr"
+summary  = "rd = ra >> (rb & 15), zero filling"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "0111_111b  ddda_aacc"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+[[insn]]
+mnemonic = "lsr"
+summary  = "rd = ra >> (imm & 15), zero filling"
+operands = [
+  { name = "d",   type = "reg"   },
+  { name = "a",   type = "reg"   },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, {a}, #{imm}"
+
+  [[insn.form]]
+  name     = "reg_imm5"
+  encoding = "0111_1000  dddi_iiii"
+  fields   = { i = "imm:imm5" }
+  tie      = { a = "d" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm3"
+  encoding = "0111_101i  ddda_aajj"
+  fields   = { i = "imm:shift3[0]", j = "imm:shift3[2:1]" }
+
+
+# --- unary operations -------------------------------------------------------
+# A unary operation is a binary operation whose 3-bit immediate selects the
+# OPERATION instead of supplying a value.  The encoding is the reg-reg-imm3
+# shape reused byte for byte - same split immediate, same register positions,
+# same two-opcode pair - so register decode and field extraction are untouched
+# and only the interpretation of three bits changes.
+#
+# That makes this a THIRD reading of the same three bits: `imm3` reads them
+# through a value table, `shift3` through a shift-count table, and here they
+# are a raw 0..7 opcode extension with no table at all.
+#
+#     byte 0:  0 0 0 1 0 0 1 s    opcode pair 0x12/0x13, s = selector bit 0
+#     byte 1:  d d d a a a t t    dest, source, selector bits 2 and 1
+#
+# Once an operation is named its selector is constant, so each one below has a
+# fully literal encoding and takes no selector operand - those bits are simply
+# opcode bits to the assembler.  Eight operations for two first-byte opcodes.
+#
+#     sel  mnemonic    byte 0  byte 1 low bits
+#      0   sxt8         0x12   00
+#      1   zxt8         0x13   00
+#      2   clz          0x12   01     TENTATIVE
+#      3   bitrev       0x13   01     TENTATIVE
+#      4   popcount     0x12   10     TENTATIVE
+#      5   -- free      0x13   10
+#      6   -- free      0x12   11
+#      7   -- free      0x13   11
+#
+# neg and inv are deliberately absent: `rsb rd, ra, #0` and `xor rd, ra, #-1`
+# already express them in two bytes, and both 0 and -1 are in the imm3 table.
+# The extends are here because they have no equally cheap shortcut.  Zero
+# extension is `and rd, ra, #255`, but 255 is outside imm5 and not in the imm3
+# table, so it needs the three-byte imm10 form; sign extension would be a
+# shl/asr pair costing four bytes.  Both are two bytes here.
+
+[[insn]]
+mnemonic = "sxt8"
+summary  = "rd = ra sign extended from 8 bits"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+]
+syntax   = "{d}, {a}"
+
+  [[insn.form]]
+  name     = "reg_reg"
+  encoding = "0001_0010  ddda_aa00"
+
+[[insn]]
+mnemonic = "zxt8"
+summary  = "rd = ra zero extended from 8 bits"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+]
+syntax   = "{d}, {a}"
+
+  [[insn.form]]
+  name     = "reg_reg"
+  encoding = "0001_0011  ddda_aa00"
+
+# --- the three below are TENTATIVE ------------------------------------------
+[[insn]]
+mnemonic = "clz"
+summary  = "rd = count of leading zeros in ra"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+]
+syntax   = "{d}, {a}"
+
+  [[insn.form]]
+  name     = "reg_reg"
+  encoding = "0001_0010  ddda_aa01"
+
+[[insn]]
+mnemonic = "bitrev"
+summary  = "rd = ra with its 16 bits reversed"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+]
+syntax   = "{d}, {a}"
+
+  [[insn.form]]
+  name     = "reg_reg"
+  encoding = "0001_0011  ddda_aa01"
+
+[[insn]]
+mnemonic = "popcount"
+summary  = "rd = number of set bits in ra"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+]
+syntax   = "{d}, {a}"
+
+  [[insn.form]]
+  name     = "reg_reg"
+  encoding = "0001_0010  ddda_aa10"
+
+
+# --- br8 / br16 -------------------------------------------------------------
+# Conditional subtract-and-branch.  The comparison is a subtract whose result
+# is discarded; only the condition it sets is used.  br8 compares at 8-bit
+# width, br16 at 16, matching the ld/st naming.
+#
+# The two-register form is the `rsb` three-register encoding with its
+# DESTINATION field replaced by a 3-bit condition, plus a displacement byte:
+#
+#     byte 0:  1 0 0 0 0 0 1 b    opcode pair 0x82/0x83, b = second reg bit 0
+#     byte 1:  c c c a a a e e    condition, first reg, second reg bits 2 and 1
+#     byte 2:  t t t t t t t t    signed displacement from the next instruction
+#
+# Three of the register bits and all of the register decode are therefore
+# shared with the ALU three-register forms; only byte 1's top field changes
+# meaning.  Eight encoded conditions cover more than eight spellings because
+# the two registers can be exchanged - see `cond3`.
+#
+# The single-register form replaces both the second register and the condition
+# with one 5-bit index into the `condimm5` table, which supplies a condition
+# and a constant together:
+#
+#     byte 0:  1 0 0 0 0 0 0 0    0x80 for br8, 0x81 for br16
+#     byte 1:  a a a k k k k k    register, condition-and-constant index
+#     byte 2:  t t t t t t t t    displacement
+[[insn]]
+mnemonic      = "br8"
+summary       = "compare low bytes of two registers and branch"
+operands = [
+  { name = "cond", type = "cond3" },
+  { name = "a",    type = "reg"   },
+  { name = "b",    type = "reg"   },
+  { name = "off",  type = "int16", pcrel = true },
+]
+syntax        = "{cond}, {a}, {b}, {off}"
+swap_operands = ["a", "b"]
+
+  # A register compared for equality with itself is always true, so pinning
+  # `eq, r0, r0` leaves nothing but the displacement byte - a two-byte
+  # unconditional relative branch that costs the condition field nothing.
+  #
+  # It used to sit at 0x87, at the end of the branch block.  brclear and brset
+  # wanted 0x86 and 0x87 as an aligned pair, and this form - which has no
+  # operand fields at all and shares no layout with anything - is the one
+  # branch that loses nothing by living outside the block.
+  [[insn.form]]
+  name     = "always"
+  encoding = "1000_1110  tttt_tttt"
+  fix      = { cond = "eq", a = 0, b = 0 }
+  fields   = { t = "off:off8" }
+
+  [[insn.form]]
+  name     = "cond_reg_reg"
+  encoding = "1000_001b  ccca_aaee  tttt_tttt"
+  fields   = { c = "cond:cond3", b = "b:reg[0]", e = "b:reg[2:1]", t = "off:off8" }
+
+[[insn]]
+mnemonic = "br8"
+summary  = "compare low byte against a table constant and branch"
+operands = [
+  { name = "k",   type = "condimm5" },
+  { name = "a",   type = "reg" },
+  { name = "off", type = "int16", pcrel = true },
+]
+syntax   = "{k.cond}, {a}, #{k.imm}, {off}"
+
+  [[insn.form]]
+  name     = "cond_reg_imm"
+  encoding = "1000_0000  aaak_kkkk  tttt_tttt"
+  fields   = { k = "k:condimm5", t = "off:off8" }
+
+
+[[insn]]
+mnemonic      = "br16"
+summary       = "compare two registers and branch"
+operands = [
+  { name = "cond", type = "cond3" },
+  { name = "a",    type = "reg"   },
+  { name = "b",    type = "reg"   },
+  { name = "off",  type = "int16", pcrel = true },
+]
+syntax        = "{cond}, {a}, {b}, {off}"
+swap_operands = ["a", "b"]
+
+  [[insn.form]]
+  name     = "cond_reg_reg"
+  encoding = "1000_010b  ccca_aaee  tttt_tttt"
+  fields   = { c = "cond:cond3", b = "b:reg[0]", e = "b:reg[2:1]", t = "off:off8" }
+
+[[insn]]
+mnemonic = "br16"
+summary  = "compare against a table constant and branch"
+operands = [
+  { name = "k",   type = "condimm5" },
+  { name = "a",   type = "reg" },
+  { name = "off", type = "int16", pcrel = true },
+]
+syntax   = "{k.cond}, {a}, #{k.imm}, {off}"
+
+  [[insn.form]]
+  name     = "cond_reg_imm"
+  encoding = "1000_0001  aaak_kkkk  tttt_tttt"
+  fields   = { k = "k:condimm5", t = "off:off8" }
+
+
+# --- brset / brclear --------------------------------------------------------
+# Branch on a masked test of one register: `ra & mask` against zero.
+#
+#     brclear ra, #mask, target      taken when (ra & mask) == 0
+#     brset   ra, #mask, target      taken when (ra & mask) != 0
+#
+# The mask is an immbit5, so the two of them together cover every single bit of
+# every register in both senses - which is all they used to do - plus every
+# ALL-BUT-ONE-BIT test, which is new and is what the fifth bit used to be spent
+# on.  `brclear r0, #0x7fff, L` branches when nothing but the sign bit is set.
+#
+# THESE ARE TWO OPCODES NOW, and the bit that separates them is exactly the bit
+# that separates `eq` from `ne` in cond3 - which is what they are: the mask
+# feeds the ALU, the result is compared with zero, and the opcode carries the
+# condition.  Nothing new is needed in the compare path.
+#
+#     byte 0:  1 0 0 0 0 1 1 e    0x86 = eq (brclear), 0x87 = ne (brset)
+#     byte 1:  a a a m m m m m    register, immbit5 mask
+#     byte 2:  t t t t t t t t    displacement
+#
+# THE OPERAND IS A MASK, NOT A BIT NUMBER.  `brset ra, #0x8000` tests the sign
+# bit; `brset ra, #15` is not an instruction, because 15 has four bits set and
+# immbit5 holds no such value.  The assembler rejects it rather than guessing,
+# which is the right outcome for a change of meaning this quiet.
+[[insn]]
+mnemonic = "brclear"
+summary  = "branch if ra & mask is zero"
+operands = [
+  { name = "a",    type = "reg"   },
+  { name = "mask", type = "int16" },
+  { name = "off",  type = "int16", pcrel = true },
+]
+syntax   = "{a}, #{mask}, {off}"
+
+  [[insn.form]]
+  name     = "reg_mask"
+  encoding = "1000_0110  aaam_mmmm  tttt_tttt"
+  fields   = { m = "mask:immbit5", t = "off:off8" }
+
+[[insn]]
+mnemonic = "brset"
+summary  = "branch if ra & mask is non-zero"
+operands = [
+  { name = "a",    type = "reg"   },
+  { name = "mask", type = "int16" },
+  { name = "off",  type = "int16", pcrel = true },
+]
+syntax   = "{a}, #{mask}, {off}"
+
+  [[insn.form]]
+  name     = "reg_mask"
+  encoding = "1000_0111  aaam_mmmm  tttt_tttt"
+  fields   = { m = "mask:immbit5", t = "off:off8" }
+
+
+# --- push / pop -------------------------------------------------------------
+# Push and pop are separate microcode state machines and the first opcode
+# selects which, so nothing here is shared between them.
+#
+# There is no register-mask form.  A mask means a variable-length loop over a
+# bitmap, which is exactly the wrong shape for interrupt latency; a pair is a
+# fixed two-store sequence the microcode can hard-code, and worst-case latency
+# stays bounded at two accesses.
+#
+# Six opcodes each: two for one register (8-bit and 16-bit) and four for two
+# registers (both widths, both positions).  Registers are 3-bit fields in
+# byte 1, so all eight registers encode - see the note on `push sp` below.
+#
+#     push single:  1000_10ww  aaa0_0000
+#     push pair:    1000_1 1xy  aaab_bb00
+#     pop  single:  1001_00ww  aaa0_00s0
+#     pop  pair:    1001_01xy  aaab_bbst
+#
+# Only pop needs the last two bits of byte 1: `s` sign extends the first popped
+# value and `t` the second, and each is ignored where that slot is 16-bit.
+#
+# ONLY THE SINGLE-REGISTER MNEMONICS ARE EVER WRITTEN BY HAND.  The four pair
+# opcodes have no hand-written spelling; the assembler coalesces adjacent
+# singles into them, and the disassembler expands them back.  See the coalesce
+# section at the end of the file.
+#
+# OPEN: whether the assembler should refuse `push sp`.  The encoding has room
+# for it either way, so this is purely an assembler policy question - and the
+# ambiguity is real, since "the value before or after the decrement" has bitten
+# both ARM and x86.  `pop sp` is more defensible, and `mov sp, rX` covers it.
+
+[[insn]]
+mnemonic = "push8"
+summary  = "push the low byte of ra"
+operands = [{ name = "a", type = "reg" }]
+syntax   = "{a}"
+
+  [[insn.form]]
+  name     = "single"
+  encoding = "1000_1000  aaa0_0000"
+
+[[insn]]
+mnemonic = "push16"
+summary  = "push ra"
+operands = [{ name = "a", type = "reg" }]
+syntax   = "{a}"
+
+  [[insn.form]]
+  name     = "single"
+  encoding = "1000_1001  aaa0_0000"
+
+# --- the four pair opcodes: assembler output only, never hand written --------
+[[insn]]
+mnemonic = "push8_8"
+summary  = "push the low bytes of ra then rb"
+operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
+syntax   = "{a}, {b}"
+
+  [[insn.form]]
+  name     = "pair"
+  encoding = "1000_1010  aaab_bb00"
+
+[[insn]]
+mnemonic = "push8_16"
+summary  = "push the low byte of ra, then rb"
+operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
+syntax   = "{a}, {b}"
+
+  [[insn.form]]
+  name     = "pair"
+  encoding = "1000_1011  aaab_bb00"
+
+[[insn]]
+mnemonic = "push16_8"
+summary  = "push ra, then the low byte of rb"
+operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
+syntax   = "{a}, {b}"
+
+  [[insn.form]]
+  name     = "pair"
+  encoding = "1000_1100  aaab_bb00"
+
+[[insn]]
+mnemonic = "push16_16"
+summary  = "push ra then rb"
+operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
+syntax   = "{a}, {b}"
+
+  [[insn.form]]
+  name     = "pair"
+  encoding = "1000_1101  aaab_bb00"
+
+
+# --- pop --------------------------------------------------------------------
+# `pop8` and `pop8s` are one opcode; they differ only in the sign-extend bit.
+# MNEMONIC IS A GUESS - the `s` suffix for "sign extending" is mine.
+[[insn]]
+mnemonic = "pop8"
+summary  = "pop a byte into ra, zero extended"
+traits   = { sx = 0 }
+operands = [{ name = "a", type = "reg" }]
+syntax   = "{a}"
+
+  [[insn.form]]
+  name     = "single"
+  encoding = "1001_0000  aaa0_0000"
+
+[[insn]]
+mnemonic = "pop8s"
+summary  = "pop a byte into ra, sign extended"
+traits   = { sx = 1 }
+operands = [{ name = "a", type = "reg" }]
+syntax   = "{a}"
+
+  [[insn.form]]
+  name     = "single"
+  encoding = "1001_0000  aaa0_0010"
+
+[[insn]]
+mnemonic = "pop16"
+summary  = "pop a word into ra"
+operands = [{ name = "a", type = "reg" }]
+syntax   = "{a}"
+
+  [[insn.form]]
+  name     = "single"
+  encoding = "1001_0001  aaa0_0000"
+
+# --- the four pair opcodes: assembler output only, never hand written --------
+[[insn]]
+mnemonic = "pop8_8"
+summary  = "pop two bytes, into ra then rb"
+operands = [
+  { name = "a",  type = "reg"    }, { name = "b",  type = "reg"    },
+  { name = "sa", type = "sxflag" }, { name = "sb", type = "sxflag" },
+]
+syntax   = "{a}, {b}, #{sa}, #{sb}"
+
+  [[insn.form]]
+  name     = "pair"
+  encoding = "1001_0100  aaab_bbst"
+  fields   = { s = "sa:sxflag", t = "sb:sxflag" }
+
+[[insn]]
+mnemonic = "pop8_16"
+summary  = "pop a byte into ra, then a word into rb"
+operands = [
+  { name = "a", type = "reg" }, { name = "b", type = "reg" },
+  { name = "sa", type = "sxflag" },
+]
+syntax   = "{a}, {b}, #{sa}"
+
+  [[insn.form]]
+  name     = "pair"
+  encoding = "1001_0101  aaab_bbs0"
+  fields   = { s = "sa:sxflag" }
+
+[[insn]]
+mnemonic = "pop16_8"
+summary  = "pop a word into ra, then a byte into rb"
+operands = [
+  { name = "a", type = "reg" }, { name = "b", type = "reg" },
+  { name = "sb", type = "sxflag" },
+]
+syntax   = "{a}, {b}, #{sb}"
+
+  [[insn.form]]
+  name     = "pair"
+  encoding = "1001_0110  aaab_bb0t"
+  fields   = { t = "sb:sxflag" }
+
+[[insn]]
+mnemonic = "pop16_16"
+summary  = "pop two words, into ra then rb"
+operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
+syntax   = "{a}, {b}"
+
+  [[insn.form]]
+  name     = "pair"
+  encoding = "1001_0111  aaab_bb00"
+
+
+# --- jmp / call / ret -------------------------------------------------------
+# Five opcodes.  The wide immediate is the `mov rd, #imm16` shape with the
+# register field spent on the opcode instead, so these reuse the same fetch
+# path: opcode byte, then a 16-bit value low byte first.
+#
+# Relative and absolute both take a full 16 bits and both reach the whole
+# address space, so the choice between them is not about range - it is whether
+# the code is position independent.  Short relative jumps are already covered
+# by `br` at 0x87, two bytes and +/-127.
+#
+# MNEMONICS ARE A GUESS.  I have taken `jmp`/`call` as absolute and `jmpr`/
+# `callr` as relative.  If you would rather have one mnemonic each with the
+# assembler choosing, that needs a directive or a target-expression syntax,
+# because both forms are the same size and form selection has no size
+# criterion to pick on.
+[[insn]]
+mnemonic = "jmpr"
+summary  = "pc += imm16"
+operands = [{ name = "t", type = "int16", pcrel = true }]
+syntax   = "{t}"
+
+  [[insn.form]]
+  name     = "rel16"
+  encoding = "1001_1000  iiii_iiii  jjjj_jjjj"
+  fields   = { i = "t:int16[7:0]", j = "t:int16[15:8]" }
+
+[[insn]]
+mnemonic = "jmp"
+summary  = "pc = imm16"
+operands = [{ name = "t", type = "int16" }]
+syntax   = "{t}"
+
+  [[insn.form]]
+  name     = "abs16"
+  encoding = "1001_1001  iiii_iiii  jjjj_jjjj"
+  fields   = { i = "t:int16[7:0]", j = "t:int16[15:8]" }
+
+[[insn]]
+mnemonic = "callr"
+summary  = "lr = pc of next instruction; pc += imm16"
+operands = [{ name = "t", type = "int16", pcrel = true }]
+syntax   = "{t}"
+
+  [[insn.form]]
+  name     = "rel16"
+  encoding = "1001_1010  iiii_iiii  jjjj_jjjj"
+  fields   = { i = "t:int16[7:0]", j = "t:int16[15:8]" }
+
+[[insn]]
+mnemonic = "call"
+summary  = "lr = pc of next instruction; pc = imm16"
+operands = [{ name = "t", type = "int16" }]
+syntax   = "{t}"
+
+  [[insn.form]]
+  name     = "abs16"
+  encoding = "1001_1011  iiii_iiii  jjjj_jjjj"
+  fields   = { i = "t:int16[7:0]", j = "t:int16[15:8]" }
+
+# Return is just pc = lr, so it needs no operands and fits in one byte.
+[[insn]]
+mnemonic = "ret"
+summary  = "pc = lr"
+operands = []
+syntax   = ""
+
+  [[insn.form]]
+  encoding = "1001_1100"
+
+
+# --- nop / halt -------------------------------------------------------------
+[[insn]]
+mnemonic = "nop"
+summary  = "do nothing"
+operands = []
+syntax   = ""
+
+  [[insn.form]]
+  encoding = "0000_0000"
+
+
+[[insn]]
+mnemonic = "halt"
+summary  = "stop the machine"
+operands = []
+syntax   = ""
+
+  [[insn.form]]
+  encoding = "0000_0001"
+
+
+# =============================================================================
+# Coalescing  (assembler-only, and reversible)
+# =============================================================================
+# An alias rewrites ONE instruction into another.  A coalesce rule merges TWO
+# ADJACENT instructions into one.  Source only ever contains single-register
+# pushes and pops, one per line; the assembler pairs them up, and the
+# disassembler expands a pair back into the two lines it came from.
+#
+# Because the expansion is exact, bytes round-trip through a listing even
+# though lines do not map one to one.
+#
+# `from` lists the two mnemonics in order, `|` separating interchangeable
+# spellings.  `args` fills the merged instruction's operands: `0.a` is operand
+# `a` of the first instruction, `1.a` of the second, and `0.sx` reads a
+# `traits` value declared on the first instruction - which is how the two
+# spellings of an 8-bit pop carry their sign-extension into the merged form.
+#
+# A pair may not be merged across a label, a directive, or any instruction
+# between them.
+
+[[coalesce]]
+from = ["push8", "push8"]
+to   = "push8_8"
+args = { a = "0.a", b = "1.a" }
+
+[[coalesce]]
+from = ["push8", "push16"]
+to   = "push8_16"
+args = { a = "0.a", b = "1.a" }
+
+[[coalesce]]
+from = ["push16", "push8"]
+to   = "push16_8"
+args = { a = "0.a", b = "1.a" }
+
+[[coalesce]]
+from = ["push16", "push16"]
+to   = "push16_16"
+args = { a = "0.a", b = "1.a" }
+
+[[coalesce]]
+from = ["pop8|pop8s", "pop8|pop8s"]
+to   = "pop8_8"
+args = { a = "0.a", b = "1.a", sa = "0.sx", sb = "1.sx" }
+
+[[coalesce]]
+from = ["pop8|pop8s", "pop16"]
+to   = "pop8_16"
+args = { a = "0.a", b = "1.a", sa = "0.sx" }
+
+[[coalesce]]
+from = ["pop16", "pop8|pop8s"]
+to   = "pop16_8"
+args = { a = "0.a", b = "1.a", sb = "1.sx" }
+
+[[coalesce]]
+from = ["pop16", "pop16"]
+to   = "pop16_16"
+args = { a = "0.a", b = "1.a" }
+
+
+# =============================================================================
+# Aliases  (assembler-only; no opcodes, no encodings)
+# =============================================================================
+
+# --- sub --------------------------------------------------------------------
+# There is no subtract opcode.  Subtraction reaches the hardware two different
+# ways depending on what the second operand is, so `sub` is two aliases:
+#
+#   sub rd, ra, rb    ->  rsb rd, rb, ra     sources swapped
+#   sub rd, ra, #imm  ->  add rd, ra, #-imm  immediate negated
+#
+# Neither `sub` alias is preferred for disassembly.  Preferring the register
+# one would erase `rsb` from every listing, since every rsb is some sub with
+# its sources swapped; preferring the immediate one would reprint every add of
+# a negative constant as a subtract.  Both are arguable as taste, neither is
+# clearly an improvement, so listings show the instruction that actually ran.
+#
+# WATCH THE IMMEDIATE CASE.  Negation happens before form selection, so the
+# form chosen depends on -imm, not imm, and the imm3 table is lopsided: it
+# holds seven non-negative values and only one negative.  `add rd, ra, #4` is
+# two bytes; `sub rd, ra, #4` becomes `add rd, ra, #-4`, which is not in the
+# table and falls all the way to the three-byte imm10 form.
+#
+# The tied form rescues the common case: `sub rd, rd, #4` negates to -4, which
+# fits imm5's -16..+15, so decrementing a register in place stays two bytes.
+# It is specifically subtracting a small constant into a DIFFERENT register
+# that costs three.
+#
+# If subtracting small constants into a DIFFERENT register turns out to be
+# common, the fix is another form or a wider table - not a sub opcode, and not
+# a reshuffle of imm3.  That table has no slack: -1, 1 and 3 are there to
+# absorb pointer tags and 0, 2, 4, 6, 8 are their untagged counterparts, so
+# there is no slot going spare to spend on -4.
+
+[[alias]]
+mnemonic = "sub"
+summary  = "rd = ra - rb"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+expand   = { mnemonic = "rsb", args = { d = "d", a = "b", b = "a" } }
+
+# --- br (unconditional relative branch) -------------------------------------
+# MNEMONIC IS A GUESS.  `br8 eq, r0, r0, target` - r0 compared with itself, so
+# always taken - has a two-byte encoding of its own, and this puts a readable
+# name on it.  `jmp` is left free on the assumption it wants the absolute imm16
+# form.
+[[alias]]
+mnemonic = "br"
+summary  = "branch unconditionally, relative"
+operands = [
+  { name = "off", type = "int16", pcrel = true },
+]
+syntax   = "{off}"
+expand   = { mnemonic = "br8", args = { cond = "eq", a = 0, b = 0, off = "off" } }
+prefer   = true
+
+
+# --- mov (register to register) ---------------------------------------------
+# There is no register-to-register move opcode.  `or rd, rs, #0` is a copy, and
+# 0 is in the imm3 table, so the two-register form is two bytes for free.  When
+# the registers are r0 and r1 the pinned one-byte forms on `or` take over, so
+# `mov r0, r1` costs a single byte - all without a mov opcode existing.
+#
+# This is two mechanisms composing: the alias rewrites to `or`, and then
+# shortest-first form selection finds the implicit encoding.  Neither knows
+# about the other.
+[[alias]]
+mnemonic = "mov"
+summary  = "rd = rs"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "s", type = "reg" },
+]
+syntax   = "{d}, {s}"
+expand   = { mnemonic = "or", args = { d = "d", a = "s", imm = 0 } }
+prefer   = true
+
+
+[[alias]]
+mnemonic = "sub"
+summary  = "rd = ra - immediate"
+operands = [
+  { name = "d",   type = "reg"   },
+  { name = "a",   type = "reg"   },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, {a}, #{imm}"
+expand   = { mnemonic = "add", args = { d = "d", a = "a", imm = "-imm" } }

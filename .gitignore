@@ -1,0 +1,5 @@
+build/
+node_modules/
+
+# Local Claude Code permission state, not project content.
+.claude/settings.local.json
