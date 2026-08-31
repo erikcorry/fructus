@@ -10,20 +10,24 @@
 ; REGISTERS
 ; ----------------------------------------------------------------------------
 ;
-;   r0   argument 0 / return value       caller saved
-;   r1   argument 1 / return value high  caller saved
-;   r2   argument 2                      caller saved
-;   r3   argument 3                      caller saved
-;   r4   -                               CALLEE saved - the only one
-;   r5   -                               caller saved, and the assembler's
-;                                        immediate scratch register
+;   r0   argument 0 / return value       caller saved, always
+;   r1   argument 1 / return value high  caller saved, always
+;   r2   argument 2                      SLIDING - see below
+;   r3   argument 3                      SLIDING - see below
+;   r4   -                               CALLEE saved, always
+;   r5   -                               caller saved, always, and the
+;                                        assembler's immediate scratch register
 ;   r6   sp, the stack pointer           preserved by definition
-;   r7   lr, the link register           caller saved - a call destroys it
+;   r7   lr, the link register           both - see below
 ;
-; lr is caller saved in the sense that matters: `call` overwrites it, so a
-; function that calls anything must save it first, and a caller must never
-; expect it to survive.  A leaf function does not have to touch it at all,
-; which is the whole reason it is a register and not a stack slot.
+; lr IS BOTH, DEPENDING ON WHICH END YOU STAND AT.  From the caller's side it is
+; caller saved: `call` overwrites it, so no caller may expect it to survive.
+; From the callee's side it is callee saved: the return address arrives in it
+; and has to still be there at the `ret`, so a function that calls anything must
+; save and restore it.  The two views do not conflict, because nobody is
+; preserving lr for anybody else - each end is describing its own obligation.
+; A leaf function does not have to touch it at all, which is the whole reason it
+; is a register and not a stack slot.
 ;
 ; WHY r5 IS CALLER SAVED, when there are so few registers to give away.  r5 is
 ; the register the assembler borrows when an immediate does not fit its
@@ -34,10 +38,125 @@
 ; two immediate modes, and hand-written and compiled code linked together would
 ; disagree about who owns the register.
 ;
-; This is MIPS's answer for $at, and it costs what MIPS's does: a caller with
-; two values live across a call saves one in r4 and spills the other.  With
-; only one callee-saved register left, the common prologue is a single
-; two-byte `push16 lr, r4` - see below.
+; This is MIPS's answer for $at, and it costs what MIPS's does: one register in
+; the middle of the file that neither side may rely on.
+;
+; ----------------------------------------------------------------------------
+; THE SLIDING REGISTERS - THE SAVE CONVENTION DEPENDS ON THE ARITY
+; ----------------------------------------------------------------------------
+;
+; r2 and r3 have no fixed save convention.  For each one, independently:
+;
+;       CALLER saved   if this function takes an argument in it
+;       CALLEE saved   if it does not
+;
+; which gives three conventions rather than one:
+;
+;   arg registers used         caller saved              callee saved
+;   ------------------------   ----------------------    ---------------
+;   0, 1 or 2   (r0, r1)       r0 r1 r5                  r2 r3 r4
+;   3           (r0, r1, r2)   r0 r1 r2 r5               r3 r4
+;   4           (r0 - r3)      r0 r1 r2 r3 r5            r4
+;
+; COUNT REGISTERS, NOT ARGUMENTS.  A 32-bit value occupies two registers and a
+; struct is decomposed into its fields, so f(long, long) uses four argument
+; registers and has the bottom row's convention even though it has two
+; arguments.  The count is over the NAMED parameters only; see varargs below.
+;
+; DO NOT TUNE ANY OF THIS AROUND 32-BIT ARGUMENTS.  f(long, long) is the shape
+; that consumes the whole argument file at once, and it is tempting to reason
+; from it because the 32-bit routines in snippets/ are written that way.  Those
+; are library internals.  In ordinary code a 32-bit argument is rare, and a pair
+; of them is rarer, so the rows that matter for the design are the top two.
+;
+; r4 IS NEVER AN ARGUMENT REGISTER and is always callee saved, so the callee
+; saved set is never empty.  Every function, whatever its arity, has at least
+; one register it can keep a value in across a call.
+;
+; ----------------------------------------------------------------------------
+; WHY THIS IS WORTH THE COMPLICATION
+; ----------------------------------------------------------------------------
+;
+; Caller saved and callee saved are two readings of one fact.  A caller saved
+; register is free for the callee to clobber, and is destroyed by every call the
+; callee makes.  A callee saved register costs the callee a push to use, and
+; then survives the callee's own calls.  Which one a function wants is decided
+; by whether it makes calls, not by how big it is.
+;
+; The bet here is that ARITY IS A USABLE PROXY FOR THAT, in the direction that a
+; function with one or two arguments is more often a small leaf - a comparison,
+; an accessor, a character class test.  Such a function never touches r2 or r3,
+; so making them callee saved costs it exactly nothing, and hands its callers
+; two extra registers that survive the call.  A function with four arguments
+; already has its arguments sitting in r2 and r3 and wants to overwrite them,
+; and is the case where making them callee saved would charge the callee for
+; consuming its own arguments.
+;
+; The bet loses on a one-argument function with high register pressure, which
+; now pays a push and a pop to use r2 and r3 where it previously got them free.
+; That cost is bounded and paid once per call; the gain is paid back at every
+; call site that had something live across the call.
+;
+; ARITY IS THE ONLY PER-FUNCTION CONVENTION THAT IS FREE TO DISTRIBUTE.  This is
+; a crude version of what a compiler does with interprocedural register
+; allocation, where the caller learns the callee's real clobber set - better
+; information, but information that has to be computed from the whole program
+; and then communicated.  Arity needs no channel at all: the caller cannot emit
+; the call without the prototype, and the prototype is the whole input to the
+; rule, so both ends derive the same answer independently and separate
+; compilation is unaffected.
+;
+; ----------------------------------------------------------------------------
+; THE CONVENTION IS PART OF THE TYPE
+; ----------------------------------------------------------------------------
+;
+; Two function pointers with different argument register counts are NOT
+; interchangeable, even where C would otherwise allow it.  Calling through a
+; pointer cast to the wrong arity is already undefined behaviour; the difference
+; here is that it stops being undefined-but-works and becomes silent register
+; corruption in the caller, surfacing arbitrarily far from the cast.
+;
+; This is a real pattern - uniform dispatch tables of mixed-arity handlers,
+; reached through one pointer type and cast back at the point of call, or not
+; cast back at all.  The rule for such code is that IT ANNOTATES.  A function
+; that will be called through a pointer of the wrong type carries an explicit
+; calling convention on its definition, and then it has one convention for
+; everybody.  The ABI does not try to make the shenanigans safe; it makes them
+; declare themselves.
+;
+; VARARGS COMPOSES CLEANLY, because unnamed arguments always go on the stack.
+; The count that selects the convention is the count of NAMED parameters, so
+; printf(const char *, ...) uses one argument register and has r2, r3 and r4
+; callee saved, which is also what a variadic function wants - it is going to
+; walk a list and call things.
+;
+; ----------------------------------------------------------------------------
+; WHAT A PUSH ACTUALLY COSTS
+; ----------------------------------------------------------------------------
+;
+; Byte count is a good first proxy for run time, because the memory bus is
+; 6502-like and every instruction byte is a bus cycle to fetch.  It is not the
+; whole story for push and pop.  Each 16-bit memory access costs TWO MORE bus
+; cycles on top of the fetch, and a multi-register push does one access per
+; register named:
+;
+;       push16  lr                      2 bytes    2 + 2 = 4 bus cycles
+;       push16  lr, r4                  2 bytes    2 + 4 = 6 bus cycles
+;       push16  lr, r4, r3              2 bytes    2 + 6 = 8 bus cycles
+;
+; THE SECOND AND THIRD REGISTERS OF A PUSH ARE FREE IN SPACE AND NOT IN TIME.
+; That matters for reasoning about the save convention, because it is easy to
+; look at the byte counts alone and conclude that preserving three registers is
+; as cheap as preserving one.  It is, to the fetch unit; it is twice the work to
+; the bus.
+;
+; The comparison still comes out the same way, and by more than the bytes
+; suggest.  Using a callee saved register costs 4 extra bus cycles ONCE PER
+; INVOCATION - two on the push, two on the pop, with no extra fetch at all.  A
+; caller spilling one value around a call costs 4 bytes and 8 bus cycles EVERY
+; TIME THAT CALL SITE EXECUTES.  A call inside a loop pays the second cost per
+; iteration and the first not at all, which is the case the sliding convention
+; is really aimed at.
 ;
 ; ----------------------------------------------------------------------------
 ; ARGUMENTS
@@ -222,9 +341,15 @@
 ; ============================================================================
 ; A leaf function                                                    4 bytes
 ; ============================================================================
-; It calls nothing, so lr is untouched and there is no prologue at all.  This is
-; the case the whole convention is tuned for: four argument registers plus r5
-; mean most small functions never touch memory.
+; It calls nothing, so lr is untouched and there is no prologue at all.  A leaf
+; may freely clobber its own argument registers and r5 - here r0, r1, r2 and r5,
+; four registers, which is enough that most small functions never touch memory.
+;
+; This is where the sliding convention charges its premium.  add3 takes three
+; arguments, so r3 and r4 are callee saved and a leaf that wants them pays one
+; push and one pop, four bytes, to borrow them.  Before the convention slid,
+; r3 was free here.  What the four bytes buy is on the other side of the call:
+; every caller of add3 now keeps two more registers across it.
 ;
 ;       int16_t add3(int16_t a, int16_t b, int16_t c)
 
@@ -276,17 +401,26 @@ nonleaf_example:
 
 
 ; ============================================================================
-; A non-leaf function that also uses r4                 5 bytes of overhead
+; A non-leaf that uses its callee-saved registers       5 bytes of overhead
 ; ============================================================================
-; The SAME five bytes.  r4 is the only callee-saved register, so the entire
-; callee-save prologue is one two-register push, and adding r4 to a function
-; that already saves lr is free.
+; The SAME five bytes, whether it preserves one register or three.  A function
+; with two arguments has r2, r3 and r4 callee saved, and lr plus any two of them
+; fit in a single push - so the whole callee-save prologue is one instruction
+; however the convention slid.
+;
+;       int16_t f(int16_t a, int16_t b)         2 argument registers
 
 full_example:
-        push16  lr, r4                  ; both, one instruction          2
-        ; ... body, free to use r0-r5 ...
-        pop16   r4, lr                  ; reverse order                  2
+        push16  lr, r4, r3              ; lr and two of them, one push   2
+        ; ... body, free to use r0, r1, r3, r4, r5 ...
+        pop16   r3, r4, lr              ; reverse order                  2
         ret                             ;                                1
+
+; THE THIRD REGISTER IS FREE IN BYTES AND NOT IN CYCLES.  This push is the same
+; two bytes as `push16 lr` and does three times the bus work: 8 cycles against
+; 4, and the same again on the pop.  Naming a register you do not use costs
+; nothing to fetch and four cycles to execute, so the prologue should still name
+; only what the body actually touches.
 
 ; POP ORDER IS THE REVERSE OF PUSH ORDER.  A push writes its registers left to
 ; right and the stack grows down, so the first named lands highest; a pop reads
@@ -307,9 +441,72 @@ spill_example:
         pop16   r2, r1, r0              ; reverse                        2
         ret                             ;                                1
 
-; THIS IS WHAT THE THREE-REGISTER FORM IS FOR.  With one callee-saved register,
-; a caller that wants values kept across a call is the common case, not the
-; callee's prologue - so the wide forms earn their opcodes on the caller's side.
+; HOW MUCH THERE IS TO SPILL DEPENDS ON WHAT IS BEING CALLED.  A call to a
+; four-argument function leaves only r4 standing and this is the common shape;
+; a call to a one-argument function leaves r2, r3 and r4, and most of the spill
+; disappears.  The caller knows which from the prototype it already has.
+;
+; THIS IS WHAT THE THREE-REGISTER FORM IS FOR.  It covers the worst case in one
+; instruction each way, which is what makes the sliding convention affordable:
+; when the arity bet goes against the caller, the fallback is two bytes, not a
+; restructured frame.
+
+
+; ============================================================================
+; What the sliding convention buys                    4 bytes per iteration
+; ============================================================================
+; A loop around a call is where the two save conventions come apart, because a
+; caller's spill repeats and a prologue's push does not.  This function has one
+; argument, so r2, r3 and r4 are all callee saved and two live values stay in
+; registers across the call.
+;
+;       int16_t sum(node_t *list)       1 argument register
+
+loop_example:
+        push16  lr, r4, r3              ; one push covers all three      2
+        mov     r3, r0                  ; the cursor                     2
+        mov     r4, #0                  ; the accumulator                2
+loop_body:
+        ld16    r0, [r3, #2]            ; node->value                    2
+        call    leaf_example            ;                                3
+        add     r4, r4, r0              ;                                2
+        ld16    r3, [r3, #0]            ; cursor = cursor->next          2
+        br16    ne, r3, #0, loop_body   ;                                3
+        mov     r0, r4                  ;                                2
+        pop16   r3, r4, lr              ;                                2
+        ret                             ;                    total  23   1
+
+; THE SAME FUNCTION UNDER A FIXED CONVENTION, where only r4 is callee saved.
+; One live value fits and the other does not, so the cursor is spilled around
+; the call - inside the loop, where it is paid every iteration.
+
+loop_example_alt:
+        push16  lr, r4                  ;                                2
+        mov     r3, r0                  ;                                2
+        mov     r4, #0                  ;                                2
+loop_body_alt:
+        ld16    r0, [r3, #2]            ;                                2
+        push16  r3                      ; <-- per iteration              2
+        call    leaf_example            ;                                3
+        pop16   r3                      ; <-- per iteration              2
+        add     r4, r4, r0              ;                                2
+        ld16    r3, [r3, #0]            ;                                2
+        br16    ne, r3, #0, loop_body_alt ;                              3
+        mov     r0, r4                  ;                                2
+        pop16   r4, lr                  ;                                2
+        ret                             ;                    total  27   1
+
+; 12 bytes of loop body against 16, and the difference is not only bytes: the
+; two extra instructions are a push and a pop, so they carry 8 bus cycles of
+; memory traffic on top of their 4 bytes of fetch, every iteration.  The push
+; that replaced them is one instruction executed once.
+;
+; THE PROLOGUES ARE THE SAME SIZE.  `push16 lr, r4, r3` and `push16 lr, r4` are
+; both two bytes, so the extra callee-saved register cost this function nothing
+; to fetch and 4 bus cycles once.  That is the whole trade, and it is the reason
+; the sliding convention is cheap to lose with: when arity guesses wrong, the
+; loser pays two bytes, and when it guesses right the winner stops paying in a
+; loop.
 
 
 ; ============================================================================
