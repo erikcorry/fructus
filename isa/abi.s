@@ -124,6 +124,23 @@
 ; everybody.  The ABI does not try to make the shenanigans safe; it makes them
 ; declare themselves.
 ;
+; NOTHING CHECKS THIS YET, and a mismatch is silent - the callee returns having
+; clobbered a register the caller expected back, and the damage shows up far
+; from the call.  A `.args` declaration is the fix if it turns out to be needed:
+; each callable symbol states its argument register count, the assembler
+; verifies it at every call site whose target it can resolve, and the count goes
+; into the object file so the linker rejects a disagreement between separately
+; assembled files.  That turns silent corruption into a link error.
+;
+; It is not written because it is not yet earned.  With one assembler and no
+; separate compilation, a call site and its target are usually in the same file
+; and under the same pair of eyes.  The declaration becomes worth its complexity
+; when there is a compiler emitting calls from prototypes it cannot see the
+; definitions of - which is also the point at which the arity rule stops being
+; a convention people follow and starts being one they can get wrong at a
+; distance.  Noting it here so the option is on the record and the ABI does not
+; have to be reopened to add it.
+;
 ; VARARGS COMPOSES CLEANLY, because unnamed arguments always go on the stack.
 ; The count that selects the convention is the count of NAMED parameters, so
 ; printf(const char *, ...) uses one argument register and has r2, r3 and r4
