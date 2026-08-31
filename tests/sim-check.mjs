@@ -189,5 +189,21 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   console.log(`ok    snippets/roll32.s on the simulator: ${n} cases`);
 }
 
+// --- data directives and struct offsets --------------------------------------
+// Both failure modes here are silent: a byte-swapped constant assembles and
+// loads without complaint, and a wrong struct offset reads the neighbouring
+// field.  Only executing it tells them apart.
+{
+  const { code, syms } = assemble('tests/data.s');
+  const r = callRoutine(m, code, syms.get('data_test'), syms.get('data_done'), {});
+  const want = { 0: 0x2222, 2: 0x3333, 3: 0xbeef, 4: 0x89ab, 5: 0xcdef };
+  const what = { 0: 'node.value through a tagged pointer', 2: 'node.kind, offset 3',
+                 3: 'dw is little endian', 4: 'dd high half, at the higher address',
+                 5: 'dd low half, at the lower address' };
+  for (const [i, v] of Object.entries(want))
+    check('data', r[i] === v, `r${i} (${what[i]}) = ${r[i].toString(16)}, want ${v.toString(16)}`);
+  console.log('ok    tests/data.s on the simulator: dw, dd and tagged struct offsets');
+}
+
 console.log(`${checks} checks, ${fails} failures`);
 process.exit(fails ? 1 : 0);

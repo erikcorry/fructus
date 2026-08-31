@@ -277,6 +277,31 @@ emit('; and, if it wants an explicit memory layout, a #bankdef.  customasm alrea
 emit('; defaults to 8 bits per addressable unit, which is what fructus uses.');
 emit();
 
+// --- data directives ---------------------------------------------------------
+// customasm's built-in #d16 and #d32 write the MOST significant byte first,
+// which is the opposite of what `endian = "little"` means and what ld16 reads
+// back.  `#d16 0x1234` assembles to 12 34 and loads as 0x3412 - silently, with
+// no diagnostic anywhere.  So the spec's endianness is emitted as directives of
+// its own, and a source file should use these rather than #d16/#d32.
+//
+// #d8 needs no equivalent: one byte has no byte order.
+{
+  const le = spec.cpu.endian === 'little';
+  emit('; --- data, in the endianness the CPU actually reads ------------------------');
+  emit('; USE THESE, NOT #d16 / #d32, which are big endian regardless of the target.');
+  emit('#ruledef fructus_data');
+  emit('{');
+  const byte = (i) => `((v >> ${i * 8}) & 0xff)\`8`;
+  const order = (n) => {
+    const ix = [...Array(n).keys()];
+    return (le ? ix : ix.reverse()).map(byte).join(' @ ');
+  };
+  emit(`    dw {v: u16} => ${order(2)}`);
+  emit(`    dd {v: u32} => ${order(4)}`);
+  emit('}');
+  emit();
+}
+
 // --- register and condition name tables --------------------------------------
 for (const [name, t] of Object.entries(types)) {
   if (t.kind !== 'reg' && t.kind !== 'enum') continue;
