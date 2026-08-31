@@ -55,6 +55,7 @@
 ;
 ; 12 bytes, 12 cycles.
 
+roll13:
         lsr     r4, r3, #3      ; r4 = H >> 3   three-register form: 3 is in
         lsr     r5, r2, #3      ; r5 = L >> 3   shift3, so r2 and r3 survive
         shl     r2, r2, #13     ; r2 = L << 13  tied form: 13 is NOT in shift3,
@@ -76,6 +77,7 @@
 ;
 ; Result in r0:r1, inputs r2:r3 untouched.  Still 12 bytes.
 
+roll8:
         shl     r0, r2, #8      ; r0 = L << 8
         lsr     r4, r3, #8      ; r4 = H >> 8
         or      r0, r0, r4      ; L' = (L<<8) | (H>>8)
@@ -98,6 +100,7 @@
 ; 14 bytes.  Paying 16 - by copying both halves first and using tied shifts
 ; throughout - is the obvious approach and the wrong one.
 
+roll7:
         mov     r4, #9          ; r4 = 9, the right-shift distance
         lsr     r5, r3, r4      ; r5 = H >> 9   three-register form
         lsr     r4, r2, r4      ; r4 = L >> 9   count is dead after this read
@@ -105,6 +108,7 @@
         shl     r3, r3, #7      ; r3 = H << 7   tied, consumes H
         or      r2, r2, r5      ; L' = (L<<7) | (H>>9)
         or      r3, r3, r4      ; H' = (H<<7) | (L>>9)
+roll7_end:
 
 ; Note `lsr r4, r2, r4` reads r4 as the shift count and writes r4 as the
 ; destination.  That is fine for a single-cycle operation, and it saves a

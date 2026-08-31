@@ -27,8 +27,10 @@ export function callRoutine(m, code, entry, stopAt, regs, max = 10000) {
   m.mem.fill(0);
   m.load(code);
   m.R.fill(0);
-  for (const [i, v] of Object.entries(regs)) m.R[i] = v & 0xffff;
   m.R[m.named.sp] = 0xfffe;
+  // Explicit registers win: add32's second form uses r4:r5 and r6:r7 as data,
+  // and r6 IS sp.  A routine that names a register is entitled to it.
+  for (const [i, v] of Object.entries(regs)) m.R[i] = v & 0xffff;
   m.pc = entry;
   m.halted = false;
   m.count = 0;

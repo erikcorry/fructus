@@ -103,5 +103,91 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   console.log(`ok    snippets/fpsub.s on the simulator: ${cases.length} cases`);
 }
 
+// --- add32 ------------------------------------------------------------------
+// Three fragments, no carry flag anywhere.  The whole point of the snippet is
+// that the carry out of a 16-bit add is recoverable from the result, so what is
+// being tested is a claim about arithmetic and not just about encoding.
+{
+  const { code, syms } = assemble('snippets/add32.s');
+  const pairs = [];
+  for (const h of [0, 1, 0x7fff, 0x8000, 0xfffe, 0xffff])
+    for (const l of [0, 1, 2, 3, 0x7fff, 0x8000, 0xfffd, 0xfffe, 0xffff]) pairs.push([h, l]);
+  let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff);
+
+  // in place, X in r0:r1 and Y in r2:r3
+  let n = 0;
+  for (const [xh, xl] of pairs) for (const [yh, yl] of pairs) {
+    const r = callRoutine(m, code, syms.get('add32'), syms.get('no_carry'), { 0: xh, 1: xl, 2: yh, 3: yl });
+    const want = (((BigInt(xh) << 16n) | BigInt(xl)) + ((BigInt(yh) << 16n) | BigInt(yl))) & M32;
+    const got = (BigInt(r[0]) << 16n) | BigInt(r[1]);
+    check('add32', got === want, `${hex32((BigInt(xh)<<16n)|BigInt(xl))} + ${hex32((BigInt(yh)<<16n)|BigInt(yl))} -> ${hex32(got)}, want ${hex32(want)}`);
+    n++;
+  }
+
+  // the same shape in r4:r5 and r6:r7 - note r6 IS sp, which the routine uses
+  // as ordinary data, so this also checks the harness is not quietly reserving it
+  for (let i = 0; i < 3000; i++) {
+    const [xh, xl, yh, yl] = [rnd() & 0xffff, rnd() & 0xffff, rnd() & 0xffff, rnd() & 0xffff];
+    const r = callRoutine(m, code, syms.get('add32_r4r5'), syms.get('no_carry2'), { 4: xh, 5: xl, 6: yh, 7: yl });
+    const want = (((BigInt(xh) << 16n) | BigInt(xl)) + ((BigInt(yh) << 16n) | BigInt(yl))) & M32;
+    const got = (BigInt(r[4]) << 16n) | BigInt(r[5]);
+    check('add32_r4r5', got === want, `${hex32(got)} want ${hex32(want)}`);
+    n++;
+  }
+
+  // += 3, where the carry test compares against the constant itself
+  for (const [xh, xl] of pairs) {
+    const r = callRoutine(m, code, syms.get('add32_plus3'), syms.get('no_carry3'), { 0: xh, 1: xl });
+    const want = (((BigInt(xh) << 16n) | BigInt(xl)) + 3n) & M32;
+    const got = (BigInt(r[0]) << 16n) | BigInt(r[1]);
+    check('add32_plus3', got === want, `${hex32((BigInt(xh)<<16n)|BigInt(xl))} + 3 -> ${hex32(got)}, want ${hex32(want)}`);
+    n++;
+  }
+  console.log(`ok    snippets/add32.s on the simulator: ${n} cases`);
+}
+
+// --- roll32 -----------------------------------------------------------------
+// Each fragment rotates by a different distance and reaches for a different
+// shift form to do it, so this is really three tests of the shift3 table.  The
+// order of the shifts is load bearing - the file says so - and getting it wrong
+// is silently wrong rather than rejected, which is exactly what execution
+// catches and assembling does not.
+{
+  const { code, syms } = assemble('snippets/roll32.s');
+  const rotl = (x, n) => ((x << BigInt(n)) | (x >> BigInt(32 - n))) & M32;
+
+  const vals = [0n, 1n, 0x80000000n, 0xffffffffn, 0x0000ffffn, 0xffff0000n,
+                0x12345678n, 0xdeadbeefn, 0xaaaaaaaan, 0x55555555n, 0x00010001n];
+  let seed = 31337; const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff);
+  for (let i = 0; i < 2000; i++) vals.push((BigInt(rnd() & 0xffff) << 16n) | BigInt(rnd() & 0xffff));
+
+  let n = 0;
+  for (const X of vals) {
+    const L = Number(X & 0xffffn), H = Number(X >> 16n);
+
+    // roll left by 13, in place in r2:r3
+    let r = callRoutine(m, code, syms.get('roll13'), syms.get('roll8'), { 2: L, 3: H });
+    let want = rotl(X, 13);
+    check('roll13', ((BigInt(r[3]) << 16n) | BigInt(r[2])) === want,
+          `rotl(${hex32(X)}, 13) -> ${hex32((BigInt(r[3]) << 16n) | BigInt(r[2]))}, want ${hex32(want)}`);
+
+    // roll left by 8, result in r0:r1, and the inputs must SURVIVE
+    r = callRoutine(m, code, syms.get('roll8'), syms.get('roll7'), { 2: L, 3: H });
+    want = rotl(X, 8);
+    check('roll8', ((BigInt(r[1]) << 16n) | BigInt(r[0])) === want,
+          `rotl(${hex32(X)}, 8) -> ${hex32((BigInt(r[1]) << 16n) | BigInt(r[0]))}, want ${hex32(want)}`);
+    check('roll8 inputs survive', r[2] === L && r[3] === H,
+          `r2:r3 was ${hex32(X)}, came back ${hex32((BigInt(r[3]) << 16n) | BigInt(r[2]))}`);
+
+    // roll left by 7, in place in r2:r3
+    r = callRoutine(m, code, syms.get('roll7'), syms.get('roll7_end'), { 2: L, 3: H });
+    want = rotl(X, 7);
+    check('roll7', ((BigInt(r[3]) << 16n) | BigInt(r[2])) === want,
+          `rotl(${hex32(X)}, 7) -> ${hex32((BigInt(r[3]) << 16n) | BigInt(r[2]))}, want ${hex32(want)}`);
+    n += 3;
+  }
+  console.log(`ok    snippets/roll32.s on the simulator: ${n} cases`);
+}
+
 console.log(`${checks} checks, ${fails} failures`);
 process.exit(fails ? 1 : 0);
