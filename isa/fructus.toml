@@ -611,18 +611,27 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   ------------------------------------------------------------------------
 #
 #   --- push / pop -----------------------------------------------------------
-#   Separate state machines, separate opcodes, no register masks.  Only the
-#   single-register mnemonics are hand written; the assembler coalesces.
+#   Separate state machines, separate opcodes, no register masks, no
+#   coalescing.  8-bit is single register only - a byte on the stack is an
+#   argument, never part of a register save.  16-bit comes in ones, twos and
+#   threes, which is what register saving actually wants.
+#
+#   Byte 1 holds nothing but registers in every one of these:
+#     one   aaa0_0000        two   aaab_bb00        three  aaab_bbcc
 #
 #   1000_1000                push8  ra                  2 bytes
 #   1000_1001                push16 ra                  2 bytes
-#   1000_1010 .. 1000_1101   push pairs, 8_8 8_16 16_8 16_16
+#   1000_1010                push16 ra, rb              2 bytes
+#   1000_1011                -- free
+#   1000_110c                push16 ra, rb, rc          TWO opcodes
 #   1000_1110                br    target        = br8 eq, r0, r0     2 bytes
 #   1000_1111                -- free
-#   1001_0000                pop8 / pop8s ra            2 bytes, sx bit in b1
-#   1001_0001                pop16 ra                   2 bytes
-#   1001_0100 .. 1001_0111   pop pairs, sx bits in byte 1
-#   1001_0010 .. 1001_0011   -- free
+#   1001_0000                pop8u  ra                  2 bytes
+#   1001_0001                pop8s  ra                  2 bytes
+#   1001_0010                pop16  ra                  2 bytes
+#   1001_0011                pop16  ra, rb              2 bytes
+#   1001_010c                pop16  ra, rb, rc          TWO opcodes
+#   1001_0110 .. 1001_0111   -- free
 #   ------------------------------------------------------------------------
 #
 #   --- control flow ---------------------------------------------------------
@@ -631,7 +640,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1001_1010                callr target               3 bytes, pc relative
 #   1001_1011                call  target               3 bytes, absolute
 #   1001_1100                ret                        1 byte
-#   1001_1101 .. 1011_1111   -- free, 35 slots
+#   1001_1101                call  ra                   2 bytes, INDIRECT
+#   1001_1110 .. 1011_1111   -- free, 34 slots
 #   ------------------------------------------------------------------------
 #
 #   11xx_xxxx                -- free, a quarter of the map
@@ -1576,27 +1586,64 @@ syntax   = "{a}, #{mask}, {off}"
 # Push and pop are separate microcode state machines and the first opcode
 # selects which, so nothing here is shared between them.
 #
-# There is no register-mask form.  A mask means a variable-length loop over a
-# bitmap, which is exactly the wrong shape for interrupt latency; a pair is a
-# fixed two-store sequence the microcode can hard-code, and worst-case latency
-# stays bounded at two accesses.
+# THE TWO WIDTHS HAVE DIFFERENT JOBS, and that is what sets the shape of this
+# block.  8-bit push and pop exist for ARGUMENTS: a char on the stack is one
+# byte, pushed on its own, and there is never a reason to move two of them at
+# once.  16-bit push and pop exist for SAVING REGISTERS across a call, which is
+# always several at a time and always in a fixed order.  So the byte forms are
+# single-register only and the word forms come in ones, twos and threes.
 #
-# Six opcodes each: two for one register (8-bit and 16-bit) and four for two
-# registers (both widths, both positions).  Registers are 3-bit fields in
-# byte 1, so all eight registers encode - see the note on `push sp` below.
+#     push8  ra                       one byte, one register
+#     pop8u  ra                       zero extended
+#     pop8s  ra                       sign extended
+#     push16 ra                       one word
+#     push16 ra, rb                   two
+#     push16 ra, rb, rc               three - TWO opcodes
+#     pop16  ra   / ra, rb / ra, rb, rc
 #
-#     push single:  1000_10ww  aaa0_0000
-#     push pair:    1000_1 1xy  aaab_bb00
-#     pop  single:  1001_00ww  aaa0_00s0
-#     pop  pair:    1001_01xy  aaab_bbst
+# EVERY ONE OF THESE IS WRITTEN BY HAND.  There is no coalescing: the assembler
+# does not merge adjacent pushes and the disassembler does not split them, so
+# what is written is what runs.  An earlier version had the assembler fuse
+# singles into pairs, which meant the register-saving cost of a function was a
+# property of the assembler rather than of the source - fine until two adjacent
+# pushes were separated by an edit and the prologue silently grew.
 #
-# Only pop needs the last two bits of byte 1: `s` sign extends the first popped
-# value and `t` the second, and each is ignored where that slot is 16-bit.
+# There is still no register-mask form.  A mask means a variable-length loop
+# over a bitmap, which is exactly the wrong shape for interrupt latency; three
+# registers is a fixed three-store sequence the microcode can hard-code, and
+# worst-case latency stays bounded.  Three is also enough: with r5 caller saved
+# there is only one callee-saved register, so the common prologue is
+# `push16 lr, r4` and the three-register form is for spilling arguments.
 #
-# ONLY THE SINGLE-REGISTER MNEMONICS ARE EVER WRITTEN BY HAND.  The four pair
-# opcodes have no hand-written spelling; the assembler coalesces adjacent
-# singles into them, and the disassembler expands them back.  See the coalesce
-# section at the end of the file.
+# BYTE 1 IS THE SAME EVERYWHERE.  Registers occupy fixed 3-bit fields and
+# nothing else lives there - no width bit, no sign bit, no count.  The
+# sign-extending pop is its own opcode rather than a flag, which costs one
+# entry in a 256-entry table and buys a byte-1 layout with no special cases:
+#
+#     one register:     aaa0_0000
+#     two registers:    aaab_bb00
+#     three registers:  aaab_bbcc      + the low bit of rc in the opcode
+#
+# The three-register forms steal an opcode bit for the ninth register bit,
+# exactly as the three-register ALU forms do - same trick, same reason.
+#
+#     0x88  push8  ra              0x90  pop8u  ra
+#     0x89  push16 ra              0x91  pop8s  ra
+#     0x8a  push16 ra, rb          0x92  pop16  ra
+#     0x8c  push16 ra, rb, rc      0x93  pop16  ra, rb
+#     0x8d    "                    0x94  pop16  ra, rb, rc
+#                                  0x95    "
+#
+# ORDER.  A push writes its registers left to right, and the stack grows down,
+# so the FIRST register named lands at the HIGHEST address.  A pop reads left to
+# right too, so it takes them off in the order they come, and a save/restore
+# pair reverses the register list:
+#
+#     push16 lr, r4, r5   ...   pop16 r5, r4, lr
+#
+# That is also why the pair push takes a 32-bit value's registers in high:low
+# order - the high half is named first and lands higher, which is little endian.
+# See isa/abi.s.
 #
 # OPEN: whether the assembler should refuse `push sp`.  The encoding has room
 # for it either way, so this is purely an assembler policy question - and the
@@ -1623,55 +1670,40 @@ syntax   = "{a}"
   name     = "single"
   encoding = "1000_1001  aaa0_0000"
 
-# --- the four pair opcodes: assembler output only, never hand written --------
 [[insn]]
-mnemonic = "push8_8"
-summary  = "push the low bytes of ra then rb"
-operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
-syntax   = "{a}, {b}"
-
-  [[insn.form]]
-  name     = "pair"
-  encoding = "1000_1010  aaab_bb00"
-
-[[insn]]
-mnemonic = "push8_16"
-summary  = "push the low byte of ra, then rb"
-operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
-syntax   = "{a}, {b}"
-
-  [[insn.form]]
-  name     = "pair"
-  encoding = "1000_1011  aaab_bb00"
-
-[[insn]]
-mnemonic = "push16_8"
-summary  = "push ra, then the low byte of rb"
-operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
-syntax   = "{a}, {b}"
-
-  [[insn.form]]
-  name     = "pair"
-  encoding = "1000_1100  aaab_bb00"
-
-[[insn]]
-mnemonic = "push16_16"
+mnemonic = "push16"
 summary  = "push ra then rb"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
 syntax   = "{a}, {b}"
 
   [[insn.form]]
-  name     = "pair"
-  encoding = "1000_1101  aaab_bb00"
+  name     = "double"
+  encoding = "1000_1010  aaab_bb00"
+
+[[insn]]
+mnemonic = "push16"
+summary  = "push ra, then rb, then rc"
+operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" },
+            { name = "c", type = "reg" }]
+syntax   = "{a}, {b}, {c}"
+
+  [[insn.form]]
+  name     = "triple"
+  encoding = "1000_110z  aaab_bbcc"
+  fields   = { z = "c:reg[0]", c = "c:reg[2:1]" }
 
 
 # --- pop --------------------------------------------------------------------
-# `pop8` and `pop8s` are one opcode; they differ only in the sign-extend bit.
-# MNEMONIC IS A GUESS - the `s` suffix for "sign extending" is mine.
+# `pop8u` and `pop8s` differ only in how the byte reaches the top half of the
+# register, and they are two opcodes rather than one opcode and a flag - see
+# the note on byte 1 above.
+#
+# MNEMONICS ARE A GUESS - the `u` and `s` suffixes for zero and sign extending
+# are mine.  `pop8` on its own is deliberately not accepted: which extension a
+# byte gets is exactly the thing a reader needs told.
 [[insn]]
-mnemonic = "pop8"
+mnemonic = "pop8u"
 summary  = "pop a byte into ra, zero extended"
-traits   = { sx = 0 }
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
 
@@ -1682,13 +1714,12 @@ syntax   = "{a}"
 [[insn]]
 mnemonic = "pop8s"
 summary  = "pop a byte into ra, sign extended"
-traits   = { sx = 1 }
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1001_0000  aaa0_0010"
+  encoding = "1001_0001  aaa0_0000"
 
 [[insn]]
 mnemonic = "pop16"
@@ -1698,60 +1729,29 @@ syntax   = "{a}"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1001_0001  aaa0_0000"
-
-# --- the four pair opcodes: assembler output only, never hand written --------
-[[insn]]
-mnemonic = "pop8_8"
-summary  = "pop two bytes, into ra then rb"
-operands = [
-  { name = "a",  type = "reg"    }, { name = "b",  type = "reg"    },
-  { name = "sa", type = "sxflag" }, { name = "sb", type = "sxflag" },
-]
-syntax   = "{a}, {b}, #{sa}, #{sb}"
-
-  [[insn.form]]
-  name     = "pair"
-  encoding = "1001_0100  aaab_bbst"
-  fields   = { s = "sa:sxflag", t = "sb:sxflag" }
+  encoding = "1001_0010  aaa0_0000"
 
 [[insn]]
-mnemonic = "pop8_16"
-summary  = "pop a byte into ra, then a word into rb"
-operands = [
-  { name = "a", type = "reg" }, { name = "b", type = "reg" },
-  { name = "sa", type = "sxflag" },
-]
-syntax   = "{a}, {b}, #{sa}"
-
-  [[insn.form]]
-  name     = "pair"
-  encoding = "1001_0101  aaab_bbs0"
-  fields   = { s = "sa:sxflag" }
-
-[[insn]]
-mnemonic = "pop16_8"
-summary  = "pop a word into ra, then a byte into rb"
-operands = [
-  { name = "a", type = "reg" }, { name = "b", type = "reg" },
-  { name = "sb", type = "sxflag" },
-]
-syntax   = "{a}, {b}, #{sb}"
-
-  [[insn.form]]
-  name     = "pair"
-  encoding = "1001_0110  aaab_bb0t"
-  fields   = { t = "sb:sxflag" }
-
-[[insn]]
-mnemonic = "pop16_16"
+mnemonic = "pop16"
 summary  = "pop two words, into ra then rb"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
 syntax   = "{a}, {b}"
 
   [[insn.form]]
-  name     = "pair"
-  encoding = "1001_0111  aaab_bb00"
+  name     = "double"
+  encoding = "1001_0011  aaab_bb00"
+
+[[insn]]
+mnemonic = "pop16"
+summary  = "pop three words, into ra then rb then rc"
+operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" },
+            { name = "c", type = "reg" }]
+syntax   = "{a}, {b}, {c}"
+
+  [[insn.form]]
+  name     = "triple"
+  encoding = "1001_010z  aaab_bbcc"
+  fields   = { z = "c:reg[0]", c = "c:reg[2:1]" }
 
 
 # --- jmp / call / ret -------------------------------------------------------
@@ -1762,7 +1762,7 @@ syntax   = "{a}, {b}"
 # Relative and absolute both take a full 16 bits and both reach the whole
 # address space, so the choice between them is not about range - it is whether
 # the code is position independent.  Short relative jumps are already covered
-# by `br` at 0x87, two bytes and +/-127.
+# by `br` at 0x8e, two bytes and +/-127.
 #
 # MNEMONICS ARE A GUESS.  I have taken `jmp`/`call` as absolute and `jmpr`/
 # `callr` as relative.  If you would rather have one mnemonic each with the
@@ -1813,6 +1813,33 @@ syntax   = "{t}"
   encoding = "1001_1011  iiii_iiii  jjjj_jjjj"
   fields   = { i = "t:int16[7:0]", j = "t:int16[15:8]" }
 
+# --- the indirect call ------------------------------------------------------
+# `call rX` is `call imm16` with the target coming from the register file
+# instead of the instruction stream: same lr write, same jump, one less fetch.
+# Two bytes.
+#
+# IT IS NOT OPTIONAL FOR C.  Before it existed, `ret` was the only transfer
+# that read a register, so a function pointer could be tail called - `mov lr,
+# rX` then `ret` - and nothing else.  There was no way to arrange a return
+# address, because the only instruction that could jump to a register was the
+# one that consumed the register holding it.  Function pointers, vtables and
+# qsort all need this opcode.
+#
+# There is deliberately no `jmp rX`.  An indirect tail call is `mov lr, rX`
+# followed by `ret`, three bytes, and it is rare enough not to be worth an
+# opcode of its own - whereas the two-byte indirect call is on the hot path of
+# every dynamic dispatch.
+[[insn]]
+mnemonic = "call"
+summary  = "lr = pc of next instruction; pc = ra"
+operands = [{ name = "a", type = "reg" }]
+syntax   = "{a}"
+
+  [[insn.form]]
+  name     = "reg"
+  encoding = "1001_1101  aaa0_0000"
+
+
 # Return is just pc = lr, so it needs no operands and fits in one byte.
 [[insn]]
 mnemonic = "ret"
@@ -1843,67 +1870,6 @@ syntax   = ""
 
   [[insn.form]]
   encoding = "0000_0001"
-
-
-# =============================================================================
-# Coalescing  (assembler-only, and reversible)
-# =============================================================================
-# An alias rewrites ONE instruction into another.  A coalesce rule merges TWO
-# ADJACENT instructions into one.  Source only ever contains single-register
-# pushes and pops, one per line; the assembler pairs them up, and the
-# disassembler expands a pair back into the two lines it came from.
-#
-# Because the expansion is exact, bytes round-trip through a listing even
-# though lines do not map one to one.
-#
-# `from` lists the two mnemonics in order, `|` separating interchangeable
-# spellings.  `args` fills the merged instruction's operands: `0.a` is operand
-# `a` of the first instruction, `1.a` of the second, and `0.sx` reads a
-# `traits` value declared on the first instruction - which is how the two
-# spellings of an 8-bit pop carry their sign-extension into the merged form.
-#
-# A pair may not be merged across a label, a directive, or any instruction
-# between them.
-
-[[coalesce]]
-from = ["push8", "push8"]
-to   = "push8_8"
-args = { a = "0.a", b = "1.a" }
-
-[[coalesce]]
-from = ["push8", "push16"]
-to   = "push8_16"
-args = { a = "0.a", b = "1.a" }
-
-[[coalesce]]
-from = ["push16", "push8"]
-to   = "push16_8"
-args = { a = "0.a", b = "1.a" }
-
-[[coalesce]]
-from = ["push16", "push16"]
-to   = "push16_16"
-args = { a = "0.a", b = "1.a" }
-
-[[coalesce]]
-from = ["pop8|pop8s", "pop8|pop8s"]
-to   = "pop8_8"
-args = { a = "0.a", b = "1.a", sa = "0.sx", sb = "1.sx" }
-
-[[coalesce]]
-from = ["pop8|pop8s", "pop16"]
-to   = "pop8_16"
-args = { a = "0.a", b = "1.a", sa = "0.sx" }
-
-[[coalesce]]
-from = ["pop16", "pop8|pop8s"]
-to   = "pop16_8"
-args = { a = "0.a", b = "1.a", sb = "1.sx" }
-
-[[coalesce]]
-from = ["pop16", "pop16"]
-to   = "pop16_16"
-args = { a = "0.a", b = "1.a" }
 
 
 # =============================================================================

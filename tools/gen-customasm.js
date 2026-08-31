@@ -64,13 +64,12 @@
 //
 // WHAT THIS DOES NOT COVER
 // ------------------------
-//   [[coalesce]]  customasm has no cross-line peephole, so adjacent push8 /
-//                 pop8 pairs are NOT merged.  The pair mnemonics are emitted so
-//                 they can be written by hand, but a run of single pushes comes
-//                 out one instruction per line, larger than the real assembler
-//                 would produce.  This is the one place the generated assembler
-//                 is knowingly worse than the spec.
 //   prefer        disassembly only; there is nothing to generate.
+//
+// Nothing else.  The spec used to ask for cross-line coalescing of adjacent
+// pushes, which customasm has no peephole pass to do and which was the one
+// place this generator was knowingly worse than the spec; the multi-register
+// push and pop forms are written by hand now, so the gap is gone.
 //
 // =============================================================================
 

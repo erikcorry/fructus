@@ -6,7 +6,7 @@
 //   npm run check
 //
 // Checks the six encoding invariants the spec documents, plus the internal
-// consistency of the operand types, aliases and coalesce rules, then prints the
+// consistency of the operand types and aliases, then prints the
 // opcode map.  Exits non-zero on any failure.
 //
 // This is the tool that keeps an evolving opcode map honest: invariants 5 and 6
@@ -347,35 +347,6 @@ for (const al of spec.alias ?? []) {
     for (const o of al.operands)
       if (!refs.includes(o.name))
         err(`${tag}: prefer requires every operand used; '${o.name}' is not`);
-  }
-}
-
-// --- coalesce rules: mnemonics resolve, args fill the merged operands --------
-for (const c of spec.coalesce ?? []) {
-  const tag = `coalesce ${c.from.join(' + ')}`;
-  const sources = c.from.map((slot) => slot.split('|'));
-  for (const alts of sources)
-    for (const m of alts)
-      if (!byMnemonic[m]) err(`${tag}: unknown source mnemonic '${m}'`);
-  const targets = byMnemonic[c.to];
-  if (!targets) { err(`${tag}: unknown target mnemonic '${c.to}'`); continue; }
-  if (targets.length !== 1) { err(`${tag}: target '${c.to}' is ambiguous`); continue; }
-
-  const want = new Set(targets[0].operands.map((o) => o.name));
-  const got = new Set(Object.keys(c.args));
-  for (const o of want) if (!got.has(o)) err(`${tag}: target operand '${o}' unfilled`);
-  for (const o of got) if (!want.has(o)) err(`${tag}: '${o}' is not an operand of ${c.to}`);
-
-  for (const ref of Object.values(c.args)) {
-    const m = /^([01])\.(\w+)$/.exec(String(ref));
-    if (!m) { err(`${tag}: cannot parse argument '${ref}'`); continue; }
-    const [, slot, name] = m;
-    for (const src of sources[+slot]) {
-      const insn = byMnemonic[src]?.[0];
-      if (!insn) continue;
-      const has = insn.operands.some((o) => o.name === name) || name in (insn.traits ?? {});
-      if (!has) err(`${tag}: '${src}' has no operand or trait '${name}'`);
-    }
   }
 }
 

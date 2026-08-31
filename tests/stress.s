@@ -61,10 +61,15 @@ start:
         zxt8    r1, r2
 
         push16  lr
+        push16  lr, r4
+        push16  r0, r1, r2
         push8   r1
-        pop8    r1
+        pop8u   r1
         pop8s   r2
+        pop16   r2, r1, r0
+        pop16   r4, lr
         pop16   lr
+        call    r3
 
 btarget:
         br      btarget                   ; 2  alias -> br8 eq, r0, r0

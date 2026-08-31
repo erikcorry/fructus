@@ -24,10 +24,12 @@
 ; implicit bit, or 0xffff to leave it standing as a sign.  Applying it is then
 ; one `and`, with no branch and no test.  See step 4.
 ;
-; NOTE r5.  Unlike the other snippets this one uses the whole register file, so
-; it does not leave the assembler's reserved scratch alone.  Nothing breaks -
-; every immediate here is small enough to need no expansion - but it cannot be
-; assembled in a mode where r5 is genuinely off limits.
+; NOT AN ABI FUNCTION.  It uses the whole register file, which collides with the
+; calling convention in isa/abi.s at both ends: it writes r4, which is callee
+; saved, and it writes r5, which is the assembler's immediate scratch.  Neither
+; breaks anything here - every immediate in this routine is small enough to need
+; no expansion - but a callable wrapper around it must save and restore r4, and
+; nothing may be inserted into it that needs a long immediate.
 ;
 ; ----------------------------------------------------------------------------
 ; WHY THE RESULT CAN BE NEGATIVE

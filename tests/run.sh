@@ -17,7 +17,7 @@ node tools/gen-customasm.js --noat > build/fructus-noat.asm
 fail=0
 
 # --- everything must assemble in r5 mode ------------------------------------
-for src in snippets/*.s tests/stress.s tests/longimm.s; do
+for src in snippets/*.s isa/abi.s tests/stress.s tests/longimm.s; do
     cat build/fructus.asm "$src" > build/_t.asm
     if "$CA" -q -o /dev/null build/_t.asm 2>build/_err; then
         printf 'ok    %s\n' "$src"
