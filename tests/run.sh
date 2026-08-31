@@ -17,7 +17,7 @@ node tools/gen-customasm.js --noat > build/fructus-noat.asm
 fail=0
 
 # --- everything must assemble in r5 mode ------------------------------------
-for src in snippets/*.s isa/abi.s tests/stress.s tests/longimm.s tests/data.s; do
+for src in snippets/*.s isa/abi.s tests/stress.s tests/longimm.s tests/data.s tests/microtan-smoke.s; do
     cat build/fructus.asm "$src" > build/_t.asm
     if "$CA" -q -o /dev/null build/_t.asm 2>build/_err; then
         printf 'ok    %s\n' "$src"
@@ -34,6 +34,9 @@ if node tests/roundtrip.mjs snippets/*.s isa/abi.s tests/stress.s tests/longimm.
 
 # --- the snippets, actually executed -----------------------------------------
 if node tests/sim-check.mjs; then :; else fail=1; fi
+
+# --- the Microtan board: reset, ROM window, keyboard, display ----------------
+if node tests/microtan-check.mjs; then :; else fail=1; fi
 
 # --- snippet arithmetic, which assembling cannot check -----------------------
 for t in tests/fpadd-check.mjs tests/fpsub-check.mjs; do

@@ -8,7 +8,8 @@
     "check": "node tools/check.js",
     "gen": "mkdir -p build && node tools/gen-customasm.js > build/fructus.asm && node tools/gen-customasm.js --noat > build/fructus-noat.asm",
     "test": "sh tests/run.sh",
-    "sim": "node tools/sim.js"
+    "sim": "node tools/sim.js",
+    "microtan": "node tools/microtan.js"
   },
   "dependencies": {
     "smol-toml": "^1.8.0"
