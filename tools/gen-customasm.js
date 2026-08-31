@@ -73,12 +73,8 @@
 //
 // =============================================================================
 
-import { parse } from 'smol-toml';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+import { join } from 'node:path';
+import { loadSpec, decodeEncoding, intRange, nameIndex, root } from './isa.js';
 
 // --- command line ------------------------------------------------------------
 const opt = { at: true, spec: join(root, 'isa/fructus.toml'), scratch: 'r5' };
@@ -91,7 +87,7 @@ for (let i = 2; i < process.argv.length; i++) {
   else { console.error(`gen-customasm: unknown option ${a}`); process.exit(2); }
 }
 
-const spec  = parse(readFileSync(opt.spec, 'utf8'));
+const spec  = loadSpec(opt.spec);
 const types = spec.optype;
 
 const out = [];
@@ -112,29 +108,11 @@ function take(expr, hi, lo) {
   return `(${shifted} & ${hex((1 << n) - 1)})\`${n}`;
 }
 
-// The index a reg or enum spelling encodes to.
-function nameIndex(t, v) {
-  if (typeof v === 'number') return v;
-  const direct = t.names.indexOf(v);
-  if (direct >= 0) return direct;
-  const target = (t.aliases ?? {})[v];
-  if (target !== undefined) return t.names.indexOf(target);
-  throw new Error(`no encoding for ${v}`);
-}
-
 // Does a written int16 fit an N-bit field?  Both spellings of a 16-bit pattern
 // are legal (int16 has wrap = true), so the check is done on the wrapped value.
 // Biasing by 2^(N-1) folds the two valid ranges - the small non-negatives and
 // the large near-0xffff ones - into one contiguous window, which is exactly how
 // a sign-range check is done in hardware.
-// The values an int optype accepts, as written.  A signed field of n bits runs
-// -2^(n-1) .. 2^(n-1)-1; an unsigned one runs 0 .. 2^n-1.
-function intRange(t) {
-  return t.signed
-    ? [-(1 << (t.bits - 1)), (1 << (t.bits - 1)) - 1]
-    : [0, (1 << t.bits) - 1];
-}
-
 function rangeAssert(name, t) {
   if (!t.signed) return [`$assert(${name} >= 0)`, `$assert(${name} <= ${t.bits >= 16 ? '0xffff' : hex((1 << t.bits) - 1)})`];
   if (t.bits >= 16) return [`$assert(${name} >= -0x8000)`, `$assert(${name} <= 0xffff)`];
@@ -149,73 +127,6 @@ function relAssert(name, t) {
     `$assert(${name} >= -${hex(half)}, "branch target too far backwards")`,
     `$assert(${name} <= ${hex(half - 1)}, "branch target too far forwards")`,
   ];
-}
-
-// =============================================================================
-// Reading an `encoding` bit map
-// =============================================================================
-
-const FIELD_RE = /^([A-Za-z_]\w*):([A-Za-z_]\w*)(?:\[(\d+)(?::(\d+))?\])?$/;
-
-// Resolve a form's encoding into a run list.  A run is either a literal bit
-// string or a contiguous descending slice of one operand's encoded value.
-function decodeEncoding(insn, form) {
-  const chars = form.encoding.replace(/[\s_]/g, '').split('');
-  const ops   = insn.operands ?? [];
-
-  const occur = new Map();
-  chars.forEach((c, i) => {
-    if (/[a-z]/.test(c)) {
-      if (!occur.has(c)) occur.set(c, []);
-      occur.get(c).push(i);
-    }
-  });
-
-  const at      = new Array(chars.length).fill(null);
-  const encType = new Map();
-
-  for (const [letter, positions] of occur) {
-    const explicit = form.fields?.[letter];
-    let opName, typeName, bitIdx = null;
-
-    if (explicit) {
-      const m = FIELD_RE.exec(explicit);
-      if (!m) throw new Error(`${insn.mnemonic}: cannot parse field '${explicit}'`);
-      opName = m[1]; typeName = m[2];
-      if (m[3] !== undefined) {
-        const hi = +m[3], lo = m[4] !== undefined ? +m[4] : +m[3];
-        bitIdx = [];
-        if (hi >= lo) for (let b = hi; b >= lo; b--) bitIdx.push(b);
-        else          for (let b = hi; b <= lo; b++) bitIdx.push(b);
-      }
-    } else {
-      const cand = ops.filter((o) => o.name.startsWith(letter));
-      if (cand.length !== 1) throw new Error(`${insn.mnemonic}: letter '${letter}' is ambiguous`);
-      opName = cand[0].name; typeName = cand[0].type;
-    }
-
-    if (!bitIdx) bitIdx = positions.map((_, k) => positions.length - 1 - k);
-    encType.set(opName, typeName);
-    positions.forEach((p, k) => { at[p] = { op: opName, bit: bitIdx[k] }; });
-  }
-
-  const runs = [];
-  for (let i = 0; i < chars.length; ) {
-    if (at[i]) {
-      const op = at[i].op;
-      const hi = at[i].bit;
-      let lo = hi, j = i + 1;
-      while (j < chars.length && at[j] && at[j].op === op && at[j].bit === lo - 1) { lo = at[j].bit; j++; }
-      runs.push({ kind: 'field', op, hi, lo });
-      i = j;
-    } else {
-      let j = i, s = '';
-      while (j < chars.length && !at[j]) { s += chars[j]; j++; }
-      runs.push({ kind: 'lit', bits: s });
-      i = j;
-    }
-  }
-  return { runs, encType, nbytes: chars.length / 8 };
 }
 
 // =============================================================================

@@ -26,6 +26,15 @@ for src in snippets/*.s isa/abi.s tests/stress.s tests/longimm.s; do
     fi
 done
 
+# --- bytes -> text -> bytes, against the decoder ------------------------------
+# The decoder is a second reading of the same `encoding` strings, sharing no
+# code with the generator below the point where both parse the TOML.  If they
+# disagree about a field, the re-assembled bytes differ.
+if node tests/roundtrip.mjs snippets/*.s isa/abi.s tests/stress.s tests/longimm.s; then :; else fail=1; fi
+
+# --- the snippets, actually executed -----------------------------------------
+if node tests/sim-check.mjs; then :; else fail=1; fi
+
 # --- snippet arithmetic, which assembling cannot check -----------------------
 for t in tests/fpadd-check.mjs tests/fpsub-check.mjs; do
     if out=$(node "$t" 2>&1) && ! printf '%s' "$out" | grep -q MISMATCH; then

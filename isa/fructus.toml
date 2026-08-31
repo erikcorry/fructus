@@ -67,6 +67,47 @@
 # bytes -> text round-trips.
 #
 # ---------------------------------------------------------------------------
+# WHAT AN INSTRUCTION DOES: THE `semantics` FIELD
+# ---------------------------------------------------------------------------
+# Every [[insn]] carries one, and tools/sim.js executes it.  The language is
+# deliberately tiny - statements separated by `;`, one `if`, no loops, no
+# locals, no calls but a fixed set of builtins:
+#
+#   R[n]              the register file          M8[a]   one byte of memory
+#   sp, lr            register aliases, by name  M16[a]  one 16-bit word,
+#   pc                see below                          in `endian` order
+#   halted            set by `halt`
+#
+#   sxt8 zxt8         extend from 8 bits         clz bitrev popcount
+#   shl lsr asr       shift by a count           test(cond, x, y, width)
+#
+# Operand names are in scope as themselves, already decoded: `off` is the
+# signed displacement the programmer wrote, not the bits that carried it, and a
+# `combo` operand's parts are reached as `k.cond` and `k.imm`.
+#
+# EVERYTHING IS 16 BITS ON THE WAY IN AND OUT.  Intermediate arithmetic is
+# exact; assigning to R[], M8[] or M16[] truncates.  So `R[d] = R[a] + R[b]`
+# wraps because the destination is 16 bits wide, which is also why the hardware
+# wraps, rather than because a wrap was written down.
+#
+# `pc` IS THE ADDRESS OF THE NEXT INSTRUCTION.  It is advanced before the
+# semantics run, which is what lets `call` be `lr = pc; pc = t` and a branch be
+# `pc = pc + off` with no adjustment term in either.  It also means the pcrel
+# displacements are relative to the next instruction because the semantics say
+# so, and not by a separate convention a reader has to remember.
+#
+# MASKING THAT IS ARCHITECTURAL IS WRITTEN OUT.  A shift reads only the low four
+# bits of its count, so the semantics say `shl(R[a], R[b] & 15)` rather than
+# hiding the mask inside `shl`.  The reader should be able to see every place
+# the hardware ignores bits it was given.
+#
+# NOT JAVASCRIPT, ON PURPOSE.  Evaluating these as JS would have been free and
+# would have worked immediately.  The spec is meant to drive a hardware
+# description as well as a simulator, and semantics written in JS can only ever
+# drive JavaScript.  Everything above has an obvious translation to C and a
+# fairly obvious one to Verilog.
+#
+# ---------------------------------------------------------------------------
 # OPERAND TYPE KINDS
 # ---------------------------------------------------------------------------
 #   int     a number, `bits` wide, `signed` or not.  `wrap` additionally
@@ -688,6 +729,7 @@ operands = [
   { name = "off", type = "int16" },   # signed byte displacement (logical)
 ]
 syntax   = "{d}, [{a}, #{off}]"
+semantics = "R[d] = M8[R[a] + off]"
 
   [[insn.form]]
   name     = "implicit"
@@ -760,6 +802,7 @@ operands = [
   { name = "off", type = "int16" },
 ]
 syntax   = "{d}, [{a}, #{off}]"
+semantics = "R[d] = M16[R[a] + off]"
 
   [[insn.form]]
   name     = "implicit"
@@ -800,6 +843,7 @@ operands = [
   { name = "off", type = "int16" },
 ]
 syntax   = "{s}, [{a}, #{off}]"
+semantics = "M8[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "reg_reg"
@@ -821,6 +865,7 @@ operands = [
   { name = "off", type = "int16" },
 ]
 syntax   = "{s}, [{a}, #{off}]"
+semantics = "M16[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "reg_reg"
@@ -856,6 +901,7 @@ operands = [
   { name = "imm", type = "int16" },
 ]
 syntax   = "{d}, #{imm}"
+semantics = "R[d] = imm"
 
   [[insn.form]]
   name     = "reg_imm5"
@@ -913,6 +959,7 @@ operands = [
   { name = "b", type = "reg" },   # second source, split across both bytes
 ]
 syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = R[a] + R[b]"
 
   # Two fully implicit one-byte encodings for the two register triples that
   # dominate in practice.  Listed first only for readability - forms are tried
@@ -945,6 +992,7 @@ operands = [
   { name = "imm", type = "int16" },
 ]
 syntax   = "{d}, {a}, #{imm}"
+semantics = "R[d] = R[a] + imm"
 
   # Increment, decrement and step-by-two on r0, in one byte each.  Everything
   # is pinned, so these carry no fields at all.
@@ -1008,6 +1056,7 @@ operands = [
   { name = "b", type = "reg" },
 ]
 syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = R[b] - R[a]"
 
   [[insn.form]]
   name     = "three_reg"
@@ -1023,6 +1072,7 @@ operands = [
   { name = "imm", type = "int16" },
 ]
 syntax   = "{d}, {a}, #{imm}"
+semantics = "R[d] = imm - R[a]"
 
   [[insn.form]]
   name     = "reg_imm5"
@@ -1050,6 +1100,7 @@ operands = [
   { name = "b", type = "reg" },
 ]
 syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = R[a] ^ R[b]"
 
   [[insn.form]]
   name     = "three_reg"
@@ -1065,6 +1116,7 @@ operands = [
   { name = "imm", type = "int16" },
 ]
 syntax   = "{d}, {a}, #{imm}"
+semantics = "R[d] = R[a] ^ imm"
 
   [[insn.form]]
   name     = "reg_imm5"
@@ -1092,6 +1144,7 @@ operands = [
   { name = "b", type = "reg" },
 ]
 syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = R[a] | R[b]"
 
   [[insn.form]]
   name     = "three_reg"
@@ -1107,6 +1160,7 @@ operands = [
   { name = "imm", type = "int16" },
 ]
 syntax   = "{d}, {a}, #{imm}"
+semantics = "R[d] = R[a] | imm"
 
   # One-byte register moves.  `or rd, ra, #0` is a copy, so pinning the two
   # hot registers both ways gives single-byte `mov r0, r1` and `mov r1, r0`
@@ -1155,6 +1209,7 @@ operands = [
   { name = "b", type = "reg" },
 ]
 syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = R[a] & R[b]"
 
   [[insn.form]]
   name     = "three_reg"
@@ -1170,6 +1225,7 @@ operands = [
   { name = "imm", type = "int16" },
 ]
 syntax   = "{d}, {a}, #{imm}"
+semantics = "R[d] = R[a] & imm"
 
   [[insn.form]]
   name     = "reg_imm5"
@@ -1219,6 +1275,7 @@ operands = [
   { name = "b", type = "reg" },
 ]
 syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = shl(R[a], R[b] & 15)"
 
   [[insn.form]]
   name     = "three_reg"
@@ -1234,6 +1291,7 @@ operands = [
   { name = "imm", type = "int16" },
 ]
 syntax   = "{d}, {a}, #{imm}"
+semantics = "R[d] = shl(R[a], imm & 15)"
 
   [[insn.form]]
   name     = "reg_imm5"
@@ -1256,6 +1314,7 @@ operands = [
   { name = "b", type = "reg" },
 ]
 syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = asr(R[a], R[b] & 15)"
 
   [[insn.form]]
   name     = "three_reg"
@@ -1271,6 +1330,7 @@ operands = [
   { name = "imm", type = "int16" },
 ]
 syntax   = "{d}, {a}, #{imm}"
+semantics = "R[d] = asr(R[a], imm & 15)"
 
   [[insn.form]]
   name     = "reg_imm5"
@@ -1293,6 +1353,7 @@ operands = [
   { name = "b", type = "reg" },
 ]
 syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = lsr(R[a], R[b] & 15)"
 
   [[insn.form]]
   name     = "three_reg"
@@ -1308,6 +1369,7 @@ operands = [
   { name = "imm", type = "int16" },
 ]
 syntax   = "{d}, {a}, #{imm}"
+semantics = "R[d] = lsr(R[a], imm & 15)"
 
   [[insn.form]]
   name     = "reg_imm5"
@@ -1364,6 +1426,7 @@ operands = [
   { name = "a", type = "reg" },
 ]
 syntax   = "{d}, {a}"
+semantics = "R[d] = sxt8(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
@@ -1377,6 +1440,7 @@ operands = [
   { name = "a", type = "reg" },
 ]
 syntax   = "{d}, {a}"
+semantics = "R[d] = zxt8(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
@@ -1391,6 +1455,7 @@ operands = [
   { name = "a", type = "reg" },
 ]
 syntax   = "{d}, {a}"
+semantics = "R[d] = clz(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
@@ -1404,6 +1469,7 @@ operands = [
   { name = "a", type = "reg" },
 ]
 syntax   = "{d}, {a}"
+semantics = "R[d] = bitrev(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
@@ -1417,6 +1483,7 @@ operands = [
   { name = "a", type = "reg" },
 ]
 syntax   = "{d}, {a}"
+semantics = "R[d] = popcount(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
@@ -1457,6 +1524,7 @@ operands = [
   { name = "off",  type = "int16", pcrel = true },
 ]
 syntax        = "{cond}, {a}, {b}, {off}"
+semantics = "if (test(cond, R[a] & 255, R[b] & 255, 8)) pc = pc + off"
 swap_operands = ["a", "b"]
 
   # A register compared for equality with itself is always true, so pinning
@@ -1487,6 +1555,7 @@ operands = [
   { name = "off", type = "int16", pcrel = true },
 ]
 syntax   = "{k.cond}, {a}, #{k.imm}, {off}"
+semantics = "if (test(k.cond, R[a] & 255, k.imm & 255, 8)) pc = pc + off"
 
   [[insn.form]]
   name     = "cond_reg_imm"
@@ -1504,6 +1573,7 @@ operands = [
   { name = "off",  type = "int16", pcrel = true },
 ]
 syntax        = "{cond}, {a}, {b}, {off}"
+semantics = "if (test(cond, R[a], R[b], 16)) pc = pc + off"
 swap_operands = ["a", "b"]
 
   [[insn.form]]
@@ -1520,6 +1590,7 @@ operands = [
   { name = "off", type = "int16", pcrel = true },
 ]
 syntax   = "{k.cond}, {a}, #{k.imm}, {off}"
+semantics = "if (test(k.cond, R[a], k.imm, 16)) pc = pc + off"
 
   [[insn.form]]
   name     = "cond_reg_imm"
@@ -1560,6 +1631,7 @@ operands = [
   { name = "off",  type = "int16", pcrel = true },
 ]
 syntax   = "{a}, #{mask}, {off}"
+semantics = "if ((R[a] & mask) == 0) pc = pc + off"
 
   [[insn.form]]
   name     = "reg_mask"
@@ -1575,6 +1647,7 @@ operands = [
   { name = "off",  type = "int16", pcrel = true },
 ]
 syntax   = "{a}, #{mask}, {off}"
+semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 
   [[insn.form]]
   name     = "reg_mask"
@@ -1655,6 +1728,7 @@ mnemonic = "push8"
 summary  = "push the low byte of ra"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
+semantics = "sp = sp - 1; M8[sp] = R[a]"
 
   [[insn.form]]
   name     = "single"
@@ -1665,6 +1739,7 @@ mnemonic = "push16"
 summary  = "push ra"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
+semantics = "sp = sp - 2; M16[sp] = R[a]"
 
   [[insn.form]]
   name     = "single"
@@ -1675,6 +1750,7 @@ mnemonic = "push16"
 summary  = "push ra then rb"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
 syntax   = "{a}, {b}"
+semantics = "sp = sp - 2; M16[sp] = R[a]; sp = sp - 2; M16[sp] = R[b]"
 
   [[insn.form]]
   name     = "double"
@@ -1686,6 +1762,7 @@ summary  = "push ra, then rb, then rc"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" },
             { name = "c", type = "reg" }]
 syntax   = "{a}, {b}, {c}"
+semantics = "sp = sp - 2; M16[sp] = R[a]; sp = sp - 2; M16[sp] = R[b]; sp = sp - 2; M16[sp] = R[c]"
 
   [[insn.form]]
   name     = "triple"
@@ -1706,6 +1783,7 @@ mnemonic = "pop8u"
 summary  = "pop a byte into ra, zero extended"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
+semantics = "R[a] = M8[sp]; sp = sp + 1"
 
   [[insn.form]]
   name     = "single"
@@ -1716,6 +1794,7 @@ mnemonic = "pop8s"
 summary  = "pop a byte into ra, sign extended"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
+semantics = "R[a] = sxt8(M8[sp]); sp = sp + 1"
 
   [[insn.form]]
   name     = "single"
@@ -1726,6 +1805,7 @@ mnemonic = "pop16"
 summary  = "pop a word into ra"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
+semantics = "R[a] = M16[sp]; sp = sp + 2"
 
   [[insn.form]]
   name     = "single"
@@ -1736,6 +1816,7 @@ mnemonic = "pop16"
 summary  = "pop two words, into ra then rb"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
 syntax   = "{a}, {b}"
+semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2"
 
   [[insn.form]]
   name     = "double"
@@ -1747,6 +1828,7 @@ summary  = "pop three words, into ra then rb then rc"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" },
             { name = "c", type = "reg" }]
 syntax   = "{a}, {b}, {c}"
+semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2; R[c] = M16[sp]; sp = sp + 2"
 
   [[insn.form]]
   name     = "triple"
@@ -1774,6 +1856,7 @@ mnemonic = "jmpr"
 summary  = "pc += imm16"
 operands = [{ name = "t", type = "int16", pcrel = true }]
 syntax   = "{t}"
+semantics = "pc = pc + t"
 
   [[insn.form]]
   name     = "rel16"
@@ -1785,6 +1868,7 @@ mnemonic = "jmp"
 summary  = "pc = imm16"
 operands = [{ name = "t", type = "int16" }]
 syntax   = "{t}"
+semantics = "pc = t"
 
   [[insn.form]]
   name     = "abs16"
@@ -1796,6 +1880,7 @@ mnemonic = "callr"
 summary  = "lr = pc of next instruction; pc += imm16"
 operands = [{ name = "t", type = "int16", pcrel = true }]
 syntax   = "{t}"
+semantics = "lr = pc; pc = pc + t"
 
   [[insn.form]]
   name     = "rel16"
@@ -1807,6 +1892,7 @@ mnemonic = "call"
 summary  = "lr = pc of next instruction; pc = imm16"
 operands = [{ name = "t", type = "int16" }]
 syntax   = "{t}"
+semantics = "lr = pc; pc = t"
 
   [[insn.form]]
   name     = "abs16"
@@ -1834,6 +1920,7 @@ mnemonic = "call"
 summary  = "lr = pc of next instruction; pc = ra"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
+semantics = "lr = pc; pc = R[a]"
 
   [[insn.form]]
   name     = "reg"
@@ -1846,6 +1933,7 @@ mnemonic = "ret"
 summary  = "pc = lr"
 operands = []
 syntax   = ""
+semantics = "pc = lr"
 
   [[insn.form]]
   encoding = "1001_1100"
@@ -1857,6 +1945,7 @@ mnemonic = "nop"
 summary  = "do nothing"
 operands = []
 syntax   = ""
+semantics = ""
 
   [[insn.form]]
   encoding = "0000_0000"
@@ -1867,6 +1956,7 @@ mnemonic = "halt"
 summary  = "stop the machine"
 operands = []
 syntax   = ""
+semantics = "halted = 1"
 
   [[insn.form]]
   encoding = "0000_0001"

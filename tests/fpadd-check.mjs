@@ -3,6 +3,12 @@
 // These MIRROR the instruction sequences in that file one line at a time; if the
 // snippet changes, change this too.  Assembling proves it encodes, which is a
 // different claim from computing the right sum.
+//
+// The mirror is no longer the only witness: tests/sim-check.mjs runs the actual
+// assembled bytes on the simulator against exact BigInt arithmetic, so a drift
+// between this file and the snippet now shows up there.  What this file still
+// buys is exhaustiveness - the 47-million-combination sweep of the two carry
+// conditions below is far past what running real code case by case can reach.
 const M = 0xffff, B32 = 1n << 32n;
 let fails = 0;
 const check = (name, ok, detail = '') => {
@@ -10,7 +16,7 @@ const check = (name, ok, detail = '') => {
 };
 
 // ============================================================================
-// fpadd_mantissa - caller has unpacked and aligned.  34 bytes.
+// fpadd_mantissa - caller has unpacked and aligned.  32 bytes.
 // ============================================================================
 function aligned(xh, xl, yh, yl) {
   let r0 = xh, r1 = xl, r2 = yh, r3 = yl;
@@ -25,7 +31,7 @@ function aligned(xh, xl, yh, yl) {
     ovf = r0 <= yh0;                       //   br16 ls, r0, r2, shift_down
   }
   if (!ovf) {
-    r0 = ((r0 << 1) & M) >>> 1;            // shl r0,r0,#1 / lsr r0,r0,#1
+    r0 = r0 & 0x7fff;                      // and  r0, r0, #0x7fff
     return { hi: r0, lo: r1, exp: 0 };     // mov  r2, #0
   }
   r1 = r1 >>> 1;                           // lsr  r1, r1, #1
