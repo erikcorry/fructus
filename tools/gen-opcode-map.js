@@ -154,6 +154,128 @@ const esc = (s) => String(s).replace(/&(?!\w+;|#)/g, '&amp;').replace(/</g, '&lt
 
 // --- emit --------------------------------------------------------------------
 const hex2 = (n) => n.toString(16).padStart(2, '0');
+
+// =============================================================================
+// SVG output:  node tools/gen-opcode-map.js --svg > docs/opcodes.svg
+// =============================================================================
+//
+// WHY SVG AND NOT PNG.  GitHub strips <style>, <script>, class and style from
+// HTML in a README, so the interactive map cannot be embedded there - but an
+// SVG referenced as an image renders fine, stays sharp at any zoom, and is a
+// few tens of kilobytes.  A PNG would need a headless browser in the build,
+// which is a large dependency for a picture that this file can draw directly.
+//
+// The one constraint is fonts: a webfont will not load inside a proxied image,
+// so this uses generic families only and lays out text on the assumption that
+// a monospace advance is 0.6em, which is true of every common one.
+if (process.argv.includes('--svg')) {
+  const PAD = 26, CW = 104, CH = 50, GAP = 3, GUT = 40, COLH = 20;
+  const gridW = GUT + 8 * CW + 7 * GAP;
+  const W = PAD * 2 + gridW;
+  const MONO = "ui-monospace,'DejaVu Sans Mono','Liberation Mono',Menlo,monospace";
+  const SANS = "'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif";
+  const INK = '#16181D', MUTED = '#6A7180', FAINT = '#9AA1AE', RULE = '#E2E5EA';
+
+  const g = [];
+  // The mono stack is set once on the root and inherited; only sans text
+  // carries the attribute.  Deliberately not an internal <style> element - a
+  // sanitiser that strips it would take the whole typeface with it, and this
+  // file has to survive being served by someone else.
+  const t = (x, y, s, o = {}) => g.push(
+    `<text x="${x}" y="${y}"` + (o.f === SANS ? ` font-family="${SANS}"` : ``) +
+    ` font-size="${o.s ?? 12}"` +
+    (o.w ? ` font-weight="${o.w}"` : '') + ` fill="${o.c ?? INK}"` +
+    (o.a ? ` text-anchor="${o.a}"` : '') +
+    (o.ls ? ` letter-spacing="${o.ls}"` : '') + `>${esc(s)}</text>`);
+
+  // Greedy wrap to a character budget - monospace, so characters are the unit.
+  const wrap = (str, budget) => {
+    const out = [];
+    let line = '';
+    for (const word of str.split(' ')) {
+      if (!line) line = word;
+      else if (line.length + 1 + word.length <= budget) line += ' ' + word;
+      else { out.push(line); line = word; }
+    }
+    if (line) out.push(line);
+    return out;
+  };
+
+  // --- header ---------------------------------------------------------------
+  let y = PAD;
+  t(PAD, y + 11, 'FRUCTUS · 16-BIT · FIRST-BYTE DECODE', { s: 10, c: MUTED, ls: 1.4 });
+  t(PAD, y + 50, 'Opcode Map', { f: SANS, s: 34, w: 700 });
+  t(PAD, y + 72, "Instruction length comes from the first byte alone, so this table is the whole decoder.",
+    { f: SANS, s: 12.5, c: MUTED });
+  const stats = [[used, 'assigned'], [256 - used, 'free'], [MODES.length, 'addressing modes'],
+                 [spec.insn.length, 'instruction entries']];
+  let sx = PAD;
+  for (const [n, label] of stats) {
+    t(sx, y + 104, String(n), { s: 20, w: 600 });
+    t(sx, y + 118, label.toUpperCase(), { s: 8.5, c: FAINT, ls: 1.2 });
+    sx += Math.max(String(n).length * 13, label.length * 6.2) + 26;
+  }
+  g.push(`<rect x="${PAD}" y="${y + 130}" width="${gridW}" height="2" fill="${INK}"/>`);
+
+  // --- the matrix -----------------------------------------------------------
+  const gridTop = y + 152;
+  for (let x = 0; x < 8; x++)
+    t(PAD + GUT + x * (CW + GAP) + CW / 2, gridTop + 13, '·' + x,
+      { s: 10, c: MUTED, a: 'middle' });
+
+  const rowTop = (r) => gridTop + COLH + r * (CH + GAP);
+  for (let row = 0; row <= lastRow; row++) {
+    const ry = rowTop(row);
+    t(PAD + GUT - 9, ry + CH / 2 + 4, hex2(row * 8), { s: 10, c: MUTED, a: 'end' });
+    for (let x = 0; x < 8; x++) {
+      const cx = PAD + GUT + x * (CW + GAP);
+      const c = cells[row * 8 + x];
+      if (!c) {
+        g.push(`<rect x="${cx}" y="${ry}" width="${CW}" height="${CH}" rx="3" fill="#fff" stroke="${RULE}"/>`);
+        t(cx + 8, ry + 15, hex2(row * 8 + x), { s: 9, c: '#B9BFC9' });
+        continue;
+      }
+      g.push(`<rect x="${cx}" y="${ry}" width="${CW}" height="${CH}" rx="3" fill="${MODE[c.mode].c}"/>`);
+      t(cx + 8, ry + 15, hex2(c.b), { s: 9, c: 'rgba(0,0,0,.45)' });
+      t(cx + CW - 8, ry + 15, c.bytes + 'B', { s: 8.5, c: 'rgba(0,0,0,.42)', a: 'end' });
+      const lines = wrap(c.names.join(' '), Math.floor((CW - 16) / (13 * 0.6)));
+      lines.forEach((ln, i) => t(cx + 8, ry + 32 + i * 12, ln, { s: 13, w: 600, c: '#000' }));
+      if (c.sub) t(cx + 8, ry + 32 + lines.length * 12, c.sub,
+                   { s: 9, c: 'rgba(0,0,0,.62)' });
+    }
+  }
+  const gridBottom = rowTop(lastRow) + CH;
+  t(PAD, gridBottom + 22,
+    `Rows below ${hex2(tailFrom)} are omitted: ${256 - tailFrom} unbroken free opcodes run from ` +
+    `${hex2(tailFrom)} to ff.`, { f: SANS, s: 11.5, c: FAINT });
+
+  // --- key ------------------------------------------------------------------
+  const keyTop = gridBottom + 52;
+  t(PAD, keyTop, 'ADDRESSING MODES', { f: SANS, s: 11.5, w: 700, c: MUTED, ls: 1.5 });
+  const COLS = 3, KW = gridW / COLS, KH = 46;
+  MODES.forEach((m, i) => {
+    const kx = PAD + (i % COLS) * KW, ky = keyTop + 24 + Math.floor(i / COLS) * KH;
+    g.push(`<rect x="${kx}" y="${ky}" width="14" height="14" rx="2" fill="${m.c}"/>`);
+    t(kx + 22, ky + 11, m.label.replace(/&lt;/g, '<'), { s: 11.5, w: 600 });
+    t(kx + 22, ky + 25, m.bits, { s: 9.5, c: MUTED });
+    t(kx + KW - 16, ky + 11, String(count(m.id)), { s: 10, c: MUTED, a: 'end' });
+  });
+  const keyBottom = keyTop + 24 + Math.ceil(MODES.length / COLS) * KH;
+
+  g.push(`<rect x="${PAD}" y="${keyBottom}" width="${gridW}" height="1" fill="${RULE}"/>`);
+  t(PAD, keyBottom + 20, 'Generated from isa/fructus.toml by tools/gen-opcode-map.js.',
+    { f: SANS, s: 11, c: FAINT });
+  const H = keyBottom + 46;
+
+  process.stdout.write(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" ` +
+    `viewBox="0 0 ${W} ${H}" role="img" aria-label="Fructus opcode map"` +
+    ` font-family="${MONO}" fill="${INK}">\n` +
+    `<rect width="${W}" height="${H}" fill="#ffffff"/>\n` + g.join('\n') + `\n</svg>\n`);
+  process.exit(0);
+}
+
+
 const out = [];
 const w = (s = '') => out.push(s);
 
@@ -203,8 +325,8 @@ h1{font-size:clamp(30px,5vw,44px);font-weight:700;letter-spacing:-.015em;margin:
            word-break:break-word}
 .cell.free{border:1px solid var(--rule);background:var(--ground)}
 .cell.free .op{color:var(--empty-ink)}
-.cell .sz{margin-top:auto;font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;
-          color:rgba(0,0,0,.42);align-self:flex-end}
+.chd{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.cell .sz{font-family:var(--mono);font-size:8.5px;letter-spacing:.1em;color:rgba(0,0,0,.42)}
 
 /* --- key ---------------------------------------------------------------- */
 h2{font-size:13px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;margin:0 0 14px;
@@ -271,10 +393,10 @@ for (let row = 0; row <= lastRow; row++) {
     w(`  <div class="cell" tabindex="0" style="background:${m.c}"` +
       ` data-op="${hex2(c.b)}" data-write="${esc(write)}" data-mode="${m.label}"` +
       ` data-bits="${m.bits}" data-size="${c.bytes}" data-colour="${m.c}">` +
-      `<div class="op">${hex2(c.b)}</div>` +
+      `<div class="chd"><span class="op">${hex2(c.b)}</span>` +
+      `<span class="sz">${c.bytes}B</span></div>` +
       `<div class="mn">${esc(c.names.join(' '))}</div>` +
-      (c.sub ? `<div class="sub">${esc(c.sub)}</div>` : '') +
-      `<div class="sz">${c.bytes}B</div></div>`);
+      (c.sub ? `<div class="sub">${esc(c.sub)}</div>` : '') + `</div>`);
   }
 }
 w(`</div></div>`);

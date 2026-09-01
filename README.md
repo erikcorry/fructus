@@ -10,6 +10,11 @@ here is *what does this cost in bytes*.
 
 Right now: **82 encoding forms over 110 of the 256 first bytes, 146 free.**
 
+![The Fructus opcode map: 110 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
+
+Both this and an interactive version with per-cell tooltips come from
+`npm run map`.
+
 ## The one idea
 
 [`isa/fructus.toml`](isa/fructus.toml) is the single source of truth. It holds
@@ -76,7 +81,7 @@ tests/                the test suite
 | `npm run gen` | emits `build/fructus.asm`, a customasm ruledef |
 | `npm run sim -- <bin>` | runs a flat binary. `--trace`, `--pc`, `--sp`, `--max` |
 | `npm run microtan -- <rom>` | runs a ROM on the simulated board |
-| `npm run map` | emits `build/opcodes.html`, the opcode map |
+| `npm run map` | the opcode map: `build/opcodes.html` and `docs/opcodes.svg` |
 | `npm test` | everything |
 
 `tools/isa.js` reads the spec; `tools/decode.js` turns bytes back into
