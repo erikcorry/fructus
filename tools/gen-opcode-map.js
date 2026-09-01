@@ -104,6 +104,18 @@ function preferred(d) {
   return null;
 }
 
+// --- the operand shape a programmer writes ----------------------------------
+// The syntax template with the operand NAMES left in rather than values, so
+// {d}, [{a}, #{off}] reads as rd, [ra, #off].  This is what the tooltip shows,
+// because "which addressing mode" is really the question "what do I write".
+function shape(insn) {
+  const decl = Object.fromEntries((insn.operands ?? []).map((o) => [o.name, o]));
+  return (insn.syntax ?? '').replace(/\{(\w+)(?:\.(\w+))?\}/g, (_, n, part) => {
+    if (part) return part;
+    return decl[n]?.type === 'reg' ? 'r' + n : n;
+  });
+}
+
 // --- one cell per first byte -------------------------------------------------
 const mem = new Uint8Array(0x10000);
 const cells = [];
@@ -126,7 +138,8 @@ for (let b = 0; b < 256; b++) {
       else if (mode === 'abbrev') sub = render(spec, d).slice(d.insn.mnemonic.length).trim();
     }
   }
-  cells.push({ b, mode, names, sub, bytes: forms[0].nbytes });
+  const shapes = [...new Set(forms.map((c) => shape(c.insn)))];
+  cells.push({ b, mode, names, sub, bytes: forms[0].nbytes, shape: shapes.join('  /  ') });
 }
 
 const used  = cells.filter(Boolean).length;
@@ -206,6 +219,23 @@ h2{font-size:13px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
 .kcount{font-family:var(--mono);font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
 footer{font-size:12px;color:var(--faint);line-height:1.6;border-top:1px solid var(--rule);padding-top:16px}
 footer code{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+/* --- tooltip ------------------------------------------------------------ */
+/* One shared card, positioned from script and living outside .matrix-wrap,
+   because that container scrolls and would clip anything drawn inside a cell. */
+.cell{cursor:default}
+.cell:focus-visible{outline:2px solid var(--ink);outline-offset:1px}
+.tip{position:fixed;z-index:20;pointer-events:none;max-width:340px;
+     background:var(--ink);color:#F4F5F7;border-radius:5px;padding:9px 12px 10px;
+     box-shadow:0 6px 20px rgba(20,24,34,.28);opacity:0;transition:opacity .07s linear}
+.tip.on{opacity:1}
+.tip .thead{display:flex;align-items:center;gap:7px;margin-bottom:5px}
+.tip .tsw{width:10px;height:10px;border-radius:2px;flex:none}
+.tip .top{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:#9AA3B4}
+.tip .twrite{font-family:var(--mono);font-size:13px;font-weight:500;color:#fff;
+             margin-bottom:6px;word-break:break-word}
+.tip .tmode{font-size:12px;color:#DDE1E8;line-height:1.35}
+.tip .tbits{font-family:var(--mono);font-size:10.5px;color:#8F97A8;margin-top:3px}
+@media (prefers-reduced-motion: reduce){ .tip{transition:none} }
 </style>`);
 
 w(`<div class="page">`);
@@ -228,9 +258,19 @@ for (let row = 0; row <= lastRow; row++) {
   w(`  <div class="rowhead">${hex2(row * 8)}</div>`);
   for (let x = 0; x < 8; x++) {
     const c = cells[row * 8 + x];
-    if (!c) { w(`  <div class="cell free"><div class="op">${hex2(row * 8 + x)}</div></div>`); continue; }
+    if (!c) {
+      // Free cells get a tooltip on hover but are NOT tab stops: 110 assigned
+      // cells is already a long tab sequence, and "unassigned" is what the
+      // blank cell already says.
+      w(`  <div class="cell free" data-op="${hex2(row * 8 + x)}" data-free="1">` +
+        `<div class="op">${hex2(row * 8 + x)}</div></div>`);
+      continue;
+    }
     const m = MODE[c.mode];
-    w(`  <div class="cell" style="background:${m.c}">` +
+    const write = c.sub ? `${c.names[0]} ${c.sub}` : `${c.names.join(' / ')} ${c.shape}`.trim();
+    w(`  <div class="cell" tabindex="0" style="background:${m.c}"` +
+      ` data-op="${hex2(c.b)}" data-write="${esc(write)}" data-mode="${m.label}"` +
+      ` data-bits="${m.bits}" data-size="${c.bytes}" data-colour="${m.c}">` +
       `<div class="op">${hex2(c.b)}</div>` +
       `<div class="mn">${esc(c.names.join(' '))}</div>` +
       (c.sub ? `<div class="sub">${esc(c.sub)}</div>` : '') +
@@ -257,6 +297,48 @@ w(`</section>`);
 w(`<footer>Generated from <code>isa/fructus.toml</code> by <code>tools/gen-opcode-map.js</code>. ` +
   `Modes come from each form's bit layout, not its name. Where two layouts differ only in how one field is <em>read</em> they share a colour: <code>#imm3</code> and <code>#shift3</code> are one set of values reinterpreted, with no extra hardware behind either. <code>#imm5</code> and <code>#1&lt;&lt;n</code> are kept apart because their vocabularies are disjoint &mdash; signed &minus;16 to 15 against 32 masks. `+
   `Opcodes <code>12</code> and <code>13</code> carry several mnemonics apiece: the unary operations share two first bytes and separate on a field in byte&nbsp;1.</footer>`);
+w(`<div class="tip" id="tip" role="tooltip" hidden></div>`);
+w(`<script>`);
+w(`(function () {`);
+w(`  var tip = document.getElementById('tip');`);
+w(`  function show(cell) {`);
+w(`    var d = cell.dataset;`);
+w(`    if (d.free) {`);
+w(`      tip.innerHTML = '<div class="thead"><span class="top">0x' + d.op + '</span></div>' +`);
+w(`        '<div class="twrite">unassigned</div>';`);
+w(`    } else {`);
+w(`      tip.innerHTML =`);
+w(`        '<div class="thead"><span class="tsw" style="background:' + d.colour + '"></span>' +`);
+w(`        '<span class="top">0x' + d.op + ' &middot; ' + d.size + ' byte' + (d.size === '1' ? '' : 's') + '</span></div>' +`);
+w(`        '<div class="twrite">' + d.write + '</div>' +`);
+w(`        '<div class="tmode">' + d.mode + '</div>' +`);
+w(`        '<div class="tbits">' + d.bits + '</div>';`);
+w(`    }`);
+w(`    tip.hidden = false;`);
+w(`    var r = cell.getBoundingClientRect(), t = tip.getBoundingClientRect();`);
+w(`    var x = r.left + r.width / 2 - t.width / 2;`);
+w(`    x = Math.max(8, Math.min(x, window.innerWidth - t.width - 8));`);
+w(`    var above = r.top - t.height - 8;`);
+w(`    tip.style.left = x + 'px';`);
+w(`    tip.style.top = (above > 8 ? above : r.bottom + 8) + 'px';`);
+w(`    tip.classList.add('on');`);
+w(`  }`);
+w(`  function hide() { tip.classList.remove('on'); tip.hidden = true; }`);
+w(`  var grid = document.querySelector('.matrix');`);
+w(`  grid.addEventListener('mouseover', function (e) {`);
+w(`    var c = e.target.closest('.cell'); if (c) show(c);`);
+w(`  });`);
+w(`  grid.addEventListener('mouseout', function (e) {`);
+w(`    if (!e.relatedTarget || !e.relatedTarget.closest('.cell')) hide();`);
+w(`  });`);
+w(`  grid.addEventListener('focusin', function (e) {`);
+w(`    var c = e.target.closest('.cell'); if (c) show(c);`);
+w(`  });`);
+w(`  grid.addEventListener('focusout', hide);`);
+w(`  window.addEventListener('scroll', hide, true);`);
+w(`  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') hide(); });`);
+w(`}());`);
+w(`</` + `script>`);
 w(`</div>`);
 
 process.stdout.write(out.join('\n') + '\n');
