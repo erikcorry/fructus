@@ -169,7 +169,7 @@ const hex2 = (n) => n.toString(16).padStart(2, '0');
 // so this uses generic families only and lays out text on the assumption that
 // a monospace advance is 0.6em, which is true of every common one.
 if (process.argv.includes('--svg')) {
-  const PAD = 26, CW = 104, CH = 50, GAP = 3, GUT = 40, COLH = 20;
+  const PAD = 26, CW = 104, CH = 62, GAP = 3, GUT = 40, COLH = 20;
   const gridW = GUT + 8 * CW + 7 * GAP;
   const W = PAD * 2 + gridW;
   const MONO = "ui-monospace,'DejaVu Sans Mono','Liberation Mono',Menlo,monospace";
@@ -236,12 +236,32 @@ if (process.argv.includes('--svg')) {
         continue;
       }
       g.push(`<rect x="${cx}" y="${ry}" width="${CW}" height="${CH}" rx="3" fill="${MODE[c.mode].c}"/>`);
-      t(cx + 8, ry + 15, hex2(c.b), { s: 9, c: 'rgba(0,0,0,.45)' });
-      t(cx + CW - 8, ry + 15, c.bytes + 'B', { s: 8.5, c: 'rgba(0,0,0,.42)', a: 'end' });
+      t(cx + 8, ry + 14, hex2(c.b), { s: 9, c: 'rgba(0,0,0,.45)' });
+      t(cx + CW - 8, ry + 14, c.bytes + 'B', { s: 8.5, c: 'rgba(0,0,0,.42)', a: 'end' });
       const lines = wrap(c.names.join(' '), Math.floor((CW - 16) / (13 * 0.6)));
-      lines.forEach((ln, i) => t(cx + 8, ry + 32 + i * 12, ln, { s: 13, w: 600, c: '#000' }));
-      if (c.sub) t(cx + 8, ry + 32 + lines.length * 12, c.sub,
-                   { s: 9, c: 'rgba(0,0,0,.62)' });
+      lines.forEach((ln, i) => t(cx + 8, ry + 31 + i * 12, ln, { s: 13, w: 600, c: '#000' }));
+
+      // THE MODE IS PRINTED, NOT HOVERED.  An SVG loaded through <img> - which
+      // is how a README embeds it - renders in secure static mode: no script,
+      // no pointer events, and <title> tooltips never fire.  So the thing the
+      // HTML puts in a tooltip has to be on the face of the cell here.
+      //
+      // A one-byte abbreviation shows its pinned operands instead.  Its colour
+      // already says which mode it is, and what it abbreviates is the only
+      // thing about it worth the room.
+      const foot = c.sub ? [c.sub] : wrap(MODE[c.mode].label.replace(/&lt;/g, '<'),
+                                          Math.floor((CW - 16) / (8.5 * 0.6)));
+      foot.forEach((ln, i) => t(cx + 8, ry + 31 + lines.length * 12 + 2 + i * 10, ln,
+                                { s: 8.5, c: 'rgba(0,0,0,.62)' }));
+
+      // Nothing may fall out of the bottom of a cell.  Two mnemonic lines and
+      // two footer lines would, and today no cell has both - the only
+      // two-line mnemonics are the unary ops, whose mode is "rd, ra".  This
+      // asserts that rather than trusting it to stay true.
+      const lowest = 31 + lines.length * 12 + 2 + (foot.length - 1) * 10 + 3;
+      if (lowest > CH)
+        throw new Error(`0x${hex2(c.b)}: ${lines.length} name lines and ${foot.length} ` +
+                        `footer lines need ${lowest}px, cell is ${CH}px`);
     }
   }
   const gridBottom = rowTop(lastRow) + CH;
