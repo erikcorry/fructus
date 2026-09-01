@@ -165,6 +165,76 @@ the case against.
 **`halt` is opcode `0x00`,** so erased memory, an unwritten ROM and a wild jump
 into a zeroed page all stop where the mistake happened.
 
+## Possible enhancements
+
+The opcode map makes the gaps visible, and three of them are worth naming. None
+is implemented; they are here so the space does not get spent on something else
+by accident.
+
+### Three-register load and store — `ld16 rd, [ra, rb]`
+
+The obvious missing addressing mode: an index register instead of a constant
+displacement, for `p[i]` where `i` is not known at assembly time. Today that
+costs an `add` first, and a register to put the sum in.
+
+**The free space is exactly the right shape.** A three-register form needs nine
+register bits, so it spends one opcode bit on the third register and takes a
+*pair* of opcodes — which is what the ALU's three-register forms already do:
+
+```
+0100_011b  ddda_aacc      add rd, ra, rb
+```
+
+Columns `.6` and `.7` are free in all four memory rows, and `.6`/`.7` is the
+column where three-register forms live:
+
+```
+0001_111b  st8  rs, [ra, rb]      0010_111b  ld8  rd, [ra, rb]
+0010_011b  st16 rs, [ra, rb]      0011_011b  ld16 rd, [ra, rb]
+```
+
+Four instructions, two opcodes each, eight opcodes — and exactly eight are free,
+in exactly those columns. Nothing has to move.
+
+The hardware cost is a second read port on the address path, which the ALU's
+three-register forms already need.
+
+### `add` and `rsb` with a `#1<<n` immediate
+
+Slot `+1` of every ALU group is the immbit5 slot. `xor`, `or` and `and` use
+theirs — bit flip, bit set, bit clear. `add` (0x41) and `rsb` (0x49) are free.
+
+For `add` this buys the powers of two from 16 to 32768 in two bytes, which
+`imm5` cannot reach and `imm10` spends three bytes on. Advancing a pointer by a
+power-of-two record size is the case that turns up. The inverted half of the
+table gives −2, −3, −5, −9, −17 … −16385, the −(2ⁿ+1) sequence: useful by
+accident rather than design, and awkward for stack frames, since a 1024-byte
+frame wants −1024 and the table offers −1025.
+
+`rsb rd, rd, #1<<n` computes (2ⁿ − rd). Plausible for mirroring an index; no
+routine here has wanted one yet.
+
+One opcode each and no new hardware — the 4-to-16 decoder is already built for
+the other three. Cheap enough that the question is whether they earn their line
+in the documentation, not whether the map can afford them.
+
+The other three free `+1` slots — `shl`, `asr` and `lsr` at 0x69, 0x71 and 0x79
+— are free for a reason and should stay that way. A shift count is masked to
+four bits, so `1<<4` and everything above it reads as a shift of zero. immbit5
+is meaningless there.
+
+### Five unused one-byte encodings
+
+0x0b through 0x0f. The eleven that are spent buy `add r0, r0, #1`, `mov r0, r1`
+and their neighbours at one byte instead of two, which is why `leaf_example` in
+[isa/abi.s](isa/abi.s) is four bytes rather than six.
+
+**These should not be spent on a guess.** Each is worth exactly the frequency of
+the operand pattern it pins, and that is a question about real code rather than
+about the instruction set. The way to spend them is to write or compile a
+corpus, count, and pin the top five — which is also an argument for getting a
+compiler working before the map fills up.
+
 ## Status
 
 The instruction set is settled enough to write real code against, and the
