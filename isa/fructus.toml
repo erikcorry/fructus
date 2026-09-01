@@ -545,9 +545,6 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   ------------------------------------------------------------------------
 #
 #   0001_0ddd                mov  rd, #imm16            3 bytes
-#   0001_1000                mov  rd, #imm5             2 bytes
-#   0001_1001                mov  rd, #immbit5          2 bytes
-#   0001_1010 .. 0001_1111   -- free, 6 slots
 #
 #   The wide-immediate form takes the WHOLE first row because it spends three
 #   opcode bits on the destination register - it is the general shape, not a
@@ -588,17 +585,38 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   order.  Nothing decodes differently either way - it is a table that people
 #   read, and it reads better in this order.
 #
-#     0010_0000  -- free               0011_0000  ld8  rd,[rd,#off5]
-#     0010_001i  st8  rs,[ra,#imm3]    0011_001i  ld8  rd,[ra,#imm3]
-#     0010_0100  st8  rs,[ra,#imm10]   0011_0100  ld8  rd,[ra,#imm10]
-#     0010_1000  -- free               0011_1000  ld16 rd,[rd,#off5]
-#     0010_101i  st16 rs,[ra,#imm3]    0011_101i  ld16 rd,[ra,#imm3]
-#     0010_1100  st16 rs,[ra,#imm10]   0011_1100  ld16 rd,[ra,#imm10]
+#     0001_1000  -- free               0010_1000  ld8  rd,[rd,#off5]
+#     0001_101i  st8  rs,[ra,#imm3]    0010_101i  ld8  rd,[ra,#imm3]
+#     0001_1100  st8  rs,[ra,#imm10]   0010_1100  ld8  rd,[ra,#imm10]
+#     0010_0000  -- free               0011_0000  ld16 rd,[rd,#off5]
+#     0010_001i  st16 rs,[ra,#imm3]    0011_001i  ld16 rd,[ra,#imm3]
+#     0010_0100  st16 rs,[ra,#imm10]   0011_0100  ld16 rd,[ra,#imm10]
+#   ------------------------------------------------------------------------
 #
-#   And the unary ALU operations end the block at 0011_111s, so they sit
-#   immediately above the ALU block proper.  They ARE ALU operations - sxt8,
-#   clz, bitrev, popcount - and having them adrift up in the mov row was the
-#   one thing in this region that had to be explained rather than seen.
+#   --- the last row before the ALU: constants and the unary operations ------
+#
+#   0011_1000                mov  rd, #imm5             2 bytes
+#   0011_1001                mov  rd, #immbit5          2 bytes
+#   0011_101s                unary ops, 8 in TWO opcodes 2 bytes
+#   0011_1100 .. 0011_1111   -- free, 4 slots
+#
+#   THE UNARY OPERATIONS ARE IN THE RIGHT COLUMN NOW, and the column is the
+#   whole argument for putting them here.  Byte 1 of a unary op is
+#
+#       d d d a a a s s      destination, source, operation selector
+#
+#   which is the same shape as byte 1 of every `rd, ra, #imm3` form in the map -
+#   two register fields and a small one left over.  So they belong in columns
+#   .2 and .3, where every other instruction with that byte-1 layout already
+#   sits: the load and store displacement forms above, and the ALU's imm3 forms
+#   below.  They are not two-register instructions that happen to have a
+#   selector; they are three-operand instructions whose third operand is the
+#   opcode.
+#
+#   From here down to the end of the push and pop block, columns .2 and .3 hold
+#   nothing but that layout: st8, st16, ld8, ld16, the unary ops, all six ALU
+#   groups, then push16 and pop16.  Eighteen consecutive rows where byte 1 is
+#   two register fields and a remainder.
 #   ------------------------------------------------------------------------
 #
 #   --- the ALU block --------------------------------------------------------
@@ -760,7 +778,7 @@ semantics = "R[d] = M8[R[a] + off]"
 
   [[insn.form]]
   name     = "reg_off5"
-  encoding = "0011_0000  aaao_oooo"
+  encoding = "0010_1000  aaao_oooo"
   fields   = { o = "off:imm5" }
   tie      = { d = "a" }             # one field serves as address and dest
 
@@ -775,7 +793,7 @@ semantics = "R[d] = M8[R[a] + off]"
   # it is what makes room for a separate destination and address in two bytes.
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_001i  ddda_aajj"
+  encoding = "0010_101i  ddda_aajj"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   # Three bytes, and in exchange everything is independent and nothing is
@@ -787,7 +805,7 @@ semantics = "R[d] = M8[R[a] + off]"
   #     byte 2:  i i i i i i i i   off bits 7..0
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0011_0100  ddda_aaii  iiii_iiii"
+  encoding = "0010_1100  ddda_aaii  iiii_iiii"
   fields   = { i = "off:imm10" }
 
 
@@ -833,18 +851,18 @@ semantics = "R[d] = M16[R[a] + off]"
 
   [[insn.form]]
   name     = "reg_off5"
-  encoding = "0011_1000  aaao_oooo"
+  encoding = "0011_0000  aaao_oooo"
   fields   = { o = "off:imm5" }
   tie      = { d = "a" }
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_101i  ddda_aajj"
+  encoding = "0011_001i  ddda_aajj"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0011_1100  ddda_aaii  iiii_iiii"
+  encoding = "0011_0100  ddda_aaii  iiii_iiii"
   fields   = { i = "off:imm10" }
 
 
@@ -869,12 +887,12 @@ semantics = "M8[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0010_001i  sssa_aajj"
+  encoding = "0001_101i  sssa_aajj"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0010_0100  sssa_aaii  iiii_iiii"
+  encoding = "0001_1100  sssa_aaii  iiii_iiii"
   fields   = { i = "off:imm10" }
 
 
@@ -891,12 +909,12 @@ semantics = "M16[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0010_101i  sssa_aajj"
+  encoding = "0010_001i  sssa_aajj"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0010_1100  sssa_aaii  iiii_iiii"
+  encoding = "0010_0100  sssa_aaii  iiii_iiii"
   fields   = { i = "off:imm10" }
 
 
@@ -927,7 +945,7 @@ semantics = "R[d] = imm"
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0001_1000  dddi_iiii"
+  encoding = "0011_1000  dddi_iiii"
   fields   = { i = "imm:imm5" }
 
   # The same two-byte shape, the same five bits, read through immbit5 instead
@@ -941,7 +959,7 @@ semantics = "R[d] = imm"
   # field.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0001_1001  dddi_iiii"
+  encoding = "0011_1001  dddi_iiii"
   fields   = { i = "imm:immbit5" }
 
   # Destination in the opcode byte, then a whole 16-bit immediate.  No
@@ -1437,7 +1455,7 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
 # through a value table, `shift3` through a shift-count table, and here they
 # are a raw 0..7 opcode extension with no table at all.
 #
-#     byte 0:  0 0 1 1 1 1 1 s    opcode pair 0x3e/0x3f, s = selector bit 0
+#     byte 0:  0 0 1 1 1 0 1 s    opcode pair 0x3a/0x3b, s = selector bit 0
 #     byte 1:  d d d a a a t t    dest, source, selector bits 2 and 1
 #
 # Once an operation is named its selector is constant, so each one below has a
@@ -1445,14 +1463,14 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
 # opcode bits to the assembler.  Eight operations for two first-byte opcodes.
 #
 #     sel  mnemonic    byte 0  byte 1 low bits
-#      0   sxt8         0x3e   00
-#      1   zxt8         0x3f   00
-#      2   clz          0x3e   01     TENTATIVE
-#      3   bitrev       0x3f   01     TENTATIVE
-#      4   popcount     0x3e   10     TENTATIVE
-#      5   -- free      0x3f   10
-#      6   -- free      0x3e   11
-#      7   -- free      0x3f   11
+#      0   sxt8         0x3a   00
+#      1   zxt8         0x3b   00
+#      2   clz          0x3a   01     TENTATIVE
+#      3   bitrev       0x3b   01     TENTATIVE
+#      4   popcount     0x3a   10     TENTATIVE
+#      5   -- free      0x3b   10
+#      6   -- free      0x3a   11
+#      7   -- free      0x3b   11
 #
 # neg and inv are deliberately absent: `rsb rd, ra, #0` and `xor rd, ra, #-1`
 # already express them in two bytes, and both 0 and -1 are in the imm3 table.
@@ -1473,7 +1491,7 @@ semantics = "R[d] = sxt8(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_1110  ddda_aa00"
+  encoding = "0011_1010  ddda_aa00"
 
 [[insn]]
 mnemonic = "zxt8"
@@ -1487,7 +1505,7 @@ semantics = "R[d] = zxt8(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_1111  ddda_aa00"
+  encoding = "0011_1011  ddda_aa00"
 
 # --- the three below are TENTATIVE ------------------------------------------
 [[insn]]
@@ -1502,7 +1520,7 @@ semantics = "R[d] = clz(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_1110  ddda_aa01"
+  encoding = "0011_1010  ddda_aa01"
 
 [[insn]]
 mnemonic = "bitrev"
@@ -1516,7 +1534,7 @@ semantics = "R[d] = bitrev(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_1111  ddda_aa01"
+  encoding = "0011_1011  ddda_aa01"
 
 [[insn]]
 mnemonic = "popcount"
@@ -1530,7 +1548,7 @@ semantics = "R[d] = popcount(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_1110  ddda_aa10"
+  encoding = "0011_1010  ddda_aa10"
 
 
 # --- br8 / br16 -------------------------------------------------------------
