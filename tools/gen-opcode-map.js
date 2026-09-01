@@ -126,12 +126,30 @@ function preferred(d) {
 // #imm5 would be an outright lie about which values fit.
 function shape(insn, form) {
   const decl = Object.fromEntries((insn.operands ?? []).map((o) => [o.name, o]));
-  return (insn.syntax ?? '').replace(/\{(\w+)(?:\.(\w+))?\}/g, (_, n, part) => {
+
+  // TWO OPERANDS JOINED BY `tie` ARE ONE REGISTER FIELD and must print with one
+  // name.  `ld rd, [ra, #off5]` is a lie: that form has a single 3-bit register
+  // field serving as both destination and address, so it can only ever be
+  // `ld rd, [rd, #off5]` - which is the whole reason it fits in two bytes, and
+  // the reason it earns its opcode on a load and not on a store.
+  //
+  // The surviving name is whichever the syntax mentions first, because that is
+  // the one the reader meets first.
+  const syn = insn.syntax ?? '';
+  const pos = (name) => { const i = syn.indexOf('{' + name + '}'); return i < 0 ? 1e9 : i; };
+  const same = {};
+  for (const [k, v] of Object.entries(form?.form?.tie ?? {})) {
+    const win = pos(k) <= pos(v) ? k : v;
+    same[k] = win; same[v] = win;
+  }
+
+  return syn.replace(/\{(\w+)(?:\.(\w+))?\}/g, (_, raw, part) => {
     if (part) return part;                      // combo parts: cond, imm
+    const n = same[raw] ?? raw;
     const d = decl[n];
     if (d?.type === 'reg') return 'r' + n;      // rd, ra, rb, rc, rs
     if (d?.pcrel || n === 'target') return 'target';
-    const enc = form?.encType.get(n);
+    const enc = form?.encType.get(raw);
     if (!enc) return n;                         // pinned or tied: no field
     if (enc === 'immbit5') return 'immbit5';
     // Only a SIZED immediate gets a width.  A condition is an enum - cond3 is

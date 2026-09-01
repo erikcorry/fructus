@@ -183,7 +183,7 @@
 <text x="74" y="537" font-size="9" fill="rgba(0,0,0,.45)">28</text>
 <text x="162" y="537" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="74" y="554" font-size="13" font-weight="600" fill="#000">ld</text>
-<text x="74" y="568" font-size="8.5" fill="rgba(0,0,0,.62)">rd, [ra, #off5]</text>
+<text x="74" y="568" font-size="8.5" fill="rgba(0,0,0,.62)">rd, [rd, #off5]</text>
 <rect x="173" y="523" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
 <text x="181" y="538" font-size="9" fill="#B9BFC9">29</text>
 <rect x="280" y="523" width="104" height="62" rx="3" fill="#A6D9B4"/>
@@ -212,7 +212,7 @@
 <text x="74" y="602" font-size="9" fill="rgba(0,0,0,.45)">30</text>
 <text x="162" y="602" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="74" y="619" font-size="13" font-weight="600" fill="#000">ld8</text>
-<text x="74" y="633" font-size="8.5" fill="rgba(0,0,0,.62)">rd, [ra, #off5]</text>
+<text x="74" y="633" font-size="8.5" fill="rgba(0,0,0,.62)">rd, [rd, #off5]</text>
 <rect x="173" y="588" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
 <text x="181" y="603" font-size="9" fill="#B9BFC9">31</text>
 <rect x="280" y="588" width="104" height="62" rx="3" fill="#A6D9B4"/>
@@ -271,7 +271,7 @@
 <text x="74" y="732" font-size="9" fill="rgba(0,0,0,.45)">40</text>
 <text x="162" y="732" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="74" y="749" font-size="13" font-weight="600" fill="#000">add</text>
-<text x="74" y="763" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #imm5</text>
+<text x="74" y="763" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #imm5</text>
 <rect x="173" y="718" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
 <text x="181" y="733" font-size="9" fill="#B9BFC9">41</text>
 <rect x="280" y="718" width="104" height="62" rx="3" fill="#A6D9B4"/>
@@ -306,7 +306,7 @@
 <text x="74" y="797" font-size="9" fill="rgba(0,0,0,.45)">48</text>
 <text x="162" y="797" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="74" y="814" font-size="13" font-weight="600" fill="#000">rsb</text>
-<text x="74" y="828" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #imm5</text>
+<text x="74" y="828" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #imm5</text>
 <rect x="173" y="783" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
 <text x="181" y="798" font-size="9" fill="#B9BFC9">49</text>
 <rect x="280" y="783" width="104" height="62" rx="3" fill="#A6D9B4"/>
@@ -341,12 +341,12 @@
 <text x="74" y="862" font-size="9" fill="rgba(0,0,0,.45)">50</text>
 <text x="162" y="862" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="74" y="879" font-size="13" font-weight="600" fill="#000">xor</text>
-<text x="74" y="893" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #imm5</text>
+<text x="74" y="893" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #imm5</text>
 <rect x="173" y="848" width="104" height="62" rx="3" fill="#F2D6F2"/>
 <text x="181" y="862" font-size="9" fill="rgba(0,0,0,.45)">51</text>
 <text x="269" y="862" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="181" y="879" font-size="13" font-weight="600" fill="#000">xor</text>
-<text x="181" y="893" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #immbit5</text>
+<text x="181" y="893" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #immbit5</text>
 <rect x="280" y="848" width="104" height="62" rx="3" fill="#A6D9B4"/>
 <text x="288" y="862" font-size="9" fill="rgba(0,0,0,.45)">52</text>
 <text x="376" y="862" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
@@ -379,12 +379,12 @@
 <text x="74" y="927" font-size="9" fill="rgba(0,0,0,.45)">58</text>
 <text x="162" y="927" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="74" y="944" font-size="13" font-weight="600" fill="#000">or</text>
-<text x="74" y="958" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #imm5</text>
+<text x="74" y="958" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #imm5</text>
 <rect x="173" y="913" width="104" height="62" rx="3" fill="#F2D6F2"/>
 <text x="181" y="927" font-size="9" fill="rgba(0,0,0,.45)">59</text>
 <text x="269" y="927" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="181" y="944" font-size="13" font-weight="600" fill="#000">or</text>
-<text x="181" y="958" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #immbit5</text>
+<text x="181" y="958" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #immbit5</text>
 <rect x="280" y="913" width="104" height="62" rx="3" fill="#A6D9B4"/>
 <text x="288" y="927" font-size="9" fill="rgba(0,0,0,.45)">5a</text>
 <text x="376" y="927" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
@@ -417,12 +417,12 @@
 <text x="74" y="992" font-size="9" fill="rgba(0,0,0,.45)">60</text>
 <text x="162" y="992" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="74" y="1009" font-size="13" font-weight="600" fill="#000">and</text>
-<text x="74" y="1023" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #imm5</text>
+<text x="74" y="1023" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #imm5</text>
 <rect x="173" y="978" width="104" height="62" rx="3" fill="#F2D6F2"/>
 <text x="181" y="992" font-size="9" fill="rgba(0,0,0,.45)">61</text>
 <text x="269" y="992" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="181" y="1009" font-size="13" font-weight="600" fill="#000">and</text>
-<text x="181" y="1023" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #immbit5</text>
+<text x="181" y="1023" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #immbit5</text>
 <rect x="280" y="978" width="104" height="62" rx="3" fill="#A6D9B4"/>
 <text x="288" y="992" font-size="9" fill="rgba(0,0,0,.45)">62</text>
 <text x="376" y="992" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
@@ -455,7 +455,7 @@
 <text x="74" y="1057" font-size="9" fill="rgba(0,0,0,.45)">68</text>
 <text x="162" y="1057" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="74" y="1074" font-size="13" font-weight="600" fill="#000">shl</text>
-<text x="74" y="1088" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #imm5</text>
+<text x="74" y="1088" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #imm5</text>
 <rect x="173" y="1043" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
 <text x="181" y="1058" font-size="9" fill="#B9BFC9">69</text>
 <rect x="280" y="1043" width="104" height="62" rx="3" fill="#A6D9B4"/>
@@ -487,7 +487,7 @@
 <text x="74" y="1122" font-size="9" fill="rgba(0,0,0,.45)">70</text>
 <text x="162" y="1122" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="74" y="1139" font-size="13" font-weight="600" fill="#000">asr</text>
-<text x="74" y="1153" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #imm5</text>
+<text x="74" y="1153" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #imm5</text>
 <rect x="173" y="1108" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
 <text x="181" y="1123" font-size="9" fill="#B9BFC9">71</text>
 <rect x="280" y="1108" width="104" height="62" rx="3" fill="#A6D9B4"/>
@@ -519,7 +519,7 @@
 <text x="74" y="1187" font-size="9" fill="rgba(0,0,0,.45)">78</text>
 <text x="162" y="1187" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
 <text x="74" y="1204" font-size="13" font-weight="600" fill="#000">lsr</text>
-<text x="74" y="1218" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #imm5</text>
+<text x="74" y="1218" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #imm5</text>
 <rect x="173" y="1173" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
 <text x="181" y="1188" font-size="9" fill="#B9BFC9">79</text>
 <rect x="280" y="1173" width="104" height="62" rx="3" fill="#A6D9B4"/>
