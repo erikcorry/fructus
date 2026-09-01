@@ -6,7 +6,7 @@
 ;
 ; ENDIANNESS.  customasm's built-in `#d16` and `#d32` write the MOST significant
 ; byte first, whatever the target is.  `#d16 0x1234` assembles to 12 34, and
-; `ld16` on a little-endian machine reads that back as 0x3412 - no error, no
+; `ld` on a little-endian machine reads that back as 0x3412 - no error, no
 ; warning, just a byte-swapped constant.  `dw` and `dd`, generated from the
 ; spec's own `endian`, are the ones to use.
 ;
@@ -45,13 +45,13 @@ text:
 
 data_test:
     mov  r1, #(obj + TAG)               ; a TAGGED pointer to obj
-    ld16 r0, [r1, #node.value - TAG]    ; 2 - 1 = 1, a two-byte encoding
-    ld16 r2, [r1, #node.kind  - TAG]    ; 4 - 1 = 3, likewise
+    ld r0, [r1, #node.value - TAG]    ; 2 - 1 = 1, a two-byte encoding
+    ld r2, [r1, #node.kind  - TAG]    ; 4 - 1 = 3, likewise
     mov  r1, #word
-    ld16 r3, [r1, #0]                   ; 0xbeef, not 0xefbe
+    ld r3, [r1, #0]                   ; 0xbeef, not 0xefbe
     mov  r1, #long
-    ld16 r4, [r1, #2]                   ; the HIGH half, at the HIGHER address
-    ld16 r5, [r1, #0]                   ; the low half.  Loaded last, because
+    ld r4, [r1, #2]                   ; the HIGH half, at the HIGHER address
+    ld r5, [r1, #0]                   ; the low half.  Loaded last, because
                                         ; r5 is the assembler's scratch and any
                                         ; long immediate above would destroy it
 data_done:

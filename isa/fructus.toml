@@ -532,8 +532,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   0000_0000                halt                       1 byte
 #   0000_0001                nop                        1 byte
-#   0000_0010                ld8  r0, [r0, #0]          1 byte
-#   0000_0011                ld16 r0, [r0, #0]          1 byte
+#   0000_0010                ld   r0, [r0, #0]          1 byte
+#   0000_0011                ld8  r0, [r0, #0]          1 byte
 #   0000_0100                add  r0, r0, #1            1 byte
 #   0000_0101                add  r0, r0, #-1           1 byte
 #   0000_0110                add  r0, r0, #2            1 byte
@@ -577,6 +577,21 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   r3, [r3, #4]` chases a pointer in place); tying a store's source to its
 #   address register would only overwrite the pointer.
 #
+#   THE WIDE FORM COMES FIRST, EVERYWHERE.  Wherever an instruction exists at
+#   both widths, the 16-bit one takes the lower opcode and the byte-wide one
+#   the next:
+#
+#       0x02 ld   / 0x03 ld8        the one-byte implicit pair
+#       0x18 st   / 0x20 st8        the store rows
+#       0x28 ld   / 0x30 ld8        the load rows
+#       0x80 push / 0x81 push8      and the same for pop at 0x88
+#       0x90 br   / 0x91 br8        and again at 0x92 / 0x94
+#
+#   The 16-bit form is the common one - a byte load is the special case, a byte
+#   push is an argument rather than a register save - so it gets the name
+#   without a suffix and the opcode you reach first.  Naming and numbering say
+#   the same thing, which means neither has to be remembered separately.
+#
 #   STORES COME FIRST, and the reason is the gap.  A store has no tied form, so
 #   its two rows begin at .2 and the .0 and .1 columns stand empty; a load fills
 #   .0 with the tied form.  Putting the stores above the loads makes that gap
@@ -585,12 +600,12 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   order.  Nothing decodes differently either way - it is a table that people
 #   read, and it reads better in this order.
 #
-#     0001_1000  -- free               0010_1000  ld8  rd,[rd,#off5]
-#     0001_101i  st8  rs,[ra,#imm3]    0010_101i  ld8  rd,[ra,#imm3]
-#     0001_1100  st8  rs,[ra,#imm10]   0010_1100  ld8  rd,[ra,#imm10]
-#     0010_0000  -- free               0011_0000  ld16 rd,[rd,#off5]
-#     0010_001i  st16 rs,[ra,#imm3]    0011_001i  ld16 rd,[ra,#imm3]
-#     0010_0100  st16 rs,[ra,#imm10]   0011_0100  ld16 rd,[ra,#imm10]
+#     0001_1000  -- free               0010_1000  ld   rd,[rd,#off5]
+#     0001_101i  st   rs,[ra,#imm3]    0010_101i  ld   rd,[ra,#imm3]
+#     0001_1100  st   rs,[ra,#imm10]   0010_1100  ld   rd,[ra,#imm10]
+#     0010_0000  -- free               0011_0000  ld8  rd,[rd,#off5]
+#     0010_001i  st8  rs,[ra,#imm3]    0011_001i  ld8  rd,[ra,#imm3]
+#     0010_0100  st8  rs,[ra,#imm10]   0011_0100  ld8  rd,[ra,#imm10]
 #   ------------------------------------------------------------------------
 #
 #   --- the last row before the ALU: constants and the unary operations ------
@@ -614,7 +629,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   opcode.
 #
 #   From here down to the end of the push and pop block, columns .2 and .3 hold
-#   nothing but that layout: st8, st16, ld8, ld16, the unary ops, all six ALU
+#   nothing but that layout: st8, st, ld8, ld, the unary ops, all six ALU
 #   groups, then push and pop.  Eighteen consecutive rows where byte 1 is
 #   two register fields and a remainder.
 #   ------------------------------------------------------------------------
@@ -713,10 +728,10 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   call so that everything writing the pc lives in 1001_xxxx and nothing else
 #   does.
 #
-#   1001_0000                br8   <cond,#imm>, ra, target
-#   1001_0001                br    <cond,#imm>, ra, target
-#   1001_001b                br8   <cond>, ra, rb, target    TWO opcodes
-#   1001_010b                br    <cond>, ra, rb, target    TWO opcodes
+#   1001_0000                br    <cond,#imm>, ra, target
+#   1001_0001                br8   <cond,#imm>, ra, target
+#   1001_001b                br    <cond>, ra, rb, target    TWO opcodes
+#   1001_010b                br8   <cond>, ra, rb, target    TWO opcodes
 #   1001_011e                brclear / brset ra, #mask, target  e = eq / ne
 #   1001_1000                jmpr  target               3 bytes, pc relative
 #   1001_1001                jmp   target               3 bytes, absolute
@@ -777,12 +792,12 @@ semantics = "R[d] = M8[R[a] + off]"
 
   [[insn.form]]
   name     = "implicit"
-  encoding = "0000_0010"
+  encoding = "0000_0011"
   fix      = { d = 0, a = 0, off = 0 }
 
   [[insn.form]]
   name     = "reg_off5"
-  encoding = "0010_1000  aaao_oooo"
+  encoding = "0011_0000  aaao_oooo"
   fields   = { o = "off:imm5" }
   tie      = { d = "a" }             # one field serves as address and dest
 
@@ -797,7 +812,7 @@ semantics = "R[d] = M8[R[a] + off]"
   # it is what makes room for a separate destination and address in two bytes.
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0010_101i  ddda_aajj"
+  encoding = "0011_001i  ddda_aajj"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   # Three bytes, and in exchange everything is independent and nothing is
@@ -809,24 +824,24 @@ semantics = "R[d] = M8[R[a] + off]"
   #     byte 2:  i i i i i i i i   off bits 7..0
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0010_1100  ddda_aaii  iiii_iiii"
+  encoding = "0011_0100  ddda_aaii  iiii_iiii"
   fields   = { i = "off:imm10" }
 
 
-# --- ld16 -------------------------------------------------------------------
+# --- ld -------------------------------------------------------------------
 # Load a 16-bit value.  Structurally identical to ld8 - same four addressing
 # forms, same operand shape, same field layouts - differing only in opcode bit
 # 3, which is the width bit for the whole load block.
 #
 # DECIDED: displacements count BYTES and are NOT scaled by the access width,
-# for ld16 and st16 alike.  Scaling would have doubled the reach of the off5
+# for ld and st alike.  Scaling would have doubled the reach of the off5
 # and imm10 forms for almost no hardware cost, and it is still rejected,
 # because POINTERS ARE TAGGED.  A heap reference carries a tag in its low bit,
 # so the displacement is what removes it:
 #
-#     ld16 rd, [rp, #-1]     first word of an object behind a tag-1 pointer
-#     ld16 rd, [rp, #1]      second word
-#     ld16 rd, [rp, #3]      third
+#     ld rd, [rp, #-1]     first word of an object behind a tag-1 pointer
+#     ld rd, [rp, #1]      second word
+#     ld rd, [rp, #3]      third
 #
 # Those displacements are ODD.  A scaled offset cannot express them at all, and
 # would put a shift or an add in front of every single field access.  Byte
@@ -838,7 +853,7 @@ semantics = "R[d] = M8[R[a] + off]"
 # do the tag arithmetic, a correct field access lands aligned anyway - this
 # just means the hardware never has to say no.
 [[insn]]
-mnemonic = "ld16"
+mnemonic = "ld"
 summary  = "load 16-bit"
 operands = [
   { name = "d",   type = "reg"  },
@@ -850,27 +865,27 @@ semantics = "R[d] = M16[R[a] + off]"
 
   [[insn.form]]
   name     = "implicit"
-  encoding = "0000_0011"
+  encoding = "0000_0010"
   fix      = { d = 0, a = 0, off = 0 }
 
   [[insn.form]]
   name     = "reg_off5"
-  encoding = "0011_0000  aaao_oooo"
+  encoding = "0010_1000  aaao_oooo"
   fields   = { o = "off:imm5" }
   tie      = { d = "a" }
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_001i  ddda_aajj"
+  encoding = "0010_101i  ddda_aajj"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0011_0100  ddda_aaii  iiii_iiii"
+  encoding = "0010_1100  ddda_aaii  iiii_iiii"
   fields   = { i = "off:imm10" }
 
 
-# --- st8 / st16 -------------------------------------------------------------
+# --- st8 / st -------------------------------------------------------------
 # Stores get exactly two forms each - the two-register forms from the load
 # block, and nothing else.  There is no tied form (a store's source register is
 # not usefully its own address register) and no implicit one-byte form (storing
@@ -891,17 +906,17 @@ semantics = "M8[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0001_101i  sssa_aajj"
+  encoding = "0010_001i  sssa_aajj"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0001_1100  sssa_aaii  iiii_iiii"
+  encoding = "0010_0100  sssa_aaii  iiii_iiii"
   fields   = { i = "off:imm10" }
 
 
 [[insn]]
-mnemonic = "st16"
+mnemonic = "st"
 summary  = "store 16 bits"
 operands = [
   { name = "s",   type = "reg"  },
@@ -913,12 +928,12 @@ semantics = "M16[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0010_001i  sssa_aajj"
+  encoding = "0001_101i  sssa_aajj"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0010_0100  sssa_aaii  iiii_iiii"
+  encoding = "0001_1100  sssa_aaii  iiii_iiii"
   fields   = { i = "off:imm10" }
 
 
@@ -1594,7 +1609,7 @@ swap_operands = ["a", "b"]
 
   [[insn.form]]
   name     = "cond_reg_reg"
-  encoding = "1001_001b  ccca_aaee  tttt_tttt"
+  encoding = "1001_010b  ccca_aaee  tttt_tttt"
   fields   = { c = "cond:cond3", b = "b:reg[0]", e = "b:reg[2:1]", t = "off:off8" }
 
 [[insn]]
@@ -1610,7 +1625,7 @@ semantics = "if (test(k.cond, R[a] & 255, k.imm & 255, 8)) pc = pc + off"
 
   [[insn.form]]
   name     = "cond_reg_imm"
-  encoding = "1001_0000  aaak_kkkk  tttt_tttt"
+  encoding = "1001_0001  aaak_kkkk  tttt_tttt"
   fields   = { k = "k:condimm5", t = "off:off8" }
 
 
@@ -1629,7 +1644,7 @@ swap_operands = ["a", "b"]
 
   [[insn.form]]
   name     = "cond_reg_reg"
-  encoding = "1001_010b  ccca_aaee  tttt_tttt"
+  encoding = "1001_001b  ccca_aaee  tttt_tttt"
   fields   = { c = "cond:cond3", b = "b:reg[0]", e = "b:reg[2:1]", t = "off:off8" }
 
 [[insn]]
@@ -1645,7 +1660,7 @@ semantics = "if (test(k.cond, R[a], k.imm, 16)) pc = pc + off"
 
   [[insn.form]]
   name     = "cond_reg_imm"
-  encoding = "1001_0001  aaak_kkkk  tttt_tttt"
+  encoding = "1001_0000  aaak_kkkk  tttt_tttt"
   fields   = { k = "k:condimm5", t = "off:off8" }
 
 

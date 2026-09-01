@@ -617,7 +617,20 @@ for (const op of ALU) {
     emit('    }');
   }
 }
-for (const ld of ['ld8', 'ld16']) {
+// WHICH MNEMONICS ARE LOADS AND STORES COMES FROM THE SPEC, not from a list
+// kept in step with it.  This was two literal arrays until ld16 was renamed to
+// ld and the generator crashed looking for an instruction that no longer
+// existed - the exact drift the rest of this file is built to avoid.  A load
+// and a store are told apart by their syntax: one names a destination, the
+// other a source.
+const memOps = (syntax) =>
+  [...new Set(spec.insn.filter((i) => i.syntax === syntax).map((i) => i.mnemonic))];
+const LOADS  = memOps('{d}, [{a}, #{off}]');
+const STORES = memOps('{s}, [{a}, #{off}]');
+if (!LOADS.length || !STORES.length)
+  throw new Error('found no load or store syntax - has the memory operand shape changed?');
+
+for (const ld of LOADS) {
   emit(`    ${ld} {d: reg}, [{a: reg}, #{off}] =>`);
   emit('    {   ; no scratch: compute the address in the destination');
   emit(`        ${tooWide('off', widestImmBits(ld, 'off'))}`);
@@ -645,7 +658,7 @@ for (const ld of ['ld8', 'ld16']) {
 if (opt.at) {
   // A store has no destination to borrow, so this is the one case that
   // genuinely cannot be done without a reserved scratch.
-  for (const st of ['st8', 'st16']) {
+  for (const st of STORES) {
     emit(`    ${st} {s: reg}, [{a: reg}, #{off}] =>`);
     emit(`    {   ; a store has no destination to borrow, so ${S} is required`);
     emit(`        ${tooWide('off', widestImmBits(st, 'off'))}`);

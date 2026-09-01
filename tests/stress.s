@@ -5,12 +5,12 @@ start:
         nop
         halt
         ld8     r0, [r0, #0]            ; 1  implicit
-        ld16    r0, [r0, #0]            ; 1  implicit
+        ld      r0, [r0, #0]            ; 1  implicit
         ld8     r3, [r3, #-12]          ; 2  tied, imm5
-        ld16    r2, [r5, #-1]           ; 2  two-reg, imm3 (tag absorbing)
+        ld      r2, [r5, #-1]           ; 2  two-reg, imm3 (tag absorbing)
         ld8     r1, [r2, #300]          ; 3  two-reg, imm10
         st8     r1, [r2, #3]            ; 2  two-reg, imm3
-        st16    r1, [r2, #-500]         ; 3  two-reg, imm10
+        st      r1, [r2, #-500]         ; 3  two-reg, imm10
 
         add     r0, r0, #1              ; 1
         add     r0, r0, #-1             ; 1

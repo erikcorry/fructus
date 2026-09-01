@@ -142,7 +142,7 @@ headless and dumps the screen, which is how the tests drive it.
 it, which the assembler structurally cannot — it only ever goes the other way.
 
 **Pointers are tagged in the low bit**, so displacements count *bytes* and are
-never scaled by access width. Field offsets come out odd (`ld16 rd, [rp, #-1]`),
+never scaled by access width. Field offsets come out odd (`ld rd, [rp, #-1]`),
 and a scaled displacement could not express them at all.
 
 **There is no carry flag.** The carry out of a 16-bit add is recoverable from the
@@ -171,7 +171,7 @@ The opcode map makes the gaps visible, and three of them are worth naming. None
 is implemented; they are here so the space does not get spent on something else
 by accident.
 
-### Three-register load and store — `ld16 rd, [ra, rb]`
+### Three-register load and store — `ld rd, [ra, rb]`
 
 The obvious missing addressing mode: an index register instead of a constant
 displacement, for `p[i]` where `i` is not known at assembly time. Today that
@@ -189,8 +189,8 @@ Columns `.6` and `.7` are free in all four memory rows, and `.6`/`.7` is the
 column where three-register forms live:
 
 ```
-0001_111b  st8  rs, [ra, rb]      0010_111b  ld8  rd, [ra, rb]
-0010_011b  st16 rs, [ra, rb]      0011_011b  ld16 rd, [ra, rb]
+0001_111b  st   rs, [ra, rb]      0010_111b  ld   rd, [ra, rb]
+0010_011b  st8  rs, [ra, rb]      0011_011b  ld8  rd, [ra, rb]
 ```
 
 Four instructions, two opcodes each, eight opcodes — and exactly eight are free,

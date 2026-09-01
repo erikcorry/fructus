@@ -484,10 +484,10 @@ loop_example:
         mov     r3, r0                  ; the cursor                     2
         mov     r4, #0                  ; the accumulator                2
 loop_body:
-        ld16    r0, [r3, #2]            ; node->value                    2
+        ld      r0, [r3, #2]            ; node->value                    2
         call    leaf_example            ;                                3
         add     r4, r4, r0              ;                                2
-        ld16    r3, [r3, #0]            ; cursor = cursor->next          2
+        ld      r3, [r3, #0]            ; cursor = cursor->next          2
         br      ne, r3, #0, loop_body   ;                                3
         mov     r0, r4                  ;                                2
         pop     r3, r4, lr              ;                                2
@@ -502,12 +502,12 @@ loop_example_alt:
         mov     r3, r0                  ;                                2
         mov     r4, #0                  ;                                2
 loop_body_alt:
-        ld16    r0, [r3, #2]            ;                                2
+        ld      r0, [r3, #2]            ;                                2
         push    r3                      ; <-- per iteration              2
         call    leaf_example            ;                                3
         pop     r3                      ; <-- per iteration              2
         add     r4, r4, r0              ;                                2
-        ld16    r3, [r3, #0]            ;                                2
+        ld      r3, [r3, #0]            ;                                2
         br      ne, r3, #0, loop_body_alt ;                              3
         mov     r0, r4                  ;                                2
         pop     r4, lr                  ;                                2
@@ -573,14 +573,14 @@ frame_examples:
 ; 16-bit stack slots are two-byte accesses and everything above them is three:
 
 slot_examples:
-        ld16    r0, [sp, #0]            ; slot 0                         2
-        ld16    r0, [sp, #2]            ; slot 1                         2
-        ld16    r0, [sp, #4]            ; slot 2                         2
-        ld16    r0, [sp, #6]            ; slot 3                         2
-        ld16    r0, [sp, #8]            ; slot 4                         2
-        ld16    r0, [sp, #10]           ; slot 5 - imm10 form            3
-        st16    r0, [sp, #4]            ; stores have the same shape     2
-        ld16    r0, [sp, #3]            ; an ODD offset costs the same   2
+        ld      r0, [sp, #0]            ; slot 0                         2
+        ld      r0, [sp, #2]            ; slot 1                         2
+        ld      r0, [sp, #4]            ; slot 2                         2
+        ld      r0, [sp, #6]            ; slot 3                         2
+        ld      r0, [sp, #8]            ; slot 4                         2
+        ld      r0, [sp, #10]           ; slot 5 - imm10 form            3
+        st      r0, [sp, #4]            ; stores have the same shape     2
+        ld      r0, [sp, #3]            ; an ODD offset costs the same   2
         ld8     r0, [sp, #1]            ; a byte argument                2
 
 ; SO ORDER THE FRAME BY TRAFFIC.  The five hottest 16-bit locals belong in the
@@ -620,7 +620,7 @@ vararg_example:
         push    lr                      ;                                2
         add     r1, sp, #2              ; r1 = va_list                   2
         ; ... r0 is fmt, r1 walks the arguments upward ...
-        ld16    r2, [r1, #0]            ; va_arg, 16-bit                 2
+        ld      r2, [r1, #0]            ; va_arg, 16-bit                 2
         add     r1, r1, #2              ; step over it                   2
         pop     lr                      ;                                2
         ret                             ;                                1
@@ -637,7 +637,7 @@ vararg_example:
 ; va_arg FOR A 32-BIT TYPE reads two consecutive words and finds the low half
 ; first, because the caller pushed the high half first and it landed higher.
 ; The register convention and the memory convention agree, so a 32-bit vararg
-; loads into a high:low register pair with ld16 at #2 and #0 and needs no
+; loads into a high:low register pair with ld at #2 and #0 and needs no
 ; shuffling - the same layout as a spilled local or a struct field.
 ;
 ; WHERE THE no-backfill RULE EARNS ITS KEEP.  If a small argument after a
