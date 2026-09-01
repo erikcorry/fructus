@@ -87,6 +87,16 @@ const boot = (keys) => {
   check('second key delivered once the port clears', m.mem[MICROTAN.key] === 0x62, `${m.mem[MICROTAN.key]}`);
 }
 
+// --- an unprogrammed ROM stops at reset --------------------------------------
+// A blank socket reads as zeros, and halt is opcode zero, so the board stops on
+// the first fetch instead of running away through 1K of nop.
+{
+  const m = new Microtan(spec).loadRom(new Uint8Array(MICROTAN.rom.size));
+  m.batch(100);
+  check("blank rom halts at reset", m.halted && m.count === 1,
+        `halted=${m.halted} after ${m.count} instructions, pc=0x${m.pc.toString(16)}`);
+}
+
 // --- an oversized ROM is refused rather than wrapping ------------------------
 {
   let threw = false;

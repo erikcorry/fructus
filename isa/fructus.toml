@@ -1939,24 +1939,34 @@ semantics = "pc = lr"
   encoding = "1001_1100"
 
 
-# --- nop / halt -------------------------------------------------------------
-[[insn]]
-mnemonic = "nop"
-summary  = "do nothing"
-operands = []
-syntax   = ""
-semantics = ""
-
-  [[insn.form]]
-  encoding = "0000_0000"
-
-
+# --- halt / nop -------------------------------------------------------------
+# HALT IS OPCODE ZERO, AND THAT IS THE WHOLE POINT.  Erased memory, an unwritten
+# ROM and a wild jump into a zeroed page all land on 0x00, and the useful thing
+# for the machine to do there is stop.  With nop at zero the same mistake runs a
+# nop sled to the top of memory, wraps, and keeps going - it produces a machine
+# that looks alive while executing nothing, which is the harder failure to
+# diagnose of the two.  A halt at the point of the mistake leaves the pc sitting
+# on the instruction that was wrong.
+#
+# It costs nothing.  Neither instruction has operands, so the two encodings are
+# interchangeable, and nop being 0x01 makes it no less of a nop.
 [[insn]]
 mnemonic = "halt"
 summary  = "stop the machine"
 operands = []
 syntax   = ""
 semantics = "halted = 1"
+
+  [[insn.form]]
+  encoding = "0000_0000"
+
+
+[[insn]]
+mnemonic = "nop"
+summary  = "do nothing"
+operands = []
+syntax   = ""
+semantics = ""
 
   [[insn.form]]
   encoding = "0000_0001"

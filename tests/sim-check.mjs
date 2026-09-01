@@ -205,5 +205,31 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   console.log('ok    tests/data.s on the simulator: dw, dd and tagged struct offsets');
 }
 
+// --- zeroed memory stops the machine ----------------------------------------
+// halt is opcode 0x00 so that erased memory, an unwritten ROM and a wild jump
+// into a zeroed page all stop where the mistake happened.  With nop at zero the
+// same jump runs a nop sled to the top of memory, wraps, and keeps going.
+{
+  const blank = machine();
+  blank.pc = 0x4000;
+  blank.step();
+  check('zeroed memory halts', blank.halted && blank.pc === 0x4001,
+        `halted=${blank.halted} pc=0x${blank.pc.toString(16)}`);
+
+  // and the pc is left on the instruction after the mistake, not miles away
+  const drift = machine();
+  drift.pc = 0x4000;
+  drift.run({ max: 1000 });
+  check('and stays put', drift.count === 1, `${drift.count} instructions`);
+
+  // nop still nops, at its new opcode
+  const n = machine();
+  n.mem[0] = 0x01; n.mem[1] = 0x01; n.pc = 0;
+  n.step(); n.step();
+  check('nop still does nothing', !n.halted && n.pc === 2 && n.regs().every((r) => r === 0),
+        `pc=${n.pc} halted=${n.halted}`);
+  console.log('ok    halt is opcode zero: zeroed memory stops the machine');
+}
+
 console.log(`${checks} checks, ${fails} failures`);
 process.exit(fails ? 1 : 0);
