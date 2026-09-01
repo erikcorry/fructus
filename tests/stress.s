@@ -34,6 +34,13 @@ start:
         or      r2, r2, #0x8000         ; 2  immbit5, set the sign bit
         or      r2, r2, #256            ; 2  immbit5, set bit 8
         or      r2, r2, #8              ; 2  imm5 WINS: 8 is in both
+        xor     r2, r2, #0x8000         ; 2  immbit5, flip the sign bit
+        xor     r2, r2, #1024           ; 2  immbit5, flip bit 10
+        xor     r2, r2, #0x7fff         ; 2  immbit5, flip all but the sign
+        xor     r2, r2, #4              ; 2  imm5 WINS: 4 is in both
+        xor     r2, r2, #-1             ; 2  imm5, the plain complement - 0xffff
+                                        ;    is -1, not ~(1<<n), so it is not an
+                                        ;    immbit5 value at all
         and     r3, r2, #0x7fff         ; 4  NOT tied, so no two-byte form fits,
                                         ;    and 0x7fff is outside imm10 as well -
                                         ;    this expands to mov + three-reg and,

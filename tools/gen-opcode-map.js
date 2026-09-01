@@ -33,7 +33,8 @@ const MODES = [
   { id: 'rri3',    c: '#A6D9B4', label: 'rd, ra, #imm3',         bits: 'table 3 (split) + reg 3 + reg 3', note: 'shifts read the same three bits as #shift3' },
   { id: 'rri10',   c: '#CBE5A0', label: 'rd, ra, #imm10',        bits: 'reg 3 + reg 3 + int 10' },
 
-  { id: 'ri5',     c: '#C6BEEC', label: 'rd, #imm5',             bits: 'reg 3 + table or int 5',         note: 'also #1&lt;&lt;n, and the tied load displacement' },
+  { id: 'ri5',     c: '#C6BEEC', label: 'rd, #imm5',             bits: 'reg 3 + int 5, signed',          note: '&minus;16 to 15, and the tied load displacement' },
+  { id: 'rib5',    c: '#F2D6F2', label: 'rd, #1&lt;&lt;n',            bits: 'reg 3 + table 5',                note: 'the same five bits read as one of 32 masks: 1&lt;&lt;n and its complement' },
   { id: 'ri16',    c: '#DEC6F0', label: 'rd, #imm16',            bits: 'reg 3 + int 16 (split)' },
 
   { id: 'crrt',    c: '#F5C2DC', label: 'cond, ra, rb, target',  bits: 'reg 3 (split) + cond 3 + reg 3 + int 8' },
@@ -58,7 +59,13 @@ function modeOf(c) {
 
   if (c.nbytes === 2) {
     if (n === 3) return has('reg:3') && parts.filter((p) => p === 'reg:3').length === 3 ? 'rrr' : 'rri3';
-    if (n === 2) return parts.every((p) => p === 'reg:3') ? 'rr' : 'ri5';
+    if (n === 2) {
+      if (parts.every((p) => p === 'reg:3')) return 'rr';
+      // Same layout as imm5, different value table - and unlike imm3 against
+      // shift3, which are one set of values reinterpreted, these are disjoint
+      // vocabularies: signed -16..15 against 32 single-bit masks.
+      return has('immbit5') ? 'rib5' : 'ri5';
+    }
     return has('reg:3') ? 'r' : 't8';
   }
   // three bytes
@@ -123,6 +130,12 @@ for (let b = 0; b < 256; b++) {
 }
 
 const used  = cells.filter(Boolean).length;
+
+// The map stops after the last assigned row.  Everything past it is one
+// unbroken free block, and thirteen blank rows of it say nothing the count
+// below the table does not say better.
+const lastRow = Math.floor(cells.findLastIndex(Boolean) / 8);
+const tailFrom = (lastRow + 1) * 8;
 const count = (id) => cells.filter((c) => c && c.mode === id).length;
 const esc = (s) => String(s).replace(/&(?!\w+;|#)/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -160,6 +173,9 @@ h1{font-size:clamp(30px,5vw,44px);font-weight:700;letter-spacing:-.015em;margin:
 
 /* --- the matrix --------------------------------------------------------- */
 .matrix-wrap{overflow-x:auto;padding-bottom:4px}
+.tail{font-size:12px;color:var(--faint);margin:12px 0 0;font-family:var(--sans)}
+.tail code{font-family:var(--mono);font-size:11.5px}
+.tail b{font-family:var(--mono);font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums}
 .matrix{display:grid;grid-template-columns:auto repeat(8,minmax(84px,1fr));gap:3px;min-width:760px}
 .colhead,.rowhead{font-family:var(--mono);font-size:11px;color:var(--muted);
                   display:flex;align-items:center;justify-content:center;letter-spacing:.06em}
@@ -208,7 +224,7 @@ w(`</header>`);
 w(`<div class="matrix-wrap"><div class="matrix">`);
 w(`  <div class="corner"></div>`);
 for (let x = 0; x < 8; x++) w(`  <div class="colhead">&middot;${x}</div>`);
-for (let row = 0; row < 32; row++) {
+for (let row = 0; row <= lastRow; row++) {
   w(`  <div class="rowhead">${hex2(row * 8)}</div>`);
   for (let x = 0; x < 8; x++) {
     const c = cells[row * 8 + x];
@@ -222,6 +238,8 @@ for (let row = 0; row < 32; row++) {
   }
 }
 w(`</div></div>`);
+w(`<p class="tail">Rows below <code>${hex2(tailFrom)}</code> are omitted: ` +
+  `<b>${256 - tailFrom}</b> unbroken free opcodes run from <code>${hex2(tailFrom)}</code> to <code>ff</code>.</p>`);
 
 w(`<section>`);
 w(`<h2>Addressing modes</h2>`);
@@ -237,8 +255,7 @@ w(`</div>`);
 w(`</section>`);
 
 w(`<footer>Generated from <code>isa/fructus.toml</code> by <code>tools/gen-opcode-map.js</code>. ` +
-  `Modes come from each form's bit layout, not its name &mdash; two layouts that differ only in which ` +
-  `value table a field indexes are one mode, which is why <code>#imm3</code> and <code>#shift3</code> share a colour. ` +
+  `Modes come from each form's bit layout, not its name. Where two layouts differ only in how one field is <em>read</em> they share a colour: <code>#imm3</code> and <code>#shift3</code> are one set of values reinterpreted, with no extra hardware behind either. <code>#imm5</code> and <code>#1&lt;&lt;n</code> are kept apart because their vocabularies are disjoint &mdash; signed &minus;16 to 15 against 32 masks. `+
   `Opcodes <code>12</code> and <code>13</code> carry several mnemonics apiece: the unary operations share two first bytes and separate on a field in byte&nbsp;1.</footer>`);
 w(`</div>`);
 

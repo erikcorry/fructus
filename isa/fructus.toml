@@ -1124,6 +1124,27 @@ semantics = "R[d] = R[a] ^ imm"
   fields   = { i = "imm:imm5" }
   tie      = { a = "d" }
 
+  # BIT FLIP, completing the set.  `or #1<<n` sets a bit and `and #~(1<<n)`
+  # clears one; this toggles one, in the same two bytes and through the same
+  # 4-to-16 decoder.  It costs an opcode the group had already reserved: slot
+  # +1 of every eight is the immbit5 slot, and it was free here only because
+  # nothing had asked for it yet.
+  #
+  # The inverted half of the table is not wasted on xor either.  `xor rd, rd,
+  # #~(1<<n)` flips every bit EXCEPT one, which is a complement with a single
+  # bit held back.
+  #
+  # The PLAIN complement is not in this form and does not need to be: 0xffff is
+  # not ~(1<<n) for any n, but it is -1, which imm5 reaches - so `xor rd, rd,
+  # #-1` is already two bytes at 0x50.  Where the two forms overlap the
+  # assembler prefers imm5, which is listed first, and drops the duplicate
+  # entries here.
+  [[insn.form]]
+  name     = "reg_immbit5"
+  encoding = "0101_0001  dddi_iiii"
+  fields   = { i = "imm:immbit5" }
+  tie      = { a = "d" }
+
   [[insn.form]]
   name     = "reg_reg_imm3"
   encoding = "0101_001i  ddda_aajj"
