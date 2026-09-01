@@ -67,17 +67,17 @@
 fpadd_mantissa:
         add     r1, r1, r3              ; XL += YL, wrapping                2
         add     r0, r0, r2              ; XH += YH, wrapping                2
-        br16    hs, r1, r3, no_lo       ; no carry out of the low half      3
+        br      hs, r1, r3, no_lo       ; no carry out of the low half      3
         add     r0, r0, #1              ; propagate it                      1
-        br16    ls, r0, r2, shift_down  ; sum <= YH means it carried        3
-        br      no_shift                ;                                   2
+        br      ls, r0, r2, shift_down  ; sum <= YH means it carried        3
+        jmpr    no_shift                ;                                   2
 no_lo:
-        br16    lo, r0, r2, shift_down  ; sum <  YH means it carried        3
+        br      lo, r0, r2, shift_down  ; sum <  YH means it carried        3
 
 no_shift:                               ; sum < 2^32: already normalised
         and     r0, r0, #0x7fff         ; drop the implicit bit             2
         mov     r2, #0                  ; exponent unchanged                2
-        br      done                    ;                                   2
+        jmpr    done                    ;                                   2
 
 shift_down:                             ; sum reached bit 32
         lsr     r1, r1, #1              ; shift the 33-bit sum right one    2

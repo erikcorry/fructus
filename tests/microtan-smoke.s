@@ -34,14 +34,14 @@ start:
         mov     r4, #SCREEN_END
 poll:
         ld8     r0, [r2, #KEY]          ; the interrupt left a character here
-        br16    eq, r0, #0, poll        ; ... or it did not
+        br      eq, r0, #0, poll        ; ... or it did not
         st8     r3, [r2, #KEY]          ; release the port for the next key
-        br16    eq, r0, #STOP, done
+        br      eq, r0, #STOP, done
         st8     r0, [r1, #0]            ; echo it to the screen
         add     r1, r1, #1              ; advance the cursor
-        br16    lo, r1, r4, poll        ; still on screen?
+        br      lo, r1, r4, poll        ; still on screen?
         mov     r1, #SCREEN             ; no: wrap to the top
-        br      poll
+        jmpr    poll
 done:
         halt
 

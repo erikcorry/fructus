@@ -70,19 +70,19 @@ fpsub_mantissa:
 ; non-negative result, which is cheaper than subtracting one way and negating:
 ; `rsb` already computes its operands the other way round, so the second arm
 ; costs an extra byte rather than an extra ten.
-        br16    lo, r0, r2, y_bigger    ; XH < YH                          3
-        br16    hi, r0, r2, x_bigger    ; XH > YH                          3
-        br16    lo, r1, r3, y_bigger    ; high halves equal: low decides   3
+        br      lo, r0, r2, y_bigger    ; XH < YH                          3
+        br      hi, r0, r2, x_bigger    ; XH > YH                          3
+        br      lo, r1, r3, y_bigger    ; high halves equal: low decides   3
 x_bigger:
-        br16    hs, r1, r3, xb_nb       ; XL >= YL: no borrow              3
+        br      hs, r1, r3, xb_nb       ; XL >= YL: no borrow              3
         add     r0, r0, #-1             ; propagate the borrow             1
 xb_nb:
         sub     r1, r1, r3              ; XL -= YL                         2
         sub     r0, r0, r2              ; XH -= YH                         2
         mov     r4, #0x7fff             ; positive: mask off the top bit    2
-        br      have_mag                ;                                  2
+        jmpr    have_mag                ;                                  2
 y_bigger:
-        br16    hs, r3, r1, yb_nb       ; YL >= XL: no borrow              3
+        br      hs, r3, r1, yb_nb       ; YL >= XL: no borrow              3
         add     r2, r2, #-1             ; propagate the borrow             2
 yb_nb:
         rsb     r1, r1, r3              ; r1 = YL - XL                     2
@@ -95,8 +95,8 @@ have_mag:
 ; three bytes here and saves the counter a range it cannot reach anyway, since
 ; `clz` only sees sixteen bits at a time.
         mov     r2, #0                  ; shift count so far               2
-        br16    ne, r0, #0, have_hi     ; high half already non-zero       3
-        br16    eq, r1, #0, done        ; both halves zero: exact cancel   3
+        br      ne, r0, #0, have_hi     ; high half already non-zero       3
+        br      eq, r1, #0, done        ; both halves zero: exact cancel   3
         mov     r0, r1                  ; step up by sixteen bits          1
         mov     r1, #0                  ;                                  2
         mov     r2, #16                 ; ... and record it                2

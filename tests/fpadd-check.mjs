@@ -24,11 +24,11 @@ function aligned(xh, xl, yh, yl) {
   r1 = (r1 + r3) & M;                      // add  r1, r1, r3
   r0 = (r0 + r2) & M;                      // add  r0, r0, r2
   let ovf;
-  if (r1 >= yl0) {                         // br16 hs, r1, r3, no_lo
-    ovf = r0 < yh0;                        //   br16 lo, r0, r2, shift_down
+  if (r1 >= yl0) {                         // br   hs, r1, r3, no_lo
+    ovf = r0 < yh0;                        //   br   lo, r0, r2, shift_down
   } else {
     r0 = (r0 + 1) & M;                     //   add  r0, r0, #1
-    ovf = r0 <= yh0;                       //   br16 ls, r0, r2, shift_down
+    ovf = r0 <= yh0;                       //   br   ls, r0, r2, shift_down
   }
   if (!ovf) {
     r0 = r0 & 0x7fff;                      // and  r0, r0, #0x7fff

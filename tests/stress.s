@@ -67,36 +67,35 @@ start:
         sxt8    r1, r2
         zxt8    r1, r2
 
-        push16  lr
-        push16  lr, r4
-        push16  r0, r1, r2
+        push    lr
+        push    lr, r4
+        push    r0, r1, r2
         push8   r1
-        pop8u   r1
-        pop8s   r2
-        pop16   r2, r1, r0
-        pop16   r4, lr
-        pop16   lr
+        pop8    r1
+        pop     r2, r1, r0
+        pop     r4, lr
+        pop     lr
         call    r3
 
 btarget:
-        br      btarget                   ; 2  alias -> br8 eq, r0, r0
+        jmpr    btarget                   ; 2  the short jmpr form
         br8     ne, r1, r2, btarget       ; 3
-        br16    gt, r1, r2, btarget       ; 3  swapped -> lt
-        br16    eq, r3, #0, btarget       ; 3  condimm5, encoded
-        br16    hs, r3, #3, btarget       ; 3  condimm5, imm3 constant
-        br16    lo, r3, #6, btarget       ; 3  condimm5, imm3 constant
-        br16    lt, r3, #4, btarget       ; 3  condimm5, signed loop bound
-        br16    ge, r3, #8, btarget       ; 3  condimm5, signed loop bound
-        br16    vs, r3, #-1, btarget      ; 3  does r3++ overflow
-        br16    vs, r3, #1, btarget       ; 3  does r3-- underflow
-        br16    vs, r3, #2, btarget       ; 3  tagged decrement underflows
-        br16    hs, r3, #1, btarget       ; 3  REWRITE -> ne #0
-        br16    lo, r3, #1, btarget       ; 3  REWRITE -> eq #0
-        br16    gt, r3, #1, btarget       ; 3  REWRITE -> ge #2
-        br16    le, r3, #0, btarget       ; 3  REWRITE -> lt #1
-        br16    le, r3, #3, btarget       ; 3  REWRITE -> lt #4
-        br16    gt, r3, #7, btarget       ; 3  REWRITE -> ge #8
-        br16    le, r3, #-2, btarget      ; 3  REWRITE -> lt #-1
+        br      gt, r1, r2, btarget       ; 3  swapped -> lt
+        br      eq, r3, #0, btarget       ; 3  condimm5, encoded
+        br      hs, r3, #3, btarget       ; 3  condimm5, imm3 constant
+        br      lo, r3, #6, btarget       ; 3  condimm5, imm3 constant
+        br      lt, r3, #4, btarget       ; 3  condimm5, signed loop bound
+        br      ge, r3, #8, btarget       ; 3  condimm5, signed loop bound
+        br      vs, r3, #-1, btarget      ; 3  does r3++ overflow
+        br      vs, r3, #1, btarget       ; 3  does r3-- underflow
+        br      vs, r3, #2, btarget       ; 3  tagged decrement underflows
+        br      hs, r3, #1, btarget       ; 3  REWRITE -> ne #0
+        br      lo, r3, #1, btarget       ; 3  REWRITE -> eq #0
+        br      gt, r3, #1, btarget       ; 3  REWRITE -> ge #2
+        br      le, r3, #0, btarget       ; 3  REWRITE -> lt #1
+        br      le, r3, #3, btarget       ; 3  REWRITE -> lt #4
+        br      gt, r3, #7, btarget       ; 3  REWRITE -> ge #8
+        br      le, r3, #-2, btarget      ; 3  REWRITE -> lt #-1
         brset   r4, #0x8000, btarget      ; 3  the sign bit is set
         brclear r4, #1, btarget           ; 3  the low bit is clear
         brclear r4, #0x7fff, btarget      ; 3  NOTHING but the sign bit is set

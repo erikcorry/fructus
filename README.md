@@ -8,7 +8,7 @@ kind of machine a 6502 ran on — a narrow memory bus where every instruction by
 is a cycle you pay for — so the design question behind almost every decision in
 here is *what does this cost in bytes*.
 
-Right now: **83 encoding forms over 111 of the 256 first bytes, 145 free.**
+Right now: **82 encoding forms over 110 of the 256 first bytes, 146 free.**
 
 ## The one idea
 
@@ -50,7 +50,7 @@ npm run sim -- build/myprog.bin --trace
 0002  mov r1, #0           r0=000a r1=0000 ...
 0004  add r1, r1, r0       r0=000a r1=0000 ...
 0005  add r0, r0, #-1      r0=000a r1=000a ...
-0006  br16 ne, r0, #0, 0x0004   r0=0009 r1=000a ...
+0006  br   ne, r0, #0, 0x0004   r0=0009 r1=000a ...
 halted after 33 instructions
 ```
 

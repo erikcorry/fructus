@@ -356,7 +356,7 @@ swapped = { gt = "lt", ge = "le", hi = "lo", hs = "ls", cs = "ls" }
 # of a widened add, and the constant that test needs is the one that was ADDED:
 #
 #       add     r1, r1, #k              ; XL += k
-#       br16    hs, r1, #k, no_carry    ; sum >= k means no carry
+#       br    hs, r1, #k, no_carry    ; sum >= k means no carry
 #
 # `k` there is drawn from imm3, so the useful unsigned bounds are exactly imm3 -
 # not powers of two.  Under powers of two, 3 and 6 were addable but not
@@ -383,10 +383,10 @@ swapped = { gt = "lt", ge = "le", hi = "lo", hs = "ls", cs = "ls" }
 # check.js proves this the only way that is actually sound: it evaluates every
 # entry over every register value it could see, at BOTH comparison widths, and
 # compares the truth sets.  Two entries are only wasteful if they agree at 8
-# bits AND at 16, since br8 and br16 share this table.
+# bits AND at 16, since br8 and br share this table.
 #
 # Those six are now `rewrite` entries below rather than table slots.  Nothing is
-# lost at the source level - the assembler still accepts `br16 hs, r1, #1` and
+# lost at the source level - the assembler still accepts `br hs, r1, #1` and
 # quietly encodes `ne #0`, which matters because that spelling is exactly the
 # carry test for `+= 1` and should keep looking like the general pattern.
 #
@@ -615,7 +615,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   From here down to the end of the push and pop block, columns .2 and .3 hold
 #   nothing but that layout: st8, st16, ld8, ld16, the unary ops, all six ALU
-#   groups, then push16 and pop16.  Eighteen consecutive rows where byte 1 is
+#   groups, then push and pop.  Eighteen consecutive rows where byte 1 is
 #   two register fields and a remainder.
 #   ------------------------------------------------------------------------
 #
@@ -683,36 +683,40 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   Byte 1 holds nothing but registers in every one of these:
 #     one   aaa0_0000        two   aaab_bb00        three  aaab_bbcc
 #
-#   THE COLUMNS LINE UP AND THAT IS DELIBERATE.  push and pop put their 16-bit
-#   forms at the same offsets - single at +2, double at +3, triple at +6 and
-#   +7 - so the two rows read as one table.  And +6/+7 is where every ALU
-#   group keeps its three-register form, so the three-register push and pop
-#   sit in the same two columns as `add rd, ra, rb`.  Reading down a column
-#   of the opcode map now tells you something.
+#   THE COLUMNS LINE UP AND THAT IS DELIBERATE.  Push and pop are the same
+#   table twice, and every form sits in the column its BYTE 1 belongs to:
 #
-#   1000_0000                push8  ra                  2 bytes
-#   1000_0001                -- free
-#   1000_0010                push16 ra                  2 bytes
-#   1000_0011                push16 ra, rb              2 bytes
-#   1000_0100 .. 1000_0101   -- free
-#   1000_011c                push16 ra, rb, rc          TWO opcodes
-#   1000_1000                pop8u  ra                  2 bytes
-#   1000_1001                pop8s  ra                  2 bytes
-#   1000_1010                pop16  ra                  2 bytes
-#   1000_1011                pop16  ra, rb              2 bytes
-#   1000_1100 .. 1000_1101   -- free
-#   1000_111c                pop16  ra, rb, rc          TWO opcodes
+#     +0   aaa0_0000   one register    with every other reg + 5-bit form
+#     +1   aaa0_0000   one register    the byte-wide pair of the same
+#     +2   aaab_bb00   two registers   with every other reg + reg + field
+#     +6/7 aaab_bbcc   three registers with the three-register ALU forms
+#
+#   So the 16-bit form - the common one, the one a prologue uses - is at +0
+#   where the eye lands, and the byte form sits beside it at +1.  Reading down
+#   a column of the opcode map tells you the shape of byte 1 and nothing else
+#   has to be remembered.
+#
+#   1000_0000                push ra                  2 bytes
+#   1000_0001                push8  ra                  2 bytes
+#   1000_0010                push ra, rb              2 bytes
+#   1000_0011 .. 1000_0101   -- free
+#   1000_011c                push ra, rb, rc          TWO opcodes
+#   1000_1000                pop  ra                  2 bytes
+#   1000_1001                pop8   ra                  2 bytes
+#   1000_1010                pop  ra, rb              2 bytes
+#   1000_1011 .. 1000_1101   -- free
+#   1000_111c                pop  ra, rb, rc          TWO opcodes
 #   ------------------------------------------------------------------------
 #
 #   --- control flow, all of it, in one contiguous block ---------------------
-#   Every branch is 3 bytes except the unconditional form, which is 2.  The
-#   conditional branches sit immediately above jmp and call so that everything
-#   that writes the pc lives in 1001_xxxx and nothing else does.
+#   Every conditional branch is 3 bytes.  They sit immediately above jmp and
+#   call so that everything writing the pc lives in 1001_xxxx and nothing else
+#   does.
 #
 #   1001_0000                br8   <cond,#imm>, ra, target
-#   1001_0001                br16  <cond,#imm>, ra, target
+#   1001_0001                br    <cond,#imm>, ra, target
 #   1001_001b                br8   <cond>, ra, rb, target    TWO opcodes
-#   1001_010b                br16  <cond>, ra, rb, target    TWO opcodes
+#   1001_010b                br    <cond>, ra, rb, target    TWO opcodes
 #   1001_011e                brclear / brset ra, #mask, target  e = eq / ne
 #   1001_1000                jmpr  target               3 bytes, pc relative
 #   1001_1001                jmp   target               3 bytes, absolute
@@ -720,7 +724,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1001_1011                call  target               3 bytes, absolute
 #   1001_1100                ret                        1 byte
 #   1001_1101                call  ra                   2 bytes, INDIRECT
-#   1001_1110                br    target        = br8 eq, r0, r0     2 bytes
+#   1001_1110                jmpr  target               2 bytes, SHORT form
 #   1001_1111                -- free
 #   1010_0000 .. 1011_1111   -- free, 32 slots
 #   ------------------------------------------------------------------------
@@ -1551,10 +1555,10 @@ semantics = "R[d] = popcount(R[a])"
   encoding = "0011_1010  ddda_aa10"
 
 
-# --- br8 / br16 -------------------------------------------------------------
+# --- br8 / br -------------------------------------------------------------
 # Conditional subtract-and-branch.  The comparison is a subtract whose result
 # is discarded; only the condition it sets is used.  br8 compares at 8-bit
-# width, br16 at 16, matching the ld/st naming.
+# width, br at 16, matching the ld/st naming.
 #
 # The two-register form is the `rsb` three-register encoding with its
 # DESTINATION field replaced by a 3-bit condition, plus a displacement byte:
@@ -1572,7 +1576,7 @@ semantics = "R[d] = popcount(R[a])"
 # with one 5-bit index into the `condimm5` table, which supplies a condition
 # and a constant together:
 #
-#     byte 0:  1 0 0 0 0 0 0 0    0x80 for br8, 0x81 for br16
+#     byte 0:  1 0 0 0 0 0 0 0    0x80 for br8, 0x81 for br
 #     byte 1:  a a a k k k k k    register, condition-and-constant index
 #     byte 2:  t t t t t t t t    displacement
 [[insn]]
@@ -1587,20 +1591,6 @@ operands = [
 syntax        = "{cond}, {a}, {b}, {off}"
 semantics = "if (test(cond, R[a] & 255, R[b] & 255, 8)) pc = pc + off"
 swap_operands = ["a", "b"]
-
-  # A register compared for equality with itself is always true, so pinning
-  # `eq, r0, r0` leaves nothing but the displacement byte - a two-byte
-  # unconditional relative branch that costs the condition field nothing.
-  #
-  # It used to sit at 0x87, at the end of the branch block.  brclear and brset
-  # wanted 0x86 and 0x87 as an aligned pair, and this form - which has no
-  # operand fields at all and shares no layout with anything - is the one
-  # branch that loses nothing by living outside the block.
-  [[insn.form]]
-  name     = "always"
-  encoding = "1001_1110  tttt_tttt"
-  fix      = { cond = "eq", a = 0, b = 0 }
-  fields   = { t = "off:off8" }
 
   [[insn.form]]
   name     = "cond_reg_reg"
@@ -1625,7 +1615,7 @@ semantics = "if (test(k.cond, R[a] & 255, k.imm & 255, 8)) pc = pc + off"
 
 
 [[insn]]
-mnemonic      = "br16"
+mnemonic      = "br"
 summary       = "compare two registers and branch"
 operands = [
   { name = "cond", type = "cond3" },
@@ -1643,7 +1633,7 @@ swap_operands = ["a", "b"]
   fields   = { c = "cond:cond3", b = "b:reg[0]", e = "b:reg[2:1]", t = "off:off8" }
 
 [[insn]]
-mnemonic = "br16"
+mnemonic = "br"
 summary  = "compare against a table constant and branch"
 operands = [
   { name = "k",   type = "condimm5" },
@@ -1728,12 +1718,11 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 # single-register only and the word forms come in ones, twos and threes.
 #
 #     push8  ra                       one byte, one register
-#     pop8u  ra                       zero extended
-#     pop8s  ra                       sign extended
-#     push16 ra                       one word
-#     push16 ra, rb                   two
-#     push16 ra, rb, rc               three - TWO opcodes
-#     pop16  ra   / ra, rb / ra, rb, rc
+#     pop8   ra                       zero extended
+#     push ra                       one word
+#     push ra, rb                   two
+#     push ra, rb, rc               three - TWO opcodes
+#     pop  ra   / ra, rb / ra, rb, rc
 #
 # EVERY ONE OF THESE IS WRITTEN BY HAND.  There is no coalescing: the assembler
 # does not merge adjacent pushes and the disassembler does not split them, so
@@ -1747,12 +1736,10 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 # registers is a fixed three-store sequence the microcode can hard-code, and
 # worst-case latency stays bounded.  Three is also enough: with r5 caller saved
 # there is only one callee-saved register, so the common prologue is
-# `push16 lr, r4` and the three-register form is for spilling arguments.
+# `push lr, r4` and the three-register form is for spilling arguments.
 #
 # BYTE 1 IS THE SAME EVERYWHERE.  Registers occupy fixed 3-bit fields and
-# nothing else lives there - no width bit, no sign bit, no count.  The
-# sign-extending pop is its own opcode rather than a flag, which costs one
-# entry in a 256-entry table and buys a byte-1 layout with no special cases:
+# nothing else lives there - no width bit, no sign bit, no count:
 #
 #     one register:     aaa0_0000
 #     two registers:    aaab_bb00
@@ -1761,19 +1748,18 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 # The three-register forms steal an opcode bit for the ninth register bit,
 # exactly as the three-register ALU forms do - same trick, same reason.
 #
-#     0x88  push8  ra              0x90  pop8u  ra
-#     0x89  push16 ra              0x91  pop8s  ra
-#     0x8a  push16 ra, rb          0x92  pop16  ra
-#     0x8c  push16 ra, rb, rc      0x93  pop16  ra, rb
-#     0x8d    "                    0x94  pop16  ra, rb, rc
-#                                  0x95    "
+#     0x80  push ra              0x88  pop  ra
+#     0x81  push8  ra              0x89  pop8   ra
+#     0x82  push ra, rb          0x8a  pop  ra, rb
+#     0x86  push ra, rb, rc      0x8e  pop  ra, rb, rc
+#     0x87    "                    0x8f    "
 #
 # ORDER.  A push writes its registers left to right, and the stack grows down,
 # so the FIRST register named lands at the HIGHEST address.  A pop reads left to
 # right too, so it takes them off in the order they come, and a save/restore
 # pair reverses the register list:
 #
-#     push16 lr, r4, r5   ...   pop16 r5, r4, lr
+#     push lr, r4, r5   ...   pop r5, r4, lr
 #
 # That is also why the pair push takes a 32-bit value's registers in high:low
 # order - the high half is named first and lands higher, which is little endian.
@@ -1793,10 +1779,10 @@ semantics = "sp = sp - 1; M8[sp] = R[a]"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1000_0000  aaa0_0000"
+  encoding = "1000_0001  aaa0_0000"
 
 [[insn]]
-mnemonic = "push16"
+mnemonic = "push"
 summary  = "push ra"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
@@ -1804,10 +1790,10 @@ semantics = "sp = sp - 2; M16[sp] = R[a]"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1000_0010  aaa0_0000"
+  encoding = "1000_0000  aaa0_0000"
 
 [[insn]]
-mnemonic = "push16"
+mnemonic = "push"
 summary  = "push ra then rb"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
 syntax   = "{a}, {b}"
@@ -1815,10 +1801,10 @@ semantics = "sp = sp - 2; M16[sp] = R[a]; sp = sp - 2; M16[sp] = R[b]"
 
   [[insn.form]]
   name     = "double"
-  encoding = "1000_0011  aaab_bb00"
+  encoding = "1000_0010  aaab_bb00"
 
 [[insn]]
-mnemonic = "push16"
+mnemonic = "push"
 summary  = "push ra, then rb, then rc"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" },
             { name = "c", type = "reg" }]
@@ -1832,15 +1818,27 @@ semantics = "sp = sp - 2; M16[sp] = R[a]; sp = sp - 2; M16[sp] = R[b]; sp = sp -
 
 
 # --- pop --------------------------------------------------------------------
-# `pop8u` and `pop8s` differ only in how the byte reaches the top half of the
-# register, and they are two opcodes rather than one opcode and a flag - see
-# the note on byte 1 above.
+# THERE IS ONE BYTE POP AND IT ZERO EXTENDS.  An earlier version had two,
+# `pop8u` and `pop8s`, differing only in how the byte reached the top half of
+# the register - and the sign-extending one has been removed.
 #
-# MNEMONICS ARE A GUESS - the `u` and `s` suffixes for zero and sign extending
-# are mine.  `pop8` on its own is deliberately not accepted: which extension a
-# byte gets is exactly the thing a reader needs told.
+# IT WAS THE ONLY SIGN-EXTENDING MEMORY READ IN THE MACHINE.  `ld8` zero
+# extends and has no signed twin; there is no `ld8s`, and nothing has ever
+# wanted one, because sign extension is what `sxt8` is for.  A pop that broke
+# that rule made the byte-wide reads inconsistent with each other for the sake
+# of one instruction.
+#
+# It was not paying for itself either.  The ABI already says a byte argument arrives
+# with its high bits UNSPECIFIED and that the callee extends what it needs, so
+# a callee that wants a signed byte writes `sxt8` regardless of how the value
+# arrived; the special pop saved it two bytes in that one case and cost an
+# opcode, a mnemonic, and a decision at every other byte pop.  Zero extension
+# is the one that composes: it leaves the register holding exactly the byte
+# that was on the stack, which is what a caller can rely on.
+#
+# So `pop8` needs no suffix, because there is nothing to distinguish it from.
 [[insn]]
-mnemonic = "pop8u"
+mnemonic = "pop8"
 summary  = "pop a byte into ra, zero extended"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
@@ -1848,21 +1846,10 @@ semantics = "R[a] = M8[sp]; sp = sp + 1"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1000_1000  aaa0_0000"
-
-[[insn]]
-mnemonic = "pop8s"
-summary  = "pop a byte into ra, sign extended"
-operands = [{ name = "a", type = "reg" }]
-syntax   = "{a}"
-semantics = "R[a] = sxt8(M8[sp]); sp = sp + 1"
-
-  [[insn.form]]
-  name     = "single"
   encoding = "1000_1001  aaa0_0000"
 
 [[insn]]
-mnemonic = "pop16"
+mnemonic = "pop"
 summary  = "pop a word into ra"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
@@ -1870,10 +1857,10 @@ semantics = "R[a] = M16[sp]; sp = sp + 2"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1000_1010  aaa0_0000"
+  encoding = "1000_1000  aaa0_0000"
 
 [[insn]]
-mnemonic = "pop16"
+mnemonic = "pop"
 summary  = "pop two words, into ra then rb"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
 syntax   = "{a}, {b}"
@@ -1881,10 +1868,10 @@ semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2"
 
   [[insn.form]]
   name     = "double"
-  encoding = "1000_1011  aaab_bb00"
+  encoding = "1000_1010  aaab_bb00"
 
 [[insn]]
-mnemonic = "pop16"
+mnemonic = "pop"
 summary  = "pop three words, into ra then rb then rc"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" },
             { name = "c", type = "reg" }]
@@ -1914,10 +1901,26 @@ semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2; R[c] = M1
 # criterion to pick on.
 [[insn]]
 mnemonic = "jmpr"
-summary  = "pc += imm16"
+summary  = "pc += displacement"
 operands = [{ name = "t", type = "int16", pcrel = true }]
 syntax   = "{t}"
 semantics = "pc = pc + t"
+
+  # THE SHORT FORM IS A BRANCH WEARING A JUMP'S NAME, and the encoding says so:
+  # 0x9e is the compare-and-branch datapath with its condition pinned to
+  # `eq, r0, r0`.  A register compared for equality with itself is always true,
+  # so the condition field costs nothing and the whole instruction is an opcode
+  # and a displacement byte.
+  #
+  # It used to be spelled `br` and it is not a branch to a programmer: it takes
+  # no condition and no registers, it is exactly `jmpr` with a shorter reach.
+  # So it is a FORM rather than an instruction, and the assembler picks between
+  # two and three bytes by how far the target is - which is what it does for
+  # every other operand that has more than one width.
+  [[insn.form]]
+  name     = "rel8"
+  encoding = "1001_1110  tttt_tttt"
+  fields   = { t = "t:off8" }
 
   [[insn.form]]
   name     = "rel16"
@@ -2083,17 +2086,6 @@ expand   = { mnemonic = "rsb", args = { d = "d", a = "b", b = "a" } }
 # always taken - has a two-byte encoding of its own, and this puts a readable
 # name on it.  `jmp` is left free on the assumption it wants the absolute imm16
 # form.
-[[alias]]
-mnemonic = "br"
-summary  = "branch unconditionally, relative"
-operands = [
-  { name = "off", type = "int16", pcrel = true },
-]
-syntax   = "{off}"
-expand   = { mnemonic = "br8", args = { cond = "eq", a = 0, b = 0, off = "off" } }
-prefer   = true
-
-
 # --- mov (register to register) ---------------------------------------------
 # There is no register-to-register move opcode.  `or rd, rs, #0` is a copy, and
 # 0 is in the imm3 table, so the two-register form is two bytes for free.  When

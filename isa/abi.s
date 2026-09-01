@@ -157,9 +157,9 @@
 ; cycles on top of the fetch, and a multi-register push does one access per
 ; register named:
 ;
-;       push16  lr                      2 bytes    2 + 2 = 4 bus cycles
-;       push16  lr, r4                  2 bytes    2 + 4 = 6 bus cycles
-;       push16  lr, r4, r3              2 bytes    2 + 6 = 8 bus cycles
+;       push    lr                      2 bytes    2 + 2 = 4 bus cycles
+;       push    lr, r4                  2 bytes    2 + 4 = 6 bus cycles
+;       push    lr, r4, r3              2 bytes    2 + 6 = 8 bus cycles
 ;
 ; THE SECOND AND THIRD REGISTERS OF A PUSH ARE FREE IN SPACE AND NOT IN TIME.
 ; That matters for reasoning about the save convention, because it is easy to
@@ -325,7 +325,7 @@
 ;
 ; SO KEEP hi:lo, for three reasons that all point the same way.  Every 32-bit
 ; routine already written assumes it - add32.s, roll32.s, fpadd.s and fpsub.s
-; all use r0:r1 as high:low.  `push16 ra, rb` pushes ra first, so the two-
+; all use r0:r1 as high:low.  `push ra, rb` pushes ra first, so the two-
 ; register push already takes its operands in high:low order.  And "reverse the
 ; arguments" is the rule a compiler wants anyway, because argument boundaries
 ; are where the no-splitting rule lives.
@@ -345,10 +345,10 @@
 ; The multi-register push takes its operands in that same order, so a 32-bit
 ; value is pushed by naming its pair the way it is already written:
 ;
-;       push16  r0, r1          ; a 32-bit value in r0:r1, correctly ordered  2
+;       push    r0, r1          ; a 32-bit value in r0:r1, correctly ordered  2
 ;
-; NOTHING IS COALESCED.  What is written is what runs: `push16 r0` followed by
-; `push16 r1` is two instructions and four bytes, and `push16 r0, r1` is one
+; NOTHING IS COALESCED.  What is written is what runs: `push r0` followed by
+; `push r1` is two instructions and four bytes, and `push r0, r1` is one
 ; instruction and two.  The assembler will not merge them and the disassembler
 ; will not split them, so a prologue's cost is a property of the source rather
 ; than of the tool that assembled it.
@@ -411,9 +411,9 @@ byte_example:
 ; function does not pay.
 
 nonleaf_example:
-        push16  lr                      ;                                2
+        push    lr                      ;                                2
         call    leaf_example            ;                                3
-        pop16   lr                      ;                                2
+        pop     lr                      ;                                2
         ret                             ;                                1
 
 
@@ -428,13 +428,13 @@ nonleaf_example:
 ;       int16_t f(int16_t a, int16_t b)         2 argument registers
 
 full_example:
-        push16  lr, r4, r3              ; lr and two of them, one push   2
+        push    lr, r4, r3              ; lr and two of them, one push   2
         ; ... body, free to use r0, r1, r3, r4, r5 ...
-        pop16   r3, r4, lr              ; reverse order                  2
+        pop     r3, r4, lr              ; reverse order                  2
         ret                             ;                                1
 
 ; THE THIRD REGISTER IS FREE IN BYTES AND NOT IN CYCLES.  This push is the same
-; two bytes as `push16 lr` and does three times the bus work: 8 cycles against
+; two bytes as `push lr` and does three times the bus work: 8 cycles against
 ; 4, and the same again on the pop.  Naming a register you do not use costs
 ; nothing to fetch and four cycles to execute, so the prologue should still name
 ; only what the body actually touches.
@@ -453,9 +453,9 @@ full_example:
 ; them itself.  Three at a time, two bytes each way.
 
 spill_example:
-        push16  r0, r1, r2              ; three registers, one push      2
+        push    r0, r1, r2              ; three registers, one push      2
         call    leaf_example            ;                                3
-        pop16   r2, r1, r0              ; reverse                        2
+        pop     r2, r1, r0              ; reverse                        2
         ret                             ;                                1
 
 ; HOW MUCH THERE IS TO SPILL DEPENDS ON WHAT IS BEING CALLED.  A call to a
@@ -480,7 +480,7 @@ spill_example:
 ;       int16_t sum(node_t *list)       1 argument register
 
 loop_example:
-        push16  lr, r4, r3              ; one push covers all three      2
+        push    lr, r4, r3              ; one push covers all three      2
         mov     r3, r0                  ; the cursor                     2
         mov     r4, #0                  ; the accumulator                2
 loop_body:
@@ -488,9 +488,9 @@ loop_body:
         call    leaf_example            ;                                3
         add     r4, r4, r0              ;                                2
         ld16    r3, [r3, #0]            ; cursor = cursor->next          2
-        br16    ne, r3, #0, loop_body   ;                                3
+        br      ne, r3, #0, loop_body   ;                                3
         mov     r0, r4                  ;                                2
-        pop16   r3, r4, lr              ;                                2
+        pop     r3, r4, lr              ;                                2
         ret                             ;                    total  23   1
 
 ; THE SAME FUNCTION UNDER A FIXED CONVENTION, where only r4 is callee saved.
@@ -498,19 +498,19 @@ loop_body:
 ; the call - inside the loop, where it is paid every iteration.
 
 loop_example_alt:
-        push16  lr, r4                  ;                                2
+        push    lr, r4                  ;                                2
         mov     r3, r0                  ;                                2
         mov     r4, #0                  ;                                2
 loop_body_alt:
         ld16    r0, [r3, #2]            ;                                2
-        push16  r3                      ; <-- per iteration              2
+        push    r3                      ; <-- per iteration              2
         call    leaf_example            ;                                3
-        pop16   r3                      ; <-- per iteration              2
+        pop     r3                      ; <-- per iteration              2
         add     r4, r4, r0              ;                                2
         ld16    r3, [r3, #0]            ;                                2
-        br16    ne, r3, #0, loop_body_alt ;                              3
+        br      ne, r3, #0, loop_body_alt ;                              3
         mov     r0, r4                  ;                                2
-        pop16   r4, lr                  ;                                2
+        pop     r4, lr                  ;                                2
         ret                             ;                    total  27   1
 
 ; 12 bytes of loop body against 16, and the difference is not only bytes: the
@@ -518,7 +518,7 @@ loop_body_alt:
 ; memory traffic on top of their 4 bytes of fetch, every iteration.  The push
 ; that replaced them is one instruction executed once.
 ;
-; THE PROLOGUES ARE THE SAME SIZE.  `push16 lr, r4, r3` and `push16 lr, r4` are
+; THE PROLOGUES ARE THE SAME SIZE.  `push lr, r4, r3` and `push lr, r4` are
 ; both two bytes, so the extra callee-saved register cost this function nothing
 ; to fetch and 4 bus cycles once.  That is the whole trade, and it is the reason
 ; the sliding convention is cheap to lose with: when arity guesses wrong, the
@@ -534,9 +534,9 @@ loop_body_alt:
 ; work normally.
 
 indirect_example:
-        push16  lr                      ;                                2
+        push    lr                      ;                                2
         call    r3                      ; r3 holds the function pointer  2
-        pop16   lr                      ;                                2
+        pop     lr                      ;                                2
         ret                             ;                                1
 
 ; AN INDIRECT TAIL CALL needs no opcode of its own and no saved lr, because
@@ -617,12 +617,12 @@ slot_examples:
 ; fmt is named, so it arrives in r0.  Everything else is on the stack.
 
 vararg_example:
-        push16  lr                      ;                                2
+        push    lr                      ;                                2
         add     r1, sp, #2              ; r1 = va_list                   2
         ; ... r0 is fmt, r1 walks the arguments upward ...
         ld16    r2, [r1, #0]            ; va_arg, 16-bit                 2
         add     r1, r1, #2              ; step over it                   2
-        pop16   lr                      ;                                2
+        pop     lr                      ;                                2
         ret                             ;                                1
 
 ; A VARIADIC FUNCTION COSTS THE SAME AS ANY OTHER.  Three bytes of prologue and
@@ -655,8 +655,8 @@ vararg_example:
 ; ----------------------------------------------------------------------------
 ; THE ALTERNATIVE IS NOT OBVIOUSLY WORSE, and the choice is a real one.  Letting
 ; unnamed arguments use r0-r3 and having the callee push them back out to
-; reconstitute the block costs the callee four bytes once - `push16 r3, r2, r1`
-; and `push16 r0` before saving lr - plus two to discard them, and eight bytes
+; reconstitute the block costs the callee four bytes once - `push r3, r2, r1`
+; and `push r0` before saving lr - plus two to discard them, and eight bytes
 ; of stack on every call no matter how few arguments were passed.  What it saves
 ; is the caller's cleanup: passing in a register is a `mov` where a push would
 ; have been, so the pushes themselves are free, and only the `add sp, sp, #n`

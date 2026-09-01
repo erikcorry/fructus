@@ -22,7 +22,7 @@
 ; `A + B >= 2^16` is exactly `A > ~B`, and `~0 = 65535` behaves correctly.
 ;
 ; ----------------------------------------------------------------------------
-; The comparison must be br16, not br8.  br8 compares low bytes only and would
+; The comparison must be br, not br8.  br8 compares low bytes only and would
 ; miss every carry that depends on the upper half of the sum.
 ; ----------------------------------------------------------------------------
 
@@ -39,7 +39,7 @@
 add32:
         add     r1, r1, r3              ; XL += YL, wrapping            2
         add     r0, r0, r2              ; XH += YH                      2
-        br16    hs, r1, r3, no_carry    ; sum >= YL means no carry      3
+        br      hs, r1, r3, no_carry    ; sum >= YL means no carry      3
         add     r0, r0, #1              ; propagate                     1
 no_carry:
 
@@ -57,7 +57,7 @@ no_carry:
 add32_r4r5:
         add     r5, r5, r7              ; XL += YL                      2
         add     r4, r4, r6              ; XH += YH                      2
-        br16    hs, r5, r7, no_carry2   ; sum >= YL means no carry      3
+        br      hs, r5, r7, no_carry2   ; sum >= YL means no carry      3
         add     r4, r4, #1              ; propagate, tied imm5 form     2
 no_carry2:
 
@@ -75,7 +75,7 @@ no_carry2:
 
 add32_plus3:
         add     r1, r1, #3              ; XL += 3, wrapping             2
-        br16    hs, r1, #3, no_carry3   ; sum >= 3 means no carry       3
+        br      hs, r1, #3, no_carry3   ; sum >= 3 means no carry       3
         add     r0, r0, #1              ; propagate                     1
 no_carry3:
 
@@ -113,7 +113,7 @@ no_carry3:
 ; `A - B` is just `A < B` and can be tested on the original operands, before
 ; anything is overwritten:
 ;
-;       br16    hs, r1, r3, no_borrow   ; XL >= YL means no borrow
+;       br      hs, r1, r3, no_borrow   ; XL >= YL means no borrow
 ;
 ; WIDER VALUES chain the same way: each limb adds, then tests its own sum
 ; against one of its inputs, then conditionally bumps the next limb up.  The
