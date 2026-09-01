@@ -114,15 +114,32 @@ function preferred(d) {
 // The syntax template with the operand NAMES left in rather than values, so
 // {d}, [{a}, #{off}] reads as rd, [ra, #off].  This is what the tooltip shows,
 // because "which addressing mode" is really the question "what do I write".
-function shape(insn) {
+// The width comes from the ENCODED type, which is a property of the form and
+// not of the instruction: `ld rd, [ra, #off]` carries a 3-bit displacement at
+// 0x2a and a 10-bit one at 0x2c, and those are the same instruction.  So an
+// immediate prints as its operand name plus how many bits this form gives it -
+// #off3, #off10, #imm5, #imm16 - which is the number a programmer actually
+// needs and the one thing the mnemonic never says.
+//
+// immbit5 prints its own name instead of a width.  Five bits is not what makes
+// it what it is; being 32 single-bit masks is, and #immbit5 says so where
+// #imm5 would be an outright lie about which values fit.
+function shape(insn, form) {
   const decl = Object.fromEntries((insn.operands ?? []).map((o) => [o.name, o]));
   return (insn.syntax ?? '').replace(/\{(\w+)(?:\.(\w+))?\}/g, (_, n, part) => {
-    if (part) return part;
+    if (part) return part;                      // combo parts: cond, imm
     const d = decl[n];
-    if (d?.type === 'reg') return 'r' + n;      // rd, ra, rb, rc, rs - the
-    if (d?.pcrel) return 'target';              // operand's own letter, so a
-    return n;                                   // store says rs and a push
-  });                                           // says ra, rb, rc
+    if (d?.type === 'reg') return 'r' + n;      // rd, ra, rb, rc, rs
+    if (d?.pcrel || n === 'target') return 'target';
+    const enc = form?.encType.get(n);
+    if (!enc) return n;                         // pinned or tied: no field
+    if (enc === 'immbit5') return 'immbit5';
+    // Only a SIZED immediate gets a width.  A condition is an enum - cond3 is
+    // the type's name, not a useful thing to print after "cond" - and a target
+    // gets its reach from the mode label instead, which says so in words.
+    const t = spec.optype[enc];
+    return (t?.kind === 'int' || t?.kind === 'table') ? n + t.bits : n;
+  });
 }
 
 // --- one cell per first byte -------------------------------------------------
@@ -159,7 +176,7 @@ for (let b = 0; b < 256; b++) {
   // is ddda_aass, two register fields and a small one, and the selector really
   // is the third operand - it just happens to be spelled in the opcode.
   const selector = forms.length > 1;
-  const shapes = [...new Set(forms.map((c) => shape(c.insn)))];
+  const shapes = [...new Set(forms.map((c) => shape(c.insn, c)))];
   cells.push({ b, mode, names, sub, bytes: forms[0].nbytes,
                shape: shapes.join('  /  ') + (selector ? ', #op' : '') });
 }
