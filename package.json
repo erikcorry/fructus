@@ -9,7 +9,8 @@
     "gen": "mkdir -p build && node tools/gen-customasm.js > build/fructus.asm && node tools/gen-customasm.js --noat > build/fructus-noat.asm",
     "test": "sh tests/run.sh",
     "sim": "node tools/sim.js",
-    "microtan": "node tools/microtan.js"
+    "microtan": "node tools/microtan.js",
+    "map": "mkdir -p build && node tools/gen-opcode-map.js > build/opcodes.html && echo build/opcodes.html"
   },
   "dependencies": {
     "smol-toml": "^1.8.0"
