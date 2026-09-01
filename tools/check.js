@@ -350,6 +350,42 @@ for (const al of spec.alias ?? []) {
   }
 }
 
+// --- the hand-written opcode map in the header comment ------------------------
+// That block is prose, and prose drifts.  It has already been wrong once: nop
+// and halt swapped encodings and the comment kept the old order, which nothing
+// would have caught.  So every line of it that names one opcode is checked
+// against the encodings below it.
+//
+// An alias may stand in for what it expands to - the block says `br` where the
+// encoding says `br8`, and that is the point of the alias.
+{
+  const aliasOf = new Map();
+  for (const a of spec.alias ?? []) {
+    if (!aliasOf.has(a.expand?.mnemonic)) aliasOf.set(a.expand?.mnemonic, new Set());
+    aliasOf.get(a.expand?.mnemonic).add(a.mnemonic);
+  }
+  const at = (b) => {
+    const names = new Set();
+    for (const f of table[b] ?? []) {
+      names.add(f.insn.mnemonic);
+      for (const x of aliasOf.get(f.insn.mnemonic) ?? []) names.add(x);
+    }
+    return names;
+  };
+  let n = 0;
+  for (const line of readFileSync(specPath, "utf8").split('\n')) {
+    const m = /^#\s+([01]{4}_[01]{4})\s{2,}(\S+)/.exec(line);
+    if (!m) continue;
+    n++;
+    const b = parseInt(m[1].replace('_', ''), 2);
+    const claim = m[2];
+    const names = at(b);
+    if (claim === '--') { if (names.size) err(`opcode map comment: ${m[1]} is listed free but holds ${[...names].join('/')}`); }
+    else if (!names.has(claim)) err(`opcode map comment: ${m[1]} is listed as ${claim} but holds ${names.size ? [...names].join('/') : 'nothing'}`);
+  }
+  if (!n) err('opcode map comment: found no lines to check - has the block moved?');
+}
+
 // --- report ------------------------------------------------------------------
 console.log('opcode  len  instruction');
 console.log('------  ---  -----------');

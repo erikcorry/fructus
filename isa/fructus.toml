@@ -308,7 +308,7 @@ values = [
 # permits the exchange says so with `swap_operands`.
 #
 # THERE IS NO `al`.  An unconditional branch is a register compared for
-# equality with itself, which is why the two-byte form at 0x87 pins `eq, r0,
+# equality with itself, which is why the two-byte form at 0x9e pins `eq, r0,
 # r0` rather than spending a condition slot on "always".  `nv` is not encoded
 # either - a branch that never happens is a nop the assembler can just not
 # emit.  Both slots go to the overflow conditions instead.
@@ -530,8 +530,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   instead of a set of bit fields, and it is why an ALU operation cannot be
 #   decoded from a fixed position.
 #
-#   0000_0000                nop                        1 byte
-#   0000_0001                halt                       1 byte
+#   0000_0000                halt                       1 byte
+#   0000_0001                nop                        1 byte
 #   0000_0010                ld8  r0, [r0, #0]          1 byte
 #   0000_0011                ld16 r0, [r0, #0]          1 byte
 #   0000_0100                add  r0, r0, #1            1 byte
@@ -544,15 +544,18 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   0000_1011 .. 0000_1111   -- free, 5 one-byte slots
 #   ------------------------------------------------------------------------
 #
-#   0001_0000                mov  rd, #imm5             2 bytes
-#   0001_0001                mov  rd, #immbit5          2 bytes
-#   0001_001s                unary ops, 8 in TWO opcodes 2 bytes
-#   0001_0100 .. 0001_0111   -- free, 4 slots
-#   0001_1ddd                mov  rd, #imm16            3 bytes
+#   0001_0ddd                mov  rd, #imm16            3 bytes
+#   0001_1000                mov  rd, #imm5             2 bytes
+#   0001_1001                mov  rd, #immbit5          2 bytes
+#   0001_101s                unary ops, 8 in TWO opcodes 2 bytes
+#   0001_1100 .. 0001_1111   -- free, 4 slots
 #
-#   That last block is the general wide-immediate shape - destination in the
-#   opcode byte, a full 16-bit value behind it - and jmp and call will reuse
-#   it.  Eight opcodes buys an addressing form, not just a mov.
+#   The wide-immediate form takes the WHOLE first row because it spends three
+#   opcode bits on the destination register - it is the general shape, not a
+#   special case, and jmp and call reuse it.  Eight opcodes buys an addressing
+#   form, not just a mov.  Putting it first keeps the row it occupies whole,
+#   and leaves the free slots gathered at the end of the second row rather
+#   than stranded in the middle of the block.
 #
 #   --- the memory block, 001T_Sfff -----------------------------------------
 #   Three independent bit fields, which is what keeps the decoder small:
@@ -641,16 +644,6 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   ------------------------------------------------------------------------
 #
 #   0110_1000 .. 0111_1111   -- free, room for 3 more grouped operations
-#   --- the branch block -----------------------------------------------------
-#   Every one of these is 3 bytes except the unconditional form, which is 2.
-#
-#   1000_0000                br8   <cond,#imm>, ra, target
-#   1000_0001                br16  <cond,#imm>, ra, target
-#   1000_001b                br8   <cond>, ra, rb, target    TWO opcodes
-#   1000_010b                br16  <cond>, ra, rb, target    TWO opcodes
-#   1000_011e                brclear / brset ra, #mask, target  e = eq / ne
-#   ------------------------------------------------------------------------
-#
 #   --- push / pop -----------------------------------------------------------
 #   Separate state machines, separate opcodes, no register masks, no
 #   coalescing.  8-bit is single register only - a byte on the stack is an
@@ -660,29 +653,46 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   Byte 1 holds nothing but registers in every one of these:
 #     one   aaa0_0000        two   aaab_bb00        three  aaab_bbcc
 #
-#   1000_1000                push8  ra                  2 bytes
-#   1000_1001                push16 ra                  2 bytes
-#   1000_1010                push16 ra, rb              2 bytes
-#   1000_1011                -- free
-#   1000_110c                push16 ra, rb, rc          TWO opcodes
-#   1000_1110                br    target        = br8 eq, r0, r0     2 bytes
-#   1000_1111                -- free
-#   1001_0000                pop8u  ra                  2 bytes
-#   1001_0001                pop8s  ra                  2 bytes
-#   1001_0010                pop16  ra                  2 bytes
-#   1001_0011                pop16  ra, rb              2 bytes
-#   1001_010c                pop16  ra, rb, rc          TWO opcodes
-#   1001_0110 .. 1001_0111   -- free
+#   THE COLUMNS LINE UP AND THAT IS DELIBERATE.  push and pop put their 16-bit
+#   forms at the same offsets - single at +2, double at +3, triple at +6 and
+#   +7 - so the two rows read as one table.  And +6/+7 is where every ALU
+#   group keeps its three-register form, so the three-register push and pop
+#   sit in the same two columns as `add rd, ra, rb`.  Reading down a column
+#   of the opcode map now tells you something.
+#
+#   1000_0000                push8  ra                  2 bytes
+#   1000_0001                -- free
+#   1000_0010                push16 ra                  2 bytes
+#   1000_0011                push16 ra, rb              2 bytes
+#   1000_0100 .. 1000_0101   -- free
+#   1000_011c                push16 ra, rb, rc          TWO opcodes
+#   1000_1000                pop8u  ra                  2 bytes
+#   1000_1001                pop8s  ra                  2 bytes
+#   1000_1010                pop16  ra                  2 bytes
+#   1000_1011                pop16  ra, rb              2 bytes
+#   1000_1100 .. 1000_1101   -- free
+#   1000_111c                pop16  ra, rb, rc          TWO opcodes
 #   ------------------------------------------------------------------------
 #
-#   --- control flow ---------------------------------------------------------
+#   --- control flow, all of it, in one contiguous block ---------------------
+#   Every branch is 3 bytes except the unconditional form, which is 2.  The
+#   conditional branches sit immediately above jmp and call so that everything
+#   that writes the pc lives in 1001_xxxx and nothing else does.
+#
+#   1001_0000                br8   <cond,#imm>, ra, target
+#   1001_0001                br16  <cond,#imm>, ra, target
+#   1001_001b                br8   <cond>, ra, rb, target    TWO opcodes
+#   1001_010b                br16  <cond>, ra, rb, target    TWO opcodes
+#   1001_011e                brclear / brset ra, #mask, target  e = eq / ne
 #   1001_1000                jmpr  target               3 bytes, pc relative
 #   1001_1001                jmp   target               3 bytes, absolute
 #   1001_1010                callr target               3 bytes, pc relative
 #   1001_1011                call  target               3 bytes, absolute
 #   1001_1100                ret                        1 byte
 #   1001_1101                call  ra                   2 bytes, INDIRECT
-#   1001_1110 .. 1011_1111   -- free, 34 slots
+#   1001_1110                br    target        = br8 eq, r0, r0     2 bytes
+#   1001_1111                -- free
+#   1010_0000 .. 1011_1111   -- free, 32 slots
 #   ------------------------------------------------------------------------
 #
 #   11xx_xxxx                -- free, a quarter of the map
@@ -905,7 +915,7 @@ semantics = "R[d] = imm"
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0001_0000  dddi_iiii"
+  encoding = "0001_1000  dddi_iiii"
   fields   = { i = "imm:imm5" }
 
   # The same two-byte shape, the same five bits, read through immbit5 instead
@@ -919,7 +929,7 @@ semantics = "R[d] = imm"
   # field.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0001_0001  dddi_iiii"
+  encoding = "0001_1001  dddi_iiii"
   fields   = { i = "imm:immbit5" }
 
   # Destination in the opcode byte, then a whole 16-bit immediate.  No
@@ -933,7 +943,7 @@ semantics = "R[d] = imm"
   # bits 15..8.
   [[insn.form]]
   name     = "reg_imm16"
-  encoding = "0001_1ddd  iiii_iiii  jjjj_jjjj"
+  encoding = "0001_0ddd  iiii_iiii  jjjj_jjjj"
   fields   = { i = "imm:int16[7:0]", j = "imm:int16[15:8]" }
 
 
@@ -1415,7 +1425,7 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
 # through a value table, `shift3` through a shift-count table, and here they
 # are a raw 0..7 opcode extension with no table at all.
 #
-#     byte 0:  0 0 0 1 0 0 1 s    opcode pair 0x12/0x13, s = selector bit 0
+#     byte 0:  0 0 0 1 1 0 1 s    opcode pair 0x1a/0x1b, s = selector bit 0
 #     byte 1:  d d d a a a t t    dest, source, selector bits 2 and 1
 #
 # Once an operation is named its selector is constant, so each one below has a
@@ -1423,14 +1433,14 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
 # opcode bits to the assembler.  Eight operations for two first-byte opcodes.
 #
 #     sel  mnemonic    byte 0  byte 1 low bits
-#      0   sxt8         0x12   00
-#      1   zxt8         0x13   00
-#      2   clz          0x12   01     TENTATIVE
-#      3   bitrev       0x13   01     TENTATIVE
-#      4   popcount     0x12   10     TENTATIVE
-#      5   -- free      0x13   10
-#      6   -- free      0x12   11
-#      7   -- free      0x13   11
+#      0   sxt8         0x1a   00
+#      1   zxt8         0x1b   00
+#      2   clz          0x1a   01     TENTATIVE
+#      3   bitrev       0x1b   01     TENTATIVE
+#      4   popcount     0x1a   10     TENTATIVE
+#      5   -- free      0x1b   10
+#      6   -- free      0x1a   11
+#      7   -- free      0x1b   11
 #
 # neg and inv are deliberately absent: `rsb rd, ra, #0` and `xor rd, ra, #-1`
 # already express them in two bytes, and both 0 and -1 are in the imm3 table.
@@ -1451,7 +1461,7 @@ semantics = "R[d] = sxt8(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0001_0010  ddda_aa00"
+  encoding = "0001_1010  ddda_aa00"
 
 [[insn]]
 mnemonic = "zxt8"
@@ -1465,7 +1475,7 @@ semantics = "R[d] = zxt8(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0001_0011  ddda_aa00"
+  encoding = "0001_1011  ddda_aa00"
 
 # --- the three below are TENTATIVE ------------------------------------------
 [[insn]]
@@ -1480,7 +1490,7 @@ semantics = "R[d] = clz(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0001_0010  ddda_aa01"
+  encoding = "0001_1010  ddda_aa01"
 
 [[insn]]
 mnemonic = "bitrev"
@@ -1494,7 +1504,7 @@ semantics = "R[d] = bitrev(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0001_0011  ddda_aa01"
+  encoding = "0001_1011  ddda_aa01"
 
 [[insn]]
 mnemonic = "popcount"
@@ -1508,7 +1518,7 @@ semantics = "R[d] = popcount(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0001_0010  ddda_aa10"
+  encoding = "0001_1010  ddda_aa10"
 
 
 # --- br8 / br16 -------------------------------------------------------------
@@ -1558,13 +1568,13 @@ swap_operands = ["a", "b"]
   # branch that loses nothing by living outside the block.
   [[insn.form]]
   name     = "always"
-  encoding = "1000_1110  tttt_tttt"
+  encoding = "1001_1110  tttt_tttt"
   fix      = { cond = "eq", a = 0, b = 0 }
   fields   = { t = "off:off8" }
 
   [[insn.form]]
   name     = "cond_reg_reg"
-  encoding = "1000_001b  ccca_aaee  tttt_tttt"
+  encoding = "1001_001b  ccca_aaee  tttt_tttt"
   fields   = { c = "cond:cond3", b = "b:reg[0]", e = "b:reg[2:1]", t = "off:off8" }
 
 [[insn]]
@@ -1580,7 +1590,7 @@ semantics = "if (test(k.cond, R[a] & 255, k.imm & 255, 8)) pc = pc + off"
 
   [[insn.form]]
   name     = "cond_reg_imm"
-  encoding = "1000_0000  aaak_kkkk  tttt_tttt"
+  encoding = "1001_0000  aaak_kkkk  tttt_tttt"
   fields   = { k = "k:condimm5", t = "off:off8" }
 
 
@@ -1599,7 +1609,7 @@ swap_operands = ["a", "b"]
 
   [[insn.form]]
   name     = "cond_reg_reg"
-  encoding = "1000_010b  ccca_aaee  tttt_tttt"
+  encoding = "1001_010b  ccca_aaee  tttt_tttt"
   fields   = { c = "cond:cond3", b = "b:reg[0]", e = "b:reg[2:1]", t = "off:off8" }
 
 [[insn]]
@@ -1615,7 +1625,7 @@ semantics = "if (test(k.cond, R[a], k.imm, 16)) pc = pc + off"
 
   [[insn.form]]
   name     = "cond_reg_imm"
-  encoding = "1000_0001  aaak_kkkk  tttt_tttt"
+  encoding = "1001_0001  aaak_kkkk  tttt_tttt"
   fields   = { k = "k:condimm5", t = "off:off8" }
 
 
@@ -1656,7 +1666,7 @@ semantics = "if ((R[a] & mask) == 0) pc = pc + off"
 
   [[insn.form]]
   name     = "reg_mask"
-  encoding = "1000_0110  aaam_mmmm  tttt_tttt"
+  encoding = "1001_0110  aaam_mmmm  tttt_tttt"
   fields   = { m = "mask:immbit5", t = "off:off8" }
 
 [[insn]]
@@ -1672,7 +1682,7 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 
   [[insn.form]]
   name     = "reg_mask"
-  encoding = "1000_0111  aaam_mmmm  tttt_tttt"
+  encoding = "1001_0111  aaam_mmmm  tttt_tttt"
   fields   = { m = "mask:immbit5", t = "off:off8" }
 
 
@@ -1753,7 +1763,7 @@ semantics = "sp = sp - 1; M8[sp] = R[a]"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1000_1000  aaa0_0000"
+  encoding = "1000_0000  aaa0_0000"
 
 [[insn]]
 mnemonic = "push16"
@@ -1764,7 +1774,7 @@ semantics = "sp = sp - 2; M16[sp] = R[a]"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1000_1001  aaa0_0000"
+  encoding = "1000_0010  aaa0_0000"
 
 [[insn]]
 mnemonic = "push16"
@@ -1775,7 +1785,7 @@ semantics = "sp = sp - 2; M16[sp] = R[a]; sp = sp - 2; M16[sp] = R[b]"
 
   [[insn.form]]
   name     = "double"
-  encoding = "1000_1010  aaab_bb00"
+  encoding = "1000_0011  aaab_bb00"
 
 [[insn]]
 mnemonic = "push16"
@@ -1787,7 +1797,7 @@ semantics = "sp = sp - 2; M16[sp] = R[a]; sp = sp - 2; M16[sp] = R[b]; sp = sp -
 
   [[insn.form]]
   name     = "triple"
-  encoding = "1000_110z  aaab_bbcc"
+  encoding = "1000_011z  aaab_bbcc"
   fields   = { z = "c:reg[0]", c = "c:reg[2:1]" }
 
 
@@ -1808,7 +1818,7 @@ semantics = "R[a] = M8[sp]; sp = sp + 1"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1001_0000  aaa0_0000"
+  encoding = "1000_1000  aaa0_0000"
 
 [[insn]]
 mnemonic = "pop8s"
@@ -1819,7 +1829,7 @@ semantics = "R[a] = sxt8(M8[sp]); sp = sp + 1"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1001_0001  aaa0_0000"
+  encoding = "1000_1001  aaa0_0000"
 
 [[insn]]
 mnemonic = "pop16"
@@ -1830,7 +1840,7 @@ semantics = "R[a] = M16[sp]; sp = sp + 2"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1001_0010  aaa0_0000"
+  encoding = "1000_1010  aaa0_0000"
 
 [[insn]]
 mnemonic = "pop16"
@@ -1841,7 +1851,7 @@ semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2"
 
   [[insn.form]]
   name     = "double"
-  encoding = "1001_0011  aaab_bb00"
+  encoding = "1000_1011  aaab_bb00"
 
 [[insn]]
 mnemonic = "pop16"
@@ -1853,7 +1863,7 @@ semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2; R[c] = M1
 
   [[insn.form]]
   name     = "triple"
-  encoding = "1001_010z  aaab_bbcc"
+  encoding = "1000_111z  aaab_bbcc"
   fields   = { z = "c:reg[0]", c = "c:reg[2:1]" }
 
 
