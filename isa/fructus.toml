@@ -1917,9 +1917,9 @@ semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2; R[c] = M1
 [[insn]]
 mnemonic = "jmpr"
 summary  = "pc += displacement"
-operands = [{ name = "t", type = "int16", pcrel = true }]
-syntax   = "{t}"
-semantics = "pc = pc + t"
+operands = [{ name = "target", type = "int16", pcrel = true }]
+syntax   = "{target}"
+semantics = "pc = pc + target"
 
   # THE SHORT FORM IS A BRANCH WEARING A JUMP'S NAME, and the encoding says so:
   # 0x9e is the compare-and-branch datapath with its condition pinned to
@@ -1935,48 +1935,48 @@ semantics = "pc = pc + t"
   [[insn.form]]
   name     = "rel8"
   encoding = "1001_1110  tttt_tttt"
-  fields   = { t = "t:off8" }
+  fields   = { t = "target:off8" }
 
   [[insn.form]]
   name     = "rel16"
   encoding = "1001_1000  iiii_iiii  jjjj_jjjj"
-  fields   = { i = "t:int16[7:0]", j = "t:int16[15:8]" }
+  fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 [[insn]]
 mnemonic = "jmp"
 summary  = "pc = imm16"
-operands = [{ name = "t", type = "int16" }]
-syntax   = "{t}"
-semantics = "pc = t"
+operands = [{ name = "target", type = "int16" }]
+syntax   = "{target}"
+semantics = "pc = target"
 
   [[insn.form]]
   name     = "abs16"
   encoding = "1001_1001  iiii_iiii  jjjj_jjjj"
-  fields   = { i = "t:int16[7:0]", j = "t:int16[15:8]" }
+  fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 [[insn]]
 mnemonic = "callr"
 summary  = "lr = pc of next instruction; pc += imm16"
-operands = [{ name = "t", type = "int16", pcrel = true }]
-syntax   = "{t}"
-semantics = "lr = pc; pc = pc + t"
+operands = [{ name = "target", type = "int16", pcrel = true }]
+syntax   = "{target}"
+semantics = "lr = pc; pc = pc + target"
 
   [[insn.form]]
   name     = "rel16"
   encoding = "1001_1010  iiii_iiii  jjjj_jjjj"
-  fields   = { i = "t:int16[7:0]", j = "t:int16[15:8]" }
+  fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 [[insn]]
 mnemonic = "call"
 summary  = "lr = pc of next instruction; pc = imm16"
-operands = [{ name = "t", type = "int16" }]
-syntax   = "{t}"
-semantics = "lr = pc; pc = t"
+operands = [{ name = "target", type = "int16" }]
+syntax   = "{target}"
+semantics = "lr = pc; pc = target"
 
   [[insn.form]]
   name     = "abs16"
   encoding = "1001_1011  iiii_iiii  jjjj_jjjj"
-  fields   = { i = "t:int16[7:0]", j = "t:int16[15:8]" }
+  fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 # --- the indirect call ------------------------------------------------------
 # `call rX` is `call imm16` with the target coming from the register file

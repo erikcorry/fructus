@@ -22,26 +22,32 @@ const dec  = buildDecoder(spec);
 // --- the modes, in key order -------------------------------------------------
 // `hue` is not decoration: the family says what kind of operand the mode takes,
 // so the map reads at two levels - the individual colour, and the group.
+// `label` names the LAYOUT, not one member's syntax.  Calling the
+// three-register layout "rd, ra, rb" was fine while only the ALU used it and
+// wrong as soon as push did - a push has no destination.  So the label
+// describes the bit shape, `bits` gives the exact widths, `note` names real
+// instructions with their real operand letters, and each cell prints its own
+// syntax.  Four grains, none of them contradicting another.
 const MODES = [
-  { id: 'abbrev',  c: '#F8CE8B', label: 'One-byte abbreviation', bits: 'every operand pinned',           note: 'add r0, r0, #1 · mov r0, r1' },
-  { id: 'special', c: '#E3A863', label: 'One-byte special',      bits: 'no operands at all',             note: 'ret · nop · halt' },
+  { id: 'abbrev',  c: '#F8CE8B', label: 'One-byte abbreviation', bits: 'every operand pinned',            note: 'add r0, r0, #1 &middot; mov r0, r1' },
+  { id: 'special', c: '#E3A863', label: 'One-byte special',      bits: 'no operands at all',              note: 'ret &middot; nop &middot; halt' },
 
-  { id: 'rrr',     c: '#9AC4E8', label: 'rd, ra, rb',            bits: 'reg 3 (split) + reg 3 + reg 3',  note: 'also the three-register push and pop' },
-  { id: 'rr',      c: '#B9D9F2', label: 'rd, ra',                bits: 'reg 3 + reg 3',                  note: 'unary ALU, and the two-register push and pop' },
-  { id: 'r',       c: '#D2E7F8', label: 'ra',                    bits: 'reg 3',                          note: 'single push, pop, and call through a register' },
+  { id: 'rrr',     c: '#9AC4E8', label: 'Three registers',       bits: 'reg 3 (split) + reg 3 + reg 3',   note: 'add rd, ra, rb &middot; push ra, rb, rc' },
+  { id: 'rr',      c: '#B9D9F2', label: 'Two registers',         bits: 'reg 3 + reg 3',                   note: 'push ra, rb &middot; and the unary ALU ops, whose third operand is the opcode' },
+  { id: 'r',       c: '#D2E7F8', label: 'One register',          bits: 'reg 3',                           note: 'push ra &middot; pop ra &middot; call ra' },
 
-  { id: 'rri3',    c: '#A6D9B4', label: 'rd, ra, #imm3',         bits: 'table 3 (split) + reg 3 + reg 3', note: 'shifts read the same three bits as #shift3' },
-  { id: 'rri10',   c: '#CBE5A0', label: 'rd, ra, #imm10',        bits: 'reg 3 + reg 3 + int 10' },
+  { id: 'rri3',    c: '#A6D9B4', label: 'Two registers, 3-bit table', bits: 'table 3 (split) + reg 3 + reg 3', note: 'ld rd, [ra, #off] &middot; st rs, [ra, #off] &middot; add rd, ra, #imm3. Shifts read the same three bits as #shift3' },
+  { id: 'rri10',   c: '#CBE5A0', label: 'Two registers, 10-bit', bits: 'reg 3 + reg 3 + int 10',          note: 'the wide displacement and immediate forms' },
 
-  { id: 'ri5',     c: '#C6BEEC', label: 'rd, #imm5',             bits: 'reg 3 + int 5, signed',          note: '&minus;16 to 15, and the tied load displacement' },
-  { id: 'rib5',    c: '#F2D6F2', label: 'rd, #1&lt;&lt;n',            bits: 'reg 3 + table 5',                note: 'the same five bits read as one of 32 masks: 1&lt;&lt;n and its complement' },
-  { id: 'ri16',    c: '#DEC6F0', label: 'rd, #imm16',            bits: 'reg 3 + int 16 (split)' },
+  { id: 'ri5',     c: '#C6BEEC', label: 'One register, 5-bit signed', bits: 'reg 3 + int 5, signed',      note: '&minus;16 to 15, and the tied load displacement' },
+  { id: 'rib5',    c: '#F2D6F2', label: 'One register, 5-bit mask',   bits: 'reg 3 + table 5',            note: 'the same five bits read as one of 32 masks: 1&lt;&lt;n and its complement' },
+  { id: 'ri16',    c: '#DEC6F0', label: 'One register, 16-bit', bits: 'reg 3 + int 16 (split)',           note: 'mov rd, #imm16' },
 
-  { id: 'crrt',    c: '#F5C2DC', label: 'cond, ra, rb, target',  bits: 'reg 3 (split) + cond 3 + reg 3 + int 8' },
-  { id: 'ckt',     c: '#E4A2C4', label: 'cond #k, ra, target',   bits: 'reg 3 + cond+const 5 + int 8' },
-  { id: 'rmt',     c: '#F2B5A5', label: 'ra, #mask, target',     bits: 'reg 3 + table 5 + int 8',        note: 'brset and brclear' },
-  { id: 't8',      c: '#FAD4D4', label: 'target, 8-bit',         bits: 'int 8',                          note: 'the unconditional branch' },
-  { id: 't16',     c: '#F0AEAE', label: 'target, 16-bit',        bits: 'int 16 (split)',                 note: 'jmp, jmpr, call, callr' },
+  { id: 'crrt',    c: '#F5C2DC', label: 'Condition, two registers, target', bits: 'reg 3 (split) + cond 3 + reg 3 + int 8', note: 'br cond, ra, rb, target' },
+  { id: 'ckt',     c: '#E4A2C4', label: 'Packed condition, register, target', bits: 'reg 3 + cond+const 5 + int 8', note: 'one five-bit field holds the condition AND the constant' },
+  { id: 'rmt',     c: '#F2B5A5', label: 'Register, mask, target', bits: 'reg 3 + table 5 + int 8',        note: 'brset &middot; brclear' },
+  { id: 't8',      c: '#FAD4D4', label: 'Target only, 8-bit',    bits: 'int 8',                           note: 'the short jmpr' },
+  { id: 't16',     c: '#F0AEAE', label: 'Target only, 16-bit',   bits: 'int 16 (split)',                  note: 'jmp &middot; jmpr &middot; call &middot; callr' },
 ];
 const MODE = Object.fromEntries(MODES.map((m) => [m.id, m]));
 
@@ -112,8 +118,11 @@ function shape(insn) {
   const decl = Object.fromEntries((insn.operands ?? []).map((o) => [o.name, o]));
   return (insn.syntax ?? '').replace(/\{(\w+)(?:\.(\w+))?\}/g, (_, n, part) => {
     if (part) return part;
-    return decl[n]?.type === 'reg' ? 'r' + n : n;
-  });
+    const d = decl[n];
+    if (d?.type === 'reg') return 'r' + n;      // rd, ra, rb, rc, rs - the
+    if (d?.pcrel) return 'target';              // operand's own letter, so a
+    return n;                                   // store says rs and a push
+  });                                           // says ra, rb, rc
 }
 
 // --- one cell per first byte -------------------------------------------------
@@ -138,8 +147,21 @@ for (let b = 0; b < 256; b++) {
       else if (mode === 'abbrev') sub = render(spec, d).slice(d.insn.mnemonic.length).trim();
     }
   }
+  // MORE THAN ONE INSTRUCTION ON ONE FIRST BYTE means the literal bits left
+  // over in byte 1 are an operation selector, not padding - which is the whole
+  // reason the unary operations fit eight operations into two opcodes.  So
+  // their shape gets a third operand, `#op`, and reads as
+  //
+  //     rd, ra, #op
+  //
+  // which is the same shape as `rd, ra, #imm3` directly above and below them
+  // in columns .2 and .3.  That is not a coincidence dressed up: byte 1 really
+  // is ddda_aass, two register fields and a small one, and the selector really
+  // is the third operand - it just happens to be spelled in the opcode.
+  const selector = forms.length > 1;
   const shapes = [...new Set(forms.map((c) => shape(c.insn)))];
-  cells.push({ b, mode, names, sub, bytes: forms[0].nbytes, shape: shapes.join('  /  ') });
+  cells.push({ b, mode, names, sub, bytes: forms[0].nbytes,
+               shape: shapes.join('  /  ') + (selector ? ', #op' : '') });
 }
 
 const used  = cells.filter(Boolean).length;
@@ -246,11 +268,19 @@ if (process.argv.includes('--svg')) {
       // no pointer events, and <title> tooltips never fire.  So the thing the
       // HTML puts in a tooltip has to be on the face of the cell here.
       //
+      // It prints THIS INSTRUCTION'S operand shape rather than the key's mode
+      // label, because one label cannot be right for every cell that shares a
+      // layout.  `add rd, ra, rb` and `push ra, rb, rc` are the same three
+      // register fields and the same colour, but a push has no destination, so
+      // calling its first operand rd would be wrong.  A store says rs.  The
+      // shape comes from the instruction's own syntax, so it cannot disagree
+      // with what the assembler accepts.
+      //
       // A one-byte abbreviation shows its pinned operands instead.  Its colour
       // already says which mode it is, and what it abbreviates is the only
       // thing about it worth the room.
-      const foot = c.sub ? [c.sub] : wrap(MODE[c.mode].label.replace(/&lt;/g, '<'),
-                                          Math.floor((CW - 16) / (8.5 * 0.6)));
+      const foot = c.sub ? [c.sub]
+                         : wrap(c.shape, Math.floor((CW - 16) / (8.5 * 0.6)));
       foot.forEach((ln, i) => t(cx + 8, ry + 31 + lines.length * 12 + 2 + i * 10, ln,
                                 { s: 8.5, c: 'rgba(0,0,0,.62)' }));
 
