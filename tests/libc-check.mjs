@@ -99,7 +99,7 @@ function call(entry, dest, src, n) {
 
   let why;
   try {
-    why = m.run({ max: 2000000, stopAt: RET });
+    why = m.run({ max: 200000, stopAt: RET });
   } catch (e) {
     why = `ran off the rails: ${e.message}`;   // a lost return address, usually
   }
@@ -277,7 +277,7 @@ function dispatch(name, r, dest, src, n) {
     m.pc = entry; m.halted = false; m.count = 0;
     m.fetched = 0; m.bus = 0;
     let why;
-    try { why = m.run({ max: 2000000, stopAt: RET }); }
+    try { why = m.run({ max: 200000, stopAt: RET }); }
     catch (e) { why = `ran off the rails: ${e.message}`; }
     return { why, mem: m.mem.slice(BUF, BUF + SPAN), cycles: m.fetched + m.bus,
              r0: m.R[0], r2: m.R[2], sp: m.R[m.named.sp], r3: m.R[3], r4: m.R[4] };
@@ -346,10 +346,15 @@ function dispatch(name, r, dest, src, n) {
   const bulk = (cost(64 + 32 * 32) - cost(64)) / (32 * 32);
   check('memset fill loop', Math.abs(bulk - 1.4688) < 0.0005,
         `${bulk.toFixed(4)} cycles/byte, the file says 1.4688`);
+  // 31 bytes is the head's worst case: one peeled byte and fifteen words.
   const head = (cost(31) - cost(0)) / 31;
-  check('memset byte head', Math.abs(head - 6) < 0.0001, `${head.toFixed(4)} cycles/byte`);
+  check('memset head', Math.abs(head - 3.4839) < 0.0005, `${head.toFixed(4)} cycles/byte`);
+  // and the seam has to be free: 32 costs three more than 31 did per byte, not
+  // a whole extra pass.  A head that ran on block-aligned lengths too would
+  // still write the right bytes and would show up right here.
+  check('memset seam', cost(32) < cost(31), `n=32 costs ${cost(32)}, n=31 costs ${cost(31)}`);
   console.log(`ok    fill loop ${bulk.toFixed(4)} cycles/byte, ` +
-              `byte head ${head.toFixed(2)} for up to 31 bytes`);
+              `head ${head.toFixed(4)} for up to 31 bytes`);
 
   console.log(`ok    sizes: bzero ${memset - bzero} bytes, ` +
               `memset ${fill.code.length - memset} bytes, ` +

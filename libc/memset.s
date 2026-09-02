@@ -21,16 +21,18 @@
 ; MEASURED, by tests/libc-check.mjs
 ; ----------------------------------------------------------------------------
 ;       fill loop       1.4688 cycles/byte      32 bytes an iteration
-;       byte head       6.0000 cycles/byte      up to 31 bytes
-;       sizes           bzero 12 bytes, memset 43, 55 together
+;       head            3.4839 cycles/byte      up to 31 bytes, in words
+;       sizes           bzero 12 bytes, memset 48, 60 together
 ;
 ; The floor is 1.00 - one bus cycle to write each byte - and 15 bytes of loop
 ; get to 1.47.  snippets/speed-of-light-memset-core.s reaches 1.3450 and spends
 ; 89 bytes doing it, so this gives up 9% for a quarter of the code.
 ;
-; THE HEAD IS THE WEAK PART.  Everything below 32 bytes goes through a `push8`
-; loop at 6 cycles a byte, so clearing a 24-byte struct costs 170 cycles where
-; the 32-byte case costs 73.  See the note at the bottom.
+; THE HEAD PUSHES WORDS, which is worth having: a byte loop costs 6 cycles a
+; byte and clearing a 24-byte struct came to 170 cycles, against 113 now.  Five
+; bytes of code buy 34% on every length below 32 and cost 3 cycles on exact
+; multiples of 32 - and the sizes below 32 are the ones a compiler emits for
+; clearing a struct, which is most memset calls in most programs.
 ; ============================================================================
 
 
@@ -58,40 +60,55 @@ bzero:
 
 
 ; ============================================================================
-; memset                                                            43 bytes
+; memset                                                            48 bytes
 ; ============================================================================
-; sp walks down from the end of the region to the start, in two phases:
+; sp walks down from the end of the region to the start, in three phases:
 ;
-;       s                    s + (n & ~31)              s + n
-;       |---- fill loop ----------|--- byte head ---------|
-;                                 <---------------------- filled first
+;       s                    s + (n & ~31)          s + n - 1   s + n
+;       |------ fill loop --------|----- words -----------|-byte-|
+;                                                          <----- filled first
 ;
-; The byte head runs FIRST because it is the high end and push descends.  It is
-; also the only part that can use the fill byte before it has been doubled,
-; which is why the doubling sits between the two loops rather than at the top.
+; The head runs FIRST because it is the high end and push descends.  The odd
+; byte goes at the very TOP rather than the bottom, which is a choice and not
+; forced: putting it at s would work too, but then the fill loop would have to
+; stop at s + 1 instead of s, and its exit test compares against r0 directly.
+; At the top it costs nothing - the head simply starts one byte lower.
+
+; --- double the byte, before anything else ---------------------------------
+; r5 is the temporary here and takes the real sp immediately afterwards, which
+; is the whole reason this can come first: there is no third register free once
+; sp has been captured, and the head needs the doubled byte to push words.
+;
+; C says memset takes an int and uses `(unsigned char)c`, so a caller passing
+; 0x12ff must fill with 0xff.  The zxt8 is what makes that true, not decoration.
 
 memset:
+        zxt8    r1, r1                  ; (unsigned char)c is the contract
+        shl     r5, r1, #8              ; 8 is in shift3, so this is two bytes
+        or      r1, r1, r5              ; r1 = c:c
         mov     r5, sp                  ; the real stack, out of the way
         add     sp, r0, r2              ; sp = one past the end
+
+; --- the head: at most 31 bytes, in words ----------------------------------
+; An odd length gets one byte peeled off the top, and everything below that is
+; pushed two bytes at a time.  Words rather than bytes is worth 3.5 cycles a
+; byte instead of 6, which is most of what a small memset costs.
+;
+; NO `add r2, r2, #-1` AFTER THE PEEL, and that is exact rather than lucky: an
+; odd n is never a multiple of 32, so subtracting one from it cannot cross a
+; block boundary, and n & ~31 is the same either way.
+
+        brclear r2, #1, .even           ; even length: no byte to peel
+        push8   r1                      ; the odd byte, at the very top    3
+.even:
         and     r2, r2, #-32            ; the length, rounded down to a block
         add     r2, r0, r2              ; ... as an address: where the head stops
 
-        br      eq, sp, r2, .headdone   ; n was already a multiple of 32
+        br      eq, sp, r2, .headdone   ; nothing between the block and the end
 .head:
-        push8   r1                      ;                               3
+        push    r1                      ;                               4
         br      ne, sp, r2, .head       ;                               3
 .headdone:
-
-; --- double the byte -------------------------------------------------------
-; r2 is finished with, so it is the temporary.  The shift comes first: it reads
-; r1 while the high byte is still whatever the caller passed, and discards it
-; anyway, so only r1 itself needs clearing.  C says memset takes an int and uses
-; `(unsigned char)c`, so a caller passing 0x12ff must fill with 0xff - the zxt8
-; is what makes that true, not decoration.
-
-        shl     r2, r1, #8              ; 8 is in shift3, so this is two bytes
-        zxt8    r1, r1                  ; and (unsigned char)c is the contract
-        or      r1, r1, r2              ; r1 = c:c
 
 ; --- the fill loop, 32 bytes an iteration ----------------------------------
 ; Sixteen words: five triples and a single.  Nothing here maintains a pointer,
@@ -119,11 +136,9 @@ memset:
 ; that borrows the scratch, so a future edit that needs one fails to assemble
 ; instead of corrupting the stack.  Do not remove that check.
 ;
-; THE HEAD COULD BE THREE AND A HALF CYCLES A BYTE INSTEAD OF SIX, for seven
-; more bytes.  Double the fill byte at the very top - r5 is free before it takes
-; sp - then peel one `push8` if n is odd and push WORDS down to the block
-; boundary.  Measured against this version: 24 bytes falls from 170 cycles to
-; 113, 31 bytes from 212 to 139, and every exact multiple of 32 costs 3 more.
-; That is a 35% saving on precisely the sizes a compiler emits for clearing a
-; struct, which is most memset calls in most programs.  Left undone on purpose:
-; 43 bytes is the version that fits the brief.
+; WHAT THE HEAD IS STILL LEAVING.  Between 3.50 and the 1.47 of the fill loop
+; there is one more step - pushing triples down to the block boundary the way
+; the fill loop does - but it needs its own entry ladder to know how many
+; triples to start with, and that is a jump table or a chain of tests.  Both
+; cost more than the case is worth: the head is at most 31 bytes, so the whole
+; remaining saving is about 60 cycles on a call that already costs 113.
