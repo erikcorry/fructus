@@ -176,6 +176,58 @@ The opcode map makes the gaps visible, and three of them are worth naming. None
 is implemented; they are here so the space does not get spent on something else
 by accident.
 
+### A multi-register store through an ordinary register
+
+**The strongest case in this list, and it comes from measurement.** `push` moves
+three registers in one two-byte instruction; a `st` moves one. That factor of
+three is the whole difference between the two cores in `snippets/`:
+
+| | measured |
+|---|---|
+| `memset`, filling through `sp` with `push` | **1.3450** cycles/byte |
+| `memcpy`, reading through `sp` with `pop`, writing with `st` | **3.4833** cycles/byte |
+
+memcpy's source side already gets the cheap rate, because `sp` can be pointed at
+it. Its *destination* side cannot, because there is only one `sp` and `memset`
+has a prior claim on it. Give the destination the same rate and memcpy goes to a
+projected **2.6905** cycles/byte — one `pop` and one multi-store per six bytes,
+four instruction bytes and twelve bus bytes, 126 bytes per iteration in 87.
+
+**A multi-register STORE is worth more than a multi-register LOAD**, and the
+asymmetry is not close. memset writes and never reads, so a load form does
+nothing for it at all; memcpy needs both sides fast but already has a fast
+source. So the store form serves both routines and the load form serves one —
+and the one it serves is the one already covered.
+
+**It has to count UP.** `push` pre-decrements and `pop` post-increments, which
+is what makes them a stack pair and exactly what makes them useless as a
+*matched* pair: reading ascending while writing descending copies the bytes to
+the wrong end of the buffer. Pairing with the existing `pop` means the new
+instruction must post-increment, like `pop` does:
+
+```
+stm ra!, rb, rc, rd        ; store three registers, ra += 6
+```
+
+The alternative — a descending multi-load to pair with the existing `push` —
+gets memcpy to the same place and leaves memset where it is, needing `sp`.
+
+**It costs four opcodes**, mirroring the push family: one register, two, and
+three (which takes an aligned pair, because nine register bits do not fit in
+byte 1). The push and pop block has seven free — 0x83, 0x84, 0x85, 0x8b, 0x8c,
+0x8d, 0x9f — including the aligned pairs 0x84/0x85 and 0x8c/0x8d, so it fits
+where it belongs with three to spare.
+
+**And it would free `sp`.** Both cores today point `sp` at data, which means
+interrupts need their own stack pointer while a copy or a fill is running. That
+is a real constraint on the whole machine bought by two routines. With a
+multi-store through an ordinary register, `memset` gives `sp` back entirely and
+`memcpy` keeps it only for the source.
+
+This is a different thing from the indexed load and store below: that one adds
+an addressing *mode*, this one adds a transfer *width*. They do not compete for
+the same opcodes and neither substitutes for the other.
+
 ### Three-register load and store — `ld rd, [ra, rb]`
 
 The obvious missing addressing mode: an index register instead of a constant
