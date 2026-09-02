@@ -2132,3 +2132,64 @@ operands = [
 ]
 syntax   = "{d}, {a}, #{imm}"
 expand   = { mnemonic = "add", args = { d = "d", a = "a", imm = "-imm" } }
+
+
+# --- the zero-offset shorthand ----------------------------------------------
+# `ld rd, [ra]` for `ld rd, [ra, #0]`, and the same for ld8, st and st8.
+#
+# Pure notation: the offset is a required field of the encoding and there is no
+# separate register-indirect opcode, so this saves nothing but typing.  It is
+# here rather than in the assembler because the spec is what defines the
+# assembly language - the same reason `mov` and `sub` are aliases and not
+# generator policy.
+#
+# NOT PREFERRED, deliberately.  A disassembly that prints `ld r0, [r1]` hides
+# the fact that an offset field was encoded, and a listing read next to a hex
+# dump should show every field the bytes carry.  So the canonical form keeps
+# the `#0` and only source may drop it, which also leaves round-tripping alone:
+# decode always emits `#0`, and `#0` always re-assembles.
+#
+# The four blocks are identical apart from the mnemonic and the load/store
+# operand name.  There is no way to say that once - an alias names exactly one
+# target - and the check in tools/check.js verifies each rewrite lands on a
+# real entry, so a drifting copy is caught rather than silently ignored.
+
+[[alias]]
+mnemonic = "ld"
+summary  = "rd = memory16[ra]"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+]
+syntax   = "{d}, [{a}]"
+expand   = { mnemonic = "ld", args = { d = "d", a = "a", off = 0 } }
+
+[[alias]]
+mnemonic = "ld8"
+summary  = "rd = memory8[ra], zero extended"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+]
+syntax   = "{d}, [{a}]"
+expand   = { mnemonic = "ld8", args = { d = "d", a = "a", off = 0 } }
+
+[[alias]]
+mnemonic = "st"
+summary  = "memory16[ra] = rs"
+operands = [
+  { name = "s", type = "reg" },
+  { name = "a", type = "reg" },
+]
+syntax   = "{s}, [{a}]"
+expand   = { mnemonic = "st", args = { s = "s", a = "a", off = 0 } }
+
+[[alias]]
+mnemonic = "st8"
+summary  = "memory8[ra] = rs"
+operands = [
+  { name = "s", type = "reg" },
+  { name = "a", type = "reg" },
+]
+syntax   = "{s}, [{a}]"
+expand   = { mnemonic = "st8", args = { s = "s", a = "a", off = 0 } }

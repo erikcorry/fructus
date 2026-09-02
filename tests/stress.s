@@ -12,6 +12,15 @@ start:
         st8     r1, [r2, #3]            ; 2  two-reg, imm3
         st      r1, [r2, #-500]         ; 3  two-reg, imm10
 
+; The zero-offset shorthand.  These four must assemble to exactly the same
+; bytes as the four above them, one-byte abbreviation included - the alias
+; rewrites to `#0` and then form selection runs as usual.
+        ld      r0, [r0]                ; 1  implicit, via the shorthand
+        ld8     r0, [r0]                ; 1  implicit, via the shorthand
+        ld      r2, [r5]                ; 2  two-reg, imm3
+        st8     r1, [r2]                ; 2  two-reg, imm3
+        ld      sp, [lr]                ; 2  and it takes register aliases
+
         add     r0, r0, #1              ; 1
         add     r0, r0, #-1             ; 1
         add     r0, r0, #2              ; 1

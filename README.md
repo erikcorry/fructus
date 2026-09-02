@@ -39,7 +39,7 @@ on your `PATH`:
 cargo install customasm        # or grab a release binary
 npm install                    # one dependency: a TOML parser
 npm run gen                    # generate build/fructus.asm from the spec
-npm test                       # 26 checks, ~23,000 assertions
+npm test                       # 33 checks, ~23,000 assertions
 ```
 
 Then assemble and run something. `customasm` takes several input files, so the
@@ -61,6 +61,27 @@ halted after 33 instructions
 
 The registers on each line are the state *entering* that instruction — what it
 reads, not what it produced.
+
+### Notation
+
+Three spellings in the assembly language have no opcode behind them. They are
+`[[alias]]` entries in `isa/fructus.toml`, not rules in the generator, because
+the spec is what defines the language:
+
+| you write | it assembles as | why |
+|---|---|---|
+| `mov rd, rs` | `or rd, rs, #0` | there is no move opcode; `or` with zero is a copy |
+| `sub rd, ra, rb` | `rsb rd, rb, ra` | one subtract opcode, sources swapped |
+| `sub rd, ra, #k` | `add rd, ra, #-k` | …and the immediate negated |
+| `ld rd, [ra]` | `ld rd, [ra, #0]` | the offset is a field of the encoding, so `#0` is just typing |
+
+The last one covers `ld`, `ld8`, `st` and `st8`. Rewriting happens *before*
+form selection, so the shorthand still reaches the shortest encoding —
+`ld r0, [r0]` is one byte, the pinned abbreviation at `0x02`.
+
+Disassembly prints the long form in every case except `mov`. A listing read
+beside a hex dump should show every field the bytes carry, and an offset field
+that is zero is still an offset field.
 
 ## What's here
 
@@ -106,6 +127,11 @@ The suite is layered, and each layer catches something the one below it cannot.
   another transcription of the algorithm.
 - **The board works.** `tests/microtan-check.mjs` checks reset, the ROM window,
   the keyboard handshake and the display.
+- **It is still as fast as the comment claims.** The `memcpy` ladder in
+  `snippets/memcpy.s` is executed at sixteen lengths and its cost is measured,
+  by differencing two buffer sizes so the setup cancels and the loop alone
+  shows. A rung that gets slower fails the suite. Prose about performance is the
+  thing in this repo most likely to go quietly stale.
 
 `tests/fpadd-check.mjs` and `tests/fpsub-check.mjs` are hand-written mirrors of
 two snippets. They predate the simulator and are kept for their exhaustiveness —
@@ -172,7 +198,7 @@ into a zeroed page all stop where the mistake happened.
 
 ## Possible enhancements
 
-The opcode map makes the gaps visible, and three of them are worth naming. None
+The opcode map makes the gaps visible, and four of them are worth naming. None
 is implemented; they are here so the space does not get spent on something else
 by accident.
 
