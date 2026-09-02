@@ -189,6 +189,14 @@ export class Machine {
     this.little = spec.cpu.endian === 'little';
     this.count  = 0;
 
+    // THE COST MODEL, such as it is.  The bus is 6502-like: one cycle per byte,
+    // and it carries both instruction fetch and data.  So the cycles an
+    // instruction takes are the bytes it occupies plus the bytes it moves, and
+    // those are the two counters below.  Nothing here models a pipeline,
+    // because there isn't one to model.
+    this.fetched = 0;      // instruction bytes
+    this.bus     = 0;      // data bytes read or written
+
     // sp and lr are register ALIASES in the spec, not hardcoded numbers here.
     const reg = spec.optype.reg;
     this.named = {};
@@ -203,13 +211,15 @@ export class Machine {
 
   load(bytes, addr = 0) { this.mem.set(bytes, addr); return this; }
 
-  rd8 (a)    { return this.mem[a & MASK]; }
-  wr8 (a, v) { this.mem[a & MASK] = v & 0xff; }
+  rd8 (a)    { this.bus += 1; return this.mem[a & MASK]; }
+  wr8 (a, v) { this.bus += 1; this.mem[a & MASK] = v & 0xff; }
   rd16(a)    {
+    this.bus += 2;
     const lo = this.mem[a & MASK], hi = this.mem[(a + 1) & MASK];
     return this.little ? lo | (hi << 8) : hi | (lo << 8);
   }
   wr16(a, v) {
+    this.bus += 2;
     const lo = v & 0xff, hi = (v >>> 8) & 0xff;
     this.mem[a & MASK]       = this.little ? lo : hi;
     this.mem[(a + 1) & MASK] = this.little ? hi : lo;
@@ -291,6 +301,7 @@ export class Machine {
     const d  = decode(this.dec, this.mem, at);
     if (!d) throw new Error(`no instruction at 0x${at.toString(16)} (first byte 0x${this.mem[at].toString(16)})`);
     this.pc = u16(at + d.nbytes);
+    this.fetched += d.nbytes;
     if (trace) trace(at, d, this);
     for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);
     this.count++;
@@ -307,6 +318,7 @@ export class Machine {
   }
 
   regs() { return Array.from(this.R); }
+  cycles() { return this.fetched + this.bus; }
 }
 
 // =============================================================================
