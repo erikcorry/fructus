@@ -25,6 +25,8 @@ const check = (name, ok, detail) => {
 
 const m = machine();
 const { code, syms } = assemble('libc/memcpy.s');
+const fill = assemble('libc/memset.s');
+let CODE = code;                     // which object the next call() runs
 
 // --- the buffers ------------------------------------------------------------
 // A window of SPAN bytes, with the two regions LOW and HIGH inside it and
@@ -83,7 +85,7 @@ function call(entry, dest, src, n) {
     if (p < BUF || p + n > BUF + SPAN)
       throw new Error(`${what} 0x${p.toString(16)}+${n} leaves the window at 0x${BUF.toString(16)}`);
   m.mem.fill(FILL);
-  m.load(code);
+  m.load(CODE);
   m.mem.set(DATA, BUF);
   const before = m.mem.slice(BUF, BUF + SPAN);
 
@@ -248,6 +250,111 @@ function dispatch(name, r, dest, src, n) {
   check('memcpy head cost', Math.abs(head - 16) < 0.0001, `${head.toFixed(2)} cycles/byte`);
   console.log(`ok    bulk loop ${per.toFixed(4)} cycles/byte, ` +
               `byte head ${head.toFixed(2)} for up to 15 bytes`);
+}
+
+// --- memset and bzero -------------------------------------------------------
+// A fill has a different failure surface from a copy.  It cannot smear, so the
+// overlap machinery above does not apply; what it can do is write the wrong
+// BYTE - C defines memset in terms of (unsigned char)c, so a caller passing an
+// int with rubbish in the high half must still get the low byte - and it can
+// write the wrong NUMBER of bytes, since the length is split between a byte
+// head and a 32-byte block loop that meet at s + (n & ~31).  Every length from
+// 0 to 96 crosses that seam three times.
+{
+  CODE = fill.code;
+  const memset = fill.syms.get('memset'), bzero = fill.syms.get('bzero');
+  const AT = 0x40;                   // the region starts here inside the window
+
+  const shot = (entry, args) => {
+    m.mem.fill(FILL);
+    m.load(CODE);
+    m.mem.set(DATA, BUF);
+    m.R.fill(0);
+    m.R[m.named.sp] = SP0;
+    m.R[m.named.lr] = RET;
+    m.R[3] = R3; m.R[4] = R4;
+    for (const [i, v] of Object.entries(args)) m.R[i] = v & 0xffff;
+    m.pc = entry; m.halted = false; m.count = 0;
+    m.fetched = 0; m.bus = 0;
+    let why;
+    try { why = m.run({ max: 2000000, stopAt: RET }); }
+    catch (e) { why = `ran off the rails: ${e.message}`; }
+    return { why, mem: m.mem.slice(BUF, BUF + SPAN), cycles: m.fetched + m.bus,
+             r0: m.R[0], r2: m.R[2], sp: m.R[m.named.sp], r3: m.R[3], r4: m.R[4] };
+  };
+
+  const filled = (name, r, at, n, byte) => {
+    check(name, r.why === 'stopped', `did not return: ${r.why}`);
+    if (r.why !== 'stopped') return;
+    let bad = -1;
+    for (let i = 0; i < SPAN; i++) {
+      const want = (i >= at && i < at + n) ? byte : DATA[i];
+      if (r.mem[i] !== want) { bad = i; break; }
+    }
+    check(name, bad < 0, bad < 0 ? '' :
+          `window byte ${bad} (s${bad >= at ? '+' + (bad - at) : bad - at}) is ` +
+          `${r.mem[bad].toString(16)}, want ${want_(r, at, n, byte, bad)}`);
+    check(name, r.r0 === BUF + at, `did not return s: 0x${r.r0.toString(16)}`);
+    check(name, r.sp === SP0, `left sp at 0x${r.sp.toString(16)}`);
+    check(name, r.r3 === R3 && r.r4 === R4, `clobbered a callee-saved register`);
+  };
+  const want_ = (r, at, n, byte, i) =>
+    ((i >= at && i < at + n) ? byte : DATA[i]).toString(16);
+
+  const lengths = [];
+  for (let n = 0; n <= 96; n++) lengths.push(n);
+  lengths.push(127, 128, 255, 256, MAXN);
+
+  // Fill bytes chosen for the seam and for the (unsigned char) contract: the
+  // last three carry rubbish in the high half of the argument, which memset
+  // must discard.  Drop the zxt8 and only those three fail.
+  const BYTES = [[0x00, 0x00], [0xff, 0xff], [0x5a, 0x5a],
+                 [0x12ff, 0xff], [0xff00, 0x00], [0xabcd, 0xcd]];
+
+  let cases = 0;
+  for (const base of BASES) {
+    BUF = base;
+    for (const n of lengths)
+      for (const [c, byte] of BYTES) {
+        filled(`memset @${base.toString(16)} n=${n} c=0x${c.toString(16)}`,
+               shot(memset, { 0: BUF + AT, 1: c, 2: n }), AT, n, byte);
+        cases++;
+      }
+  }
+  BUF = BASES[0];
+  console.log(`ok    libc/memset.s memset: ${cases} cases over two bases`);
+
+  // bzero, whose whole prologue exists to keep r2 - it is callee saved for a
+  // two-argument function and caller saved for the three-argument memset it
+  // calls.  Nothing else in the suite would notice if that save disappeared.
+  const KEEP = 0xc2c2;
+  for (const base of BASES) {
+    BUF = base;
+    for (const n of [0, 1, 2, 15, 16, 31, 32, 33, 64, 100]) {
+      const r = shot(bzero, { 0: BUF + AT, 1: n, 2: KEEP });
+      filled(`bzero @${base.toString(16)} n=${n}`, r, AT, n, 0);
+      check(`bzero @${base.toString(16)} n=${n} keeps r2`, r.r2 === KEEP,
+            `r2 came back 0x${r.r2.toString(16)}, want 0x${KEEP.toString(16)} - ` +
+            `r2 is callee saved for a two-argument function`);
+    }
+  }
+  BUF = BASES[0];
+  console.log('ok    libc/memset.s bzero: 20 cases, r2 preserved across the call');
+
+  // Cost, differenced so the head and the prologue cancel.
+  const cost = (n) => shot(memset, { 0: BUF + AT, 1: 0xff, 2: n }).cycles;
+  const bulk = (cost(64 + 32 * 32) - cost(64)) / (32 * 32);
+  check('memset fill loop', Math.abs(bulk - 1.4688) < 0.0005,
+        `${bulk.toFixed(4)} cycles/byte, the file says 1.4688`);
+  const head = (cost(31) - cost(0)) / 31;
+  check('memset byte head', Math.abs(head - 6) < 0.0001, `${head.toFixed(4)} cycles/byte`);
+  console.log(`ok    fill loop ${bulk.toFixed(4)} cycles/byte, ` +
+              `byte head ${head.toFixed(2)} for up to 31 bytes`);
+
+  console.log(`ok    sizes: bzero ${memset - bzero} bytes, ` +
+              `memset ${fill.code.length - memset} bytes, ` +
+              `${fill.code.length} together`);
+  CODE = code;
 }
 
 // --- sizes, so the compactness claim is checkable ---------------------------

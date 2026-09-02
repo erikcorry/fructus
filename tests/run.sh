@@ -38,6 +38,23 @@ if node tests/sim-check.mjs; then :; else fail=1; fi
 # --- libc, against a reference rather than a second copy of the algorithm ----
 if node tests/libc-check.mjs; then :; else fail=1; fi
 
+# --- libc must never need the assembler scratch ------------------------------
+# memset keeps the real stack pointer in r5, and r5 is also the register the
+# assembler borrows when an immediate does not fit its instruction.  An
+# expansion there would overwrite the saved sp silently - no diagnostic, a
+# corrupt stack.  The --noat ruledef omits every rule that borrows the scratch,
+# so assembling against it turns "nothing in libc needs an expansion" from a
+# property that happens to hold today into one the suite enforces.
+for src in libc/*.s; do
+    cat build/fructus-noat.asm "$src" > build/_t.asm
+    if "$CA" -q -o /dev/null build/_t.asm 2>build/_err; then
+        printf 'ok    %s needs no assembler scratch\n' "$src"
+    else
+        printf 'FAIL  %s needs the assembler scratch, which memset uses to hold sp\n' "$src"
+        sed 's/\x1b\[[0-9;]*m//g' build/_err | head -10; fail=1
+    fi
+done
+
 # --- the Microtan board: reset, ROM window, keyboard, display ----------------
 if node tests/microtan-check.mjs; then :; else fail=1; fi
 
