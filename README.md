@@ -39,7 +39,7 @@ on your `PATH`:
 cargo install customasm        # or grab a release binary
 npm install                    # one dependency: a TOML parser
 npm run gen                    # generate build/fructus.asm from the spec
-npm test                       # 33 checks, ~23,000 assertions
+npm test                       # 39 checks, ~31,000 assertions
 ```
 
 Then assemble and run something. `customasm` takes several input files, so the
@@ -89,6 +89,7 @@ that is zero is still an offset field.
 isa/fructus.toml      the ISA: encodings, operand types, semantics, rationale
 isa/abi.s             the calling convention, as a file that assembles
 tools/                the toolchain, all driven by the TOML
+libc/                 a tiny libc, sized for a machine with 64K
 snippets/             worked routines, with their byte counts measured
 tangerine/            the Microtan monitor ROM
 tests/                the test suite
@@ -127,6 +128,13 @@ The suite is layered, and each layer catches something the one below it cannot.
   another transcription of the algorithm.
 - **The board works.** `tests/microtan-check.mjs` checks reset, the ROM window,
   the keyboard handshake and the display.
+- **It survives every placement.** `tests/libc-check.mjs` runs `libc/` against
+  a reference built from a snapshot rather than a second copy of the algorithm,
+  sweeping every overlap of source and destination in a window, at two bases and
+  across the 0x8000 sign boundary. Two things the sweep depends on are asserted
+  rather than assumed: no placement may leave the window, and the fill may not
+  resemble a shifted copy of itself — a fill with a period, or merely with runs
+  of equal bytes, makes a wrong-direction copy invisible.
 - **It is still as fast as the comment claims.** The `memcpy` ladder in
   `snippets/memcpy.s` is executed at sixteen lengths and its cost is measured,
   by differencing two buffer sizes so the setup cancels and the loop alone
