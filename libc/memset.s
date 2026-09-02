@@ -21,18 +21,32 @@
 ; MEASURED, by tests/libc-check.mjs
 ; ----------------------------------------------------------------------------
 ;       fill loop       1.4688 cycles/byte      32 bytes an iteration
-;       head            3.4839 cycles/byte      up to 31 bytes, in words
-;       sizes           bzero 12 bytes, memset 48, 60 together
+;       head            3.5000 cycles/byte      up to 15 bytes, in words
+;       sizes           bzero 12 bytes, memset 52, 64 together
 ;
 ; The floor is 1.00 - one bus cycle to write each byte - and 15 bytes of loop
 ; get to 1.47.  snippets/speed-of-light-memset-core.s reaches 1.3450 and spends
 ; 89 bytes doing it, so this gives up 9% for a quarter of the code.
 ;
-; THE HEAD PUSHES WORDS, which is worth having: a byte loop costs 6 cycles a
-; byte and clearing a 24-byte struct came to 170 cycles, against 113 now.  Five
-; bytes of code buy 34% on every length below 32 and cost 3 cycles on exact
-; multiples of 32 - and the sizes below 32 are the ones a compiler emits for
-; clearing a struct, which is most memset calls in most programs.
+; THE HEAD ONLY HAS TO REACH 15 BYTES, because the fill loop can be entered at
+; its midpoint - see the loop itself.  Everything from 16 bytes up runs at the
+; loop's rate, and the head pushes words rather than bytes, so what began as a
+; 6-cycles-a-byte tail is now 3.5 over at most fifteen bytes.
+;
+; The two steps together, measured, against the original byte head:
+;
+;       n        byte head    word head    + midpoint entry
+;       16         122           85              53
+;       24         170          113              81
+;       31         212          137             105
+;       32          73           76              80
+;
+; and the cost of each is exact and small: word pushes were 5 bytes and 3 cycles
+; on multiples of 32, the midpoint 4 more bytes and 4 more cycles on lengths
+; whose bit 4 is clear.  Averaged over every length from 0 to 512 the midpoint
+; alone is worth 14 cycles a call: 32 saved on half the lengths, 4 spent on the
+; other half.  These are the sizes a compiler emits to clear a struct, which is
+; most memset calls in most programs.
 ; ============================================================================
 
 
@@ -60,13 +74,17 @@ bzero:
 
 
 ; ============================================================================
-; memset                                                            48 bytes
+; memset                                                            52 bytes
 ; ============================================================================
 ; sp walks down from the end of the region to the start, in three phases:
 ;
-;       s                    s + (n & ~31)          s + n - 1   s + n
-;       |------ fill loop --------|----- words -----------|-byte-|
-;                                                          <----- filled first
+;       s                        s + (n & ~15)      s + n - 1   s + n
+;       |-------- fill loop ----------|--- words --------|-byte-|
+;                                                         <----- filled first
+;
+; The fill loop moves 32 bytes an iteration but can be entered halfway, so the
+; boundary is a multiple of 16 rather than 32 and the head never exceeds 15
+; bytes.  That is the whole reason for the loop's 3-3-2 3-3-2 shape.
 ;
 ; The head runs FIRST because it is the high end and push descends.  The odd
 ; byte goes at the very TOP rather than the bottom, which is a choice and not
@@ -101,7 +119,7 @@ memset:
         brclear r2, #1, .even           ; even length: no byte to peel
         push8   r1                      ; the odd byte, at the very top    3
 .even:
-        and     r2, r2, #-32            ; the length, rounded down to a block
+        and     r2, r2, #-16            ; the length, rounded down to a half block
         add     r2, r0, r2              ; ... as an address: where the head stops
 
         br      eq, sp, r2, .headdone   ; nothing between the block and the end
@@ -110,18 +128,36 @@ memset:
         br      ne, sp, r2, .head       ;                               3
 .headdone:
 
-; --- the fill loop, 32 bytes an iteration ----------------------------------
-; Sixteen words: five triples and a single.  Nothing here maintains a pointer,
-; because push already does, and nothing reads memory at all.
+; --- the fill loop, 32 bytes an iteration, in two identical halves ---------
+; Sixteen words as 3-3-2 twice over, rather than five triples and a single.
+; Both spellings are twelve bytes and both cost 44 cycles, so the shape is free
+; - but this one has a USABLE MIDPOINT, and that is the whole point.  Entering
+; at .mid fills exactly 16 bytes and then falls into the loop test, so the
+; routine can start on a half block without a second copy of the code.
+;
+; That is what lets the head round to 16 rather than 32.  Half the work that
+; used to go through the head at 3.5 cycles a byte now goes through the loop at
+; 1.47, and the entry ladder costs five bytes: one `sub` to get the length back
+; out of the boundary address, and one `brset` on bit 4.
+;
+; THE `sub` IS NOT BOOKKEEPING.  r2 has been the boundary ADDRESS since the head
+; needed something to stop against, and the bit that decides where to enter is
+; bit 4 of the LENGTH.  r2 - r0 recovers it, and no register was free to keep
+; the length in.  (`xor r2, r2, r0` would do as well, and for a reason worth
+; knowing: r2 and r0 agree in bits 0-3, so the subtraction cannot borrow into
+; bit 4.  Same two bytes, less obvious, so sub it is.)
 
+        sub     r2, r2, r0              ; the length back: a multiple of 16
+        brset   r2, #16, .mid           ; an odd multiple starts halfway in
         jmpr    .bottom
 .top:
         push    r1, r1, r1              ;                               8
         push    r1, r1, r1              ;                               8
+        push    r1, r1                  ;                               6
+.mid:
         push    r1, r1, r1              ;                               8
         push    r1, r1, r1              ;                               8
-        push    r1, r1, r1              ;                               8
-        push    r1                      ;                               4
+        push    r1, r1                  ;                               6
 .bottom:
         br      ne, sp, r0, .top        ;                               3
 
@@ -136,9 +172,20 @@ memset:
 ; that borrows the scratch, so a future edit that needs one fails to assemble
 ; instead of corrupting the stack.  Do not remove that check.
 ;
-; WHAT THE HEAD IS STILL LEAVING.  Between 3.50 and the 1.47 of the fill loop
-; there is one more step - pushing triples down to the block boundary the way
-; the fill loop does - but it needs its own entry ladder to know how many
-; triples to start with, and that is a jump table or a chain of tests.  Both
-; cost more than the case is worth: the head is at most 31 bytes, so the whole
-; remaining saving is about 60 cycles on a call that already costs 113.
+; WHY THE GRANULARITY STOPS AT 16, which is not squeamishness but arithmetic.
+; An entry point is only useful if it leaves a POWER OF TWO to be pushed, since
+; that is what one `brset` can select; and the arrangement of a 16-byte half
+; decides which remainders exist.  Eight words - sixteen bytes - in six bytes of
+; code cost 22 cycles, and every 22-cycle spelling is two triples and a double:
+;
+;       3-3-2   leaves 16, 10, 4        22 cycles       <- what we use
+;       3-2-3   leaves 16, 10, 6        22
+;       2-3-3   leaves 16, 12, 6        22
+;       3-1-3-1 leaves 16, 10, 8, 2     24              <- an 8, at a price
+;       2-2-2-2 leaves 16, 12, 8, 4     24
+;
+; So 8-byte granularity exists, but only in a spelling that costs two more
+; cycles per half - four per 32-byte block, thirty-two on a 256-byte fill - to
+; save at most a few cycles on a quarter of the short calls.  The trade goes
+; the wrong way, and it goes the wrong way by a wide enough margin that it is
+; not worth re-measuring on a whim.

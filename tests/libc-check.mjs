@@ -321,8 +321,20 @@ function dispatch(name, r, dest, src, n) {
         cases++;
       }
   }
+  // WHERE THE REGION STARTS MATTERS, and only for one reason: the entry test
+  // is `brset` on bit 4 of the LENGTH, recovered from the boundary ADDRESS by
+  // subtracting s.  Drop that subtraction and the test reads bit 4 of the
+  // address instead - which agrees with the length whenever s has bit 4 clear,
+  // and 0x40 does.  Every start offset in a 32-byte window is swept here, so
+  // half of them disagree and the missing `sub` cannot hide.
+  for (let off = 0; off < 32; off++)
+    for (let n = 0; n <= 40; n++) {
+      filled(`memset s+0x${off.toString(16)} n=${n}`,
+             shot(memset, { 0: BUF + AT + off, 1: 0xff, 2: n }), AT + off, n, 0xff);
+      cases++;
+    }
   BUF = BASES[0];
-  console.log(`ok    libc/memset.s memset: ${cases} cases over two bases`);
+  console.log(`ok    libc/memset.s memset: ${cases} cases over two bases and 32 start offsets`);
 
   // bzero, whose whole prologue exists to keep r2 - it is callee saved for a
   // two-argument function and caller saved for the three-argument memset it
@@ -346,15 +358,34 @@ function dispatch(name, r, dest, src, n) {
   const bulk = (cost(64 + 32 * 32) - cost(64)) / (32 * 32);
   check('memset fill loop', Math.abs(bulk - 1.4688) < 0.0005,
         `${bulk.toFixed(4)} cycles/byte, the file says 1.4688`);
-  // 31 bytes is the head's worst case: one peeled byte and fifteen words.
-  const head = (cost(31) - cost(0)) / 31;
-  check('memset head', Math.abs(head - 3.4839) < 0.0005, `${head.toFixed(4)} cycles/byte`);
-  // and the seam has to be free: 32 costs three more than 31 did per byte, not
-  // a whole extra pass.  A head that ran on block-aligned lengths too would
-  // still write the right bytes and would show up right here.
+  // The head pushes words, so it costs 3.5 cycles a byte; measured over a pure
+  // even length so the odd-byte peel does not muddy it.
+  const head = (cost(14) - cost(0)) / 14;
+  check('memset head', Math.abs(head - 3.5) < 0.0005, `${head.toFixed(4)} cycles/byte`);
+
+  // TWO STRUCTURAL CLAIMS, neither of which a byte comparison can see.
+  //
+  // The head must stop at 15 bytes, not 31: a 16-byte fill enters the loop at
+  // its midpoint and must therefore cost LESS than a 15-byte one, which cannot
+  // happen if the boundary is still rounded to 32.
+  check('memset midpoint entry', cost(16) < cost(15),
+        `n=16 costs ${cost(16)}, n=15 costs ${cost(15)} - the midpoint is not being used`);
+  // And the seam at the boundary must be free rather than a whole extra pass.
   check('memset seam', cost(32) < cost(31), `n=32 costs ${cost(32)}, n=31 costs ${cost(31)}`);
+
+  // Sixteen more bytes on top of a whole number of blocks must go through the
+  // loop's midpoint, not the head.  Through the midpoint that is 20 cycles;
+  // through a word head it would be 56.  This is the assertion that actually
+  // pins the boundary at 16 rather than 32 - dropping to `and r2, r2, #-32`
+  // still fills every byte correctly and shows up only here.
+  for (const n of [0, 32, 64]) {
+    const step = cost(n + 16) - cost(n);
+    check(`memset half block after ${n}`, step < 32,
+          `16 more bytes cost ${step} cycles, so they went through the head`);
+  }
+
   console.log(`ok    fill loop ${bulk.toFixed(4)} cycles/byte, ` +
-              `head ${head.toFixed(4)} for up to 31 bytes`);
+              `head ${head.toFixed(4)} for up to 15 bytes, midpoint entry live`);
 
   console.log(`ok    sizes: bzero ${memset - bzero} bytes, ` +
               `memset ${fill.code.length - memset} bytes, ` +
