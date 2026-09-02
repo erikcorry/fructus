@@ -16,7 +16,7 @@ export function assemble(src) {
   const syms = new Map();
   for (const line of execFileSync(CA, ['-q', '-f', 'symbols', '-p', inp], { encoding: 'utf8' })
                       .replace(/\x1b\[[0-9;]*m/g, '').split('\n')) {
-    const m = /^(\w+) = (0x[0-9a-f]+|\d+)$/.exec(line.trim());
+    const m = /^([\w.]+) = (0x[0-9a-f]+|\d+)$/.exec(line.trim());
     if (m) syms.set(m[1], Number(m[2]));
   }
   return { code: readFileSync(bin), syms };

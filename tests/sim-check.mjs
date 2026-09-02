@@ -205,6 +205,76 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   console.log('ok    tests/data.s on the simulator: dw, dd and tagged struct offsets');
 }
 
+// --- memcpy: the ladder, both correct and no slower --------------------------
+// Two separate claims, and neither one implies the other.  A copy that moves
+// the wrong bytes is a bug; a copy that moves the right bytes two cycles per
+// byte slower than the comment says is a comment that has quietly gone stale,
+// which is the failure this repo keeps finding in prose.
+//
+// The cycle figure is the LOOP alone, recovered by differencing two lengths so
+// that prologue, epilogue and tail cancel out.  That is why the numbers come
+// out exactly whole - 14.0000, not 14.02 - and why a regression shows up as a
+// clean step rather than drifting with the buffer size.
+{
+  const { code, syms } = assemble('snippets/memcpy.s');
+  const SRC = 0x1000, DST = 0x4000, RET = 0x8000, GUARD = 0xa5;
+
+  // Run one copy and return both what it wrote and what it cost.
+  const copy = (entry, n) => {
+    m.mem.fill(GUARD);
+    m.load(code);
+    for (let i = 0; i < n; i++) m.mem[SRC + i] = (i * 7 + 13) & 0xff;
+    m.R.fill(0);
+    m.R[m.named.sp] = 0xfffe;
+    m.R[m.named.lr] = RET;            // ret lands on the sentinel, and we stop
+    m.R[0] = SRC; m.R[1] = DST; m.R[2] = n;
+    m.pc = entry; m.halted = false; m.count = 0;
+    m.fetched = 0; m.bus = 0;
+    const why = m.run({ max: 5000000, stopAt: RET });
+    let wrong = -1;
+    for (let i = 0; i < n; i++)
+      if (m.mem[DST + i] !== ((i * 7 + 13) & 0xff)) { wrong = i; break; }
+    // and it must not touch the four bytes past the end
+    const over = [0, 1, 2, 3].some((i) => m.mem[DST + n + i] !== GUARD);
+    return { why, wrong, over, cycles: m.fetched + m.bus, sp: m.R[m.named.sp] };
+  };
+
+  const rungs = [
+    ['memcpy',                 14.0000, 1],
+    ['memcpy2',                 8.0000, 1],
+    ['memcpy3',                 7.0000, 1],
+    ['memcpy4',                 5.7500, 1],
+    ['memcpy_divisible_by_32',  4.3750, 32],
+  ];
+
+  for (const [name, want, unit] of rungs) {
+    const entry = syms.get(name);
+    check(name, entry !== undefined, 'no such symbol');
+    if (entry === undefined) continue;
+
+    // Lengths that exercise the head and tail peeling: odd, even, just under
+    // and just over a block.  The last rung only promises multiples of 32.
+    const lengths = unit === 1
+      ? [0, 1, 2, 3, 4, 5, 7, 8, 13, 16, 31, 32, 33, 63, 101, 256]
+      : [32, 64, 96, 256];
+    for (const n of lengths) {
+      const r = copy(entry, n);
+      check(name, r.why === 'stopped', `n=${n} did not return: ${r.why}`);
+      if (r.why !== 'stopped') continue;
+      check(name, r.wrong < 0, `n=${n} wrong byte at +${r.wrong}`);
+      check(name, !r.over, `n=${n} wrote past the end`);
+      check(name, r.sp === 0xfffe, `n=${n} left sp at 0x${r.sp.toString(16)}`);
+    }
+
+    // Differencing: (cost of a+k*unit) - (cost of a) over the extra bytes.
+    const a = 32 * unit, b = a + 64 * unit;
+    const per = (copy(entry, b).cycles - copy(entry, a).cycles) / (b - a);
+    check(name, Math.abs(per - want) < 0.0001,
+          `loop costs ${per.toFixed(4)} cycles/byte, the file says ${want.toFixed(4)}`);
+  }
+  console.log('ok    snippets/memcpy.s on the simulator: 5 rungs, bytes and cycles');
+}
+
 // --- zeroed memory stops the machine ----------------------------------------
 // halt is opcode 0x00 so that erased memory, an unwritten ROM and a wild jump
 // into a zeroed page all stop where the mistake happened.  With nop at zero the
