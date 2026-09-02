@@ -162,6 +162,27 @@ function verify(name, r, dest, src, n) {
   console.log(`ok    libc/memcpy.s memcpy: ${placements} placements over two bases`);
 }
 
+// CORRECTNESS DOES NOT PIN THE DISPATCH DOWN.  A memmove that always descends
+// passes every byte comparison above and is two to three times slower on the
+// copies that did not need it; so does one whose second test is strict rather
+// than inclusive, which sends exactly-abutting regions the long way round.
+// Neither shows up as a wrong byte, so the path is measured instead.
+//
+// The two loops are far enough apart to tell by cost alone - the bulk loop runs
+// at 3.81 cycles/byte and the descending byte loop at 14 - so anything under 8
+// went ascending.  Only lengths of 32 and up are judged, where the byte-loop
+// head and the prologue no longer dominate.
+const ASCENDING = 8;
+function dispatch(name, r, dest, src, n) {
+  if (n < 32 || r.why !== 'stopped') return;
+  const ascended = r.cycles / n < ASCENDING;
+  // Ascending is legal exactly when the write never overtakes the read.
+  const legal = dest <= src || src + n <= dest;
+  check(name, ascended === legal,
+        legal ? `descended ${(r.cycles / n).toFixed(2)} c/B where ascending was legal`
+              : `ascended at ${(r.cycles / n).toFixed(2)} c/B over a real overlap`);
+}
+
 // --- memmove: every overlap in a window -------------------------------------
 // dest walks past src one byte at a time, from well clear below to well clear
 // above, at several lengths.  That crosses both dispositions the routine tests
@@ -176,7 +197,9 @@ function verify(name, r, dest, src, n) {
     for (const n of [1, 2, 3, 15, 16, 17, 31, 32, 33, 64]) {
       for (let d = -(n + 4); d <= n + 4; d++) {
         const src = BUF + HIGH, dest = src + d;
-        verify(`memmove @${tag} n=${n} d=${d}`, call(entry, dest, src, n), dest, src, n);
+        const r = call(entry, dest, src, n);
+        verify(`memmove @${tag} n=${n} d=${d}`, r, dest, src, n);
+        dispatch(`memmove @${tag} n=${n} d=${d} dispatch`, r, dest, src, n);
         placements++;
       }
     }
@@ -199,8 +222,10 @@ function verify(name, r, dest, src, n) {
                              [0x301, 0x300, 0x400],       // dest one above src
                              [0x300, 0x301, 0x400]]) {    // dest one below src
     const dest = BUF + ds, src = BUF + ss;
-    verify(`memmove across 0x8000 d=0x${dest.toString(16)} s=0x${src.toString(16)}`,
-           call(entry, dest, src, n), dest, src, n);
+    const tag = `memmove across 0x8000 d=0x${dest.toString(16)} s=0x${src.toString(16)}`;
+    const r = call(entry, dest, src, n);
+    verify(tag, r, dest, src, n);
+    dispatch(`${tag} dispatch`, r, dest, src, n);
     placements++;
   }
   BUF = BASES[0];
