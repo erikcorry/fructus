@@ -6,19 +6,26 @@
 //     node tools/gen-6502-map.js       > build/6502.html
 //     node tools/gen-6502-map.js --svg > docs/6502.svg
 //
-// Same layout as tools/gen-opcode-map.js, same palette conventions, different
+// Same palette conventions and typography as tools/gen-opcode-map.js, different
 // machine - so the two can be put side by side.  Read from isa/mos6502.toml,
 // which is reference data and not part of Fructus.
 //
-// THREE DIFFERENCES FROM THE FRUCTUS MAP, all forced by the subject:
+// SIXTEEN WIDE, NOT EIGHT, and the reason is the colours rather than the shape
+// of the page.  A 6502 opcode is aaabbbcc and the addressing mode comes from
+// bbb, which is bits 2 to 4.  At sixteen columns the low two bits of bbb are
+// part of the column and the top bit is the row's parity, so a column holds at
+// most two modes and they alternate - 24 of the 32 half-columns are a single
+// colour from top to bottom.  At eight columns bbb is split across the column
+// and two row bits, and only 1 of 16 is.  The same table, the same data, and
+// one layout shows the decoding while the other hides it.
+//
+// It is also half as tall, which is what made the problem visible.
+//
+// TWO DIFFERENCES FROM THE FRUCTUS MAP, both forced by the subject:
 //
 //   The table cannot stop early.  Fructus has 146 unassigned opcodes in one
 //   run at the end, so its map cuts off and says so.  Every one of the 6502's
-//   256 decodes to something, so all thirty-two rows are drawn.
-//
-//   Cells are shorter.  A 6502 mnemonic is three characters and its operand
-//   shape is never more than seven, so 44px does what 62 had to on a machine
-//   with `push ra, rb, rc`.
+//   256 decodes to something, so every cell is drawn.
 //
 //   There is a fourteenth key entry that is not an addressing mode.  105 of
 //   the 256 are undocumented - the chip decodes them, MOS never published
@@ -77,6 +84,23 @@ const ops = spec.table.ops.map((s, i) => {
   for (const [name, m] of Object.entries(spec.mode))
     if (![1, 2, 3].includes(m.bytes)) fail.push(`mode ${name}: ${m.bytes} bytes`);
 
+  // THE REASON THE MAP IS SIXTEEN WIDE, asserted rather than asserted-in-prose.
+  // Mode comes from bbb = bits 2..4; at this width bits 2..3 are in the column
+  // and bit 4 is the row's parity, so (column, parity) should fix the colour.
+  // It does for 24 of the 32 half-columns, and the eight it does not are the
+  // 6502's famous irregularities - JMP indirect, the two Y-indexed exceptions
+  // that exist because X is already the other index, and the control-flow
+  // oddments in column 0.  If a redesign ever made this number worse, the
+  // layout would have stopped earning itself.
+  let solid = 0;
+  for (let c = 0; c < 16; c++)
+    for (const par of [0, 1]) {
+      const set = new Set();
+      for (let r = par; r < 16; r += 2) set.add(ops[r * 16 + c].mode);
+      if (set.size === 1) solid++;
+    }
+  eq('single-colour half-columns', solid, 24);
+
   if (fail.length) throw new Error('isa/mos6502.toml:\n  ' + fail.join('\n  '));
 }
 
@@ -133,8 +157,8 @@ const esc = (s) => String(s).replace(/&(?!\w+;|#)/g, '&amp;').replace(/</g, '&lt
 // SVG
 // =============================================================================
 if (process.argv.includes('--svg')) {
-  const PAD = 26, CW = 104, CH = 44, GAP = 3, GUT = 40, COLH = 20;
-  const gridW = GUT + 8 * CW + 7 * GAP;
+  const PAD = 26, CW = 66, CH = 44, GAP = 2, GUT = 34, COLH = 20;
+  const gridW = GUT + 16 * CW + 15 * GAP;
   const W = PAD * 2 + gridW;
   const MONO = "ui-monospace,'DejaVu Sans Mono','Liberation Mono',Menlo,monospace";
   const SANS = "'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif";
@@ -164,29 +188,29 @@ if (process.argv.includes('--svg')) {
   g.push(`<rect x="${PAD}" y="${y + 130}" width="${gridW}" height="2" fill="${INK}"/>`);
 
   const gridTop = y + 152;
-  for (let x = 0; x < 8; x++)
-    t(PAD + GUT + x * (CW + GAP) + CW / 2, gridTop + 13, '·' + x,
+  for (let x = 0; x < 16; x++)
+    t(PAD + GUT + x * (CW + GAP) + CW / 2, gridTop + 13, '·' + x.toString(16).toUpperCase(),
       { s: 10, c: MUTED, a: 'middle' });
 
   const rowTop = (r) => gridTop + COLH + r * (CH + GAP);
-  for (let row = 0; row < 32; row++) {
+  for (let row = 0; row < 16; row++) {
     const ry = rowTop(row);
-    t(PAD + GUT - 9, ry + CH / 2 + 4, hex2(row * 8), { s: 10, c: MUTED, a: 'end' });
-    for (let x = 0; x < 8; x++) {
+    t(PAD + GUT - 8, ry + CH / 2 + 4, hex2(row * 16), { s: 10, c: MUTED, a: 'end' });
+    for (let x = 0; x < 16; x++) {
       const cx = PAD + GUT + x * (CW + GAP);
-      const o = ops[row * 8 + x];
+      const o = ops[row * 16 + x];
       const ink = o.undoc ? 'rgba(0,0,0,.55)' : '#000';
       g.push(`<rect x="${cx}" y="${ry}" width="${CW}" height="${CH}" rx="3" ` +
              `fill="${o.undoc ? UNDOC : COLOUR[o.mode]}"` +
              (o.undoc ? ` stroke="#D6D9DF"` : '') + `/>`);
-      t(cx + 8, ry + 13, hex2(o.code), { s: 9, c: 'rgba(0,0,0,.45)' });
-      t(cx + CW - 8, ry + 13, o.bytes + 'B', { s: 8.5, c: 'rgba(0,0,0,.42)', a: 'end' });
+      t(cx + 6, ry + 13, hex2(o.code), { s: 9, c: 'rgba(0,0,0,.45)' });
+      t(cx + CW - 6, ry + 13, o.bytes + 'B', { s: 8.5, c: 'rgba(0,0,0,.42)', a: 'end' });
       // The mnemonic, with a leading dot on the ones MOS never published - so
       // the distinction survives being printed in grey on a grey screen.
-      t(cx + 8, ry + 28, (o.undoc ? '·' : '') + o.mnemonic,
+      t(cx + 6, ry + 28, (o.undoc ? '·' : '') + o.mnemonic,
         { s: 13, w: 600, c: ink });
-      t(cx + 8, ry + 39, o.write || '—', { s: 8.5, c: 'rgba(0,0,0,.62)' });
-      t(cx + CW - 8, ry + 39, o.cycles, { s: 8.5, c: 'rgba(0,0,0,.5)', a: 'end' });
+      t(cx + 6, ry + 39, o.write || '—', { s: 8.5, c: 'rgba(0,0,0,.62)' });
+      t(cx + CW - 6, ry + 39, o.cycles, { s: 8.5, c: 'rgba(0,0,0,.5)', a: 'end' });
 
       // The operand shape and the cycle count share the last line, one from
       // each end, and an SVG will happily draw them straight through each
@@ -194,13 +218,13 @@ if (process.argv.includes('--svg')) {
       // than a guess - and it is checked because the alternative is finding
       // out by looking at a picture.
       const adv = 8.5 * 0.6;
-      const left = 8 + (o.write || '—').length * adv;
-      const right = CW - 8 - o.cycles.length * adv;
+      const left = 6 + (o.write || '—').length * adv;
+      const right = CW - 6 - o.cycles.length * adv;
       if (left > right - 4)
         throw new Error(`${hex2(o.code)}: "${o.write}" and "${o.cycles}" collide in a ${CW}px cell`);
     }
   }
-  const gridBottom = rowTop(31) + CH;
+  const gridBottom = rowTop(15) + CH;
   t(PAD, gridBottom + 22,
     'Cycles are the no-page-crossing case: + adds one when an indexed address crosses a page, ' +
     '++ is a branch (+1 taken, +2 taken across a page).',
@@ -208,7 +232,7 @@ if (process.argv.includes('--svg')) {
 
   const keyTop = gridBottom + 54;
   t(PAD, keyTop, 'ADDRESSING MODES', { f: SANS, s: 11.5, w: 700, c: MUTED, ls: 1.5 });
-  const COLS = 3, KW = gridW / COLS, KH = 46;
+  const COLS = 4, KW = gridW / COLS, KH = 46;
   const rows = [...MODES, { id: 'undoc', c: UNDOC, label: 'Undocumented', bytes: null,
                             write: '', note: 'decoded by the chip, never published', n: nUndoc }];
   rows.forEach((m, i) => {
@@ -256,12 +280,12 @@ w(`<style>
 *{box-sizing:border-box}
 body{background:var(--ground);color:var(--ink);font-family:var(--sans);
      margin:0;padding:40px 28px 64px;-webkit-font-smoothing:antialiased}
-.page{max-width:940px;margin:0 auto;display:flex;flex-direction:column;gap:36px}
+.page{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:36px}
 
 header{display:flex;flex-direction:column;gap:10px;border-bottom:2px solid var(--ink);padding-bottom:18px}
 .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
 h1{font-size:clamp(30px,5vw,44px);font-weight:700;letter-spacing:-.015em;margin:0;text-wrap:balance;line-height:1.02}
-.lede{font-size:16px;color:var(--muted);max-width:62ch;margin:0;line-height:1.5}
+.lede{font-size:16px;color:var(--muted);max-width:70ch;margin:0;line-height:1.5}
 .census{display:flex;flex-wrap:wrap;gap:28px;margin-top:6px;font-family:var(--mono);
         font-variant-numeric:tabular-nums}
 .census div{display:flex;flex-direction:column;gap:2px}
@@ -271,11 +295,11 @@ h1{font-size:clamp(30px,5vw,44px);font-weight:700;letter-spacing:-.015em;margin:
 .matrix-wrap{overflow-x:auto;padding-bottom:4px}
 .tail{font-size:12px;color:var(--faint);margin:12px 0 0;line-height:1.5}
 .tail code{font-family:var(--mono);font-size:11.5px}
-.matrix{display:grid;grid-template-columns:auto repeat(8,minmax(84px,1fr));gap:3px;min-width:760px}
+.matrix{display:grid;grid-template-columns:auto repeat(16,minmax(62px,1fr));gap:2px;min-width:1030px}
 .colhead,.rowhead{font-family:var(--mono);font-size:11px;color:var(--muted);
                   display:flex;align-items:center;justify-content:center;letter-spacing:.06em}
-.rowhead{justify-content:flex-end;padding-right:9px;min-width:44px}
-.cell{border-radius:3px;padding:5px 7px 6px;min-height:40px;display:flex;flex-direction:column;
+.rowhead{justify-content:flex-end;padding-right:8px;min-width:32px}
+.cell{border-radius:3px;padding:5px 6px 6px;min-height:40px;display:flex;flex-direction:column;
       gap:1px;border:1px solid transparent;cursor:default}
 .cell.undoc{border-color:var(--undoc-edge)}
 .cell .op{font-family:var(--mono);font-size:9px;letter-spacing:.06em;color:rgba(0,0,0,.45)}
@@ -320,7 +344,7 @@ w(`<div class="page">`);
 w(`<header>`);
 w(`  <div class="eyebrow">MOS 6502 &middot; NMOS &middot; first-byte decode</div>`);
 w(`  <h1>6502 Opcode Map</h1>`);
-w(`  <p class="lede">Every instruction's length is fixed by its opcode byte, so this table is the whole decoder. Columns are the low three bits, rows the high five.</p>`);
+w(`  <p class="lede">Every instruction's length is fixed by its opcode byte, so this table is the whole decoder. Columns are the low nibble, rows the high &mdash; which is also what makes the colours line up, because the addressing mode is chosen by three bits that this width keeps together.</p>`);
 w(`  <div class="census">`);
 w(`    <div><b>${nDoc}</b><span>documented</span></div>`);
 w(`    <div><b>${nUndoc}</b><span>undocumented</span></div>`);
@@ -331,11 +355,12 @@ w(`</header>`);
 
 w(`<div class="matrix-wrap"><div class="matrix">`);
 w(`  <div class="corner"></div>`);
-for (let x = 0; x < 8; x++) w(`  <div class="colhead">&middot;${x}</div>`);
-for (let row = 0; row < 32; row++) {
-  w(`  <div class="rowhead">${hex2(row * 8)}</div>`);
-  for (let x = 0; x < 8; x++) {
-    const o = ops[row * 8 + x];
+for (let x = 0; x < 16; x++)
+  w(`  <div class="colhead">&middot;${x.toString(16).toUpperCase()}</div>`);
+for (let row = 0; row < 16; row++) {
+  w(`  <div class="rowhead">${hex2(row * 16)}</div>`);
+  for (let x = 0; x < 16; x++) {
+    const o = ops[row * 16 + x];
     const write = `${o.mnemonic}${o.write ? ' ' + o.write : ''}`;
     w(`  <div class="cell${o.undoc ? ' undoc' : ''}" tabindex="0"` +
       ` style="background:${o.undoc ? UNDOC : COLOUR[o.mode]}"` +
@@ -373,8 +398,9 @@ w(`</section>`);
 
 w(`<footer>`);
 w(`<p>Generated from <code>isa/mos6502.toml</code> by <code>tools/gen-6502-map.js</code>, which refuses to draw a map that fails its own arithmetic: 256 opcodes, ${nDoc} documented, ${nMnem} instructions, ${MODES.length} addressing modes.</p>`);
-w(`<p><b>The regular part.</b> An opcode is <code>aaabbbcc</code>: <code>cc</code> picks the group, <code>bbb</code> the addressing mode, <code>aaa</code> the operation. Column <code>cc&nbsp;=&nbsp;01</code> &mdash; the accumulator group, every fourth cell starting at <code>01</code> &mdash; is all 64 combinations of eight operations with eight modes, and every one of them lands exactly where the bits say. It has one hole: <code>89</code> would be <code>STA&nbsp;#</code>, storing to a constant, so nothing was put there.</p>`);
-w(`<p><b>The undocumented part.</b> Column <code>cc&nbsp;=&nbsp;11</code> is empty in the data sheet and full on the die. Those 64 opcodes drive the read-modify-write group and the accumulator group at once, which is why they do two things at a time and why their names are portmanteaux: <code>SLO</code> is <code>ASL</code> then <code>ORA</code>, <code>DCP</code> is <code>DEC</code> then <code>CMP</code>. Twelve more hang the processor until reset. They are drawn here because the alternative &mdash; blank cells &mdash; would describe a chip that was never made.</p>`);
+w(`<p><b>Why the colours stripe.</b> An opcode is <code>aaabbbcc</code>: <code>cc</code> picks the group, <code>bbb</code> the addressing mode, <code>aaa</code> the operation. At sixteen columns the low two bits of <code>bbb</code> fall inside the column and the top bit is the row's parity &mdash; so a column holds at most two modes and they alternate, and 24 of the 32 half-columns are a single colour all the way down. The eight that are not are the irregularities worth knowing: <code>JMP&nbsp;($nnnn)</code> alone in column <code>&middot;C</code>; the Y-indexed <code>LDX</code>/<code>STX</code> in <code>&middot;6</code> and <code>&middot;E</code>, which exist because X is already the other index; and column <code>&middot;0</code>, where the control-flow instructions live and no rule holds.</p>`);
+w(`<p><b>The regular part.</b> Column <code>cc&nbsp;=&nbsp;01</code> &mdash; every fourth cell starting at <code>01</code>, the accumulator group &mdash; is all 64 combinations of eight operations with eight modes, every one landing exactly where the bits say. It has a single hole: <code>89</code> would be <code>STA&nbsp;#</code>, storing to a constant, so nothing was put there. Column <code>&middot;8</code> is the other extreme: sixteen implied instructions, one colour, no operand between them.</p>`);
+w(`<p><b>The undocumented part.</b> Columns <code>&middot;3</code>, <code>&middot;7</code>, <code>&middot;B</code> and <code>&middot;F</code> &mdash; <code>cc&nbsp;=&nbsp;11</code>, the four grey stripes &mdash; are empty in the data sheet and full on the die. Those 64 opcodes drive the read-modify-write group and the accumulator group at once, which is why they do two things at a time and why their names are portmanteaux: <code>SLO</code> is <code>ASL</code> then <code>ORA</code>, <code>DCP</code> is <code>DEC</code> then <code>CMP</code>. Twelve more hang the processor until reset. They are drawn here because the alternative &mdash; blank cells &mdash; would describe a chip that was never made.</p>`);
 w(`</footer>`);
 w(`<div class="tip" id="tip" role="tooltip" hidden></div>`);
 w(`<script>`);
