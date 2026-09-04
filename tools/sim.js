@@ -134,6 +134,23 @@ function parse(src) {
   return body;
 }
 
+// Does this statement assign pc from an expression that mentions pc?  That is
+// the whole test for "relative branch", and it reads the spec rather than
+// repeating it - see the cost model under [cpu] in isa/fructus.toml.
+const PC = 'pc';
+function mentionsPc(n) {
+  if (!n || typeof n !== 'object') return false;
+  if (n.n === 'var') return n.name === PC;
+  for (const k of ['l', 'r', 'e', 'c', 'a', 'b', 'addr', 'value', 'body', 'target'])
+    if (mentionsPc(n[k])) return true;
+  return (n.args ?? []).some(mentionsPc);
+}
+function isRelativeBranch(st) {
+  if (st.n === 'if') return isRelativeBranch(st.body);
+  return st.n === 'set' && st.target && st.target.n === 'var' && st.target.name === PC
+      && mentionsPc(st.value);
+}
+
 // =============================================================================
 // The machine
 // =============================================================================
@@ -189,13 +206,25 @@ export class Machine {
     this.little = spec.cpu.endian === 'little';
     this.count  = 0;
 
-    // THE COST MODEL, such as it is.  The bus is 6502-like: one cycle per byte,
-    // and it carries both instruction fetch and data.  So the cycles an
-    // instruction takes are the bytes it occupies plus the bytes it moves, and
-    // those are the two counters below.  Nothing here models a pipeline,
-    // because there isn't one to model.
+    // THE COST MODEL.  See [cpu] in the spec, which is where it is defined.
+    // The bus is 6502-like: one cycle per byte, carrying instruction fetch and
+    // data alike, so an instruction costs the bytes it occupies plus the bytes
+    // it moves.  A taken RELATIVE branch costs one more, for the add that
+    // produces pc + off; there is nothing to fetch while the adder runs.
+    // Nothing here models a pipeline, because there isn't one to model.
     this.fetched = 0;      // instruction bytes
     this.bus     = 0;      // data bytes read or written
+    this.taken   = 0;      // relative branches taken, one cycle each
+    this.penalty = spec.cpu.taken_branch_penalty ?? 0;
+
+    // WHICH INSTRUCTIONS PAY IT COMES FROM THE SEMANTICS, not from a list here
+    // that would have to be kept in step.  An instruction is a relative branch
+    // exactly when it assigns pc from an expression that mentions pc:
+    //
+    //     pc = pc + off     relative, pays when taken
+    //     pc = target       absolute, latched as it is fetched, pays nothing
+    //     pc = lr           absolute, straight out of the register file
+    this.relative = new Map();
 
     // sp and lr are register ALIASES in the spec, not hardcoded numbers here.
     const reg = spec.optype.reg;
@@ -205,7 +234,9 @@ export class Machine {
     this.sem = new Map();          // insn object -> parsed statement list
     for (const insn of spec.insn) {
       if (insn.semantics === undefined) throw new Error(`${insn.mnemonic}: no semantics`);
-      this.sem.set(insn, parse(insn.semantics));
+      const body = parse(insn.semantics);
+      this.sem.set(insn, body);
+      this.relative.set(insn, body.some(isRelativeBranch));
     }
   }
 
@@ -286,7 +317,7 @@ export class Machine {
       return;
     }
     if (t.n === 'var') {
-      if (t.name === 'pc')     { this.pc = u16(v); return; }
+      if (t.name === 'pc')     { this.pc = u16(v); this.wrotePc = true; return; }
       if (t.name === 'halted') { this.halted = !!v; return; }
       if (t.name in this.named) { this.R[this.named[t.name]] = u16(v); return; }
     }
@@ -302,8 +333,15 @@ export class Machine {
     if (!d) throw new Error(`no instruction at 0x${at.toString(16)} (first byte 0x${this.mem[at].toString(16)})`);
     this.pc = u16(at + d.nbytes);
     this.fetched += d.nbytes;
+    this.wrotePc = false;
     if (trace) trace(at, d, this);
     for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);
+    // TAKEN means the assignment to pc RAN, not that pc ended up somewhere
+    // else.  Those differ, and the difference is not academic: a branch whose
+    // target is the next instruction still puts pc + off through the adder and
+    // still costs the cycle.  Testing the outcome instead of the act made
+    // `br eq, r0, #0, .next` look free, which tests/branch-cost.s caught.
+    if (this.wrotePc && this.relative.get(d.insn)) this.taken += this.penalty;
     this.count++;
     return d;
   }
@@ -318,7 +356,11 @@ export class Machine {
   }
 
   regs() { return Array.from(this.R); }
-  cycles() { return this.fetched + this.bus; }
+  // Zero the cost counters.  Tests used to open-code this, and open-coded the
+  // SUM as well - which is how the taken-branch penalty went unnoticed by every
+  // cycle assertion in the suite the moment it was added.  One definition.
+  reset() { this.fetched = this.bus = this.taken = 0; return this; }
+  cycles() { return this.fetched + this.bus + this.taken; }
 }
 
 // =============================================================================

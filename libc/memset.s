@@ -20,33 +20,34 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED, by tests/libc-check.mjs
 ; ----------------------------------------------------------------------------
-;       fill loop       1.4688 cycles/byte      32 bytes an iteration
-;       head            3.5000 cycles/byte      up to 15 bytes, in words
+;       fill loop       1.5000 cycles/byte      32 bytes an iteration
+;       head            3.8571 cycles/byte      up to 15 bytes, in words
 ;       sizes           bzero 12 bytes, memset 52, 64 together
 ;
 ; The floor is 1.00 - one bus cycle to write each byte - and 15 bytes of loop
-; get to 1.47.  snippets/speed-of-light-memset-core.s reaches 1.3450 and spends
-; 89 bytes doing it, so this gives up 9% for a quarter of the code.
+; get to 1.50.  snippets/speed-of-light-memset-core.s reaches 1.3488 and spends
+; 89 bytes doing it, so this gives up 11% for a quarter of the code.  The whole
+; difference is the branch: 4 cycles over 32 bytes here, over 258 there.
 ;
 ; THE HEAD ONLY HAS TO REACH 15 BYTES, because the fill loop can be entered at
 ; its midpoint - see the loop itself.  Everything from 16 bytes up runs at the
 ; loop's rate, and the head pushes words rather than bytes, so what began as a
-; 6-cycles-a-byte tail is now 3.5 over at most fifteen bytes.
+; 7-cycles-a-byte tail is now 3.86 over at most fifteen bytes.
 ;
 ; The two steps together, measured, against the original byte head:
 ;
 ;       n        byte head    word head    + midpoint entry
-;       16         122           85              53
-;       24         170          113              81
-;       31         212          137             105
-;       32          73           76              80
+;       16         138           94              56
+;       24         194          126              86
+;       31         243          152             112
+;       32          76           80              84
 ;
-; and the cost of each is exact and small: word pushes were 5 bytes and 3 cycles
+; and the cost of each is exact and small: word pushes were 5 bytes and 4 cycles
 ; on multiples of 32, the midpoint 4 more bytes and 4 more cycles on lengths
 ; whose bit 4 is clear.  Averaged over every length from 0 to 512 the midpoint
-; alone is worth 14 cycles a call: 32 saved on half the lengths, 4 spent on the
-; other half.  These are the sizes a compiler emits to clear a struct, which is
-; most memset calls in most programs.
+; alone is worth 17.8 cycles a call: 40 saved on half the lengths, 4 spent on
+; the other half.  These are the sizes a compiler emits to clear a struct, which
+; is most memset calls in most programs.
 ; ============================================================================
 
 
@@ -109,8 +110,8 @@ memset:
 
 ; --- the head: at most 31 bytes, in words ----------------------------------
 ; An odd length gets one byte peeled off the top, and everything below that is
-; pushed two bytes at a time.  Words rather than bytes is worth 3.5 cycles a
-; byte instead of 6, which is most of what a small memset costs.
+; pushed two bytes at a time.  Words rather than bytes is worth 3.86 cycles a
+; byte instead of 7, which is most of what a small memset costs.
 ;
 ; NO `add r2, r2, #-1` AFTER THE PEEL, and that is exact rather than lucky: an
 ; odd n is never a multiple of 32, so subtracting one from it cannot cross a
@@ -125,7 +126,7 @@ memset:
         br      eq, sp, r2, .headdone   ; nothing between the block and the end
 .head:
         push    r1                      ;                               4
-        br      ne, sp, r2, .head       ;                               3
+        br      ne, sp, r2, .head       ;                               4
 .headdone:
 
 ; --- the fill loop, 32 bytes an iteration, in two identical halves ---------
@@ -136,8 +137,8 @@ memset:
 ; routine can start on a half block without a second copy of the code.
 ;
 ; That is what lets the head round to 16 rather than 32.  Half the work that
-; used to go through the head at 3.5 cycles a byte now goes through the loop at
-; 1.47, and the entry ladder costs five bytes: one `sub` to get the length back
+; used to go through the head at 3.86 cycles a byte now goes through the loop at
+; 1.50, and the entry ladder costs five bytes: one `sub` to get the length back
 ; out of the boundary address, and one `brset` on bit 4.
 ;
 ; THE `sub` IS NOT BOOKKEEPING.  r2 has been the boundary ADDRESS since the head
@@ -159,7 +160,7 @@ memset:
         push    r1, r1, r1              ;                               8
         push    r1, r1                  ;                               6
 .bottom:
-        br      ne, sp, r0, .top        ;                               3
+        br      ne, sp, r0, .top        ;                               4
 
         mov     sp, r5                  ; hand the real stack back
         ret

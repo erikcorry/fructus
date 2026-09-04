@@ -95,7 +95,7 @@ function call(entry, dest, src, n) {
   m.R[0] = dest; m.R[1] = src; m.R[2] = n;
   m.R[3] = R3;   m.R[4] = R4;
   m.pc = entry; m.halted = false; m.count = 0;
-  m.fetched = 0; m.bus = 0;
+  m.reset();
 
   let why;
   try {
@@ -107,7 +107,7 @@ function call(entry, dest, src, n) {
     why, before,
     after: m.mem.slice(BUF, BUF + SPAN),
     ret: m.R[0], sp: m.R[m.named.sp], r3: m.R[3], r4: m.R[4],
-    cycles: m.fetched + m.bus,
+    cycles: m.cycles(),
   };
 }
 
@@ -242,12 +242,12 @@ function dispatch(name, r, dest, src, n) {
   const a = 64, b = MAXN;
   const cost = (n) => call(entry, BUF + HIGH, BUF + LOW, n).cycles;
   const per = (cost(b) - cost(a)) / (b - a);
-  check('memcpy bulk cost', Math.abs(per - 3.8125) < 0.0001,
-        `${per.toFixed(4)} cycles/byte, the file says 3.8125`);
+  check('memcpy bulk cost', Math.abs(per - 3.8750) < 0.0001,
+        `${per.toFixed(4)} cycles/byte, the file says 3.8750`);
 
   // The byte head is the expensive part, and its worst case is 15 bytes.
   const head = (cost(15) - cost(0)) / 15;
-  check('memcpy head cost', Math.abs(head - 16) < 0.0001, `${head.toFixed(2)} cycles/byte`);
+  check('memcpy head cost', Math.abs(head - 17) < 0.0001, `${head.toFixed(2)} cycles/byte`);
   console.log(`ok    bulk loop ${per.toFixed(4)} cycles/byte, ` +
               `byte head ${head.toFixed(2)} for up to 15 bytes`);
 }
@@ -275,11 +275,11 @@ function dispatch(name, r, dest, src, n) {
     m.R[3] = R3; m.R[4] = R4;
     for (const [i, v] of Object.entries(args)) m.R[i] = v & 0xffff;
     m.pc = entry; m.halted = false; m.count = 0;
-    m.fetched = 0; m.bus = 0;
+    m.reset();
     let why;
     try { why = m.run({ max: 200000, stopAt: RET }); }
     catch (e) { why = `ran off the rails: ${e.message}`; }
-    return { why, mem: m.mem.slice(BUF, BUF + SPAN), cycles: m.fetched + m.bus,
+    return { why, mem: m.mem.slice(BUF, BUF + SPAN), cycles: m.cycles(),
              r0: m.R[0], r2: m.R[2], sp: m.R[m.named.sp], r3: m.R[3], r4: m.R[4] };
   };
 
@@ -356,12 +356,12 @@ function dispatch(name, r, dest, src, n) {
   // Cost, differenced so the head and the prologue cancel.
   const cost = (n) => shot(memset, { 0: BUF + AT, 1: 0xff, 2: n }).cycles;
   const bulk = (cost(64 + 32 * 32) - cost(64)) / (32 * 32);
-  check('memset fill loop', Math.abs(bulk - 1.4688) < 0.0005,
-        `${bulk.toFixed(4)} cycles/byte, the file says 1.4688`);
+  check('memset fill loop', Math.abs(bulk - 1.5000) < 0.0005,
+        `${bulk.toFixed(4)} cycles/byte, the file says 1.5000`);
   // The head pushes words, so it costs 3.5 cycles a byte; measured over a pure
   // even length so the odd-byte peel does not muddy it.
   const head = (cost(14) - cost(0)) / 14;
-  check('memset head', Math.abs(head - 3.5) < 0.0005, `${head.toFixed(4)} cycles/byte`);
+  check('memset head', Math.abs(head - 3.8571) < 0.0005, `${head.toFixed(4)} cycles/byte`);
 
   // TWO STRUCTURAL CLAIMS, neither of which a byte comparison can see.
   //
@@ -375,7 +375,7 @@ function dispatch(name, r, dest, src, n) {
 
   // Sixteen more bytes on top of a whole number of blocks must go through the
   // loop's midpoint, not the head.  Through the midpoint that is 20 cycles;
-  // through a word head it would be 56.  This is the assertion that actually
+  // through a word head it would be 62.  This is the assertion that actually
   // pins the boundary at 16 rather than 32 - dropping to `and r2, r2, #-32`
   // still fills every byte correctly and shows up only here.
   for (const n of [0, 32, 64]) {

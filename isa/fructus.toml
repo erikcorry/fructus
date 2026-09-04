@@ -202,6 +202,30 @@ endian     = "little"    # byte order of 16-bit values in *data* memory
 # it will reject an otherwise reasonable encoding that violates it.
 length_from_first_byte = true
 
+# =============================================================================
+# THE COST MODEL
+# =============================================================================
+# The bus is 6502-like: one cycle carries one byte, and it carries instruction
+# fetch and data alike.  So an instruction costs the bytes it occupies plus the
+# bytes it moves, and tools/sim.js counts exactly that.
+#
+# WITH ONE EXCEPTION, and it is not a rounding error.  A relative branch that is
+# TAKEN costs one cycle more than its length, because the target is pc + off and
+# the adder cannot produce it until the displacement byte has arrived.  There is
+# nothing to fetch during that cycle.  The 6502 charges the same: a branch is
+# two bytes and two cycles when it falls through, three when it is taken.
+#
+# AN ABSOLUTE JUMP PAYS NOTHING, for the same reason in reverse.  `jmp target`
+# and `call target` carry the new pc as immediate bytes, so they are latched as
+# they are fetched and no addition happens; `ret` and `call ra` read the pc from
+# the register file, which is available at once.  Again this is the 6502's
+# behaviour, where JMP absolute is three bytes and exactly three cycles.
+#
+# The simulator does not need a list of which instructions are which - the
+# semantics already say.  `pc = pc + off` mentions pc on the right and is
+# therefore relative; `pc = target` and `pc = lr` do not and are absolute.
+taken_branch_penalty = 1
+
 
 # =============================================================================
 # Operand types

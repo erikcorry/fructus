@@ -10,9 +10,13 @@
 ;       r2  n                                   r6 = sp, r7 = lr
 ;
 ; COMPACT, NOT MAXIMAL.  The bulk loop moves 16 bytes an iteration where
-; snippets/speed-of-light-memcpy-core.s moves 60.  That gives up about 9% of
+; snippets/speed-of-light-memcpy-core.s moves 60.  That gives up about 11% of
 ; the throughput for a quarter of the code, which is the right trade for a
 ; libc: the routine is linked into everything, and most calls are short.
+;
+; A SHORT LOOP PAYS THE BRANCH MORE OFTEN, which is most of the difference: the
+; taken branch is four cycles either way, but here it is spread over 16 bytes
+; and there over 60 - 0.25 of a cycle a byte against 0.067.
 ;
 ; INTERRUPTS MUST HAVE THEIR OWN STACK POINTER.  The bulk loop points sp at the
 ; source and reads through it with `pop`, which is the whole reason it is fast -
@@ -42,8 +46,8 @@
 ; BOTH TESTS ARE INCLUSIVE, and that is not cosmetic.  Regions that abut exactly
 ; - dest + n == src, or src + n == dest - do not overlap, so the fast path is
 ; correct for them and `ls` lets them take it; `lo` would send both the long way
-; round for nothing.  Measured, the descending loop is 14.2 cycles/byte against
-; the bulk loop's 3.8, so the difference is a factor of three on a case that
+; round for nothing.  Measured, the descending loop is 15.2 cycles/byte against
+; the bulk loop's 3.9, so the difference is a factor of four on a case that
 ; turns up whenever a caller copies into the slot next to its source.
 ;
 ; THE CHEAPER TEST GOES FIRST.  dest <= src needs no arithmetic and leaves in
@@ -131,7 +135,7 @@ memcpy:
         st      r4, [r0, #6]            ; dest +14                      4
         add     r0, r0, #8              ;                               2
 .bottom:
-        br      ne, sp, r2, .top        ;                               3
+        br      ne, sp, r2, .top        ;                               4
 
         mov     sp, lr                  ; hand the real stack back
         pop     r4, r3

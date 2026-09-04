@@ -14,7 +14,7 @@
 // only way to pass is to compute the right answer.
 // =============================================================================
 
-import { assemble, callRoutine, machine } from './harness.mjs';
+import { assemble, callRoutine, machine, spec } from './harness.mjs';
 
 const M32 = (1n << 32n) - 1n, B31 = 1n << 31n, B32 = 1n << 32n;
 let fails = 0, checks = 0;
@@ -229,22 +229,22 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     m.R[m.named.lr] = RET;            // ret lands on the sentinel, and we stop
     m.R[0] = SRC; m.R[1] = DST; m.R[2] = n;
     m.pc = entry; m.halted = false; m.count = 0;
-    m.fetched = 0; m.bus = 0;
+    m.reset();
     const why = m.run({ max: 5000000, stopAt: RET });
     let wrong = -1;
     for (let i = 0; i < n; i++)
       if (m.mem[DST + i] !== ((i * 7 + 13) & 0xff)) { wrong = i; break; }
     // and it must not touch the four bytes past the end
     const over = [0, 1, 2, 3].some((i) => m.mem[DST + n + i] !== GUARD);
-    return { why, wrong, over, cycles: m.fetched + m.bus, sp: m.R[m.named.sp] };
+    return { why, wrong, over, cycles: m.cycles(), sp: m.R[m.named.sp] };
   };
 
   const rungs = [
-    ['memcpy',                 14.0000, 1],
-    ['memcpy2',                 8.0000, 1],
-    ['memcpy3',                 7.0000, 1],
-    ['memcpy4',                 5.7500, 1],
-    ['memcpy_divisible_by_32',  4.3750, 32],
+    ['memcpy',                 15.0000, 1],
+    ['memcpy2',                 8.5000, 1],
+    ['memcpy3',                 7.5000, 1],
+    ['memcpy4',                 6.0000, 1],
+    ['memcpy_divisible_by_32',  4.4063, 32],
   ];
 
   for (const [name, want, unit] of rungs) {
@@ -273,6 +273,53 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
           `loop costs ${per.toFixed(4)} cycles/byte, the file says ${want.toFixed(4)}`);
   }
   console.log('ok    snippets/memcpy.s on the simulator: 5 rungs, bytes and cycles');
+}
+
+// --- the cost model: what a taken branch costs -------------------------------
+// Every performance figure in this repo rests on one cycle being charged for a
+// taken RELATIVE branch and nothing for an absolute transfer.  Nothing else in
+// the suite would catch the simulator dropping that: the numbers would all move
+// together, and each assertion would be re-tightened around the new wrong value
+// by whoever ran the tests next.  So it is measured here directly, one
+// instruction at a time.
+{
+  const { code, syms } = assemble('tests/branch-cost.s');
+  const cost = (label) => {
+    m.mem.fill(0);
+    m.load(code);
+    m.R.fill(0);                       // r0 = 0: `eq #0` is taken, `ne #0` is not
+    m.pc = syms.get(label);
+    m.halted = false;
+    m.reset();
+    m.step();
+    return m.cycles();
+  };
+
+  const want = [
+    ['b_taken', 4, 'a 3-byte branch, taken'],
+    ['b_fall',  3, 'a 3-byte branch, not taken'],
+    ['j_rel',   3, 'a 2-byte relative jump'],
+    ['j_abs',   3, 'a 3-byte absolute jump'],
+    ['c_rel',   4, 'a 3-byte relative call'],
+    ['c_abs',   3, 'a 3-byte absolute call'],
+    ['i_ret',   1, 'ret, straight out of the register file'],
+  ];
+  for (const [label, cycles, what] of want)
+    check('branch cost', cost(label) === cycles,
+          `${what} cost ${cost(label)} cycles, want ${cycles}`);
+
+  // The pair that isolates the cause.  callr and call are both three bytes and
+  // both always transfer control; the only difference is that one has to add.
+  check('branch cost', cost('c_rel') - cost('c_abs') === 1,
+        `callr and call differ by ${cost('c_rel') - cost('c_abs')}, want 1`);
+  // And the same instruction taken against not taken.
+  check('branch cost', cost('b_taken') - cost('b_fall') === 1,
+        `taken and not-taken differ by ${cost('b_taken') - cost('b_fall')}, want 1`);
+
+  // The penalty is declared in the spec, not buried in the simulator.
+  check('branch cost', spec.cpu.taken_branch_penalty === 1,
+        `spec says the penalty is ${spec.cpu.taken_branch_penalty}`);
+  console.log('ok    cost model: taken relative branches cost one cycle, absolute none');
 }
 
 // --- zeroed memory stops the machine ----------------------------------------

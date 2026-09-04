@@ -17,7 +17,7 @@ node tools/gen-customasm.js --noat > build/fructus-noat.asm
 fail=0
 
 # --- everything must assemble in r5 mode ------------------------------------
-for src in snippets/*.s libc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/data.s tests/microtan-smoke.s; do
+for src in snippets/*.s libc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/data.s tests/branch-cost.s tests/microtan-smoke.s; do
     cat build/fructus.asm "$src" > build/_t.asm
     if "$CA" -q -o /dev/null build/_t.asm 2>build/_err; then
         printf 'ok    %s\n' "$src"
@@ -30,7 +30,7 @@ done
 # The decoder is a second reading of the same `encoding` strings, sharing no
 # code with the generator below the point where both parse the TOML.  If they
 # disagree about a field, the re-assembled bytes differ.
-if node tests/roundtrip.mjs snippets/*.s libc/*.s isa/abi.s tests/stress.s tests/longimm.s; then :; else fail=1; fi
+if node tests/roundtrip.mjs snippets/*.s libc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
 
 # --- the snippets, actually executed -----------------------------------------
 if node tests/sim-check.mjs; then :; else fail=1; fi

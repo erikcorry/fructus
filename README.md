@@ -39,7 +39,7 @@ on your `PATH`:
 cargo install customasm        # or grab a release binary
 npm install                    # one dependency: a TOML parser
 npm run gen                    # generate build/fructus.asm from the spec
-npm test                       # 47 checks, ~44,000 assertions
+npm test                       # 50 checks, ~44,000 assertions
 ```
 
 Then assemble and run something. `customasm` takes several input files, so the
@@ -206,6 +206,16 @@ the case against.
 **`halt` is opcode `0x00`,** so erased memory, an unwritten ROM and a wild jump
 into a zeroed page all stop where the mistake happened.
 
+**A taken relative branch costs one cycle more than its length**, for the add
+that produces `pc + off`; an absolute `jmp`, `call` or `ret` costs nothing
+beyond its bytes, because the target is latched as it is fetched or read
+straight from the register file. This is the 6502's behaviour — a branch is two
+cycles falling through and three when taken, while `JMP` absolute is exactly
+three — and it is what makes a longer unrolled loop worth anything once the
+instruction mix is fixed. The simulator does not keep a list of which
+instructions are which: `pc = pc + off` mentions `pc` on the right and is
+therefore relative, `pc = target` does not.
+
 ## Possible enhancements
 
 The opcode map makes the gaps visible, and four of them are worth naming. None
@@ -220,13 +230,13 @@ three is the whole difference between the two cores in `snippets/`:
 
 | | measured |
 |---|---|
-| `memset`, filling through `sp` with `push` | **1.3450** cycles/byte |
-| `memcpy`, reading through `sp` with `pop`, writing with `st` | **3.4833** cycles/byte |
+| `memset`, filling through `sp` with `push` | **1.3488** cycles/byte |
+| `memcpy`, reading through `sp` with `pop`, writing with `st` | **3.5000** cycles/byte |
 
 memcpy's source side already gets the cheap rate, because `sp` can be pointed at
 it. Its *destination* side cannot, because there is only one `sp` and `memset`
 has a prior claim on it. Give the destination the same rate and memcpy goes to a
-projected **2.6905** cycles/byte — one `pop` and one multi-store per six bytes,
+projected **2.6984** cycles/byte — one `pop` and one multi-store per six bytes,
 four instruction bytes and twelve bus bytes, 126 bytes per iteration in 87.
 
 **A multi-register STORE is worth more than a multi-register LOAD**, and the

@@ -32,18 +32,19 @@
 ;
 ; The exact cost of P pushes and one branch is
 ;
-;       (2P + 3 + 6P) / 6P  =  1.3333 + 0.5/P
+;       (2P + 4 + 6P) / 6P  =  1.3333 + 0.6667/P
 ;
-; so the branch is the entire gap above the floor, and P is capped only by how
-; much code you are willing to spend.  P = 43 fills 258 bytes per iteration in
-; 89 bytes of code.
+; where the branch is three bytes and a fourth cycle for being taken.  So the
+; branch is the entire gap above the floor, and P is capped only by how much
+; code you are willing to spend.  P = 43 fills 258 bytes per iteration in 89
+; bytes of code.
 ;
 ; ----------------------------------------------------------------------------
 ; MEASURED
 ; ----------------------------------------------------------------------------
-;   258 bytes/iteration   89 bytes   1.3450 cycles/byte
+;   258 bytes/iteration   89 bytes   1.3488 cycles/byte
 ;
-; Against the memcpy core in the neighbouring file at 3.4833, and against a
+; Against the memcpy core in the neighbouring file at 3.5000, and against a
 ; 6502, which needs about 4 cycles a byte with unrolled self-modifying stores.
 ; Filling is where this machine is furthest ahead of a 6502, because `push` is
 ; doing three things at once that a 6502 does in three instructions.
