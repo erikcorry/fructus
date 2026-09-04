@@ -88,6 +88,7 @@ that is zero is still an offset field.
 ```
 isa/fructus.toml      the ISA: encodings, operand types, semantics, rationale
 isa/abi.s             the calling convention, as a file that assembles
+isa/mos6502.toml      the NMOS 6502 opcode table, for comparison - not part of Fructus
 tools/                the toolchain, all driven by the TOML
 libc/                 a tiny libc, sized for a machine with 64K
 snippets/             worked routines, with their byte counts measured
@@ -104,6 +105,7 @@ tests/                the test suite
 | `npm run sim -- <bin>` | runs a flat binary. `--trace`, `--pc`, `--sp`, `--max` |
 | `npm run microtan -- <rom>` | runs a ROM on the simulated board |
 | `npm run map` | the opcode map: `build/opcodes.html` and `docs/opcodes.svg` |
+| `npm run map6502` | the same map for the NMOS 6502: `build/6502.html` and `docs/6502.svg` |
 | `npm test` | everything |
 
 `tools/isa.js` reads the spec; `tools/decode.js` turns bytes back into
