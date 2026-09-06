@@ -1,26 +1,283 @@
-; uint16 * uint16 -> unint16
-; We either know it won't overflow or we don't care.
-; Follows calling convention.
-; 21 or 24 bytes.
+; ============================================================================
+; mul.s - 16 x 16 -> 16 multiply, and what it costs to make it faster
+; ============================================================================
+;
+;       uint16 mul_16(uint16 a, uint16 b)       a in r0, b in r1, result in r0
+;
+; Either we know it will not overflow or we do not care.  Two arguments, so
+; under isa/abi.s r0 and r1 are caller saved and r5 is the assembler's scratch,
+; also caller saved - which is exactly the three registers this needs, so there
+; is no prologue and no epilogue anywhere in this file.
+;
+; ENTRY POINTS.  `mul_16` handles a == 0; `mul_16.nz` is the same code with
+; that test skipped, for callers that already know a is non-zero.  The dotted
+; name is how the assembler spells a label scoped to the routine, and it is
+; reachable from anywhere as `mul_16.nz`.
+;
+; ----------------------------------------------------------------------------
+; MEASURED, by tests/sim-check.mjs, over 600 pairs from each distribution
+; ----------------------------------------------------------------------------
+;                        bytes   16x16    b<256   a<256, b full
+;       mul_16              24     167       82     165
+;       mul_16_x4           40     133       68     131
+;       mul_16_fast        158     101       73     101
+;       mul_16_min           9   in front of any of them; see below
+;
+; THE PLAIN LOOP IS ALREADY GOOD, and it is worth saying why before improving
+; on it.  It costs 10 cycles for a set bit and 11 for a clear one, and about
+; 6.5 of that is the two branches.  The obvious loop -
+;
+;       .top:   brclear r1, #1, .skip
+;               add     r0, r0, r5
+;       .skip:  shl     r5, r5, #1
+;               lsr     r1, r1, #1
+;               br      ne, r1, #0, .top
+;
+; - has only one bit test but pays a separate loop-back branch, and comes to
+; 12.5 cycles a bit.  Rotating the loop so the two conditional branches ARE the
+; loop control is what buys the 2 cycles, and it is why unrolling has to give
+; something back before it gains anything.
+;
+; UNROLLING IS WORTH ABOUT A FIFTH.  Four bits to a group amortises the counter
+; shift and the loop branch over four bits instead of paying two branches for
+; each, and costs 16 bytes.  It is never worse than the plain loop above 3 bits
+; of multiplier and never dramatically better.
+;
+; FULLY UNROLLING IS WORTH ABOUT A THIRD, and only above 7 bits.  It is the
+; fastest thing here for a wide multiplier and the slowest for a narrow one,
+; because its dispatch has to walk down to the top set bit.  158 bytes.
+;
+; AND THE BIGGEST SINGLE WIN IS NOT UNROLLING AT ALL.  All of these cost time
+; per bit of the MULTIPLIER and nothing for its leading zeros, so which operand
+; sits in r1 matters more than any of the above: 9 bytes of compare and swap
+; take the a<256 column from 165 to 91 on the plain loop, and 131 to 76 on the
+; four-bit one.  It is worth ~3 cycles when it does not help.
+;
+; WHICH TO USE.  mul_16_x4 is the one to reach for - never worst in any column,
+; 40 bytes - with mul_16_min in front of it if the operands are asymmetric.
+; mul_16 if space is the binding constraint, mul_16_fast if the multiplier is
+; genuinely wide and 158 bytes is affordable.
+; ============================================================================
+
+
+; The plain algorithm with two things folded out of it.
+;
+; r0 IS BOTH THE MULTIPLICAND AND THE ACCUMULATOR.  If bit 0 of b is set then
+; the first partial product is a, which is already in r0 - so the accumulator
+; needs no initialisation at all and the first add never happens.  If bit 0 is
+; clear the accumulator has to be zeroed, and `mov r0, #0` is one byte because
+; r0 is the register the one-byte abbreviations pin.
+;
+; AND r5 STARTS AT a*2, not a, so the first shift is folded into the setup too.
+; Between them these remove one add and one shift from the first iteration.
+;
+; THE LOOP IS ROTATED so that the two exits fall at the bottom, which is what
+; lets a set bit and a clear bit take different paths without an unconditional
+; jump in either.  It does mean a CLEAR bit costs one cycle more than a set
+; one - 11 against 10 - because it reaches .clear through a taken branch while
+; a set bit reaches .set through one and then falls through.
+
+; ============================================================================
+; mul_16_min - a prologue: put the smaller operand in the multiplier  9 bytes
+; ============================================================================
+; A DIFFERENT AXIS FROM ANY OF THE UNROLLING, and the cheapest thing in this
+; file.  Every routine below runs once per bit of b and not at all for its
+; leading zeros, so the cost is set by which operand is the multiplier - and
+; multiplication does not care which way round they are.
+;
+; It falls through into mul_16 rather than jumping to it, which is why it is
+; here and not at the end of the file: from below the chain, mul_16 is more
+; than 128 bytes back and the three-byte branch cannot reach it.
+;
+; Worth almost nothing on uniformly random 16-bit operands, where both sides
+; are nearly always 16 bits wide.  Worth a great deal on the multiplies real
+; programs do, where one side is a count or a small constant.
+
+mul_16_min:
+        br      ls, r1, r0, mul_16      ; 3   b is already the smaller
+        mov     r5, r0                  ; 2
+        mov     r0, r1                  ; 2
+        mov     r1, r5                  ; 2   ... and fall through
+
+
+; ============================================================================
+; mul_16 - shift and add, one bit at a time                          25 bytes
+; ============================================================================
 mul_16:
-  br eq, r0, #0, .done              ; 3 (optional)
-mul_16_we_know_r0_is_non_zero:
-  ; r5 is the lhs and we initialize it with r0 * 2 to save a dynamic instruction.
-  shl r5, r0, #1  ; r5 = lhs        ; 2
-  ; If the low bit of r1 is 1 then the accumulator in r0 already has the first addition.
-  brset r1, #1, .entry              ; 3
-  ; Otherwise, zero the accumulator.
-  mov r0, #0  ; Accumulator         ; 1
-  ; Skip most of the first iteration.
-  jmpr .entry                       ; 2
-.set
-  add r0, r5                        ; 2
+        br      eq, r0, #0, .done       ; 3   a == 0: r0 is already the answer
+.nz:
+        shl     r5, r0, #1              ; 2   r5 = a << 1
+        brset   r1, #1, .entry          ; 3   bit 0 set: r0 already holds a
+        mov     r0, #0                  ; 1   otherwise start the sum at zero
+        jmpr    .entry                  ; 2
+.set:
+        add     r0, r0, r5              ; 2
 .clear:
-  shl r5, #1                        ; 2
+        shl     r5, r5, #1              ; 2
 .entry:
-  asr r1, #1                        ; 2
-.end:
-  brset r1, #1, .set                ; 3
-  br ne, r1, #0, .clear             ; 3
-.done
-  ret                               ; 4
+        lsr     r1, r1, #1              ; 2   LOGICAL: an arithmetic shift would
+.end:                                   ;     never clear r1 and never end
+        brset   r1, #1, .set            ; 3
+        br      ne, r1, #0, .clear      ; 3
+.done:
+        ret                             ; 1
+
+
+; ============================================================================
+; mul_16_x4 - the same loop, four bits at a time                     41 bytes
+; ============================================================================
+; The rotation above is what makes the plain loop cheap, and it is also what
+; stops it getting cheaper: the two branches ARE the loop, so there is no
+; separate loop-back to amortise.  Unrolling has to give that up and go back to
+; an explicit mask per bit - which costs one branch per bit instead of two, and
+; pays for a counter shift and a loop branch once per four bits.
+;
+; Testing bit i directly needs no shifting of b at all during the group, and
+; every mask it wants is in immbit5, which holds 1<<n for all sixteen n.
+
+mul_16_x4:
+        br      eq, r0, #0, .done       ; 3
+        mov     r5, r0                  ; 2   r5 = a
+        mov     r0, #0                  ; 2   acc = 0
+.top:
+        brclear r1, #0x0001, .s0     ; 3
+        add     r0, r0, r5              ; 2
+.s0:     shl     r5, r5, #1              ; 2
+        brclear r1, #0x0002, .s1     ; 3
+        add     r0, r0, r5              ; 2
+.s1:     shl     r5, r5, #1              ; 2
+        brclear r1, #0x0004, .s2     ; 3
+        add     r0, r0, r5              ; 2
+.s2:     shl     r5, r5, #1              ; 2
+        brclear r1, #0x0008, .s3     ; 3
+        add     r0, r0, r5              ; 2
+.s3:     shl     r5, r5, #1              ; 2
+        lsr     r1, r1, #4              ; 2
+        br      ne, r1, #0, .top        ; 3
+.done:
+        ret                             ; 1
+
+; Four bits cost 4 branches, up to 4 adds, 4 shifts, a counter shift and a loop
+; branch - against eight branches and the rest for the same four bits above.
+
+
+; ============================================================================
+; mul_16_fast - unrolled the whole way, entered where the number starts
+; ============================================================================
+; MSB FIRST, which is the change that makes unrolling pay.  Working up from bit
+; zero, a shorter multiplier has to be detected and jumped out of; working down
+; from bit fifteen, it is entered LATE and the leading blocks are simply never
+; executed.  The recurrence is
+;
+;       acc = acc * 2 + (bit ? a : 0)
+;
+; so each block is three instructions and exactly seven bytes:
+;
+;       shl     r0, r0, #1              double the accumulator
+;       brclear r1, #1<<k, .next        this bit clear: nothing to add
+;       add     r0, r0, r5              set: add the multiplicand
+;
+; and a stays put in r5 the whole way, where the loop above has to keep
+; shifting its copy.  That is the second saving and it is why there is no
+; second scratch register in use.
+;
+; ----------------------------------------------------------------------------
+; FINDING THE ENTRY POINT
+; ----------------------------------------------------------------------------
+; A computed goto is the obvious way in - clz gives the leading zero count, and
+; entry is base + clz * 7.  It is the wrong answer here, and by a wide margin.
+;
+; It needs a register for the address, and with two arguments only r0, r1 and
+; r5 are ours - all three are spoken for - so lr has to be pushed and popped
+; around it.  With the multiply by seven that is about 28 cycles before the
+; first block runs, and it costs the same 28 whether b is 0xffff or 3.
+;
+; A LINEAR SCAN OF brset IS CHEAPER WHERE IT MATTERS.  Sixteen tests, falling
+; through until one hits: 3 cycles for each bit that is clear and 4 for the one
+; that is set, so 3c + 4 for c leading zeros.  That is worse than a computed
+; goto for a small multiplier and better for a large one, crossing over at
+; c = 8 - and c is 0 half the time and 1 a quarter of the time, so the scan
+; wins on the overwhelming majority of inputs.  The whole thing is dispatch
+; that costs almost nothing when it has almost nothing to skip.
+;
+; AND THE SCAN IS THE FIRST BLOCK'S TEST, not an extra one.  When it finds the
+; top set bit at k, the accumulator should be exactly a - and r0 still holds a,
+; because nothing has overwritten it yet.  So the scan jumps to block k-1 with
+; the first partial product already in place, and the chain needs only fifteen
+; blocks rather than sixteen.
+
+mul_16_fast:
+        mov     r5, r0                  ; 2   r5 = a, and r0 becomes the sum
+        brset   r1, #0x8000, .b14    ; 3   top bit is 15: sum starts at a
+        brset   r1, #0x4000, .b13    ; 3   top bit is 14: sum starts at a
+        brset   r1, #0x2000, .b12    ; 3   top bit is 13: sum starts at a
+        brset   r1, #0x1000, .b11    ; 3   top bit is 12: sum starts at a
+        brset   r1, #0x0800, .b10    ; 3   top bit is 11: sum starts at a
+        brset   r1, #0x0400, .b9     ; 3   top bit is 10: sum starts at a
+        brset   r1, #0x0200, .b8     ; 3   top bit is 9: sum starts at a
+        brset   r1, #0x0100, .b7     ; 3   top bit is 8: sum starts at a
+        brset   r1, #0x0080, .b6     ; 3   top bit is 7: sum starts at a
+        brset   r1, #0x0040, .b5     ; 3   top bit is 6: sum starts at a
+        brset   r1, #0x0020, .b4     ; 3   top bit is 5: sum starts at a
+        brset   r1, #0x0010, .b3     ; 3   top bit is 4: sum starts at a
+        brset   r1, #0x0008, .b2     ; 3   top bit is 3: sum starts at a
+        brset   r1, #0x0004, .b1     ; 3   top bit is 2: sum starts at a
+        brset   r1, #0x0002, .b0     ; 3   top bit is 1: sum starts at a
+        brset   r1, #0x0001, .short     ; 3   b == 1, and r0 is already a
+        mov     r0, #0                  ; 2   b == 0
+.short:
+        ret                             ; 1
+.b14:     shl     r0, r0, #1              ; 2
+        brclear r1, #0x4000, .b13   ; 3
+        add     r0, r0, r5              ; 2
+.b13:     shl     r0, r0, #1              ; 2
+        brclear r1, #0x2000, .b12   ; 3
+        add     r0, r0, r5              ; 2
+.b12:     shl     r0, r0, #1              ; 2
+        brclear r1, #0x1000, .b11   ; 3
+        add     r0, r0, r5              ; 2
+.b11:     shl     r0, r0, #1              ; 2
+        brclear r1, #0x0800, .b10   ; 3
+        add     r0, r0, r5              ; 2
+.b10:     shl     r0, r0, #1              ; 2
+        brclear r1, #0x0400, .b9    ; 3
+        add     r0, r0, r5              ; 2
+.b9:      shl     r0, r0, #1              ; 2
+        brclear r1, #0x0200, .b8    ; 3
+        add     r0, r0, r5              ; 2
+.b8:      shl     r0, r0, #1              ; 2
+        brclear r1, #0x0100, .b7    ; 3
+        add     r0, r0, r5              ; 2
+.b7:      shl     r0, r0, #1              ; 2
+        brclear r1, #0x0080, .b6    ; 3
+        add     r0, r0, r5              ; 2
+.b6:      shl     r0, r0, #1              ; 2
+        brclear r1, #0x0040, .b5    ; 3
+        add     r0, r0, r5              ; 2
+.b5:      shl     r0, r0, #1              ; 2
+        brclear r1, #0x0020, .b4    ; 3
+        add     r0, r0, r5              ; 2
+.b4:      shl     r0, r0, #1              ; 2
+        brclear r1, #0x0010, .b3    ; 3
+        add     r0, r0, r5              ; 2
+.b3:      shl     r0, r0, #1              ; 2
+        brclear r1, #0x0008, .b2    ; 3
+        add     r0, r0, r5              ; 2
+.b2:      shl     r0, r0, #1              ; 2
+        brclear r1, #0x0004, .b1    ; 3
+        add     r0, r0, r5              ; 2
+.b1:      shl     r0, r0, #1              ; 2
+        brclear r1, #0x0002, .b0    ; 3
+        add     r0, r0, r5              ; 2
+.b0:      shl     r0, r0, #1              ; 2
+        brclear r1, #0x0001, .done  ; 3
+        add     r0, r0, r5              ; 2
+.done:
+        ret                             ; 1
+
+; TWO EXITS, ONE BYTE EACH.  .short is for b of 0 or 1, which never reach the
+; chain; .done is where the chain runs out.  Giving the chain its own `ret`
+; rather than jumping back to the first one costs a byte and saves a branch on
+; every single call - and the first draft of this routine, which assumed the
+; chain could fall into the earlier `ret`, ran off the end of itself instead.
+
