@@ -306,12 +306,13 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     return { why, r0: m.R[0], cycles: m.cycles() };
   };
 
-  const NAMES = ['mul_16', 'mul_16.nz', 'mul_16_x4', 'mul_16_fast', 'mul_16_min'];
+  const NAMES = ['mul_16', 'mul_16_x4', 'mul_16_fast', 'mul_16_min'];
 
   // Every power of two and its neighbours, both ways round, plus a sweep.  The
   // powers of two are where a shift-and-add goes wrong: they are the operands
   // that carry a single set bit, and 0x8000 is the one whose shift falls off
-  // the top.  mul_16.nz is exempt from a == 0, which is the promise it makes.
+  // the top.  Zero is in the list for all four, because none of them tests for
+  // it any more - they are merely correct about it.
   const edge = [0, 1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 127, 128,
                 129, 255, 256, 257, 1023, 1024, 4095, 4096, 32767, 32768, 32769,
                 40000, 65535];
@@ -324,7 +325,6 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   for (const name of NAMES) {
     let wrong = 0, eg = '';
     for (const [a, b] of cases) {
-      if (a === 0 && name === 'mul_16.nz') continue;   // outside its contract
       const r = call(name, a, b);
       const want = (a * b) & 0xffff;
       if (r.why !== 'stopped' || r.r0 !== want) {
@@ -347,10 +347,10 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   const UNIFORM = (r) => [r(16), r(16)];
   const SMALL_A = (r) => [r(8), r(16)];
   const want = [
-    ['mul_16',      UNIFORM, 167], ['mul_16',      SMALL_A, 165],
-    ['mul_16_x4',   UNIFORM, 133], ['mul_16_x4',   SMALL_A, 131],
+    ['mul_16',      UNIFORM, 163], ['mul_16',      SMALL_A, 163],
+    ['mul_16_x4',   UNIFORM, 129], ['mul_16_x4',   SMALL_A, 129],
     ['mul_16_fast', UNIFORM, 101], ['mul_16_fast', SMALL_A, 101],
-    ['mul_16_min',  UNIFORM, 166], ['mul_16_min',  SMALL_A,  91],
+    ['mul_16_min',  UNIFORM, 163], ['mul_16_min',  SMALL_A,  88],
   ];
   for (const [entry, gen, target] of want) {
     const got = mean(entry, gen);

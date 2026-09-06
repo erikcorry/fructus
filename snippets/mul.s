@@ -9,19 +9,27 @@
 ; also caller saved - which is exactly the three registers this needs, so there
 ; is no prologue and no epilogue anywhere in this file.
 ;
-; ENTRY POINTS.  `mul_16` handles a == 0; `mul_16.nz` is the same code with
-; that test skipped, for callers that already know a is non-zero.  The dotted
-; name is how the assembler spells a label scoped to the routine, and it is
-; reachable from anywhere as `mul_16.nz`.
+; THE FRONT DOOR IS mul_16_min, which swaps the operands so the smaller one is
+; the multiplier and falls through into the loop.  Every routine here costs
+; time per bit of the multiplier and nothing for its leading zeros, so that
+; swap is worth more than anything else in the file - and it is also why none
+; of them tests for a zero operand.  See below.
 ;
 ; ----------------------------------------------------------------------------
 ; MEASURED, by tests/sim-check.mjs, over 600 pairs from each distribution
 ; ----------------------------------------------------------------------------
-;                        bytes   16x16    b<256   a<256, b full
-;       mul_16              24     167       82     165
-;       mul_16_x4           40     133       68     131
-;       mul_16_fast        158     101       73     101
-;       mul_16_min           9   in front of any of them; see below
+;                        bytes   b 16-bit   b 8-bit   a 8-bit, b 16-bit
+;       mul_16              21       163        79        163
+;       mul_16_x4           37       129        65        129
+;       mul_16_fast        158       101        73        101
+;       mul_16_min           8       163        83         88
+;
+; THE FIRST THREE ROWS HAVE IDENTICAL FIRST AND LAST COLUMNS, and that is the
+; whole argument for the fourth.  Their cost is a function of the MULTIPLIER
+; alone - how wide the multiplicand is does not enter into it - so handing them
+; a small number in the wrong register buys nothing at all.  mul_16_min is the
+; only row where those two columns differ, because it is the only one that can
+; decide which operand the multiplier is.
 ;
 ; THE PLAIN LOOP IS ALREADY GOOD, and it is worth saying why before improving
 ; on it.  It costs 10 cycles for a set bit and 11 for a clear one, and about
@@ -49,9 +57,21 @@
 ;
 ; AND THE BIGGEST SINGLE WIN IS NOT UNROLLING AT ALL.  All of these cost time
 ; per bit of the MULTIPLIER and nothing for its leading zeros, so which operand
-; sits in r1 matters more than any of the above: 9 bytes of compare and swap
-; take the a<256 column from 165 to 91 on the plain loop, and 131 to 76 on the
-; four-bit one.  It is worth ~3 cycles when it does not help.
+; sits in r1 matters more than any of the above: 8 bytes of compare and swap
+; take the last column from 163 to 88 on the plain loop, and 129 to 76 on the
+; four-bit one.  It costs ~3 cycles when it does not help.
+;
+; AND IT PAYS FOR ITSELF TWICE, because it also removes the zero test.  Both
+; loops used to open with `br eq, r0, #0` - three bytes and three cycles on
+; every call, to save a hundred and sixty on the rare one where an operand is
+; zero.  With the swap in front that test is dead: zero is the smallest value
+; there is, so a zero operand is always the one that ends up as the multiplier,
+; and a zero multiplier drops out of the bottom of the loop on the first pass
+; without any help.  Removing it took three cycles off every column above.
+;
+; The only caller that loses is one that jumps straight to `mul_16` with a zero
+; in r0 and something wide in r1 - 163 cycles rather than 4.  Through
+; mul_16_min the same call is 26.
 ;
 ; WHICH TO USE.  mul_16_x4 is the one to reach for - never worst in any column,
 ; 40 bytes - with mul_16_min in front of it if the operands are asymmetric.
@@ -65,8 +85,9 @@
 ; r0 IS BOTH THE MULTIPLICAND AND THE ACCUMULATOR.  If bit 0 of b is set then
 ; the first partial product is a, which is already in r0 - so the accumulator
 ; needs no initialisation at all and the first add never happens.  If bit 0 is
-; clear the accumulator has to be zeroed, and `mov r0, #0` is one byte because
-; r0 is the register the one-byte abbreviations pin.
+; clear the accumulator has to be zeroed, and `mov r0, #0` is one byte, which
+; it was not when this file was written: the slot at 0x0b was spent on it
+; because of this line.
 ;
 ; AND r5 STARTS AT a*2, not a, so the first shift is folded into the setup too.
 ; Between them these remove one add and one shift from the first iteration.
@@ -78,12 +99,20 @@
 ; a set bit reaches .set through one and then falls through.
 
 ; ============================================================================
-; mul_16_min - a prologue: put the smaller operand in the multiplier  9 bytes
+; mul_16_min - a prologue: put the smaller operand in the multiplier  8 bytes
 ; ============================================================================
 ; A DIFFERENT AXIS FROM ANY OF THE UNROLLING, and the cheapest thing in this
 ; file.  Every routine below runs once per bit of b and not at all for its
 ; leading zeros, so the cost is set by which operand is the multiplier - and
 ; multiplication does not care which way round they are.
+;
+; EIGHT BYTES, NOT NINE, because the middle move of the three-way swap is
+; `mov r0, r1` and that is one of the pinned one-byte encodings.  Rotating the
+; swap the other way, through r0 rather than r5, would cost a byte more.
+;
+; IT ALSO SUBSUMES THE ZERO TEST both loops below used to carry.  Zero is the
+; smallest value there is, so if either operand is zero this puts it in r1, and
+; a zero multiplier falls out of the bottom of the loop on the first pass.
 ;
 ; It falls through into mul_16 rather than jumping to it, which is why it is
 ; here and not at the end of the file: from below the chain, mul_16 is more
@@ -101,11 +130,9 @@ mul_16_min:
 
 
 ; ============================================================================
-; mul_16 - shift and add, one bit at a time                          25 bytes
+; mul_16 - shift and add, one bit at a time                          21 bytes
 ; ============================================================================
 mul_16:
-        br      eq, r0, #0, .done       ; 3   a == 0: r0 is already the answer
-.nz:
         shl     r5, r0, #1              ; 2   r5 = a << 1
         brset   r1, #1, .entry          ; 3   bit 0 set: r0 already holds a
         mov     r0, #0                  ; 1   otherwise start the sum at zero
@@ -119,12 +146,11 @@ mul_16:
 .end:                                   ;     never clear r1 and never end
         brset   r1, #1, .set            ; 3
         br      ne, r1, #0, .clear      ; 3
-.done:
         ret                             ; 1
 
 
 ; ============================================================================
-; mul_16_x4 - the same loop, four bits at a time                     41 bytes
+; mul_16_x4 - the same loop, four bits at a time                     37 bytes
 ; ============================================================================
 ; The rotation above is what makes the plain loop cheap, and it is also what
 ; stops it getting cheaper: the two branches ARE the loop, so there is no
@@ -136,9 +162,8 @@ mul_16:
 ; every mask it wants is in immbit5, which holds 1<<n for all sixteen n.
 
 mul_16_x4:
-        br      eq, r0, #0, .done       ; 3
         mov     r5, r0                  ; 2   r5 = a
-        mov     r0, #0                  ; 2   acc = 0
+        mov     r0, #0                  ; 1   acc = 0, in the pinned byte
 .top:
         brclear r1, #0x0001, .s0     ; 3
         add     r0, r0, r5              ; 2
@@ -154,7 +179,6 @@ mul_16_x4:
 .s3:     shl     r5, r5, #1              ; 2
         lsr     r1, r1, #4              ; 2
         br      ne, r1, #0, .top        ; 3
-.done:
         ret                             ; 1
 
 ; Four bits cost 4 branches, up to 4 adds, 4 shifts, a counter shift and a loop
