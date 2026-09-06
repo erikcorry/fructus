@@ -20,7 +20,7 @@
 ; ----------------------------------------------------------------------------
 ;                        bytes   b 16-bit   b 8-bit   a 8-bit, b 16-bit
 ;       mul_16              21       163        79        163
-;       mul_16_x4           37       129        65        129
+;       mul_16_x4           37       121        62        121
 ;       mul_16_fast        158       101        73        101
 ;       mul_16_min           8       163        83         88
 ;
@@ -46,10 +46,11 @@
 ; loop control is what buys the 2 cycles, and it is why unrolling has to give
 ; something back before it gains anything.
 ;
-; UNROLLING IS WORTH ABOUT A FIFTH.  Four bits to a group amortises the counter
-; shift and the loop branch over four bits instead of paying two branches for
-; each, and costs 16 bytes.  It is never worse than the plain loop above 3 bits
-; of multiplier and never dramatically better.
+; UNROLLING IS WORTH ABOUT A QUARTER.  Four bits to a group amortises the
+; counter shift and the loop branch over four bits instead of paying two
+; branches for each, and costs 16 bytes.  Handling those four as two pairs
+; rather than four singles - see below - is what takes it from a fifth to a
+; quarter, and costs nothing at all.
 ;
 ; FULLY UNROLLING IS WORTH ABOUT A THIRD, and only above 7 bits.  It is the
 ; fastest thing here for a wide multiplier and the slowest for a narrow one,
@@ -73,10 +74,11 @@
 ; in r0 and something wide in r1 - 163 cycles rather than 4.  Through
 ; mul_16_min the same call is 26.
 ;
-; WHICH TO USE.  mul_16_x4 is the one to reach for - never worst in any column,
-; 40 bytes - with mul_16_min in front of it if the operands are asymmetric.
-; mul_16 if space is the binding constraint, mul_16_fast if the multiplier is
-; genuinely wide and 158 bytes is affordable.
+; WHICH TO USE.  mul_16_x4, with mul_16_min in front of it - 45 bytes together,
+; never worst in any column, and within 20% of the fully unrolled chain for a
+; quarter of its size.  mul_16 if space is the binding constraint.  mul_16_fast
+; only if the multiplier is genuinely wide and 158 bytes is affordable, and the
+; gap has narrowed enough that it is a harder case to make than it was.
 ; ============================================================================
 
 
@@ -160,23 +162,55 @@ mul_16:
 ;
 ; Testing bit i directly needs no shifting of b at all during the group, and
 ; every mask it wants is in immbit5, which holds 1<<n for all sixteen n.
+;
+; ----------------------------------------------------------------------------
+; ONE SHIFT PER PAIR, NOT PER BIT
+; ----------------------------------------------------------------------------
+; The bits are handled two at a time against a multiplicand that does not move
+; between them.  After testing bit i and adding r5 once, bit i+1 is tested
+; against the SAME r5 - and its partial product is 2*(a<<i), which is r5 added
+; twice.  Then one `shl r5, r5, #2` serves the pair.
+;
+; It trades one unconditional shift for one conditional add, and an add and a
+; shift are both two bytes and two cycles - so the group is the same 14 bytes
+; either way, and the saving is that the extra add is only paid when the bit is
+; set.  Half a cycle a bit: 129 down to 121.
+;
+; TWO IS THE OPTIMUM, and not by a little.  Bit j of a group needs 2^j adds
+; when it is set, so with a branch at 3 cycles falling through and 4 taken, a
+; group of k bits costs
+;
+;       2 + sum(j < k) [ 4/2 + (3 + 2^(j+1))/2 ]  =  1 + 3.5k + 2^k
+;
+;       k = 1   6.500 cycles a bit        the shift-every-bit version
+;       k = 2   6.000                     <- this loop
+;       k = 3   6.500
+;       k = 4   7.750
+;
+; The shift saved is one instruction however wide the group, and the adds grow
+; geometrically, so k = 2 is where those cross.  A third bit would need four
+; adds and give back everything the pairing won.
 
 mul_16_x4:
         mov     r5, r0                  ; 2   r5 = a
         mov     r0, #0                  ; 1   acc = 0, in the pinned byte
 .top:
-        brclear r1, #0x0001, .s0     ; 3
+        brclear r1, #0x0001, .s0        ; 3
+        add     r0, r0, r5              ; 2   += a<<i
+.s0:
+        brclear r1, #0x0002, .s1        ; 3
+        add     r0, r0, r5              ; 2   twice, because r5 has not moved
+        add     r0, r0, r5              ; 2   ... and 2*(a<<i) is a<<(i+1)
+.s1:
+        shl     r5, r5, #2              ; 2   one shift for the pair
+        brclear r1, #0x0004, .s2        ; 3
         add     r0, r0, r5              ; 2
-.s0:     shl     r5, r5, #1              ; 2
-        brclear r1, #0x0002, .s1     ; 3
+.s2:
+        brclear r1, #0x0008, .s3        ; 3
         add     r0, r0, r5              ; 2
-.s1:     shl     r5, r5, #1              ; 2
-        brclear r1, #0x0004, .s2     ; 3
         add     r0, r0, r5              ; 2
-.s2:     shl     r5, r5, #1              ; 2
-        brclear r1, #0x0008, .s3     ; 3
-        add     r0, r0, r5              ; 2
-.s3:     shl     r5, r5, #1              ; 2
+.s3:
+        shl     r5, r5, #2              ; 2
         lsr     r1, r1, #4              ; 2
         br      ne, r1, #0, .top        ; 3
         ret                             ; 1
@@ -299,6 +333,17 @@ mul_16_fast:
 .done:
         ret                             ; 1
 
+; THE PAIRING TRICK DOES NOT COME HERE, and the reason is the dispatch.  This
+; chain doubles the ACCUMULATOR rather than the multiplicand, so the same
+; rearrangement applies in principle - one `shl r0, r0, #2` for two bits, with
+; the higher one adding twice.  But the scan needs to enter at any bit, and
+; half of those entries would land in the middle of a pair, after its shift had
+; been skipped.  Each would need a stub of its own to make up the missing
+; double, which costs more than the half cycle a bit it would save.
+;
+; So the pairing is worth having in the loop, where entry is always at the top,
+; and not in the chain, where it never is.
+;
 ; TWO EXITS, ONE BYTE EACH.  .short is for b of 0 or 1, which never reach the
 ; chain; .done is where the chain runs out.  Giving the chain its own `ret`
 ; rather than jumping back to the first one costs a byte and saves a branch on

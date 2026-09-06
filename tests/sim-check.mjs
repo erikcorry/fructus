@@ -348,7 +348,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   const SMALL_A = (r) => [r(8), r(16)];
   const want = [
     ['mul_16',      UNIFORM, 163], ['mul_16',      SMALL_A, 163],
-    ['mul_16_x4',   UNIFORM, 129], ['mul_16_x4',   SMALL_A, 129],
+    ['mul_16_x4',   UNIFORM, 121], ['mul_16_x4',   SMALL_A, 121],
     ['mul_16_fast', UNIFORM, 101], ['mul_16_fast', SMALL_A, 101],
     ['mul_16_min',  UNIFORM, 163], ['mul_16_min',  SMALL_A,  88],
   ];
