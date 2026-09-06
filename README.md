@@ -328,16 +328,23 @@ The other three free `+1` slots — `shl`, `asr` and `lsr` at 0x69, 0x71 and 0x7
 four bits, so `1<<4` and everything above it reads as a shift of zero. immbit5
 is meaningless there.
 
-### Five unused one-byte encodings
+### Four unused one-byte encodings
 
-0x0b through 0x0f. The eleven that are spent buy `add r0, r0, #1`, `mov r0, r1`
-and their neighbours at one byte instead of two, which is why `leaf_example` in
-[isa/abi.s](isa/abi.s) is four bytes rather than six.
+0x0c through 0x0f. The twelve that are spent buy `add r0, r0, #1`, `mov r0, r1`,
+`mov r0, #0` and their neighbours at one byte instead of two, which is why
+`leaf_example` in [isa/abi.s](isa/abi.s) is four bytes rather than six.
 
-**These should not be spent on a guess.** Each is worth exactly the frequency of
-the operand pattern it pins, and that is a question about real code rather than
-about the instruction set. The way to spend them is to write or compile a
-corpus, count, and pin the top five — which is also an argument for getting a
+`mov r0, #0` at 0x0b was the most recent, and the argument for it is the 65C02's:
+`STZ` was one of that part's most valuable additions because clearing a location
+is the commonest thing a program does that the 6502 had no short way to say.
+Zeroing a register is the same observation one level in — loop counters,
+accumulators, null pointers, cleared flags — and `r0` is where a return value and
+a first argument live.
+
+**The rest should not be spent on a guess.** Each is worth exactly the frequency
+of the operand pattern it pins, and that is a question about real code rather
+than about the instruction set. The way to spend them is to write or compile a
+corpus, count, and pin the top four — which is also an argument for getting a
 compiler working before the map fills up.
 
 ## Status

@@ -565,7 +565,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   0000_1000                add  r1, r1, r0            1 byte
 #   0000_1001                or   r0, r1, #0  = mov     1 byte
 #   0000_1010                or   r1, r0, #0  = mov     1 byte
-#   0000_1011 .. 0000_1111   -- free, 5 one-byte slots
+#   0000_1011                mov  r0, #0                1 byte
+#   0000_1100 .. 0000_1111   -- free, 4 one-byte slots
 #   ------------------------------------------------------------------------
 #
 #   0001_0ddd                mov  rd, #imm16            3 bytes
@@ -985,6 +986,20 @@ operands = [
 ]
 syntax   = "{d}, #{imm}"
 semantics = "R[d] = imm"
+
+  # ZEROING r0 IS ONE BYTE.  The 65C02 added STZ for exactly this reason -
+  # clearing a location was the commonest thing a program did that the 6502
+  # had no short way to say - and setting a register to zero is the same
+  # observation one level in.  Loop counters, accumulators, null pointers and
+  # cleared flags are all this instruction, and r0 is where a return value and
+  # a first argument live, so it is the register they most often want.
+  #
+  # It costs one of the five free one-byte slots and pins both operands, which
+  # is what an abbreviation is: a form of `mov` with nothing left to say.
+  [[insn.form]]
+  name     = "r0_zero"
+  encoding = "0000_1011"
+  fix      = { d = 0, imm = 0 }
 
   [[insn.form]]
   name     = "reg_imm5"

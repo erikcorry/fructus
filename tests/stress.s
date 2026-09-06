@@ -62,6 +62,8 @@ start:
         mov     r2, #16                 ; 2  immbit5 - three bytes before it
         mov     r2, #4096               ; 2  immbit5, was imm16
         mov     r2, #0x8000             ; 2  immbit5
+        mov     r0, #0                  ; 1  the pinned zero
+        mov     r1, #0                  ; 2  ... only r0 has one
         mov     r2, #0x7fff             ; 2  immbit5, largest positive
         mov     r2, #-17                ; 2  immbit5, ~16
         mov     r2, #4097               ; 3  imm16: two bits set, no shortcut

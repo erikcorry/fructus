@@ -275,6 +275,106 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   console.log('ok    snippets/memcpy.s on the simulator: 5 rungs, bytes and cycles');
 }
 
+// --- mul.s: four multiplies, all of them the same function -------------------
+// The reference is a * b & 0xffff computed in JavaScript, which is not another
+// transcription of shift-and-add - the whole point of the file is that four
+// quite different algorithms have to agree with it.
+//
+// The cycle figures in the file's header are what the choice between them rests
+// on, so they are pinned too.  They are averages over a distribution rather
+// than a single call, because that is the only honest way to compare a routine
+// whose cost depends on the multiplier's width against one that does not.
+{
+  const { code, syms } = assemble('snippets/mul.s');
+  const RET = 0x8000;
+  const call = (entry, a, b) => {
+    m.mem.fill(0);
+    m.load(code);
+    m.R.fill(0);
+    m.R[m.named.sp] = 0xfffe;
+    m.R[m.named.lr] = RET;
+    m.R[0] = a; m.R[1] = b;
+    m.pc = syms.get(entry); m.halted = false; m.count = 0;
+    m.reset();
+    let why;
+    // A 16x16 multiply is at most a couple of hundred instructions, so this cap
+    // is 20x headroom and turns a routine that fails to terminate into an
+    // instant failure rather than a stalled suite.  The version of mul_16 that
+    // shifted the multiplier ARITHMETICALLY never cleared r1 and never ended.
+    try { why = m.run({ max: 4000, stopAt: RET }); }
+    catch (e) { why = `ran off the rails: ${e.message}`; }
+    return { why, r0: m.R[0], cycles: m.cycles() };
+  };
+
+  const NAMES = ['mul_16', 'mul_16.nz', 'mul_16_x4', 'mul_16_fast', 'mul_16_min'];
+
+  // Every power of two and its neighbours, both ways round, plus a sweep.  The
+  // powers of two are where a shift-and-add goes wrong: they are the operands
+  // that carry a single set bit, and 0x8000 is the one whose shift falls off
+  // the top.  mul_16.nz is exempt from a == 0, which is the promise it makes.
+  const edge = [0, 1, 2, 3, 4, 5, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 127, 128,
+                129, 255, 256, 257, 1023, 1024, 4095, 4096, 32767, 32768, 32769,
+                40000, 65535];
+  let x = 0x2545f491;
+  const r32 = () => { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; return x; };
+  const cases = [];
+  for (const a of edge) for (const b of edge) cases.push([a, b]);
+  for (let i = 0; i < 2000; i++) cases.push([(r32() >>> 16) & 0xffff, (r32() >>> 16) & 0xffff]);
+
+  for (const name of NAMES) {
+    let wrong = 0, eg = '';
+    for (const [a, b] of cases) {
+      if (a === 0 && name === 'mul_16.nz') continue;   // outside its contract
+      const r = call(name, a, b);
+      const want = (a * b) & 0xffff;
+      if (r.why !== 'stopped' || r.r0 !== want) {
+        if (!wrong++) eg = `${a} * ${b} -> ${r.why !== 'stopped' ? r.why : r.r0}, want ${want}`;
+      }
+    }
+    check(`mul ${name}`, wrong === 0, `${wrong} of ${cases.length} wrong, e.g. ${eg}`);
+  }
+
+  // The header's table.  A drift of a cycle or two is a real change to one of
+  // these routines and should be looked at, so the tolerance is tight.
+  const mean = (entry, gen) => {
+    let y = 0x9e3779b9;
+    const g = () => { y ^= y << 13; y >>>= 0; y ^= y >>> 17; y ^= y << 5; y >>>= 0; return y; };
+    const bits = (n) => (g() >>> (32 - n)) & 0xffff;
+    let tot = 0;
+    for (let i = 0; i < 600; i++) { const [a, b] = gen(bits); tot += call(entry, a, b).cycles; }
+    return tot / 600;
+  };
+  const UNIFORM = (r) => [r(16), r(16)];
+  const SMALL_A = (r) => [r(8), r(16)];
+  const want = [
+    ['mul_16',      UNIFORM, 167], ['mul_16',      SMALL_A, 165],
+    ['mul_16_x4',   UNIFORM, 133], ['mul_16_x4',   SMALL_A, 131],
+    ['mul_16_fast', UNIFORM, 101], ['mul_16_fast', SMALL_A, 101],
+    ['mul_16_min',  UNIFORM, 166], ['mul_16_min',  SMALL_A,  91],
+  ];
+  for (const [entry, gen, target] of want) {
+    const got = mean(entry, gen);
+    check(`mul ${entry} cost`, Math.abs(got - target) < 1.5,
+          `${(gen === UNIFORM ? '16x16' : 'a<256')}: ${got.toFixed(1)} cycles, the file says ${target}`);
+  }
+
+  // AND THE ORDERING, which is the file's actual conclusion and survives a
+  // change of a few cycles either way.
+  check('mul: unrolling helps', mean('mul_16_x4', UNIFORM) < mean('mul_16', UNIFORM),
+        'the four-bit loop is not faster than the plain one');
+  check('mul: full unrolling helps more', mean('mul_16_fast', UNIFORM) < mean('mul_16_x4', UNIFORM),
+        'the unrolled chain is not faster than the four-bit loop');
+  check('mul: but not for a narrow multiplier',
+        call('mul_16_fast', 0xbeef, 3).cycles > call('mul_16', 0xbeef, 3).cycles,
+        'the unrolled chain no longer loses on a 2-bit multiplier');
+  check('mul: swapping beats all of it when the operands are lopsided',
+        mean('mul_16_min', SMALL_A) < mean('mul_16_fast', SMALL_A),
+        'the swap prologue no longer beats the unrolled chain on a small multiplicand');
+
+  console.log('ok    snippets/mul.s on the simulator: 5 entry points, ' +
+              cases.length + ' pairs each, and the cost table');
+}
+
 // --- the cost model: what a taken branch costs -------------------------------
 // Every performance figure in this repo rests on one cycle being charged for a
 // taken RELATIVE branch and nothing for an absolute transfer.  Nothing else in

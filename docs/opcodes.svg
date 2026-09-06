@@ -3,9 +3,9 @@
 <text x="26" y="37" font-size="10" fill="#6A7180" letter-spacing="1.4">FRUCTUS · 16-BIT · FIRST-BYTE DECODE</text>
 <text x="26" y="76" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="34" font-weight="700" fill="#16181D">Opcode Map</text>
 <text x="26" y="98" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#6A7180">Instruction length comes from the first byte alone, so this table is the whole decoder.</text>
-<text x="26" y="130" font-size="20" font-weight="600" fill="#16181D">110</text>
+<text x="26" y="130" font-size="20" font-weight="600" fill="#16181D">111</text>
 <text x="26" y="144" font-size="8.5" fill="#9AA1AE" letter-spacing="1.2">ASSIGNED</text>
-<text x="101.6" y="130" font-size="20" font-weight="600" fill="#16181D">146</text>
+<text x="101.6" y="130" font-size="20" font-weight="600" fill="#16181D">145</text>
 <text x="101.6" y="144" font-size="8.5" fill="#9AA1AE" letter-spacing="1.2">FREE</text>
 <text x="166.6" y="130" font-size="20" font-weight="600" fill="#16181D">15</text>
 <text x="166.6" y="144" font-size="8.5" fill="#9AA1AE" letter-spacing="1.2">ADDRESSING MODES</text>
@@ -75,8 +75,11 @@
 <text x="376" y="277" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
 <text x="288" y="294" font-size="13" font-weight="600" fill="#000">mov</text>
 <text x="288" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r1, r0</text>
-<rect x="387" y="263" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
-<text x="395" y="278" font-size="9" fill="#B9BFC9">0b</text>
+<rect x="387" y="263" width="104" height="62" rx="3" fill="#F8CE8B"/>
+<text x="395" y="277" font-size="9" fill="rgba(0,0,0,.45)">0b</text>
+<text x="483" y="277" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
+<text x="395" y="294" font-size="13" font-weight="600" fill="#000">mov</text>
+<text x="395" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r0, #0</text>
 <rect x="494" y="263" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
 <text x="502" y="278" font-size="9" fill="#B9BFC9">0c</text>
 <rect x="601" y="263" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
@@ -701,7 +704,7 @@
 <rect x="26" y="1571" width="14" height="14" rx="2" fill="#F8CE8B"/>
 <text x="48" y="1582" font-size="11.5" font-weight="600" fill="#16181D">One-byte abbreviation</text>
 <text x="48" y="1596" font-size="9.5" fill="#6A7180">every operand pinned</text>
-<text x="307.6666666666667" y="1582" font-size="10" fill="#6A7180" text-anchor="end">9</text>
+<text x="307.6666666666667" y="1582" font-size="10" fill="#6A7180" text-anchor="end">10</text>
 <rect x="323.6666666666667" y="1571" width="14" height="14" rx="2" fill="#E3A863"/>
 <text x="345.6666666666667" y="1582" font-size="11.5" font-weight="600" fill="#16181D">One-byte special</text>
 <text x="345.6666666666667" y="1596" font-size="9.5" fill="#6A7180">no operands at all</text>
