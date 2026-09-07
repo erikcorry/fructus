@@ -348,12 +348,15 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   };
   const UNIFORM = (r) => [r(16), r(16)];
   const SMALL_A = (r) => [r(8), r(16)];
+  const SMALL_B = (r) => [r(16), r(8)];      // a NARROW MULTIPLIER, which is
+                                             // the axis every routine here
+                                             // actually costs time along
   const want = [
     ['mul_16',      UNIFORM, 163], ['mul_16',      SMALL_A, 163],
     ['mul_16_x4',   UNIFORM, 121], ['mul_16_x4',   SMALL_A, 121],
     ['mul_16_fast', UNIFORM, 101], ['mul_16_fast', SMALL_A, 101],
     ['mul_16_fast_erik', UNIFORM, 114], ['mul_16_fast_erik', SMALL_A, 114],
-    ['mul_16_nib', UNIFORM, 123], ['mul_16_nib', SMALL_A, 123],
+    ['mul_16_nib', UNIFORM, 102], ['mul_16_nib', SMALL_A, 102],
     ['mul_16_min',  UNIFORM, 163], ['mul_16_min',  SMALL_A,  88],
   ];
   for (const [entry, gen, target] of want) {
@@ -386,12 +389,29 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
         mean('mul_16_min', SMALL_A) < mean('mul_16_fast', SMALL_A),
         'the swap prologue no longer beats the unrolled chain on a small multiplicand');
 
-  // THE NIBBLE TABLE IS DOMINATED, which is the finding, so it is asserted:
-  // 279 bytes to be no faster than a 37-byte loop.  If a future edit made it
-  // win, the comment explaining why it cannot would be wrong.
-  check('mul: the nibble table does not pay',
-        mean('mul_16_nib', UNIFORM) > mean('mul_16_x4', UNIFORM),
-        'the nibble table now beats the four-bit loop, so the write-up is stale');
+  // THE NIBBLE TABLE IS THE FASTEST PER BIT, which it was not before its
+  // dispatch was cut from 20 cycles a nibble to 10.  Both halves of that are
+  // asserted: it beats the four-bit loop, and it costs seven times the bytes
+  // to do it - so neither the speed claim nor the size caveat can go stale.
+  check('mul: the nibble table pays now',
+        mean('mul_16_nib', UNIFORM) < mean('mul_16_x4', UNIFORM),
+        'the nibble table no longer beats the four-bit loop');
+  // Its steady state is the cheapest here - 4 cycles a bit against the
+  // unrolled chain's 6.5 - but it pays 33 cycles of prologue against that
+  // chain's 7, so it wins where there are fewer bits to amortise over and
+  // loses by a whisker on a full sixteen.  Both directions are pinned.
+  // Compared as MEANS, not at single values: the two have different worst
+  // cases, so a point comparison flips depending which point.  0xffff is the
+  // unrolled chain's worst case - sixteen set bits, sixteen adds - and one of
+  // the table's best, since a nibble of 15 is 16a - a and only three
+  // instructions.  At that one value the table wins by 15 cycles while losing
+  // on the average.
+  check('mul: the table wins on a narrow multiplier',
+        mean('mul_16_nib', SMALL_B) < mean('mul_16_fast', SMALL_B),
+        'the nibble table no longer beats the unrolled chain on 8-bit multipliers');
+  check('mul: and loses on a wide one',
+        mean('mul_16_nib', UNIFORM) > mean('mul_16_fast', UNIFORM),
+        'the nibble table no longer loses to the unrolled chain on 16-bit ones');
 
   console.log('ok    snippets/mul.s on the simulator: 7 entry points, ' +
               cases.length + ' pairs each, and the cost table');
