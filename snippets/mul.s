@@ -509,6 +509,28 @@ mul_16_fast_erik:
 ; loses its own and becomes an immediate, one byte and one cycle dearer in the
 ; tail.  Worth it several times over.
 ;
+; GIVING THE MASK ITS REGISTER BACK COSTS MORE THAN THE BYTE IT SAVES, which is
+; not obvious and was measured rather than argued.  There is room for it - r4
+; is free - and it makes the tail nine bytes again, which lets all sixteen
+; blocks inline it instead of thirteen.  It also needs a fourth register saved,
+; and a fourth push is four more cycles rather than none:
+;
+;                                        bytes   b 16-bit   b 8-bit
+;       mask in r3, multiplier in r4       283      101.1      73.7
+;       mask as an immediate               276       98.0      67.1
+;
+; The tail saves a cycle a nibble and the three extra inlined blocks save about
+; another, so eight cycles over four nibbles - against eleven for the extra
+; push, the extra pop and loading the constant.  It is worse on a wide
+; multiplier and much worse on a narrow one, where there are only two nibbles
+; to spread the prologue over.
+;
+; THE ONE THING THAT WOULD ACTUALLY BUY IT BACK is putting the table at address
+; zero.  Then `and lr, r3, #0xf0` IS the block address and `add lr, lr, r2`
+; goes away entirely - a seven-byte tail, two cycles a nibble cheaper, and the
+; base register freed for the mask.  That is a decision about the machine's
+; memory map and not about this routine, so it is left here as a note.
+;
 ; AND ADDING THE TEMP BEATS SHIFTING IT, up to a point.  Three copies of 2a is
 ; 6a for three one-byte adds; shifting to 4a and adding again costs the same
 ; three instructions but four bytes.  So k = 3, 6, 11, 12 and 13 all set the
