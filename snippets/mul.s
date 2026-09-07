@@ -23,7 +23,7 @@
 ;       mul_16_x4           37       121        62        121
 ;       mul_16_fast        158       101        73        101
 ;       mul_16_fast_erik   132       114        62        114
-;       mul_16_nib         276        98        67         98
+;       mul_16_nib         274        89        63         89
 ;       mul_16_min           8       163        83         88
 ;
 ; THE FIRST THREE ROWS HAVE IDENTICAL FIRST AND LAST COLUMNS, and that is the
@@ -85,10 +85,11 @@
 ; that use most of their sixteen bits; on eight-bit multipliers mul_16_x4 ties
 ; the better of them exactly.  They are here because the dispatch question is
 ; interesting, not because the answer is to use one.  mul_16_nib has the best
-; steady state of any of them - 3.83 cycles a bit - and the worst prologue, so
-; it wins on wide multipliers and loses to a 37-byte loop on narrow ones.  It
-; is the one to look at if 276 bytes is affordable, and the one to widen to
-; radix 256 if seven kilobytes is.
+; steady state of any of them - 3.19 cycles a bit - and the worst prologue, so
+; it wins outright on wide multipliers and only draws level on narrow ones,
+; where mul_16_x4 does the same work in 37 bytes.  It is the one to look at if
+; 274 bytes is affordable, and the one to widen to radix 256 if six kilobytes
+; is.
 ; ============================================================================
 
 
@@ -478,298 +479,256 @@ mul_16_fast_erik:
 
 
 
+
 ; ============================================================================
 ; mul_16_nib - a nibble at a time, through a table of sixteen blocks
 ; ============================================================================
 ; Mask four bits of the multiplier into a block offset, add the table base and
-; jump.  Each block adds k times the multiplicand for its own k, then advances
-; to the next nibble and jumps straight to the next block - there is no loop.
+; jump.  Each block adds k times the multiplicand for its own k, advances to
+; the next nibble, and jumps straight to the next block - there is no loop, and
+; every block carries its own copy of that tail.
 ;
-; THE NIBBLE IS TAKEN ALREADY SCALED.  `and lr, r3, #0xf0` reads bits 4 to 7 -
-; the nibble AFTER the one being processed - and those bits are already that
-; nibble times sixteen, which is exactly the block offset.  Doing it before
-; `lsr r3, r3, #4` rather than after removes the scaling shift completely.
+; THE MULTIPLICAND LIVES IN r1, which is what the whole routine is built round.
+; `add r0, r0, r1` is the pinned one-byte encoding at 0x07, so a block that
+; wants k times the multiplicand can just add it k times - no scratch register,
+; no shifting anything into place first.
 ;
-; THERE IS NO LOOP.  The tail IS the dispatch: it computes the next block's
-; address and `ret`s to it, so blocks chain directly into one another.
+; A BLOCK MAY SHIFT r1 AND THE TAIL SHIFTS LESS TO MATCH.  The nibble step is
+; `r1 <<= 4`; a block that has already shifted it by two only needs two more.
+; So the shift is borrowed rather than spent, and multiplying by 8 costs one
+; shift and one add whose shift the tail was going to do anyway.  It may not
+; exceed four - coming back down with `lsr` would drop bits off the top that
+; the next nibble still needs.
 ;
-; AND THE TERMINATION TEST LIVES IN BLOCK ZERO.  The chain ends when the
-; shifted multiplier reaches zero - and if it does, the nibble just read from
-; bits 4 to 7 was zero too, so the last dispatch is always to block 0.  That is
-; the only block that has to ask, and it asks once a call, not once a nibble.
+; k = 14 AND k = 15 BORROW ALL FOUR and pay nothing for the shift: subtract the
+; multiplicand once or twice, shift it up by four, add it back.  Their tails
+; have no shift instruction at all, which is how a nibble of 15 - the most work
+; there is to do - comes out cheaper than a nibble of 11.
 ;
-; ----------------------------------------------------------------------------
-; THE TEMP IS r1, WHICH IS WHAT THE BLOCKS ARE BUILT AROUND
-; ----------------------------------------------------------------------------
-; `add r0, r0, r1` is the pinned one-byte encoding at 0x07, and it is the
-; instruction these blocks are made of - 24 of the 48 in the table.  Putting
-; the temp anywhere else makes every one of them two bytes.
+; AND THE MASK KEEPS ITS REGISTER.  With no scratch needed, r5 is free for
+; 0xf0, so the tail's `and` is the two-byte three-register form.  The routine
+; still has only three long-lived values - base, multiplier, mask - so it is
+; still one `push`.
 ;
-; That costs the multiplier its register: it moves to r3, and the 0xf0 mask
-; loses its own and becomes an immediate, one byte and one cycle dearer in the
-; tail.  Worth it several times over.
-;
-; GIVING THE MASK ITS REGISTER BACK COSTS MORE THAN THE BYTE IT SAVES, and the
-; reason is not the swap - moving the multiplier to r5 instead of r3 costs the
-; same one `mov` either way.  It is that the mask would be a FOURTH long-lived
-; value, and there is only one free register to put one of them in:
-;
-;       r0   accumulator     pinned by `add r0, r0, r1`
-;       r1   temp            pinned by the same
-;       lr   the block address, rebuilt every nibble and destroyed by `ret`
-;       ---
-;       base, multiplier, multiplicand        three that must live somewhere
-;       + mask, if it gets a register         four
-;
-; A two-argument function owns r0, r1 and r5 outright, so r5 houses exactly one
-; of them however they are shuffled and the rest are callee-saved.  Three saved
-; registers is one `push` instruction; four is two, and the second costs four
-; cycles going in and four coming out.
-;
-; The mask register does buy something real - a nine-byte tail, which lets all
-; sixteen blocks inline it instead of thirteen - and it is still not enough:
-;
-;                                        bytes   b 16-bit   b 8-bit
-;       mask in r3, multiplier in r4       283      101.1      73.7
-;       mask as an immediate               276       98.0      67.1
-;
-; Differencing a four-nibble call against a two-nibble one separates the two
-; effects exactly:
-;
-;                                   per nibble   prologue + epilogue
-;       mask in r3, 16/16 inline          14.0                  47.0
-;       mask immediate, 13/16 inline      15.0                  37.0
-;
-; So the register is worth ONE cycle a nibble - the shorter `and` and the three
-; extra inlined tails together - and costs TEN once.  Four nibbles cannot repay
-; it and two are twice as far from repaying it, which is why the gap widens
-; from 6 cycles to 8 as the multiplier gets narrower.  A radix-256 table, where
-; a round is eight bits, would repay it and then some; at radix 16 it does not.
-;
-; THE WAY TO AFFORD IT IS TO DROP THE BASE, not to shuffle the others.  With
-; the table at address zero, `and lr, r3, r2` with r2 = 0xf0 IS the block
-; address: the mask gets its register, `add lr, lr, r2` disappears, the tail
-; falls to seven bytes, and there are still only three long-lived values so it
-; is still one push.  Two cycles a nibble and a byte, for free.
-;
-; That is a decision about the machine's memory map rather than about this
-; routine - 256 bytes of jump table at address 0 is a large thing to spend -
-; so it is a note here and not a change.
-;
-; AND ADDING THE TEMP BEATS SHIFTING IT, up to a point.  Three copies of 2a is
-; 6a for three one-byte adds; shifting to 4a and adding again costs the same
-; three instructions but four bytes.  So k = 3, 6, 11, 12 and 13 all set the
-; temp once and add it repeatedly.  Past three copies the shift wins again -
-; four adds cost four where a shift and an add cost three - which is why k = 8
-; shifts and k = 6 does not.
-;
-; The chains are a shortest-path search over (accumulator, log of the temp)
-; weighted by BYTES, not a hand-derived table, because the one-byte add makes
-; the arithmetic unobvious: 4.56 cycles a nibble against 6.00 when the temp was
-; lr and every add cost two.
-;
-; `push lr, r2, r3` costs the same eight cycles as pushing two separately and
-; two bytes fewer, so the third saved register is free.
+; THE CHAINS ARE A SHORTEST-PATH SEARCH over (accumulator, how far r1 has been
+; shifted), weighted by bytes and charging each block for the tail shift it
+; leaves behind.  Every one of the sixteen then fits its block with its tail,
+; so nothing jumps anywhere.
 ;
 ; ----------------------------------------------------------------------------
-; WHERE THE CYCLES WENT
+; HOW IT GOT HERE
 ; ----------------------------------------------------------------------------
-;                                     bytes  cycles  a nibble   work  overhead
-;       lr as temp, with a loop         279     123    25.75    6.00     19.75
-;       no loop, mask in a register     276     102    16.25    6.00     10.25
-;       r1 as temp, chains re-searched  276      98    16.25    4.56     10.75
+;                                       bytes  cycles  a nibble  work  the rest
+;       lr as temp, with a loop           279     123    25.75    6.00    19.75
+;       no loop, mask in a register       276     102    16.25    6.00    10.25
+;       r1 as temp, chains re-searched    276      98    16.25    4.56    10.75
+;       r1 as the MULTIPLICAND            274      89    12.75    5.75     7.00
 ;
-; Two separate things, and the second only became worth doing because of the
-; first: cutting the overhead in half made the blocks the majority of the cost,
-; and moving the temp into r1 then cut those by a quarter.
+; The last step reads worse in the work column and is the largest gain of the
+; four, because the columns are not comparable: the earlier versions paid a
+; separate `shl r5, r5, #4` in every tail and this one does not - the block
+; borrows that shift and the tail finishes what is left.  Counting it where it
+; belongs, work went from 6.56 to 5.75 and the tail from 10 to 7.
 ;
-; AND THE RADIX ARGUMENT MOVES WITH IT.  A table has to amortise its dispatch,
-; so halving the dispatch halves how wide the table must be to pay for itself:
+; AND IT COST NOTHING TO GET THE MASK REGISTER BACK.  An earlier note here said
+; the mask could not have one without a fourth push, because base, multiplier,
+; multiplicand and mask are four long-lived values and only r5 is free.  That
+; was true of a design with a separate scratch.  With the multiplicand IN the
+; scratch's place there are three - base, multiplier, mask - r5 takes the mask,
+; and it is still one `push`.  The register was not unaffordable; it was being
+; spent on a temporary that did not need to exist.
 ;
-;       radix   work a round   + overhead   cycles a bit   table
+; ----------------------------------------------------------------------------
+; AND THE RADIX
+; ----------------------------------------------------------------------------
+;       radix   work a round   + the rest   cycles a bit   table
 ;           2   a branch a bit                      6.00   none
-;          16       4.56           15.31            3.83   256 B
-;         256       8.95           19.70            2.46   ~7 KB
+;          16       5.75          12.75             3.19   256 B
+;         256      10.19          17.19             2.15   ~6 KB
 ;
 ; The first version of this came to 6.50 cycles a bit and was pointless beside
-; a shift-and-add loop at 6.00.  It is 3.83 now, and radix 256 would be 2.46
-; for about seven kilobytes.
+; a shift-and-add loop at 6.00.  It is 3.19 now.
 ;
-; IT IS THE FASTEST HERE ON A 16-BIT MULTIPLIER - 98 against mul_16_fast's 101
-; - and still loses on an 8-bit one, 67 against mul_16_x4's 62.  Thirty-three
-; cycles of prologue want four nibbles to amortise and two do not give it
-; enough.  That is the shape of the whole routine: the best steady state in the
-; file behind the most expensive way in.
+; IT IS THE FASTEST ROUTINE HERE - 89 cycles against mul_16_fast's 101 - and on
+; an 8-bit multiplier it has finally caught mul_16_x4, 63 against 62, which
+; that routine does in 37 bytes rather than 274.  Thirty-three cycles of
+; prologue is still the whole story of its narrow-multiplier case.
 
 mul_16_nib:
         push    lr, r2, r3              ; 8   three for the price of two
-        mov     r2, #.table             ; 3
-        mov     r3, r1                  ; 2   the multiplier vacates r1
-        mov     r5, r0                  ; 2   r5 = a
+        mov     r3, r1                  ; 2   the multiplier vacates r1 first
+        mov     r1, r0                  ; 1   ... and the multiplicand takes it
         mov     r0, #0                  ; 1   acc = 0
+        mov     r2, #.table             ; 3
+        mov     r5, #0xf0               ; 3   the mask, in a register again
         shl     lr, r3, #4              ; 2   nibble 0 has to be scaled by hand
-        and     lr, lr, #0xf0           ; 3
+        and     lr, lr, r5              ; 2
         add     lr, lr, r2              ; 2
         ret                             ; 1
 .done:
-        pop     r3, r2, lr              ; 8   and back in the same order
+        pop     r3, r2, lr              ; 8
         ret                             ; 1
 
 ; --- the table: sixteen blocks on a sixteen-byte stride ---------------------
-; A block with room for the ten-byte tail keeps its own copy and saves the jump
-; back; the three that have not end with `jmpr .next`, which is block 0's copy.
-
 .table:
 .k0:
         br      eq, r3, #0, .done       ; 3   the whole routine's exit test
-.next:
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #4              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k0)
 .k1:   
-        add     r0, r0, r5
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        add     r0, r0, r1
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #4              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k1)
 .k2:   
-        shl     r1, r5, #1
         add     r0, r0, r1
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        add     r0, r0, r1
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #4              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k2)
 .k3:   
-        shl     r1, r5, #0
         add     r0, r0, r1
         add     r0, r0, r1
         add     r0, r0, r1
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #4              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k3)
 .k4:   
-        shl     r1, r5, #2
+        shl     r1, r1, #2
         add     r0, r0, r1
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #2              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k4)
 .k5:   
-        shl     r1, r5, #2
         add     r0, r0, r1
-        add     r0, r0, r5
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        shl     r1, r1, #2
+        add     r0, r0, r1
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #2              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k5)
 .k6:   
-        shl     r1, r5, #1
+        shl     r1, r1, #1
         add     r0, r0, r1
         add     r0, r0, r1
         add     r0, r0, r1
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #3              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k6)
 .k7:   
-        shl     r1, r5, #3
+        rsb     r0, r1, r0
+        shl     r1, r1, #3
         add     r0, r0, r1
-        rsb     r0, r5, r0
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #1              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k7)
 .k8:   
-        shl     r1, r5, #3
+        shl     r1, r1, #3
         add     r0, r0, r1
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #1              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k8)
 .k9:   
-        shl     r1, r5, #3
         add     r0, r0, r1
-        add     r0, r0, r5
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        shl     r1, r1, #3
+        add     r0, r0, r1
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #1              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k9)
 .k10:  
-        shl     r1, r5, #3
         add     r0, r0, r1
-        shl     r1, r5, #1
         add     r0, r0, r1
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        shl     r1, r1, #3
+        add     r0, r0, r1
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #1              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k10)
 .k11:  
-        shl     r1, r5, #2
         add     r0, r0, r1
         add     r0, r0, r1
         add     r0, r0, r1
-        rsb     r0, r5, r0
-        jmpr    .next                   ; no room for the tail
+        shl     r1, r1, #3
+        add     r0, r0, r1
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #1              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k11)
 .k12:  
-        shl     r1, r5, #2
+        shl     r1, r1, #2
         add     r0, r0, r1
         add     r0, r0, r1
         add     r0, r0, r1
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #2              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k12)
 .k13:  
-        shl     r1, r5, #2
+        add     r0, r0, r1
+        shl     r1, r1, #2
         add     r0, r0, r1
         add     r0, r0, r1
         add     r0, r0, r1
-        add     r0, r0, r5
-        jmpr    .next                   ; no room for the tail
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        shl     r1, r1, #2              ; 2   the rest of the nibble step
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k13)
 .k14:  
-        shl     r1, r5, #4
-        add     r0, r0, r1
-        shl     r1, r5, #1
         rsb     r0, r1, r0
-        jmpr    .next                   ; no room for the tail
+        rsb     r0, r1, r0
+        shl     r1, r1, #4
+        add     r0, r0, r1
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k14)
 .k15:  
-        shl     r1, r5, #4
+        rsb     r0, r1, r0
+        shl     r1, r1, #4
         add     r0, r0, r1
-        rsb     r0, r5, r0
-        and     lr, r3, #0xf0   ; the NEXT nibble, already times 16
-        lsr     r3, r3, #4      ; 
-        shl     r5, r5, #4      ; 
-        add     lr, lr, r2      ; 
-        ret                     ; straight into the next block
+        and     lr, r3, r5              ; 2   next nibble, already times 16
+        lsr     r3, r3, #4              ; 2
+        add     lr, lr, r2              ; 2
+        ret                             ; 1
         #res    16 - ($ - .k15)
 
 #assert mul_16_nib.k1  - mul_16_nib.table == 16
