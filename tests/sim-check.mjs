@@ -356,7 +356,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     ['mul_16_x4',   UNIFORM, 121], ['mul_16_x4',   SMALL_A, 121],
     ['mul_16_fast', UNIFORM, 101], ['mul_16_fast', SMALL_A, 101],
     ['mul_16_fast_erik', UNIFORM, 114], ['mul_16_fast_erik', SMALL_A, 114],
-    ['mul_16_nib', UNIFORM, 102], ['mul_16_nib', SMALL_A, 102],
+    ['mul_16_nib', UNIFORM, 98], ['mul_16_nib', SMALL_A, 98],
     ['mul_16_min',  UNIFORM, 163], ['mul_16_min',  SMALL_A,  88],
   ];
   for (const [entry, gen, target] of want) {
@@ -400,18 +400,17 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   // unrolled chain's 6.5 - but it pays 33 cycles of prologue against that
   // chain's 7, so it wins where there are fewer bits to amortise over and
   // loses by a whisker on a full sixteen.  Both directions are pinned.
-  // Compared as MEANS, not at single values: the two have different worst
-  // cases, so a point comparison flips depending which point.  0xffff is the
-  // unrolled chain's worst case - sixteen set bits, sixteen adds - and one of
-  // the table's best, since a nibble of 15 is 16a - a and only three
-  // instructions.  At that one value the table wins by 15 cycles while losing
-  // on the average.
-  check('mul: the table wins on a narrow multiplier',
-        mean('mul_16_nib', SMALL_B) < mean('mul_16_fast', SMALL_B),
-        'the nibble table no longer beats the unrolled chain on 8-bit multipliers');
-  check('mul: and loses on a wide one',
-        mean('mul_16_nib', UNIFORM) > mean('mul_16_fast', UNIFORM),
-        'the nibble table no longer loses to the unrolled chain on 16-bit ones');
+  // THE TABLE HAS THE BEST STEADY STATE AND THE WORST ENTRY, and both halves
+  // are pinned because the routine only exists to show the trade.  It beats
+  // every unrolled chain on a 16-bit multiplier, and a 37-byte loop still
+  // beats IT on an 8-bit one, because 33 cycles of prologue want four nibbles
+  // to amortise and two do not give it enough.
+  check('mul: the table is fastest on a wide multiplier',
+        mean('mul_16_nib', UNIFORM) < mean('mul_16_fast', UNIFORM),
+        'the nibble table no longer beats the unrolled chain on 16 bits');
+  check('mul: and its prologue costs it the narrow one',
+        mean('mul_16_nib', SMALL_B) > mean('mul_16_x4', SMALL_B),
+        'the nibble table now beats the four-bit loop on 8-bit multipliers too');
 
   console.log('ok    snippets/mul.s on the simulator: 7 entry points, ' +
               cases.length + ' pairs each, and the cost table');
