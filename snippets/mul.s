@@ -509,11 +509,25 @@ mul_16_fast_erik:
 ; loses its own and becomes an immediate, one byte and one cycle dearer in the
 ; tail.  Worth it several times over.
 ;
-; GIVING THE MASK ITS REGISTER BACK COSTS MORE THAN THE BYTE IT SAVES, which is
-; not obvious and was measured rather than argued.  There is room for it - r4
-; is free - and it makes the tail nine bytes again, which lets all sixteen
-; blocks inline it instead of thirteen.  It also needs a fourth register saved,
-; and a fourth push is four more cycles rather than none:
+; GIVING THE MASK ITS REGISTER BACK COSTS MORE THAN THE BYTE IT SAVES, and the
+; reason is not the swap - moving the multiplier to r5 instead of r3 costs the
+; same one `mov` either way.  It is that the mask would be a FOURTH long-lived
+; value, and there is only one free register to put one of them in:
+;
+;       r0   accumulator     pinned by `add r0, r0, r1`
+;       r1   temp            pinned by the same
+;       lr   the block address, rebuilt every nibble and destroyed by `ret`
+;       ---
+;       base, multiplier, multiplicand        three that must live somewhere
+;       + mask, if it gets a register         four
+;
+; A two-argument function owns r0, r1 and r5 outright, so r5 houses exactly one
+; of them however they are shuffled and the rest are callee-saved.  Three saved
+; registers is one `push` instruction; four is two, and the second costs four
+; cycles going in and four coming out.
+;
+; The mask register does buy something real - a nine-byte tail, which lets all
+; sixteen blocks inline it instead of thirteen - and it is still not enough:
 ;
 ;                                        bytes   b 16-bit   b 8-bit
 ;       mask in r3, multiplier in r4       283      101.1      73.7
@@ -532,11 +546,15 @@ mul_16_fast_erik:
 ; from 6 cycles to 8 as the multiplier gets narrower.  A radix-256 table, where
 ; a round is eight bits, would repay it and then some; at radix 16 it does not.
 ;
-; THE ONE THING THAT WOULD ACTUALLY BUY IT BACK is putting the table at address
-; zero.  Then `and lr, r3, #0xf0` IS the block address and `add lr, lr, r2`
-; goes away entirely - a seven-byte tail, two cycles a nibble cheaper, and the
-; base register freed for the mask.  That is a decision about the machine's
-; memory map and not about this routine, so it is left here as a note.
+; THE WAY TO AFFORD IT IS TO DROP THE BASE, not to shuffle the others.  With
+; the table at address zero, `and lr, r3, r2` with r2 = 0xf0 IS the block
+; address: the mask gets its register, `add lr, lr, r2` disappears, the tail
+; falls to seven bytes, and there are still only three long-lived values so it
+; is still one push.  Two cycles a nibble and a byte, for free.
+;
+; That is a decision about the machine's memory map rather than about this
+; routine - 256 bytes of jump table at address 0 is a large thing to spend -
+; so it is a note here and not a change.
 ;
 ; AND ADDING THE TEMP BEATS SHIFTING IT, up to a point.  Three copies of 2a is
 ; 6a for three one-byte adds; shifting to 4a and adding again costs the same
