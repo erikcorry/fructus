@@ -519,11 +519,18 @@ mul_16_fast_erik:
 ;       mask in r3, multiplier in r4       283      101.1      73.7
 ;       mask as an immediate               276       98.0      67.1
 ;
-; The tail saves a cycle a nibble and the three extra inlined blocks save about
-; another, so eight cycles over four nibbles - against eleven for the extra
-; push, the extra pop and loading the constant.  It is worse on a wide
-; multiplier and much worse on a narrow one, where there are only two nibbles
-; to spread the prologue over.
+; Differencing a four-nibble call against a two-nibble one separates the two
+; effects exactly:
+;
+;                                   per nibble   prologue + epilogue
+;       mask in r3, 16/16 inline          14.0                  47.0
+;       mask immediate, 13/16 inline      15.0                  37.0
+;
+; So the register is worth ONE cycle a nibble - the shorter `and` and the three
+; extra inlined tails together - and costs TEN once.  Four nibbles cannot repay
+; it and two are twice as far from repaying it, which is why the gap widens
+; from 6 cycles to 8 as the multiplier gets narrower.  A radix-256 table, where
+; a round is eight bits, would repay it and then some; at radix 16 it does not.
 ;
 ; THE ONE THING THAT WOULD ACTUALLY BUY IT BACK is putting the table at address
 ; zero.  Then `and lr, r3, #0xf0` IS the block address and `add lr, lr, r2`
