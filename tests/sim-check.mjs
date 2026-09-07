@@ -306,7 +306,8 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     return { why, r0: m.R[0], cycles: m.cycles() };
   };
 
-  const NAMES = ['mul_16', 'mul_16_x4', 'mul_16_fast', 'mul_16_min'];
+  const NAMES = ['mul_16', 'mul_16_x4', 'mul_16_fast', 'mul_16_fast_erik',
+                 'mul_16_min'];
 
   // Every power of two and its neighbours, both ways round, plus a sweep.  The
   // powers of two are where a shift-and-add goes wrong: they are the operands
@@ -350,6 +351,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     ['mul_16',      UNIFORM, 163], ['mul_16',      SMALL_A, 163],
     ['mul_16_x4',   UNIFORM, 121], ['mul_16_x4',   SMALL_A, 121],
     ['mul_16_fast', UNIFORM, 101], ['mul_16_fast', SMALL_A, 101],
+    ['mul_16_fast_erik', UNIFORM, 114], ['mul_16_fast_erik', SMALL_A, 114],
     ['mul_16_min',  UNIFORM, 163], ['mul_16_min',  SMALL_A,  88],
   ];
   for (const [entry, gen, target] of want) {
@@ -367,11 +369,22 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   check('mul: but not for a narrow multiplier',
         call('mul_16_fast', 0xbeef, 3).cycles > call('mul_16', 0xbeef, 3).cycles,
         'the unrolled chain no longer loses on a 2-bit multiplier');
+
+  // THE TWO DISPATCHES CROSS OVER, which is the whole point of keeping both.
+  // A linear scan costs 3c+4 and a computed goto a flat 23, so the scan wins
+  // on a wide multiplier and loses badly on a narrow one.  If either of these
+  // stopped holding, one of the two routines would have become pointless.
+  check('mul: the scan wins on a wide multiplier',
+        call('mul_16_fast', 0xbeef, 0xffff).cycles < call('mul_16_fast_erik', 0xbeef, 0xffff).cycles,
+        'the scan no longer beats the computed goto at clz = 0');
+  check('mul: the computed goto wins on a narrow one',
+        call('mul_16_fast_erik', 0xbeef, 15).cycles < call('mul_16_fast', 0xbeef, 15).cycles,
+        'the computed goto no longer beats the scan at clz = 12');
   check('mul: swapping beats all of it when the operands are lopsided',
         mean('mul_16_min', SMALL_A) < mean('mul_16_fast', SMALL_A),
         'the swap prologue no longer beats the unrolled chain on a small multiplicand');
 
-  console.log('ok    snippets/mul.s on the simulator: 5 entry points, ' +
+  console.log('ok    snippets/mul.s on the simulator: 6 entry points, ' +
               cases.length + ' pairs each, and the cost table');
 }
 

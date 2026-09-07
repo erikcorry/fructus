@@ -22,6 +22,7 @@
 ;       mul_16              21       163        79        163
 ;       mul_16_x4           37       121        62        121
 ;       mul_16_fast        158       101        73        101
+;       mul_16_fast_erik   132       114        62        114
 ;       mul_16_min           8       163        83         88
 ;
 ; THE FIRST THREE ROWS HAVE IDENTICAL FIRST AND LAST COLUMNS, and that is the
@@ -75,10 +76,14 @@
 ; mul_16_min the same call is 26.
 ;
 ; WHICH TO USE.  mul_16_x4, with mul_16_min in front of it - 45 bytes together,
-; never worst in any column, and within 20% of the fully unrolled chain for a
-; quarter of its size.  mul_16 if space is the binding constraint.  mul_16_fast
-; only if the multiplier is genuinely wide and 158 bytes is affordable, and the
-; gap has narrowed enough that it is a harder case to make than it was.
+; never worst in any column, and it ties the best unrolled chain outright in
+; the middle one.  mul_16 if space is the binding constraint.
+;
+; Neither fully unrolled version is easy to justify any more.  Between them
+; they cost 132 or 158 bytes to beat 45 by at most 16%, and only on multipliers
+; that use most of their sixteen bits; on eight-bit multipliers mul_16_x4 ties
+; the better of them exactly.  They are here because the dispatch question is
+; interesting, not because the answer is to use one.
 ; ============================================================================
 
 
@@ -242,28 +247,49 @@ mul_16_x4:
 ; ----------------------------------------------------------------------------
 ; FINDING THE ENTRY POINT
 ; ----------------------------------------------------------------------------
-; A computed goto is the obvious way in - clz gives the leading zero count, and
-; entry is base + clz * 7.  It is the wrong answer here, and by a wide margin.
+; A computed goto is the obvious way in - clz gives the leading zero count and
+; entry is base + clz*7 - and mul_16_fast_erik below does exactly that, in 23
+; cycles flat.  THIS SECTION ORIGINALLY SAID 28 AND USED THAT TO DISMISS IT.
+; The 28 was my arithmetic on a worse implementation than the one I was
+; comparing against, and the two mistakes are both worth naming:
 ;
-; It needs a register for the address, and with two arguments only r0, r1 and
-; r5 are ours - all three are spoken for - so lr has to be pushed and popped
-; around it.  With the multiply by seven that is about 28 cycles before the
-; first block runs, and it costs the same 28 whether b is 0xffff or 3.
+;   I reached for `callr` to get a PC-relative base - 3 bytes and 4 cycles -
+;   plus an `add` to fold in the distance to the table, where a plain
+;   `mov r5, #table` does the whole job in 3 bytes and 3 cycles.  I bought
+;   position independence nobody had asked for.
 ;
-; A LINEAR SCAN OF brset IS CHEAPER WHERE IT MATTERS.  Sixteen tests, falling
-; through until one hits: 3 cycles for each bit that is clear and 4 for the one
-; that is set, so 3c + 4 for c leading zeros.  That is worse than a computed
-; goto for a small multiplier and better for a large one, crossing over at
-; c = 8 - and c is 0 half the time and 1 a quarter of the time, so the scan
-; wins on the overwhelming majority of inputs.  The whole thing is dispatch
-; that costs almost nothing when it has almost nothing to skip.
+;   And I zeroed the accumulator, 2 more cycles.  It does not need zeroing:
+;   entering the chain at the block below the top set bit wants the accumulator
+;   to hold exactly a, and r0 still does.  That is the trick immediately below
+;   this paragraph - I had found it for the scan and not carried it across.
+;
+; So: 23, not 28, in 132 bytes rather than 158.
+;
+; A LINEAR SCAN OF brset IS STILL CHEAPER WHERE IT MATTERS, but by much less
+; than that comparison claimed.  Sixteen tests, falling through until one hits:
+; 3 cycles for each bit that is clear and 4 for the one that is set, so 3c + 4
+; for c leading zeros, against a flat 23.  They cross at c = 5, not c = 8:
+;
+;       b        clz    scan   computed
+;       0xffff     0     112        128
+;       0x0fff     4      96        100
+;       0x03ff     6      88         86
+;       0x00ff     8      80         72
+;       0x000f    12      64         44
+;       0            16      52         24
+;
+; c is 0 half the time and 1 a quarter of the time on uniformly random input,
+; so the scan still wins there - 101 against 114.  On anything narrower the
+; computed goto wins, and it wins by a great deal at the bottom.  Which is the
+; better dispatch depends entirely on what the multipliers look like, and the
+; computed one is smaller either way.
 ;
 ; AND THE SCAN IS THE FIRST BLOCK'S TEST, not an extra one.  When it finds the
 ; top set bit at k, the accumulator should be exactly a - and r0 still holds a,
 ; because nothing has overwritten it yet.  So the scan jumps to block k-1 with
 ; the first partial product already in place, and the chain needs only fifteen
-; blocks rather than sixteen.
-
+; blocks rather than sixteen.  The computed version gets the same thing free
+; from the arithmetic: base + clz*7 IS the block below the top set bit.
 mul_16_fast:
         mov     r5, r0                  ; 2   r5 = a, and r0 becomes the sum
         brset   r1, #0x8000, .b14    ; 3   top bit is 15: sum starts at a
@@ -350,3 +376,96 @@ mul_16_fast:
 ; every single call - and the first draft of this routine, which assumed the
 ; chain could fall into the earlier `ret`, ran off the end of itself instead.
 
+
+mul_16_fast_erik:
+        push lr
+        clz lr, r1  ; Gets 0-16 inclusive
+        shl r5, lr, #3  ; Times 8
+        sub lr, r5, lr  ; Times 7 because each part below is 7 bytes.
+        mov r5, #.branch_table
+        add lr, lr, r5
+        mov r5, r0
+        ret       ; jmp lr
+.branch_table:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x4000, .b13   ; 3
+        add     r0, r0, r5              ; 2
+.b13:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x2000, .b12   ; 3
+        add     r0, r0, r5              ; 2
+.b12:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x1000, .b11   ; 3
+        add     r0, r0, r5              ; 2
+.b11:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x0800, .b10   ; 3
+        add     r0, r0, r5              ; 2
+.b10:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x0400, .b9    ; 3
+        add     r0, r0, r5              ; 2
+.b9:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x0200, .b8    ; 3
+        add     r0, r0, r5              ; 2
+.b8:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x0100, .b7    ; 3
+        add     r0, r0, r5              ; 2
+.b7:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x0080, .b6    ; 3
+        add     r0, r0, r5              ; 2
+.b6:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x0040, .b5    ; 3
+        add     r0, r0, r5              ; 2
+.b5:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x0020, .b4    ; 3
+        add     r0, r0, r5              ; 2
+.b4:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x0010, .b3    ; 3
+        add     r0, r0, r5              ; 2
+.b3:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x0008, .b2    ; 3
+        add     r0, r0, r5              ; 2
+.b2:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x0004, .b1    ; 3
+        add     r0, r0, r5              ; 2
+.b1:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x0002, .b0    ; 3
+        add     r0, r0, r5              ; 2
+.b0:
+        shl     r0, r0, #1              ; 2
+        brclear r1, #0x0001, .done  ; 3
+        add     r0, r0, r5              ; 2
+.done:                                  ; table + 7*15, reached when b == 1
+        pop     lr                      ; 4
+        ret                             ; 1
+
+; b == 0 IS THE ONE CASE THE ARITHMETIC DOES NOT COVER.  clz(0) is 16, so the
+; entry lands on table + 7*16 - one slot past the end of a fifteen-block chain,
+; which is four bytes past this `ret`.  Rather than pay three bytes and three
+; cycles on every call to test for it, the slot is given something to land on:
+; four bytes of nothing, then the answer.
+;
+; The two assertions below are what make that safe.  They pin the chain to
+; fifteen seven-byte blocks and the zero slot to the sixteenth, so any edit
+; that changes a block's size fails to assemble instead of jumping into the
+; middle of an instruction.
+
+        #res    4
+.zero:                                  ; table + 7*16, reached when b == 0
+        mov     r0, #0                  ; 1
+        pop     lr                      ; 4
+        ret                             ; 1
+
+#assert mul_16_fast_erik.done - mul_16_fast_erik.branch_table == 7 * 15
+#assert mul_16_fast_erik.zero - mul_16_fast_erik.branch_table == 7 * 16
