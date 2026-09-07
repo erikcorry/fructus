@@ -286,7 +286,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 // whose cost depends on the multiplier's width against one that does not.
 {
   const { code, syms } = assemble('snippets/mul.s');
-  const RET = 0x8000;
+  const RET = 0x8000, R2 = 0xc2c2;
   const call = (entry, a, b) => {
     m.mem.fill(0);
     m.load(code);
@@ -294,6 +294,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     m.R[m.named.sp] = 0xfffe;
     m.R[m.named.lr] = RET;
     m.R[0] = a; m.R[1] = b;
+    m.R[2] = R2;                      // mul_16_nib borrows it and must give it back
     m.pc = syms.get(entry); m.halted = false; m.count = 0;
     m.reset();
     let why;
@@ -303,11 +304,11 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     // shifted the multiplier ARITHMETICALLY never cleared r1 and never ended.
     try { why = m.run({ max: 4000, stopAt: RET }); }
     catch (e) { why = `ran off the rails: ${e.message}`; }
-    return { why, r0: m.R[0], cycles: m.cycles() };
+    return { why, r0: m.R[0], r2: m.R[2], cycles: m.cycles() };
   };
 
   const NAMES = ['mul_16', 'mul_16_x4', 'mul_16_fast', 'mul_16_fast_erik',
-                 'mul_16_min'];
+                 'mul_16_nib', 'mul_16_min'];
 
   // Every power of two and its neighbours, both ways round, plus a sweep.  The
   // powers of two are where a shift-and-add goes wrong: they are the operands
@@ -328,7 +329,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     for (const [a, b] of cases) {
       const r = call(name, a, b);
       const want = (a * b) & 0xffff;
-      if (r.why !== 'stopped' || r.r0 !== want) {
+      if (r.why !== 'stopped' || r.r0 !== want || r.r2 !== R2) {
         if (!wrong++) eg = `${a} * ${b} -> ${r.why !== 'stopped' ? r.why : r.r0}, want ${want}`;
       }
     }
@@ -352,6 +353,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     ['mul_16_x4',   UNIFORM, 121], ['mul_16_x4',   SMALL_A, 121],
     ['mul_16_fast', UNIFORM, 101], ['mul_16_fast', SMALL_A, 101],
     ['mul_16_fast_erik', UNIFORM, 114], ['mul_16_fast_erik', SMALL_A, 114],
+    ['mul_16_nib', UNIFORM, 123], ['mul_16_nib', SMALL_A, 123],
     ['mul_16_min',  UNIFORM, 163], ['mul_16_min',  SMALL_A,  88],
   ];
   for (const [entry, gen, target] of want) {
@@ -384,7 +386,14 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
         mean('mul_16_min', SMALL_A) < mean('mul_16_fast', SMALL_A),
         'the swap prologue no longer beats the unrolled chain on a small multiplicand');
 
-  console.log('ok    snippets/mul.s on the simulator: 6 entry points, ' +
+  // THE NIBBLE TABLE IS DOMINATED, which is the finding, so it is asserted:
+  // 279 bytes to be no faster than a 37-byte loop.  If a future edit made it
+  // win, the comment explaining why it cannot would be wrong.
+  check('mul: the nibble table does not pay',
+        mean('mul_16_nib', UNIFORM) > mean('mul_16_x4', UNIFORM),
+        'the nibble table now beats the four-bit loop, so the write-up is stale');
+
+  console.log('ok    snippets/mul.s on the simulator: 7 entry points, ' +
               cases.length + ' pairs each, and the cost table');
 }
 

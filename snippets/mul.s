@@ -23,6 +23,7 @@
 ;       mul_16_x4           37       121        62        121
 ;       mul_16_fast        158       101        73        101
 ;       mul_16_fast_erik   132       114        62        114
+;       mul_16_nib         279       123        72        123
 ;       mul_16_min           8       163        83         88
 ;
 ; THE FIRST THREE ROWS HAVE IDENTICAL FIRST AND LAST COLUMNS, and that is the
@@ -83,7 +84,9 @@
 ; they cost 132 or 158 bytes to beat 45 by at most 16%, and only on multipliers
 ; that use most of their sixteen bits; on eight-bit multipliers mul_16_x4 ties
 ; the better of them exactly.  They are here because the dispatch question is
-; interesting, not because the answer is to use one.
+; interesting, not because the answer is to use one.  mul_16_nib is here for
+; the same reason and is dominated outright - it costs 279 bytes to be two
+; cycles slower than mul_16_x4's 37.
 ; ============================================================================
 
 
@@ -469,3 +472,187 @@ mul_16_fast_erik:
 
 #assert mul_16_fast_erik.done - mul_16_fast_erik.branch_table == 7 * 15
 #assert mul_16_fast_erik.zero - mul_16_fast_erik.branch_table == 7 * 16
+
+
+; ============================================================================
+; mul_16_nib - a nibble at a time, through a table of sixteen blocks
+; ============================================================================
+; Mask the low four bits of the multiplier, shift left by four to turn them
+; into an offset, add the table base and jump.  Each block adds k times the
+; multiplicand for its own k and jumps back; then the multiplicand shifts up
+; four and the multiplier down four.
+;
+; THE BLOCKS ARE ADDITION CHAINS, and every instruction in them is two bytes
+; and two cycles, so the chain length IS the cost.  Cheap k are the ones near
+; a power of two from either side - 7 is 8-1 and 15 is 16-1, both three
+; instructions, while 11 and 13 need five.  Sixteen blocks come to 48
+; instructions, three per nibble on average, so the WORK is 6 cycles a nibble
+; and everything else is overhead.
+;
+; IT NEEDS FIVE LIVE REGISTERS - accumulator, multiplier, multiplicand, table
+; base and a scratch - where a two-argument function owns three.  lr is the
+; scratch and also the jump target, since `ret` is the only register-indirect
+; jump; r2 holds the base, and both have to be pushed.
+;
+; ----------------------------------------------------------------------------
+; IT DOES NOT PAY, AND THE MEASUREMENT SAYS WHY
+; ----------------------------------------------------------------------------
+; 279 bytes, 123 cycles on a 16-bit multiplier - against mul_16_x4's 121 in 37.
+; The blocks are not the problem; they are excellent.  Instrumenting one call
+; and splitting the cycles by where the pc was:
+;
+;       25.75 cycles a nibble, of which 6.0 is inside a block
+;
+; So three quarters of the time is spent deciding which block to run and
+; getting back out of it:
+;
+;       and / shl / add / ret       8   working out the entry
+;       jmpr back to the loop       4
+;       lsr / shl / br              8   advancing to the next nibble
+;       ----
+;       20 cycles a nibble, whatever the nibble is
+;
+; THE DISPATCH COSTS THE SAME WHATEVER THE RADIX, so the radix has to be wide
+; enough to amortise it.  Twenty cycles over four bits is five cycles a bit of
+; pure overhead, and the whole of a shift-and-add loop is six.  The table makes
+; the WORK four times cheaper - 1.5 cycles a bit against about 6 - and the
+; dispatch takes all of it back.
+;
+; Chain lengths are a solved problem here: lr only ever holds a power of two
+; times a, so the optimum is a breadth-first search over (accumulator, log lr),
+; and it agrees exactly with the sixteen chains written out below.
+;
+;       radix   work a round   + 20 overhead   cycles a bit   table
+;           2   a branch a bit                        6.00    none
+;          16       6.0            26.0               6.50    256 B
+;         256      11.6            31.6               3.95    5.5 KB
+;
+; Radix 256 is where it starts paying - 3.95 cycles a bit would beat everything
+; else in this file by a wide margin - and it wants five and a half kilobytes
+; of table on a machine with sixty-four.  Radix 16 is the worst of both: enough
+; table to hurt, not enough width to pay for the dispatch.
+;
+; WHAT WOULD RESCUE IT is not a better table but a cheaper way in and out.  The
+; four cycles of `jmpr` back could go if each block ended with the loop tail
+; instead, but the tail is seven bytes and the longest chain is ten, so blocks
+; would have to be 32 bytes and the table 512.  That buys 22 cycles a nibble,
+; 5.5 a bit, for twice the space - still behind mul_16_fast at a third of the
+; size.  This is a dead end, and an interesting one.
+
+mul_16_nib:
+        push    lr                      ; 4
+        push    r2                      ; 4   base, callee saved at this arity
+        mov     r2, #.table             ; 3
+        mov     r5, r0                  ; 2   r5 = a
+        mov     r0, #0                  ; 1   acc = 0
+.top:
+        and     lr, r1, #15             ; 3   the low nibble
+        shl     lr, lr, #4              ; 2   ... as a block offset
+        add     lr, lr, r2              ; 2
+        ret                             ; 1   jump into the table
+.next:
+        lsr     r1, r1, #4              ; 2
+        shl     r5, r5, #4              ; 2
+        br      ne, r1, #0, .top        ; 4
+        pop     r2                      ; 4
+        pop     lr                      ; 4
+        ret                             ; 1
+.table:
+.k0:   
+        jmpr    .next
+        #res    16 - ($ - .k0)
+.k1:   
+        add     r0, r0, r5
+        jmpr    .next
+        #res    16 - ($ - .k1)
+.k2:   
+        shl     lr, r5, #1
+        add     r0, r0, lr
+        jmpr    .next
+        #res    16 - ($ - .k2)
+.k3:   
+        shl     lr, r5, #1
+        add     r0, r0, lr
+        add     r0, r0, r5
+        jmpr    .next
+        #res    16 - ($ - .k3)
+.k4:   
+        shl     lr, r5, #2
+        add     r0, r0, lr
+        jmpr    .next
+        #res    16 - ($ - .k4)
+.k5:   
+        shl     lr, r5, #2
+        add     r0, r0, lr
+        add     r0, r0, r5
+        jmpr    .next
+        #res    16 - ($ - .k5)
+.k6:   
+        shl     lr, r5, #1
+        add     r0, r0, lr
+        shl     lr, lr, #1
+        add     r0, r0, lr
+        jmpr    .next
+        #res    16 - ($ - .k6)
+.k7:   
+        shl     lr, r5, #3
+        add     r0, r0, lr
+        rsb     r0, r5, r0
+        jmpr    .next
+        #res    16 - ($ - .k7)
+.k8:   
+        shl     lr, r5, #3
+        add     r0, r0, lr
+        jmpr    .next
+        #res    16 - ($ - .k8)
+.k9:   
+        shl     lr, r5, #3
+        add     r0, r0, lr
+        add     r0, r0, r5
+        jmpr    .next
+        #res    16 - ($ - .k9)
+.k10:  
+        shl     lr, r5, #1
+        add     r0, r0, lr
+        shl     lr, lr, #2
+        add     r0, r0, lr
+        jmpr    .next
+        #res    16 - ($ - .k10)
+.k11:  
+        shl     lr, r5, #3
+        add     r0, r0, lr
+        shl     lr, r5, #1
+        add     r0, r0, lr
+        add     r0, r0, r5
+        jmpr    .next
+        #res    16 - ($ - .k11)
+.k12:  
+        shl     lr, r5, #2
+        add     r0, r0, lr
+        shl     lr, lr, #1
+        add     r0, r0, lr
+        jmpr    .next
+        #res    16 - ($ - .k12)
+.k13:  
+        shl     lr, r5, #2
+        add     r0, r0, lr
+        shl     lr, lr, #1
+        add     r0, r0, lr
+        add     r0, r0, r5
+        jmpr    .next
+        #res    16 - ($ - .k13)
+.k14:  
+        shl     lr, r5, #4
+        add     r0, r0, lr
+        shl     lr, r5, #1
+        rsb     r0, lr, r0
+        jmpr    .next
+        #res    16 - ($ - .k14)
+.k15:  
+        shl     lr, r5, #4
+        add     r0, r0, lr
+        rsb     r0, r5, r0
+        jmpr    .next
+        #res    16 - ($ - .k15)
+#assert mul_16_nib.k1 - mul_16_nib.table == 16
+#assert mul_16_nib.k15 - mul_16_nib.table == 15 * 16
