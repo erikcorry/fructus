@@ -39,7 +39,7 @@ on your `PATH`:
 cargo install customasm        # or grab a release binary
 npm install                    # one dependency: a TOML parser
 npm run gen                    # generate build/fructus.asm from the spec
-npm test                       # 50 checks, ~44,000 assertions
+npm test                       # 63 checks, ~44,000 assertions
 ```
 
 Then assemble and run something. `customasm` takes several input files, so the
@@ -195,6 +195,16 @@ See `snippets/add32.s`.
 **`r5` belongs to the assembler.** Any immediate that does not fit its
 instruction expands through it, so no function can promise to preserve it. This
 is MIPS's `$at`, and it costs what MIPS's does.
+
+The rule that follows is **don't keep anything in `r5` that has to survive** —
+not "check whether this particular instruction expands". Whether `lsr r5, lr, #14`
+expands depends on which forms exist for that mnemonic, which is not something a
+reader should have to know. So it is enforced rather than remembered: `npm test`
+assembles every file in `snippets/` and `libc/` against the `--noat` ruledef,
+which omits every rule that borrows the scratch. A file that assembles there
+cannot contain an expansion, and `r5` in it is an ordinary register.
+`isa/abi.s` is the one exception, and expands exactly once on purpose to show
+what it costs — the suite pins the count at one.
 
 **Unaligned 16-bit access is free**, with no fault and no penalty visible to
 software, which is what lets the stack pack byte arguments without padding.
