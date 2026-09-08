@@ -17,7 +17,7 @@ node tools/gen-customasm.js --noat > build/fructus-noat.asm
 fail=0
 
 # --- everything must assemble in r5 mode ------------------------------------
-for src in snippets/*.s libc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/data.s tests/branch-cost.s tests/microtan-smoke.s; do
+for src in snippets/*.s libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/data.s tests/branch-cost.s tests/microtan-smoke.s; do
     cat build/fructus.asm "$src" > build/_t.asm
     if "$CA" -q -o /dev/null build/_t.asm 2>build/_err; then
         printf 'ok    %s\n' "$src"
@@ -30,7 +30,7 @@ done
 # The decoder is a second reading of the same `encoding` strings, sharing no
 # code with the generator below the point where both parse the TOML.  If they
 # disagree about a field, the re-assembled bytes differ.
-if node tests/roundtrip.mjs snippets/*.s libc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
+if node tests/roundtrip.mjs snippets/*.s libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
 
 # --- the snippets, actually executed -----------------------------------------
 if node tests/sim-check.mjs; then :; else fail=1; fi
@@ -53,7 +53,7 @@ if node tests/libc-check.mjs; then :; else fail=1; fi
 #
 # isa/abi.s is the one exception and is checked separately below, because it
 # demonstrates the clobber on purpose.
-for src in libc/*.s snippets/*.s; do
+for src in libc/*.s snippets/*.s libgcc/*.s; do
     cat build/fructus-noat.asm "$src" > build/_t.asm
     if "$CA" -q -o /dev/null build/_t.asm 2>build/_err; then
         printf 'ok    %s needs no assembler scratch\n' "$src"
@@ -62,6 +62,9 @@ for src in libc/*.s snippets/*.s; do
         sed 's/\x1b\[[0-9;]*m//g' build/_err | head -10; fail=1
     fi
 done
+
+# --- libgcc, against plain arithmetic ----------------------------------------
+if node tests/libgcc-check.mjs; then :; else fail=1; fi
 
 # --- the Microtan board: reset, ROM window, keyboard, display ----------------
 if node tests/microtan-check.mjs; then :; else fail=1; fi
