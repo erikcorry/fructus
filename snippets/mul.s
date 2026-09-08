@@ -20,7 +20,7 @@
 ; ----------------------------------------------------------------------------
 ;                        bytes   b 16-bit   b 8-bit   a 8-bit, b 16-bit
 ;       mul_16              21       163        79        163
-;       mul_16_x4           37       121        62        121
+;       mul_16_x4           32       110        57        110
 ;       mul_16_fast        158       101        73        101
 ;       mul_16_fast_erik   132       114        62        114
 ;       mul_16_nib         274        89        63         89
@@ -76,7 +76,7 @@
 ; in r0 and something wide in r1 - 163 cycles rather than 4.  Through
 ; mul_16_min the same call is 26.
 ;
-; WHICH TO USE.  mul_16_x4, with mul_16_min in front of it - 45 bytes together,
+; WHICH TO USE.  mul_16_x4, with mul_16_min in front of it - 40 bytes together,
 ; never worst in any column, and it ties the best unrolled chain outright in
 ; the middle one.  mul_16 if space is the binding constraint.
 ;
@@ -87,7 +87,7 @@
 ; interesting, not because the answer is to use one.  mul_16_nib has the best
 ; steady state of any of them - 3.19 cycles a bit - and the worst prologue, so
 ; it wins outright on wide multipliers and only draws level on narrow ones,
-; where mul_16_x4 does the same work in 37 bytes.  It is the one to look at if
+; where mul_16_x4 does the same work in 32 bytes.  It is the one to look at if
 ; 274 bytes is affordable, and the one to widen to radix 256 if six kilobytes
 ; is.
 ; ============================================================================
@@ -163,7 +163,7 @@ mul_16:
 
 
 ; ============================================================================
-; mul_16_x4 - the same loop, four bits at a time                     37 bytes
+; mul_16_x4 - the same loop, four bits at a time                     32 bytes
 ; ============================================================================
 ; The rotation above is what makes the plain loop cheap, and it is also what
 ; stops it getting cheaper: the two branches ARE the loop, so there is no
@@ -182,52 +182,54 @@ mul_16:
 ; against the SAME r5 - and its partial product is 2*(a<<i), which is r5 added
 ; twice.  Then one `shl r5, r5, #2` serves the pair.
 ;
-; It trades one unconditional shift for one conditional add, and an add and a
-; shift are both two bytes and two cycles - so the group is the same 14 bytes
-; either way, and the saving is that the extra add is only paid when the bit is
-; set.  Half a cycle a bit: 129 down to 121.
+; It trades one unconditional shift for one conditional add, and the saving is
+; that the extra add is only paid when the bit is set.
 ;
-; TWO IS THE OPTIMUM, and not by a little.  Bit j of a group needs 2^j adds
-; when it is set, so with a branch at 3 cycles falling through and 4 taken, a
-; group of k bits costs
+; THE MULTIPLICAND LIVES IN r1 so that every one of those adds is the pinned
+; one-byte encoding at 0x07.  That costs the multiplier its register - it moves
+; to r5, which a two-argument function owns anyway - and one extra `mov` in the
+; setup, which the pinned `mov r1, r0` gives back.  Six adds in the loop go from
+; two bytes to one: 37 bytes to 32, and 121 cycles to 110.
 ;
-;       2 + sum(j < k) [ 4/2 + (3 + 2^(j+1))/2 ]  =  1 + 3.5k + 2^k
+; TWO IS STILL THE OPTIMUM, but by less than it was.  Bit j of a group needs
+; 2^j adds when it is set, at one cycle each now rather than two, so with a
+; branch at 3 cycles falling through and 4 taken a group of k bits costs
 ;
-;       k = 1   6.500 cycles a bit        the shift-every-bit version
-;       k = 2   6.000                     <- this loop
-;       k = 3   6.500
-;       k = 4   7.750
+;       2 + sum(j < k) [ 4/2 + (3 + 2^j)/2 ]  =  2 + 3.5k + (2^k - 1)/2
 ;
-; The shift saved is one instruction however wide the group, and the adds grow
-; geometrically, so k = 2 is where those cross.  A third bit would need four
-; adds and give back everything the pairing won.
+;       k = 1   6.000 cycles a bit        the shift-every-bit version
+;       k = 2   5.250                     <- this loop
+;       k = 3   5.333
+;       k = 4   5.875
+;
+; Cheaper adds tilt it towards wider groups - k = 3 was half a cycle behind and
+; is now a thirteenth of one - but the adds still grow geometrically and the
+; shift saved is still just one instruction, so two holds.
 
 mul_16_x4:
-        mov     r5, r0                  ; 2   r5 = a
-        mov     r0, #0                  ; 1   acc = 0, in the pinned byte
+        mov     r5, r1                  ; 2   the multiplier vacates r1 ...
+        mov     r1, r0                  ; 1   ... so the multiplicand can have it
+        mov     r0, #0                  ; 1   acc = 0
 .top:
-        brclear r1, #0x0001, .s0        ; 3
-        add     r0, r0, r5              ; 2   += a<<i
+        brclear r5, #0x0001, .s0        ; 3
+        add     r0, r0, r1              ; 1   += a<<i, in one byte
 .s0:
-        brclear r1, #0x0002, .s1        ; 3
-        add     r0, r0, r5              ; 2   twice, because r5 has not moved
-        add     r0, r0, r5              ; 2   ... and 2*(a<<i) is a<<(i+1)
+        brclear r5, #0x0002, .s1        ; 3
+        add     r0, r0, r1              ; 1   twice, because r1 has not moved
+        add     r0, r0, r1              ; 1   ... and 2*(a<<i) is a<<(i+1)
 .s1:
-        shl     r5, r5, #2              ; 2   one shift for the pair
-        brclear r1, #0x0004, .s2        ; 3
-        add     r0, r0, r5              ; 2
+        shl     r1, r1, #2              ; 2   one shift for the pair
+        brclear r5, #0x0004, .s2        ; 3
+        add     r0, r0, r1              ; 1
 .s2:
-        brclear r1, #0x0008, .s3        ; 3
-        add     r0, r0, r5              ; 2
-        add     r0, r0, r5              ; 2
+        brclear r5, #0x0008, .s3        ; 3
+        add     r0, r0, r1              ; 1
+        add     r0, r0, r1              ; 1
 .s3:
-        shl     r5, r5, #2              ; 2
-        lsr     r1, r1, #4              ; 2
-        br      ne, r1, #0, .top        ; 3
+        shl     r1, r1, #2              ; 2
+        lsr     r5, r5, #4              ; 2
+        br      ne, r5, #0, .top        ; 3
         ret                             ; 1
-
-; Four bits cost 4 branches, up to 4 adds, 4 shifts, a counter shift and a loop
-; branch - against eight branches and the rest for the same four bits above.
 
 
 ; ============================================================================
@@ -550,8 +552,8 @@ mul_16_fast_erik:
 ; a shift-and-add loop at 6.00.  It is 3.19 now.
 ;
 ; IT IS THE FASTEST ROUTINE HERE - 89 cycles against mul_16_fast's 101 - and on
-; an 8-bit multiplier it has finally caught mul_16_x4, 63 against 62, which
-; that routine does in 37 bytes rather than 274.  Thirty-three cycles of
+; an 8-bit multiplier mul_16_x4 still beats it, 57 against 63, and does it in
+; 32 bytes rather than 274.  Thirty-three cycles of
 ; prologue is still the whole story of its narrow-multiplier case.
 
 mul_16_nib:
