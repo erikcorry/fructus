@@ -106,6 +106,10 @@ tests/                the test suite
 | `npm run microtan -- <rom>` | runs a ROM on the simulated board |
 | `npm run map` | the opcode map: `build/opcodes.html` and `docs/opcodes.svg` |
 | `npm run map6502` | the same map for the NMOS 6502: `build/6502.html` and `docs/6502.svg` |
+
+Heading for hardware: [docs/fpga-toolchain.md](docs/fpga-toolchain.md) is the
+open-source iCE40 toolchain, how to install it and the two things that catch
+you out.
 | `npm test` | everything |
 
 `tools/isa.js` reads the spec; `tools/decode.js` turns bytes back into
