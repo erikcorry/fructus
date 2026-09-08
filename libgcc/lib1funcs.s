@@ -201,7 +201,7 @@ __mulhisi3:
 
 
 ; ============================================================================
-; __mulsi3 - 32 x 32 -> 32, signed or unsigned                       32 bytes
+; __mulsi3 - 32 x 32 -> 32, signed or unsigned                       43 bytes
 ; ============================================================================
 ;       a in r0:r1 as high:low          b in r2:r3 as high:low
 ;       result in r0:r1 as high:low
@@ -217,14 +217,41 @@ __mulhisi3:
 ; needs all thirty-two, which is __umulhisi3 - and its high:low result is
 ; already in the right registers, so folding the cross terms in is one `add`.
 ;
+; ONE PUSH, NOT TWO.  A three-register push costs the same eight cycles as
+; pushing two separately and two bytes fewer, and the order works out: `push
+; r4, lr, r1` writes r4 highest and al lowest, so `ld r0, [sp]` finds al, and
+; the later `pop r0` then `pop lr, r4` unwind it in the right order.
+;
 ; NEITHER HELPER TOUCHES r2, r3 OR r4.  __mulhi3 uses r0, r1 and r5 and nothing
 ; else; __umulhisi3 saves r2 and r3 and restores them.  So bh and bl sit in
 ; their argument registers across all three calls and only al has to be spilled
 ; - once, and read back without popping the first time it is wanted.
+;
+; ----------------------------------------------------------------------------
+; BOTH HIGH WORDS ZERO IS A TAIL CALL
+; ----------------------------------------------------------------------------
+; If ah and bh are both zero then a and b are 16-bit values, both cross terms
+; vanish, and the answer is just the widening product of the low halves - which
+; __umulhisi3 already returns as high:low in r0:r1, exactly where this routine
+; has to leave it.  Nothing to fix up afterwards, so it is a real tail call:
+; the test happens before the prologue and there is no lr to save.
+;
+;       or      r5, r0, r2              ; both high words at once
+;
+; Five cycles to ask, and it turns 591 into about 330 - or about 95 when the
+; low halves are small enough for __umulhisi3's own shortcut.  A `long` holding
+; a value that fits in sixteen bits is the common case in real code by a wide
+; margin, which is what makes this worth its eleven bytes.
+;
+; ONLY ONE HIGH WORD ZERO is not tested for.  It would kill one cross term
+; rather than both, which is a third of the work for another test on each of
+; two paths, and the case is much rarer than both being zero.
 
 __mulsi3:
-        push    r4, lr                  ; 6
-        push    r1                      ; 4   al, wanted twice more
+        or      r5, r0, r2              ; 2   ah | bh
+        br      eq, r5, #0, .narrow     ; 3   both zero: a 16 x 16 widening
+        push    r4, lr, r1              ; 8   three for the price of two:
+                                        ;     al ends up lowest, so [sp] finds it
         mov     r1, r3                  ; 2   ah * bl
         callr   __mulhi3                ; 4
         mov     r4, r0                  ; 2
@@ -238,3 +265,7 @@ __mulsi3:
         add     r0, r0, r4              ; 2   fold the cross terms into the high
         pop     lr, r4                  ; 6
         ret                             ; 1
+.narrow:
+        mov     r0, r1                  ; 1   al, pinned
+        mov     r1, r3                  ; 2   bl
+        jmpr    __umulhisi3             ; 3   its high:low result is ours

@@ -128,6 +128,12 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
       cases.push([A >>> 0, B >>> 0]);
   for (let i = 0; i < 2500; i++)
     cases.push([((r16() * 65536) + r16()) >>> 0, ((r16() * 65536) + r16()) >>> 0]);
+  // Both high words zero is the shortcut path and needs its own coverage: a
+  // random 32-bit pair almost never lands on it.
+  for (let i = 0; i < 1000; i++) cases.push([r16(), r16()]);
+  for (let i = 0; i < 500; i++) cases.push([r16() & 0xff, r16() & 0xff]);
+  // And exactly one of them zero, which is NOT shortcut and takes the long way.
+  for (let i = 0; i < 500; i++) cases.push([((r16() * 65536) + r16()) >>> 0, r16()]);
 
   for (const [A, B] of cases) {
     const q = run('__mulsi3', { 0: A >>> 16, 1: A & 0xffff, 2: B >>> 16, 3: B & 0xffff });
@@ -139,7 +145,27 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
     }
   }
   check('__mulsi3', wrong === 0, `${wrong} of ${cases.length} wrong, e.g. ${eg}`);
-  console.log(`ok    __mulsi3: ${cases.length} products against Math.imul`);
+
+  // THE SHORTCUT.  Both high words zero means both cross terms vanish and the
+  // answer is the widening product of the low halves - which __umulhisi3
+  // already returns as high:low, so it is a tail call with nothing to fix up.
+  const cost = (regs) => run('__mulsi3', regs).cycles;
+  let wide = 0, narrow = 0, tiny = 0;
+  for (let i = 0; i < 200; i++) {
+    const p = [r16(), r16(), r16(), r16()];
+    wide   += cost({ 0: p[0] | 0x8000, 1: p[1], 2: p[2] | 0x8000, 3: p[3] });
+    narrow += cost({ 0: 0, 1: p[1], 2: 0, 3: p[3] });
+    tiny   += cost({ 0: 0, 1: p[1] & 0xff, 2: 0, 3: p[3] & 0xff });
+  }
+  check('__mulsi3 shortcut', narrow / 200 < wide / 200 * 0.6,
+        `16-bit longs cost ${(narrow / 200).toFixed(0)} against ${(wide / 200).toFixed(0)} ` +
+        `for full ones, so the both-high-words-zero path is not being taken`);
+  check('__mulsi3 shortcut reaches through', tiny / 200 < narrow / 200 * 0.5,
+        `8-bit longs cost ${(tiny / 200).toFixed(0)} against ${(narrow / 200).toFixed(0)}, ` +
+        `so __umulhisi3's own under-256 shortcut is not being reached`);
+  console.log(`ok    __mulsi3: ${cases.length} products; ` +
+              `${(wide / 200).toFixed(0)} / ${(narrow / 200).toFixed(0)} / ` +
+              `${(tiny / 200).toFixed(0)} cycles for 32 / 16 / 8-bit values`);
 }
 
 console.log(`${checks} checks, ${fails} failures`);
