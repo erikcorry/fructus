@@ -10,10 +10,10 @@
 ; REGISTERS
 ; ----------------------------------------------------------------------------
 ;
-;   r0   argument 0 / return value       caller saved, always
-;   r1   argument 1 / return value high  caller saved, always
-;   r2   argument 2                      SLIDING - see below
-;   r3   argument 3                      SLIDING - see below
+;   r0   argument 0 / return word 0      caller saved, always
+;   r1   argument 1 / return word 1      caller saved, always
+;   r2   argument 2 / return word 2      SLIDING - see below
+;   r3   argument 3 / return word 3      SLIDING - see below
 ;   r4   -                               CALLEE saved, always
 ;   r5   -                               caller saved, always, and the
 ;                                        assembler's immediate scratch register
@@ -47,16 +47,54 @@
 ;
 ; r2 and r3 have no fixed save convention.  For each one, independently:
 ;
-;       CALLER saved   if this function takes an argument in it
-;       CALLEE saved   if it does not
+;       CALLER saved   if this function takes an argument in it,
+;                      OR returns a value wide enough to reach it
+;       CALLEE saved   if neither
 ;
 ; which gives three conventions rather than one:
 ;
-;   arg registers used         caller saved              callee saved
-;   ------------------------   ----------------------    ---------------
-;   0, 1 or 2   (r0, r1)       r0 r1 r5                  r2 r3 r4
-;   3           (r0, r1, r2)   r0 r1 r2 r5               r3 r4
-;   4           (r0 - r3)      r0 r1 r2 r3 r5            r4
+;   registers the signature uses   caller saved              callee saved
+;   ----------------------------   ----------------------    ---------------
+;   r0, r1                         r0 r1 r5                  r2 r3 r4
+;   r0, r1, r2                     r0 r1 r2 r5               r3 r4
+;   r0 - r3                        r0 r1 r2 r3 r5            r4
+;
+; THE RETURN CLAUSE IS NOT AN AFTERTHOUGHT.  A 64-bit value comes back in
+; r0:r1:r2:r3, so `long long f(int)` writes r2 and r3 even though it takes one
+; argument - and without the second clause the arity rule would have promised
+; to preserve them.
+;
+; ----------------------------------------------------------------------------
+; IS C TYPING STRONG ENOUGH TO DECIDE THIS?
+; ----------------------------------------------------------------------------
+;
+; Yes, and for exactly the reason the arity clause already works: both ends
+; read the same declaration, and a declaration carries the return type as
+; plainly as the parameter list.  `long long foo(int a, int b)` puts a in r0
+; and b in r1, so the arity clause alone would make r2 and r3 callee saved -
+; but the return reaches r2 and r3, so both are caller saved, and the caller
+; computes that from the same three words the callee does.
+;
+; IT IS A UNION AND NOT A MAXIMUM, per register.  Arguments do not always fill
+; a prefix: in `f(long a, int b, long c)`, a takes r0:r1, b takes r2, and c
+; needs two registers with only r3 left, so by the no-splitting rule it goes
+; entirely on the stack and r3 is used by nothing.  r3 is callee saved there.
+; Give the same function a 64-bit return and r3 becomes caller saved because
+; the RETURN reaches it, not because an argument did.
+;
+; A FUNCTION IN THIS POSITION GAINS AS WELL AS LOSES.  Caller saved means the
+; callee may destroy the register, so `long long foo(int, int)` gets r2 and r3
+; as free scratch - which it wants anyway, since it has to write them.  What it
+; gives up is having them survive its own calls, leaving only r4; that is the
+; real cost of returning wide, and it is the cost of returning in registers at
+; all.
+;
+; WHERE IT BREAKS IS WHERE THE ARITY RULE ALREADY BREAKS.  A call through a
+; function pointer of the wrong type, or a call with no declaration in scope,
+; gets the convention wrong - and got it wrong before this clause existed, for
+; the arguments.  The answer is the same as it was: a program doing that has to
+; annotate the function with an explicit convention.  This clause widens an
+; existing hazard rather than introducing a new one.
 ;
 ; COUNT REGISTERS, NOT ARGUMENTS.  A 32-bit value occupies two registers and a
 ; struct is decomposed into its fields, so f(long, long) uses four argument
@@ -237,10 +275,52 @@
 ;   up to 8 bits     r0, low byte, high byte unspecified
 ;   up to 16 bits    r0
 ;   32 bits          r0:r1, high:low - the same shape as an argument pair
-;   anything larger  the CALLER allocates the space and passes a pointer to it
+;   64 bits          r0:r1:r2:r3, high to low - an argument quad
+;   an aggregate     decomposed into its fields exactly as an argument is, and
+;                    returned in r0 upwards if they fit in four registers
+;   anything else    the CALLER allocates the space and passes a pointer to it
 ;                    as a hidden first argument in r0, shifting the real
 ;                    arguments up one register.  The callee writes through it
 ;                    and returns that same pointer in r0.
+;
+; RETURNING IS THE MIRROR OF PASSING, which is the whole rule and the reason
+; there is not a separate table for it.  A value is decomposed into registers
+; the same way whether it is going in or coming out, and the same four
+; registers are used; the only difference is what happens when it does not fit,
+; because a return has no stack to overflow into.
+;
+; WHY AGGREGATES AND NOT JUST SCALARS.  A two-word struct - a pointer and a tag,
+; a pointer and a length, a pointer and a reference count - is the shape a
+; language with fat pointers returns constantly, and pushing every one of them
+; through memory would cost a stack slot, four bus cycles to write and four to
+; read at every call.  Since structs are already decomposed for ARGUMENTS, and
+; a two-word struct is already passed in two registers, returning it in two
+; registers needs no new machinery at all.
+;
+; THE LIMIT IS FOUR REGISTERS, NOT EIGHT BYTES, because that is how arguments
+; count: a byte-sized field takes a whole register, so `struct { char a, b, c,
+; d, e; }` is five registers and goes through memory even though it is five
+; bytes.  Counting registers keeps one rule for both directions; counting bytes
+; would need a second.
+;
+; ----------------------------------------------------------------------------
+; A TWO-WORD RETURN, WHICH IS THE CASE THE AGGREGATE RULE EXISTS FOR
+; ----------------------------------------------------------------------------
+;
+;       struct fat { char *p; unsigned tag; };
+;       struct fat fat_bump(struct fat f) { f.p += 2; return f; }
+;
+; The struct is two 16-bit fields, so it arrives decomposed in r0 and r1 and
+; leaves the same way.  There is no frame, no hidden pointer, and nothing
+; touches memory:
+
+fat_bump:
+        add     r0, r0, #2              ; 2   the pointer field
+        ret                             ; 1
+
+; Through a hidden pointer the same function would be a `ld`, an `add`, two
+; `st`s and the pointer to return - about twenty cycles and eight bytes of
+; caller stack, for a function whose entire work is one instruction.
 ;
 ; ----------------------------------------------------------------------------
 ; THE STACK
