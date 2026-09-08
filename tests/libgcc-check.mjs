@@ -57,23 +57,20 @@ for (const a of edge) for (const b of edge) pairs.push([a, b]);
 for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
 
 // --- __mulhi3 ----------------------------------------------------------------
-// The narrow helper, and the one every int multiply goes through.  It also
-// promises r1 = 0 on return, which is not decoration: it is what makes the
-// result a valid 32-bit LOW:HIGH pair, and the widening routine below leans on
-// exactly that when it exchanges the two halves.
+// The narrow helper, and the one every int multiply goes through.  It leaves
+// rubbish in r1 and is entitled to: an earlier draft zeroed it so the pair
+// r0:r1 would be a 32-bit value, but abi.s puts the high half in r0, so that
+// was backwards and __umulhisi3 writes both halves itself.
 {
-  let wrong = 0, notzero = 0, eg = '';
+  let wrong = 0, eg = '';
   for (const [a, b] of pairs) {
     const q = run('__mulhi3', { 0: a, 1: b });
     if (q.why !== 'stopped' || q.R[0] !== ((a * b) & 0xffff) || q.sp !== SP0 || q.R[4] !== R4) {
       if (!wrong++) eg = `${a} * ${b} -> ${q.why !== 'stopped' ? q.why : q.R[0]}`;
     }
-    if (q.R[1] !== 0) notzero++;
   }
   check('__mulhi3', wrong === 0, `${wrong} of ${pairs.length} wrong, e.g. ${eg}`);
-  check('__mulhi3 returns r1 = 0', notzero === 0,
-        `${notzero} of ${pairs.length} left r1 non-zero, which __umulhisi3 relies on`);
-  console.log(`ok    __mulhi3: ${pairs.length} products, and r1 zero in every one`);
+  console.log(`ok    __mulhi3: ${pairs.length} products`);
 }
 
 // --- __umulhisi3 and __mulhisi3 ----------------------------------------------

@@ -33,16 +33,17 @@
 
 
 ; ============================================================================
-; __mulhi3 - 16 x 16 -> 16, signed or unsigned                       41 bytes
+; __mulhi3 - 16 x 16 -> 16, signed or unsigned                       39 bytes
 ; ============================================================================
 ;       r0  a, then the product              r5  the multiplier
-;       r1  b, then the multiplicand,        lr  untouched: this is a leaf
-;           then ZERO on return
+;       r1  b, then the multiplicand          lr  untouched: this is a leaf
 ;
-; IT ALWAYS RETURNS r1 = 0, and that is a promise the routine makes rather than
-; an accident.  __umulhisi3 below tail-calls it whenever the product provably
-; fits in sixteen bits, and a widening helper has to return a 32-bit value in
-; r0:r1 - so the high half has to be right on the way out.  Two bytes.
+; r1 IS LEFT AS RUBBISH - the multiplicand, shifted up by however many nibbles
+; the loop ran.  An earlier draft zeroed it, so that the pair r0:r1 would be a
+; well-formed 32-bit value and __umulhisi3 could tail-call this routine when
+; the product provably fit.  isa/abi.s puts the HIGH half of a pair in r0, so
+; that would have been the wrong way round; __umulhisi3 has to exchange the two
+; halves after the call and sets both, and the two bytes bought nothing.
 ;
 ; THE SMALLER OPERAND BECOMES THE MULTIPLIER, because the loop costs time per
 ; bit of it and stops as soon as it runs out.  The test doubles as the setup:
@@ -86,7 +87,6 @@ __mulhi3:
         shl     r1, r1, #2              ; 2
         lsr     r5, r5, #4              ; 2
         br      ne, r5, #0, .top        ; 3
-        mov     r1, #0                  ; 2   the promise
         ret                             ; 1
 
 
@@ -112,20 +112,16 @@ __mulhi3:
 ; already made.
 ;
 ; IT IS A CALL AND NOT A TAIL CALL, and that is the high:low convention's
-; doing.  __mulhi3 leaves the product in r0 and zero in r1 - which is exactly a
-; LOW:HIGH pair, and the wrong way round for this routine.  The exchange is two
-; one-byte instructions because one half is known to be zero, but it has to run
-; after the multiply, so `jmpr` becomes push / callr / pop.
+; doing.  __mulhi3 returns the product in r0, and this routine needs it in r1
+; with zero in r0 - so the two have to be set after the multiply, which `jmpr`
+; cannot do.
 ;
 ;       tail call, returning low:high    72 cycles   60 bytes   ABI-wrong
 ;       call and exchange, high:low      84          68         correct
 ;
-; Twelve cycles and eight bytes for the convention.  Worth knowing, because
-; __mulhi3's promise to leave zero in r1 was made for the tail call and under
-; high:low it buys nothing - the exchange overwrites r1 either way.  The
-; promise is kept anyway: it costs two bytes, it makes the routine's output a
-; well-formed 32-bit value in the study convention that snippets/mul.s uses,
-; and it is what this would need if isa/abi.s ever went the other way.
+; Twelve cycles and eight bytes for the convention.  Both halves are written
+; explicitly here, so __mulhi3 does not have to leave anything particular in
+; r1 - which is why it no longer bothers.
 
 __umulhisi3:
         br      ls, r1, r0, .sorted     ; 3   b is already the smaller
@@ -168,8 +164,8 @@ __umulhisi3:
         push    lr                      ; 4
         callr   __mulhi3.sorted         ; 4   past the comparison already made
         pop     lr                      ; 4
-        mov     r1, r0                  ; 1   ... which is low:high, so exchange
-        mov     r0, #0                  ; 1
+        mov     r1, r0                  ; 1   the product is the LOW half
+        mov     r0, #0                  ; 1   ... and the high half is zero
         ret                             ; 1
 
 
