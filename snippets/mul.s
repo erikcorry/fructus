@@ -733,3 +733,91 @@ mul_16_nib:
 
 #assert mul_16_nib.k1  - mul_16_nib.table == 16
 #assert mul_16_nib.k15 - mul_16_nib.table == 15 * 16
+
+
+; ============================================================================
+; mul_16_16_32 - unsigned 16 x 16 -> 32                              52 bytes
+; ============================================================================
+; a in r0, b in r1; result low in r0, high in r1.  Meant as a building block
+; for wider multiplies, so it follows the ABI and touches nothing else.
+;
+;       r0  accumulator low, and a on the way in     r2  multiplicand high
+;       r1  multiplier, then the result high         r3  accumulator high
+;       lr  multiplicand low                         r5  scratch
+;
+; Shift and add with both sides widened: the accumulator is r3:r0 and the
+; multiplicand r2:lr, both 32 bits, and the multiplier shifts down out of r1.
+;
+; Two things carried over from mul_16.  The smaller operand becomes the
+; multiplier, so the loop runs over as few bits as it can - worth about half
+; the time on lopsided operands.  And r0 doubles as a and as the accumulator's
+; low half: if bit 0 of the multiplier is set the first partial product is
+; already sitting in r0, and its high half is zero because a is 16 bits.
+;
+; ----------------------------------------------------------------------------
+; THE CARRY TEST IS SAFE WHEN THE ADDEND IS ZERO, which is worth stating
+; because it is the trap add32.s warns about and the addend really does reach
+; zero here: the multiplicand is a << i, so a = 0x8000 leaves nothing in the
+; low half after one step, and every set bit of b above bit 0 then adds zero.
+;
+;       br      hs, r0, lr, .clear      ; sum >= addend means no carry
+;
+; With lr = 0 the sum is unchanged and `sum < 0` is never true, so it reports
+; no carry - which is right, because adding zero cannot carry.  The form that
+; breaks is the negation, `A >= -B`: negating zero gives zero and it reports a
+; carry on every add.  65541 multiplies with a chosen to zero the low half
+; agree.
+;
+; ----------------------------------------------------------------------------
+; TWO THINGS THE FIRST DRAFT PAID FOR AND DID NOT NEED
+; ----------------------------------------------------------------------------
+;       first draft   53 bytes   350 cycles
+;       this          52 bytes   311 cycles
+;
+; THE LOOP IS ROTATED, as in mul_16: the two conditional branches at the bottom
+; ARE the loop control, so there is no `jmpr` back to the top and no separate
+; `br eq, r1, #0` to test for the end.  Three cycles a bit.
+;
+; AND THE CARRY BETWEEN THE MULTIPLICAND'S HALVES IS BRANCHLESS.  The bit
+; leaving the low half is `lsr r5, lr, #15` - 15 is in the shift3 table, so
+; that is a two-byte three-register form - and it is simply `or`ed into the
+; high half after it shifts.  Four instructions, eight cycles, no branch, where
+; testing bit 15 and conditionally setting bit 0 was nine bytes and 8.5 cycles.
+
+mul_16_16_32:
+        br      ls, r1, r0, .smallest   ; 3   b is already the smaller
+        mov     r5, r0                  ; 2
+        mov     r0, r1                  ; 1   pinned
+        mov     r1, r5                  ; 2   ... and fall through
+.smallest:
+        push    r2, r3, lr              ; 8
+        lsr     r2, r0, #15             ; 2   multiplicand high = a >> 15
+        shl     lr, r0, #1              ; 2   multiplicand low  = a << 1
+        mov     r3, #0                  ; 2   accumulator high
+        brset   r1, #1, .entry          ; 3   bit 0 set: r0 is already the sum
+        mov     r0, #0                  ; 1   otherwise start it at zero
+        jmpr    .entry                  ; 3
+.set:
+        add     r0, r0, lr              ; 2
+        add     r3, r3, r2              ; 2
+        br      hs, r0, lr, .clear      ; 3   sum >= addend means no carry
+        add     r3, r3, #1              ; 2
+.clear:
+        lsr     r5, lr, #15             ; 2   the bit about to leave the low half
+        shl     r2, r2, #1              ; 2
+        or      r2, r2, r5              ; 2
+        shl     lr, lr, #1              ; 2
+.entry:
+        lsr     r1, r1, #1              ; 2   LOGICAL, or the loop never ends
+.end:
+        brset   r1, #1, .set            ; 3
+        br      ne, r1, #0, .clear      ; 3
+.done:
+        mov     r1, r3                  ; 2
+        pop     lr, r3, r2              ; 8   push order reversed
+        ret                             ; 1
+
+; THE MULTIPLICAND IS PRE-SHIFTED BY ONE at entry, for the same reason mul_16
+; pre-shifts its copy: bit 0 of the multiplier has already been accounted for,
+; so the first pass through .clear would otherwise shift one time too few.
+; r2 = a >> 15 and lr = a << 1 are the two halves of a << 1.

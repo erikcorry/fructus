@@ -304,7 +304,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     // shifted the multiplier ARITHMETICALLY never cleared r1 and never ended.
     try { why = m.run({ max: 4000, stopAt: RET }); }
     catch (e) { why = `ran off the rails: ${e.message}`; }
-    return { why, r0: m.R[0], r2: m.R[2], cycles: m.cycles() };
+    return { why, r0: m.R[0], r1: m.R[1], r2: m.R[2], cycles: m.cycles() };
   };
 
   const NAMES = ['mul_16', 'mul_16_x4', 'mul_16_fast', 'mul_16_fast_erik',
@@ -411,6 +411,58 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   check('mul: and its prologue costs it the narrow one',
         mean('mul_16_nib', SMALL_B) > mean('mul_16_x4', SMALL_B),
         'the nibble table now beats the four-bit loop on 8-bit multipliers too');
+
+  // --- the widening multiply ------------------------------------------------
+  // 16 x 16 -> 32, so the reference is a plain JavaScript product: both
+  // operands are 16 bits, the result is at most 32, and doubles are exact to
+  // 53.  Nothing here needs BigInt and nothing here is a second shift-and-add.
+  {
+    const wide = (a, b) => {
+      const r = call('mul_16_16_32', a, b);
+      return { ...r, product: r.r1 * 65536 + r.r0 };
+    };
+    let wrong = 0, eg = '';
+    const at = [0, 1, 2, 3, 5, 255, 256, 257, 4095, 32767, 32768, 32769,
+                49152, 65534, 65535];
+    const pairs = [];
+    for (const a of at) for (const b of at) pairs.push([a, b]);
+    for (let i = 0; i < 2000; i++) pairs.push([(r32() >>> 16) & 0xffff, (r32() >>> 16) & 0xffff]);
+
+    // THE ADDEND REACHES ZERO and the carry test has to be right about it.
+    // The multiplicand is a << i, so a = 0x8000 empties its low half after one
+    // step and every set bit of b above bit 0 then adds zero.  `sum < addend`
+    // handles that; `sum >= -addend` would not, which is why add32.s says so.
+    for (const a of [0x8000, 0xc000, 0x4000, 0xff00])
+      for (let b = 0; b < 0x10000; b += 337) pairs.push([a, b]);
+
+    for (const [a, b] of pairs) {
+      const r = wide(a, b);
+      if (r.why !== 'stopped' || r.product !== a * b) {
+        if (!wrong++) eg = `${a} * ${b} = ${a * b}, got ` +
+                           `${r.why !== 'stopped' ? r.why : r.product}`;
+      }
+    }
+    check('mul_16_16_32', wrong === 0, `${wrong} of ${pairs.length} wrong, e.g. ${eg}`);
+
+    const w = (gen) => {
+      let y = 0x517cc1b7;
+      const g = () => { y ^= y << 13; y >>>= 0; y ^= y >>> 17; y ^= y << 5; y >>>= 0; return y; };
+      const bits = (n) => (g() >>> (32 - n)) & 0xffff;
+      let tot = 0;
+      for (let i = 0; i < 400; i++) { const [a, b] = gen(bits); tot += wide(a, b).cycles; }
+      return tot / 400;
+    };
+    const wide16 = w((r) => [r(16), r(16)]), wide8 = w((r) => [r(16), r(8)]);
+    check('mul_16_16_32 cost', Math.abs(wide16 - 311) < 2,
+          `16x16 costs ${wide16.toFixed(1)} cycles, the file says 311`);
+    check('mul_16_16_32 narrow', Math.abs(wide8 - 164) < 2,
+          `16x8 costs ${wide8.toFixed(1)} cycles, the file says 164`);
+    // The swap is load-bearing here too: a narrow multiplicand must be moved
+    // into the multiplier, or the loop runs over all sixteen bits.
+    check('mul_16_16_32 swaps', w((r) => [r(8), r(16)]) < wide16 * 0.75,
+          'a narrow multiplicand no longer becomes the multiplier');
+    console.log(`ok    mul_16_16_32: ${pairs.length} products against exact arithmetic`);
+  }
 
   console.log('ok    snippets/mul.s on the simulator: 7 entry points, ' +
               cases.length + ' pairs each, and the cost table');
