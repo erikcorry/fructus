@@ -269,3 +269,121 @@ __mulsi3:
         mov     r0, r1                  ; 1   al, pinned
         mov     r1, r3                  ; 2   bl
         jmpr    __umulhisi3             ; 3   its high:low result is ours
+
+
+; ============================================================================
+; __umulsidi3 - 32 x 32 -> 64, unsigned
+; ============================================================================
+;       a in r0:r1 as high:low          b in r2:r3 as high:low
+;       result in r0:r1:r2:r3, high word to low word
+;
+; This is what libgcc2.c builds __muldi3 out of, so it is the last helper a
+; port needs for `long long`.  The result exactly overwrites its arguments,
+; which is what the new 64-bit return rule in isa/abi.s buys.
+;
+;       (ah:al) * (bh:bl)  =  P3<<32  +  (P1 + P2)<<16  +  P0
+;
+;       P0 = al*bl   P1 = al*bh   P2 = ah*bl   P3 = ah*bh
+;
+; ALL FOUR PRODUCTS ARE NEEDED, unlike __mulsi3 which throws P3 away.  Four
+; calls to __umulhisi3 and a 64-bit accumulation.
+;
+; THE CROSS TERMS ARE SUMMED FIRST, into a 33-bit X = P1 + P2 with its carry
+; kept separately.  That is what keeps the register pressure survivable: the
+; four operands live on the stack, __umulhisi3 preserves r2, r3 and r4, and
+; those three hold X and its carry across every call.
+;
+;       w0 = P0.lo
+;       w1 = P0.hi + X.lo               carry k1
+;       w2 = P3.lo + X.hi + k1          carry k2
+;       w3 = P3.hi + cx + k2
+;
+; WHERE A CARRY CAN AND CANNOT WRAP AGAIN is the whole difficulty, and it is
+; decided by bounds rather than by testing everywhere:
+;
+;   P2.hi <= 0xfffe, because ah*bl <= 0xfffe0001.  So folding the carry out of
+;   X.lo into P2.hi before adding it cannot overflow, and needs no second test.
+;
+;   X.hi CAN be 0xffff, so the carry out of w1 folded into it CAN wrap, and
+;   that one is tested.
+;
+;   cx and the carries above it never exceed 2 before P3.hi arrives, so
+;   `add r4, r4, #1` there is always safe.
+;
+; The one test that guards a carry-of-a-carry is reached by almost no operands:
+; deleting it leaves 3700 random 32-bit products all correct.  It takes a sweep
+; of halves near 0xffff to find, which tests/libgcc-check.mjs does deliberately.
+
+__umulsidi3:
+        or      r5, r0, r2              ; 2   ah | bh
+        br      eq, r5, #0, .narrow     ; 3   both zero: it is a 16 x 16
+        push    r4, lr, r0              ; 8   r4, lr, ah      ah lowest
+        push    r1, r2, r3              ; 8   al, bh, bl      bl lowest
+        add     sp, sp, #-2             ; 2   and a slot for w0
+        ;      w0(0)  bl(2)  bh(4)  al(6)  ah(8)  lr(10)  r4(12)
+
+        ; --- P1 = al * bh ---------------------------------------------------
+        ld      r0, [sp, #6]            ; 4
+        ld      r1, [sp, #4]            ; 4
+        callr   __umulhisi3             ; 4
+        mov     r2, r0                  ; 2   X.hi
+        mov     r3, r1                  ; 2   X.lo
+
+        ; --- P2 = ah * bl, and X = P1 + P2 ----------------------------------
+        ld      r0, [sp, #8]            ; 4
+        ld      r1, [sp, #2]            ; 4
+        callr   __umulhisi3             ; 4
+        mov     r4, #0                  ; 2   cx
+        add     r3, r3, r1              ; 2   X.lo
+        br      hs, r3, r1, .nc1        ; 3
+        add     r0, r0, #1              ; 2   into P2.hi; it cannot wrap
+.nc1:
+        add     r2, r2, r0              ; 2   X.hi
+        br      hs, r2, r0, .nc2        ; 3
+        add     r4, r4, #1              ; 2
+.nc2:
+
+        ; --- P0 = al * bl ---------------------------------------------------
+        ld      r0, [sp, #6]            ; 4
+        ld      r1, [sp, #2]            ; 4
+        callr   __umulhisi3             ; 4
+        st      r1, [sp, #0]            ; 4   w0 is finished
+        add     r3, r3, r0              ; 2   w1 = X.lo + P0.hi
+        br      hs, r3, r0, .nc3        ; 3
+        add     r2, r2, #1              ; 2   k1 into X.hi ...
+        br      ne, r2, #0, .nc3        ; 3   ... which CAN wrap
+        add     r4, r4, #1              ; 2
+.nc3:
+
+        ; --- P3 = ah * bh ---------------------------------------------------
+        ld      r0, [sp, #8]            ; 4
+        ld      r1, [sp, #4]            ; 4
+        callr   __umulhisi3             ; 4
+        add     r2, r2, r1              ; 2   w2 = X.hi + k1 + P3.lo
+        br      hs, r2, r1, .nc4        ; 3
+        add     r4, r4, #1              ; 2
+.nc4:
+        add     r0, r0, r4              ; 2   w3 = P3.hi + cx + k2
+
+        ; --- place the four words and unwind --------------------------------
+        mov     r1, r2                  ; 2   w2
+        mov     r2, r3                  ; 2   w1
+        ld      r3, [sp, #0]            ; 4   w0
+        add     sp, sp, #10             ; 2
+        pop     lr, r4                  ; 6
+        ret                             ; 1
+
+; BOTH HIGH WORDS ZERO leaves only P0, so the answer is one widening multiply
+; with two zero words above it.  `mov r1, r0` after r0 is zeroed is the pinned
+; one-byte encoding, so both top words cost two bytes between them.
+.narrow:
+        push    lr                      ; 4
+        mov     r0, r1                  ; 1   al, pinned
+        mov     r1, r3                  ; 2   bl
+        callr   __umulhisi3             ; 4
+        mov     r2, r0                  ; 2   w1
+        mov     r3, r1                  ; 2   w0
+        mov     r0, #0                  ; 1   w3
+        mov     r1, r0                  ; 1   w2, pinned
+        pop     lr                      ; 4
+        ret                             ; 1

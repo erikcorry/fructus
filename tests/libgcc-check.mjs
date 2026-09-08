@@ -168,5 +168,82 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
               `${(tiny / 200).toFixed(0)} cycles for 32 / 16 / 8-bit values`);
 }
 
+// --- __umulsidi3 -------------------------------------------------------------
+// 32 x 32 -> 64, so BigInt is the reference: the product does not fit a double.
+// The four words come back high to low in r0:r1:r2:r3.
+//
+// THE CARRIES ARE WHAT THIS IS REALLY TESTING.  Three of the four additions can
+// carry into the next word, and one of those carries can itself wrap - which
+// the routine handles with a second test that most operands never reach.  So
+// the cases below are not only random: they include products chosen to drive
+// the partial sums to 0xffff, where the second test is the only thing between
+// a right answer and a wrong one.
+{
+  const wide = (A, B) => {
+    m.mem.fill(0);
+    m.load(code);
+    m.R.fill(0);
+    m.R[m.named.sp] = SP0;
+    m.R[m.named.lr] = RET;
+    m.R[4] = R4;
+    m.R[0] = Number((A >> 16n) & 0xffffn); m.R[1] = Number(A & 0xffffn);
+    m.R[2] = Number((B >> 16n) & 0xffffn); m.R[3] = Number(B & 0xffffn);
+    m.pc = syms.get('__umulsidi3'); m.halted = false; m.count = 0;
+    m.reset();
+    let why;
+    try { why = m.run({ max: 20000, stopAt: RET }); }
+    catch (e) { why = `ran off the rails: ${e.message}`; }
+    return { why, sp: m.R[m.named.sp], r4: m.R[4], cycles: m.cycles(),
+             product: (BigInt(m.R[0]) << 48n) | (BigInt(m.R[1]) << 32n) |
+                      (BigInt(m.R[2]) << 16n) | BigInt(m.R[3]) };
+  };
+  const r32n = () => (BigInt(r16()) << 16n) | BigInt(r16());
+
+  const cases = [];
+  const edge = [0n, 1n, 2n, 0xffffn, 0x10000n, 0xfffffffen, 0xffffffffn,
+                0x80000000n, 0x7fffffffn, 0xdeadbeefn];
+  for (const A of edge) for (const B of edge) cases.push([A, B]);
+  for (let i = 0; i < 2500; i++) cases.push([r32n(), r32n()]);
+  for (let i = 0; i < 800; i++) cases.push([BigInt(r16()), BigInt(r16())]);  // the shortcut
+  for (let i = 0; i < 400; i++) cases.push([r32n(), BigInt(r16())]);
+
+  // Operands whose halves are all 0xffff or near it drive every partial sum to
+  // the top of its range, which is where the carry-of-a-carry lives.
+  //
+  // THIS SWEEP IS THE ONLY THING THAT CATCHES IT, which was checked and not
+  // assumed: deleting the routine's second carry test leaves 3700 random
+  // products all correct and fails only here.  Four thousand more cases for
+  // one bug that randomness does not reach.
+  const near = [0xfffcn, 0xfffdn, 0xfffen, 0xffffn, 0x0000n, 0x0001n, 0x8000n, 0x8001n];
+  for (const ah of near) for (const al of near) for (const bh of near) for (const bl of near)
+    cases.push([(ah << 16n) | al, (bh << 16n) | bl]);
+
+  let wrong = 0, eg = '';
+  for (const [A, B] of cases) {
+    const q = wide(A, B);
+    if (q.why !== 'stopped' || q.product !== A * B || q.sp !== SP0 || q.r4 !== R4) {
+      if (!wrong++) eg = `0x${A.toString(16)} * 0x${B.toString(16)} = ` +
+                         `0x${(A * B).toString(16)}, got ` +
+                         (q.why !== 'stopped' ? q.why : `0x${q.product.toString(16)}`);
+    }
+  }
+  check('__umulsidi3', wrong === 0, `${wrong} of ${cases.length} wrong, e.g. ${eg}`);
+
+  const cost = (gen) => {
+    let y = 0x517cc1b7;
+    const g = () => { y ^= y << 13; y >>>= 0; y ^= y >>> 17; y ^= y << 5; y >>>= 0; return y; };
+    const b = (n) => BigInt((g() >>> (32 - n)) & 0xffff);
+    let t = 0;
+    for (let i = 0; i < 200; i++) { const [A, B] = gen(b); t += wide(A, B).cycles; }
+    return t / 200;
+  };
+  const full = cost((b) => [(b(16) << 16n) | b(16), (b(16) << 16n) | b(16)]);
+  const half = cost((b) => [b(16), b(16)]);
+  check('__umulsidi3 shortcut', half < full / 3,
+        `16-bit values cost ${half.toFixed(0)} against ${full.toFixed(0)} for 32-bit ones`);
+  console.log(`ok    __umulsidi3: ${cases.length} products against BigInt; ` +
+              `${full.toFixed(0)} cycles full width, ${half.toFixed(0)} narrow`);
+}
+
 console.log(`${checks} checks, ${fails} failures`);
 process.exit(fails ? 1 : 0);
