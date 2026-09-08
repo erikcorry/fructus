@@ -65,6 +65,16 @@ start:
         mov     r0, #0                  ; 1  the pinned zero
         mov     r1, #0                  ; 2  ... only r0 has one
         mov     r2, #0x7fff             ; 2  immbit5, largest positive
+        mov     r3, #0x00ff             ; 2  immask5, the low byte
+        mov     r4, #0xcccc             ; 2  immask5, a stripe
+        and     r0, r0, #0x00f0         ; 2  immask5, keep a nibble
+        or      r1, r1, #0xf000         ; 2  immask5, set the top nibble
+        xor     r2, r2, #0xaaaa         ; 2  immask5, flip alternate bits
+        add     r3, r3, #0xff00         ; 2  immask5 on add
+        add     r4, r4, #0x0100         ; 2  immbit5 on add, the new +1 slot
+        brclear r5, #0x000f, .mask_ok   ; 3  immask5 branch
+        brset   r5, #0xff00, .mask_ok   ; 3
+.mask_ok:
         mov     r2, #-17                ; 2  immbit5, ~16
         mov     r2, #4097               ; 3  imm16: two bits set, no shortcut
         sub     r1, r2, r3              ; 2  alias -> rsb, swapped

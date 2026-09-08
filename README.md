@@ -39,7 +39,7 @@ on your `PATH`:
 cargo install customasm        # or grab a release binary
 npm install                    # one dependency: a TOML parser
 npm run gen                    # generate build/fructus.asm from the spec
-npm test                       # 63 checks, ~44,000 assertions
+npm test                       # 71 checks, ~44,000 assertions
 ```
 
 Then assemble and run something. `customasm` takes several input files, so the
@@ -318,20 +318,14 @@ in exactly those columns. Nothing has to move.
 The hardware cost is a second read port on the address path, which the ALU's
 three-register forms already need.
 
-### `add` and `rsb` with a `#1<<n` immediate
+### `rsb` with a `#1<<n` immediate
 
-Slot `+1` of every ALU group is the immbit5 slot. `xor`, `or` and `and` use
-theirs — bit flip, bit set, bit clear. `add` (0x41) and `rsb` (0x49) are free.
-
-For `add` this buys the powers of two from 16 to 32768 in two bytes, which
-`imm5` cannot reach and `imm10` spends three bytes on. Advancing a pointer by a
-power-of-two record size is the case that turns up. The inverted half of the
-table gives −2, −3, −5, −9, −17 … −16385, the −(2ⁿ+1) sequence: useful by
-accident rather than design, and awkward for stack frames, since a 1024-byte
-frame wants −1024 and the table offers −1025.
-
-`rsb rd, rd, #1<<n` computes (2ⁿ − rd). Plausible for mirroring an index; no
-routine here has wanted one yet.
+Slot `+1` of every ALU group is the immbit5 slot, and four of the eight
+operations now use theirs — `add` (0x41), `xor` (0x51), `or` (0x59), `and`
+(0x61). `rsb` (0x49) is the one left that could plausibly want it:
+`rsb rd, rd, #1<<n` computes (2ⁿ − rd), plausible for mirroring an index, and
+no routine here has wanted one yet. The shifts leave theirs free because a
+shift distance is four bits.
 
 One opcode each and no new hardware — the 4-to-16 decoder is already built for
 the other three. Cheap enough that the question is whether they earn their line

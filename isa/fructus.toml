@@ -322,6 +322,39 @@ values = [
   0xfeff, 0xfdff, 0xfbff, 0xf7ff, 0xefff, 0xdfff, 0xbfff, 0x7fff,
 ]
 
+# FIELDS AND STRIPES, and their complements.  immbit5 reaches one bit at a
+# time; this reaches the shapes a bit FIELD has - a pair, a nibble, a byte -
+# and the swizzle masks a bit-twiddling routine needs.
+#
+#   0x3 << 2n   eight aligned 2-bit fields.  Tagged pointers use the low bits
+#               and small enums live in pairs, so these are the masks that
+#               extract and clear them.
+#   0xf << 4n   the four nibbles.
+#   0xff00      the high byte.  Its complement 0x00ff is the low byte, which
+#               is why that one is not listed separately.
+#   f0f0 cccc aaaa
+#               the swizzle masks, and their complements 0f0f 3333 5555.
+#
+# THE COMPLEMENTS ARE HALF THE POINT.  `and rd, rd, #~mask` clears a field
+# where `and rd, rd, #mask` keeps it, and both are two bytes.
+#
+# AND THE SET IS EXACTLY WHAT SWAR NEEDS.  5555 3333 0f0f 00ff and their
+# complements aaaa cccc f0f0 ff00 are all present, which is the whole mask
+# sequence a software popcount or bit reversal walks.
+#
+# It costs 30 LUT4 on an iCE40 - a 32-entry table is two LUT4 per output bit
+# and change, whatever is in it - so the CONTENTS were chosen for the compiler
+# and not for the fabric.
+[optype.immask5]
+kind   = "table"
+bits   = 5
+values = [
+  0xc000, 0x3000, 0x0c00, 0x0300, 0x00c0, 0x0030, 0x000c, 0x0003,
+  0xf000, 0x0f00, 0x00f0, 0x000f, 0xff00, 0xf0f0, 0xcccc, 0xaaaa,
+  0x3fff, 0xcfff, 0xf3ff, 0xfcff, 0xff3f, 0xffcf, 0xfff3, 0xfffc,
+  0x0fff, 0xf0ff, 0xff0f, 0xfff0, 0x00ff, 0x0f0f, 0x3333, 0x5555,
+]
+
 # Branch conditions.  Three bits, eight encoded, twelve spellings accepted.
 #
 # The encoded eight are the four ordered comparisons - signed and unsigned, in
@@ -638,7 +671,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   0011_1000                mov  rd, #imm5             2 bytes
 #   0011_1001                mov  rd, #immbit5          2 bytes
 #   0011_101s                unary ops, 8 in TWO opcodes 2 bytes
-#   0011_1100 .. 0011_1111   -- free, 4 slots
+#   0011_1100                mov  rd, #immask5          2 bytes
+#   0011_1101 .. 0011_1111   -- free, 3 slots
 #
 #   THE UNARY OPERATIONS ARE IN THE RIGHT COLUMN NOW, and the column is the
 #   whole argument for putting them here.  Byte 1 of a unary op is
@@ -675,7 +709,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #       +2   rd, ra, #imm3     2 bytes  two regs + table imm, TWO opcodes
 #       +3     "
 #       +4   rd, ra, #imm10    3 bytes  two regs + wide imm
-#       +5   -- free
+#       +5   rd, rd, #immask5  2 bytes  same shape, field and stripe masks
 #       +6   rd, ra, rb        2 bytes  THREE registers, TWO opcodes
 #       +7     "
 #
@@ -683,20 +717,25 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   unchanged.  Form +6 is the one the memory block has no use for: it spends
 #   the stolen opcode bit on a third register rather than an immediate bit.
 #
-#   Form +1 exists only for `and` and `or`, where it is bit-clear and bit-set.
-#   The other four operations leave it free: xor's single-bit case is already
-#   covered because imm5 and imm3 hold the values that matter to it, and a
-#   single-bit add or subtract is just an add.  Nothing stops a later operation
-#   from claiming its own +1.
+#   FORMS +1 AND +5 ARE PER-OPERATION and neither is claimed by all eight.
 #
 #     0x40  add      0x48  rsb      0x50  xor      0x58  or      0x60  and
 #
-#   0x59 and 0x61 are the two +1 slots in use: `or rd, rd, #1<<n` (bit set) and
-#   `and rd, rd, #~(1<<n)` (bit clear).
+#   +1 is immbit5, single bits and their complements, and four operations take
+#   it: 0x41 `add rd, rd, #1<<n` - and the complement half makes that a
+#   subtract of a power of two - 0x51 bit flip, 0x59 bit set, 0x61 bit clear.
+#   rsb leaves it free because a single-bit reverse subtract is nothing in
+#   particular, and the shifts because a shift distance is four bits.
+#
+#   +5 is immask5, the field and stripe masks, and the same four take it:
+#   0x45, 0x55, 0x5d, 0x65.  Extracting a nibble, clearing a tag, adding into
+#   a field, and the SWAR masks a popcount or bit reversal walks - all two
+#   bytes and no constant to build first.
 #
 #   The shifts take the same group shape but only three of the forms: no imm10
-#   (a shift count never needs ten bits) and no one-byte encodings.  Five
-#   opcodes each, and +1, +4 and +5 go unused in their groups.
+#   (a shift count never needs ten bits), no mask forms, and no one-byte
+#   encodings.  Five opcodes each, and +1, +4 and +5 go unused in their
+#   groups.
 #
 #     0x68  shl      0x70  asr      0x78  lsr
 #
@@ -739,7 +778,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1000_0000                push ra                  2 bytes
 #   1000_0001                push8  ra                  2 bytes
 #   1000_0010                push ra, rb              2 bytes
-#   1000_0011 .. 1000_0101   -- free
+#   1000_0011                -- free
+#   1000_0100                brclear ra, #immask5, target
+#   1000_0101                brset   ra, #immask5, target
 #   1000_011c                push ra, rb, rc          TWO opcodes
 #   1000_1000                pop  ra                  2 bytes
 #   1000_1001                pop8   ra                  2 bytes
@@ -757,7 +798,11 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1001_0001                br8   <cond,#imm>, ra, target
 #   1001_001b                br    <cond>, ra, rb, target    TWO opcodes
 #   1001_010b                br8   <cond>, ra, rb, target    TWO opcodes
-#   1001_011e                brclear / brset ra, #mask, target  e = eq / ne
+#   1001_011e                brclear / brset ra, #immbit5, target  e = eq/ne
+#
+#   The immask5 pair is at 1000_0100 and 1000_0101, up among the pushes, and
+#   that is the one place the map gives up on grouping.  This row had a single
+#   slot left and the pair needed two; bit 0 still separates clear from set.
 #   1001_1000                jmpr  target               3 bytes, pc relative
 #   1001_1001                jmp   target               3 bytes, absolute
 #   1001_1010                callr target               3 bytes, pc relative
@@ -1020,6 +1065,13 @@ semantics = "R[d] = imm"
   encoding = "0011_1001  dddi_iiii"
   fields   = { i = "imm:immbit5" }
 
+  # And the mask table.  Loading 0x00ff or 0xf000 was three bytes before this;
+  # a routine that masks with a constant usually has to build it first.
+  [[insn.form]]
+  name     = "reg_immask5"
+  encoding = "0011_1100  dddi_iiii"
+  fields   = { i = "imm:immask5" }
+
   # Destination in the opcode byte, then a whole 16-bit immediate.  No
   # narrowing happens here - the encoded type is the logical type - which is
   # the one case where a form can represent everything the programmer writes.
@@ -1115,6 +1167,25 @@ semantics = "R[d] = R[a] + imm"
   name     = "reg_imm5"
   encoding = "0100_0000  dddi_iiii"
   fields   = { i = "imm:imm5" }
+  tie      = { a = "d" }
+
+  # ADDING A POWER OF TWO.  imm5 already reaches 1, 2, 4 and 8, so what this
+  # buys is 16 upwards and 0x8000 - and the complements, which are the
+  # subtractions: `add rd, rd, #0xfff0` is minus sixteen.  The slot was
+  # reserved for immbit5 in every one of the eight ALU groups and nothing had
+  # asked for it here.
+  [[insn.form]]
+  name     = "reg_immbit5"
+  encoding = "0100_0001  dddi_iiii"
+  fields   = { i = "imm:immbit5" }
+  tie      = { a = "d" }
+
+  # And the mask table, for the same reason it is on and/or/xor: a field is
+  # often added to as well as masked out.
+  [[insn.form]]
+  name     = "reg_immask5"
+  encoding = "0100_0101  dddi_iiii"
+  fields   = { i = "imm:immask5" }
   tie      = { a = "d" }
 
   [[insn.form]]
@@ -1243,6 +1314,14 @@ semantics = "R[d] = R[a] ^ imm"
   fields   = { i = "imm:immbit5" }
   tie      = { a = "d" }
 
+  # The same shape again, read through immask5: fields and stripes rather than
+  # single bits.  Column .5 of the ALU block was reserved and empty.
+  [[insn.form]]
+  name     = "reg_immask5"
+  encoding = "0101_0101  dddi_iiii"
+  fields   = { i = "imm:immask5" }
+  tie      = { a = "d" }
+
   [[insn.form]]
   name     = "reg_reg_imm3"
   encoding = "0101_001i  ddda_aajj"
@@ -1308,6 +1387,14 @@ semantics = "R[d] = R[a] | imm"
   fields   = { i = "imm:immbit5" }
   tie      = { a = "d" }
 
+  # The same shape again, read through immask5: fields and stripes rather than
+  # single bits.  Column .5 of the ALU block was reserved and empty.
+  [[insn.form]]
+  name     = "reg_immask5"
+  encoding = "0101_1101  dddi_iiii"
+  fields   = { i = "imm:immask5" }
+  tie      = { a = "d" }
+
   [[insn.form]]
   name     = "reg_reg_imm3"
   encoding = "0101_101i  ddda_aajj"
@@ -1360,6 +1447,14 @@ semantics = "R[d] = R[a] & imm"
   name     = "reg_immbit5"
   encoding = "0110_0001  dddi_iiii"
   fields   = { i = "imm:immbit5" }
+  tie      = { a = "d" }
+
+  # The same shape again, read through immask5: fields and stripes rather than
+  # single bits.  Column .5 of the ALU block was reserved and empty.
+  [[insn.form]]
+  name     = "reg_immask5"
+  encoding = "0110_0101  dddi_iiii"
+  fields   = { i = "imm:immask5" }
   tie      = { a = "d" }
 
   [[insn.form]]
@@ -1743,6 +1838,15 @@ semantics = "if ((R[a] & mask) == 0) pc = pc + off"
   encoding = "1001_0110  aaam_mmmm  tttt_tttt"
   fields   = { m = "mask:immbit5", t = "off:off8" }
 
+  # The same test against the mask table instead of a single bit - branch on
+  # whether a FIELD is empty.  It is nowhere near the other branches in the
+  # map, because the branch row had one slot left and this needed two; bit 0
+  # still separates clear from set, as it does at 0x96 and 0x97.
+  [[insn.form]]
+  name     = "reg_mask5"
+  encoding = "1000_0100  aaam_mmmm  tttt_tttt"
+  fields   = { m = "mask:immask5", t = "off:off8" }
+
 [[insn]]
 mnemonic = "brset"
 summary  = "branch if ra & mask is non-zero"
@@ -1758,6 +1862,15 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
   name     = "reg_mask"
   encoding = "1001_0111  aaam_mmmm  tttt_tttt"
   fields   = { m = "mask:immbit5", t = "off:off8" }
+
+  # The same test against the mask table instead of a single bit - branch on
+  # whether a FIELD is empty.  It is nowhere near the other branches in the
+  # map, because the branch row had one slot left and this needed two; bit 0
+  # still separates clear from set, as it does at 0x96 and 0x97.
+  [[insn.form]]
+  name     = "reg_mask5"
+  encoding = "1000_0101  aaam_mmmm  tttt_tttt"
+  fields   = { m = "mask:immask5", t = "off:off8" }
 
 
 # --- push / pop -------------------------------------------------------------
