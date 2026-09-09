@@ -532,12 +532,28 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   drift.run({ max: 1000 });
   check('and stays put', drift.count === 1, `${drift.count} instructions`);
 
-  // nop still nops, at its new opcode
+  // THE OPCODES COME FROM THE SPEC.  This test used to spell nop as a literal
+  // 0x01, which is how it came to be testing `ret` the day the one-byte row was
+  // rearranged - it passed no useful assertion and reported a confusing pc.
+  const opcodeOf = (mnemonic) => {
+    const i = spec.insn.find((x) => x.mnemonic === mnemonic && !(x.operands ?? []).length);
+    return parseInt(i.form[0].encoding.replace(/_/g, ''), 2);
+  };
+  const NOP = opcodeOf('nop');
+
   const n = machine();
-  n.mem[0] = 0x01; n.mem[1] = 0x01; n.pc = 0;
+  n.mem[0] = NOP; n.mem[1] = NOP; n.pc = 0;
   n.step(); n.step();
   check('nop still does nothing', !n.halted && n.pc === 2 && n.regs().every((r) => r === 0),
         `pc=${n.pc} halted=${n.halted}`);
+
+  // And the layout the argument above depends on: the two instructions a wild
+  // jump is likeliest to hit are the two that stop or unwind, and nop is as far
+  // from them as the one-byte row reaches.
+  check('halt and ret hold the bottom of the one-byte row',
+        opcodeOf('halt') === 0x00 && opcodeOf('ret') === 0x01,
+        `halt=0x${opcodeOf('halt').toString(16)} ret=0x${opcodeOf('ret').toString(16)}`);
+  check('nop bookends the far end', NOP === 0x0f, `nop=0x${NOP.toString(16)}`);
   console.log('ok    halt is opcode zero: zeroed memory stops the machine');
 }
 

@@ -342,9 +342,31 @@ values = [
 # complements aaaa cccc f0f0 ff00 are all present, which is the whole mask
 # sequence a software popcount or bit reversal walks.
 #
-# It costs 30 LUT4 on an iCE40 - a 32-entry table is two LUT4 per output bit
-# and change, whatever is in it - so the CONTENTS were chosen for the compiler
-# and not for the fabric.
+# IT COSTS 25 LUT4 ON AN iCE40, and the cheapness comes from a property of the
+# contents rather than of the table.  Yosys maps the flat 32-entry lookup to 30
+# LUT4; hand-factored it is 25, measured and verified equivalent on all 32
+# entries:
+#
+#     8   layer 1     p[k], a function of the low four select bits
+#     1   detector    sel[3:0] == 15, the aaaa row
+#     8   odd bits    out[2k+1] = p[k] ^ sel[4]
+#     8   even bits   out[2k]   = (p[k] & ~aaaa) ^ sel[4]
+#
+# Layer 1 is EIGHT lookups rather than sixteen because aaaa is the only entry in
+# the table whose bit 2k and bit 2k+1 ever differ - the fields, the nibbles, the
+# byte and the swizzles are all built from aligned pairs - so one lookup serves
+# both bits of a pair and a single detector patches the exception.  5555 costs
+# nothing extra because it is reached as a complement, through the sel[4] xor,
+# rather than stored.
+#
+# Both layers are combinational: two LUT levels is 7.4 ns on an UP5K, or 135
+# MHz, against 9.8 ns for a 16-bit add.  The flat 30-LUT version has the same
+# depth, so the factorisation is area and not speed.
+#
+# NONE OF THIS CONSTRAINED THE CONTENTS, which were chosen for the compiler.
+# But it is worth knowing which way the dependency runs: adding a mask with an
+# odd-aligned run - 0x0006, say - would break the pair symmetry and take layer 1
+# back to sixteen lookups, costing 8 LUT4 rather than the 0 it looks like.
 [optype.immask5]
 kind   = "table"
 bits   = 5
@@ -365,7 +387,7 @@ values = [
 # permits the exchange says so with `swap_operands`.
 #
 # THERE IS NO `al`.  An unconditional branch is a register compared for
-# equality with itself, which is why the two-byte form at 0x9e pins `eq, r0,
+# equality with itself, which is why the two-byte form at 0x9f pins `eq, r0,
 # r0` rather than spending a condition slot on "always".  `nv` is not encoded
 # either - a branch that never happens is a nop the assembler can just not
 # emit.  Both slots go to the overflow conditions instead.
@@ -588,7 +610,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   decoded from a fixed position.
 #
 #   0000_0000                halt                       1 byte
-#   0000_0001                nop                        1 byte
+#   0000_0001                ret                        1 byte
 #   0000_0010                ld   r0, [r0, #0]          1 byte
 #   0000_0011                ld8  r0, [r0, #0]          1 byte
 #   0000_0100                add  r0, r0, #1            1 byte
@@ -599,7 +621,23 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   0000_1001                or   r0, r1, #0  = mov     1 byte
 #   0000_1010                or   r1, r0, #0  = mov     1 byte
 #   0000_1011                mov  r0, #0                1 byte
-#   0000_1100 .. 0000_1111   -- free, 4 one-byte slots
+#   0000_1100 .. 0000_1110   -- free, 3 one-byte slots
+#   0000_1111                nop                        1 byte
+#
+#   THE TWO ENDS OF THIS ROW ARE THE TWO INSTRUCTIONS THAT DO NOTHING USEFUL,
+#   and putting them there is the point.  halt and ret hold 0x00 and 0x01: both
+#   write the pc and neither takes an operand, so the two opcodes a wild jump
+#   is likeliest to land on are the two that stop or unwind.  nop holds 0x0f at
+#   the far end, where it bookends the block and stays as far from 0x00 as a
+#   four-bit row allows - which matters for the reason halt is at zero in the
+#   first place: a nop sled through erased memory is the failure that looks
+#   like a working machine.
+#
+#   Everything between them is an ABBREVIATION - a form of some instruction
+#   that also exists in full elsewhere, with every operand pinned.  So the row
+#   reads as three things and not twelve: two control-flow stubs, ten pinned
+#   forms, one nop, and the free slots sit next to the nop rather than in the
+#   middle of the abbreviations.
 #   ------------------------------------------------------------------------
 #
 #   0001_0ddd                mov  rd, #imm16            3 bytes
@@ -643,7 +681,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #       0x18 st   / 0x20 st8        the store rows
 #       0x28 ld   / 0x30 ld8        the load rows
 #       0x80 push / 0x81 push8      and the same for pop at 0x88
-#       0x90 br   / 0x91 br8        and again at 0x92 / 0x94
+#       0x90 br   / 0x98 br8        and again at 0x92 / 0x9a
 #
 #   The 16-bit form is the common one - a byte load is the special case, a byte
 #   push is an argument rather than a register save - so it gets the name
@@ -671,8 +709,25 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   0011_1000                mov  rd, #imm5             2 bytes
 #   0011_1001                mov  rd, #immbit5          2 bytes
 #   0011_101s                unary ops, 8 in TWO opcodes 2 bytes
-#   0011_1100                mov  rd, #immask5          2 bytes
-#   0011_1101 .. 0011_1111   -- free, 3 slots
+#   0011_1100                -- free
+#   0011_1101                mov  rd, #immask5          2 bytes
+#   0011_1110                -- free
+#   0011_1111                -- free
+#
+#   THIS ROW IS AN ALU GROUP WITHOUT AN ALU OPERATION, and it is numbered as
+#   one.  `mov rd, #imm` is `or rd, #imm` with the register half thrown away, so
+#   the row lines its constant forms up on the same columns the six ALU groups
+#   below use: +0 imm5, +1 immbit5, +5 immask5.  The unary operations take the
+#   two-register columns +2 and +3, exactly as the ALU's imm3 forms do.
+#
+#   That leaves 0x3c empty, which is the imm10 column and is deliberate: `mov
+#   rd, #imm10` would be a strictly worse `mov rd, #imm16` - three bytes either
+#   way, six fewer bits of range - so the slot has nothing to hold.  Putting
+#   immask5 there to close the gap would have cost more than it saved: a reader
+#   who knows +5 is the mask column in six groups would have to learn that the
+#   seventh spells it differently, and a decoder built from column arithmetic
+#   would need a special case for one opcode.  An empty slot in the right place
+#   is cheaper than a full one in the wrong place, and there are 137 free.
 #
 #   THE UNARY OPERATIONS ARE IN THE RIGHT COLUMN NOW, and the column is the
 #   whole argument for putting them here.  Byte 1 of a unary op is
@@ -778,40 +833,76 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1000_0000                push ra                  2 bytes
 #   1000_0001                push8  ra                  2 bytes
 #   1000_0010                push ra, rb              2 bytes
-#   1000_0011                -- free
-#   1000_0100                brclear ra, #immask5, target
-#   1000_0101                brset   ra, #immask5, target
+#   1000_0011 .. 1000_0101   -- free
 #   1000_011c                push ra, rb, rc          TWO opcodes
 #   1000_1000                pop  ra                  2 bytes
 #   1000_1001                pop8   ra                  2 bytes
 #   1000_1010                pop  ra, rb              2 bytes
 #   1000_1011 .. 1000_1101   -- free
 #   1000_111c                pop  ra, rb, rc          TWO opcodes
+#
+#   PUSH AND POP ARE NOW THE SAME SHAPE TWICE with nothing borrowed from either
+#   row.  The two branches that used to sit at 1000_0100 and 1000_0101 have gone
+#   back to the control-flow block where they belong, which is what makes the
+#   claim below - everything that writes the pc is a 1001_xxxx opcode - true
+#   again rather than nearly true.
 #   ------------------------------------------------------------------------
 #
-#   --- control flow, all of it, in one contiguous block ---------------------
-#   Every conditional branch is 3 bytes.  They sit immediately above jmp and
-#   call so that everything writing the pc lives in 1001_xxxx and nothing else
-#   does.
+#   --- control flow, all of it, in exactly two rows -------------------------
+#   EVERY OPCODE THAT WRITES THE PC IS 1001_xxxx AND NOTHING ELSE IS - with one
+#   deliberate exception, `ret`, which is one byte and lives with the other
+#   one-byte instructions at 0000_1100.  Sixteen slots, sixteen instructions,
+#   nothing spilling into a neighbouring row.
 #
-#   1001_0000                br    <cond,#imm>, ra, target
-#   1001_0001                br8   <cond,#imm>, ra, target
-#   1001_001b                br    <cond>, ra, rb, target    TWO opcodes
-#   1001_010b                br8   <cond>, ra, rb, target    TWO opcodes
-#   1001_011e                brclear / brset ra, #immbit5, target  e = eq/ne
-#
-#   The immask5 pair is at 1000_0100 and 1000_0101, up among the pushes, and
-#   that is the one place the map gives up on grouping.  This row had a single
-#   slot left and the pair needed two; bit 0 still separates clear from set.
-#   1001_1000                jmpr  target               3 bytes, pc relative
-#   1001_1001                jmp   target               3 bytes, absolute
-#   1001_1010                callr target               3 bytes, pc relative
-#   1001_1011                call  target               3 bytes, absolute
-#   1001_1100                ret                        1 byte
-#   1001_1101                call  ra                   2 bytes, INDIRECT
-#   1001_1110                jmpr  target               2 bytes, SHORT form
-#   1001_1111                -- free
+#   1001_0000                br      <cond,#imm5>, ra, target
+#   1001_0001                brclear ra, #immbit5, target
+#   1001_001b                br      <cond>, ra, rb, target    TWO opcodes
+#   1001_0100                jmpr    target             3 bytes, pc relative
+#   1001_0101                brclear ra, #immask5, target
+#   1001_0110                jmp     target             3 bytes, absolute
+#   1001_0111                call    ra                 2 bytes, INDIRECT
+#   1001_1000                br8     <cond,#imm5>, ra, target
+#   1001_1001                brset   ra, #immbit5, target
+#   1001_101b                br8     <cond>, ra, rb, target    TWO opcodes
+#   1001_1100                callr   target             3 bytes, pc relative
+#   1001_1101                brset   ra, #immask5, target
+#   1001_1110                call    target             3 bytes, absolute
+#   1001_1111                jmpr    target             2 bytes, SHORT form
 #   1010_0000 .. 1011_1111   -- free, 32 slots
+#
+#   THE TWO ROWS ARE br AND br8, EIGHT APART, which is the same relationship
+#   st/st8 and ld/ld8 already have and for the same reason: the 16-bit form is
+#   the common one and gets the opcode you reach first, the byte form sits
+#   directly below it in the same column.  Both of br8's forms moved to get
+#   this - the two-register pair from 1001_010b to 1001_101b, the packed form
+#   from 1001_0001 to 1001_1000 - and what it buys is that a reader never has
+#   to remember where the byte version of anything is.  It is one row down.
+#
+#   AND THE COLUMNS SAY WHAT BYTE 1 LOOKS LIKE, exactly as they do everywhere
+#   else in the map:
+#
+#     .0 .1 .5   aaa?_????   one register and a 5-bit field
+#     .2 .3      ccca_aaee   two registers and a condition
+#     .4 .6      iiii_iiii   a 16-bit target and no register at all
+#     .7                     the two-byte odds and ends
+#
+#   .0, .1 AND .5 ARE THE ALU'S CONSTANT COLUMNS, and that is not an analogy.
+#   Byte 1 of `br cond, ra, #imm5` is `aaak_kkkk` and byte 1 of `brclear ra,
+#   #mask` is `aaam_mmmm`: one register and five bits, identically placed.  The
+#   only difference is which table reads the five bits - a packed condition and
+#   signed constant at +0, immbit5 at +1, immask5 at +5 - which is precisely the
+#   +0 / +1 / +5 relationship every ALU group has.  So the branches on a mask
+#   sit in the mask columns, and clear-versus-set is the row rather than bit 0.
+#
+#   .4 AND .6 SPLIT RELATIVE FROM ABSOLUTE.  Column .4 is pc-relative and column
+#   .6 is absolute; the row then says jump or call.  Four instructions, two
+#   bits, and the pair a linker cares about - jmpr against jmp, callr against
+#   call - differ in one bit position rather than in the low bit of a run.
+#
+#   .7 HOLDS WHAT IS LEFT: the two forms that are two bytes rather than three.
+#   `call ra` is a register and `jmpr target` a short displacement, so they
+#   share no byte-1 layout with each other or with anything above them.  A
+#   column of leftovers is honest; scattering them through the gaps would not be.
 #   ------------------------------------------------------------------------
 #
 #   11xx_xxxx                -- free, a quarter of the map
@@ -1039,8 +1130,9 @@ semantics = "R[d] = imm"
   # cleared flags are all this instruction, and r0 is where a return value and
   # a first argument live, so it is the register they most often want.
   #
-  # It costs one of the five free one-byte slots and pins both operands, which
-  # is what an abbreviation is: a form of `mov` with nothing left to say.
+  # It costs one of the free one-byte slots and pins both operands, which is
+  # what an abbreviation is: a form of `mov` with nothing left to say.  Three
+  # are left after this and `ret`.
   [[insn.form]]
   name     = "r0_zero"
   encoding = "0000_1011"
@@ -1069,7 +1161,7 @@ semantics = "R[d] = imm"
   # a routine that masks with a constant usually has to build it first.
   [[insn.form]]
   name     = "reg_immask5"
-  encoding = "0011_1100  dddi_iiii"
+  encoding = "0011_1101  dddi_iiii"
   fields   = { i = "imm:immask5" }
 
   # Destination in the opcode byte, then a whole 16-bit immediate.  No
@@ -1712,9 +1804,13 @@ semantics = "R[d] = popcount(R[a])"
 # The two-register form is the `rsb` three-register encoding with its
 # DESTINATION field replaced by a 3-bit condition, plus a displacement byte:
 #
-#     byte 0:  1 0 0 0 0 0 1 b    opcode pair 0x82/0x83, b = second reg bit 0
+#     byte 0:  1 0 0 1 w 0 1 b    0x92/0x93 for br, 0x9a/0x9b for br8
 #     byte 1:  c c c a a a e e    condition, first reg, second reg bits 2 and 1
 #     byte 2:  t t t t t t t t    signed displacement from the next instruction
+#
+# w IS THE WIDTH BIT and it is bit 3 in both forms: clear for br, set for br8,
+# which puts the byte-wide row eight opcodes below the word-wide one exactly as
+# st/st8 and ld/ld8 sit.  b is still the second register's low bit.
 #
 # Three of the register bits and all of the register decode are therefore
 # shared with the ALU three-register forms; only byte 1's top field changes
@@ -1725,9 +1821,15 @@ semantics = "R[d] = popcount(R[a])"
 # with one 5-bit index into the `condimm5` table, which supplies a condition
 # and a constant together:
 #
-#     byte 0:  1 0 0 0 0 0 0 0    0x80 for br8, 0x81 for br
+#     byte 0:  1 0 0 1 w 0 0 0    0x90 for br, 0x98 for br8
 #     byte 1:  a a a k k k k k    register, condition-and-constant index
 #     byte 2:  t t t t t t t t    displacement
+#
+# BYTE 1 IS THE MASK BRANCHES' BYTE 1.  `aaak_kkkk` here and `aaam_mmmm` in
+# brclear and brset are one register and five bits in the same places; only the
+# table reading those five bits differs.  So these three share a row the way an
+# ALU group's +0, +1 and +5 forms do, and for the same reason - see the opcode
+# map at the top of this file.
 [[insn]]
 mnemonic      = "br8"
 summary       = "compare low bytes of two registers and branch"
@@ -1743,7 +1845,7 @@ swap_operands = ["a", "b"]
 
   [[insn.form]]
   name     = "cond_reg_reg"
-  encoding = "1001_010b  ccca_aaee  tttt_tttt"
+  encoding = "1001_101b  ccca_aaee  tttt_tttt"
   fields   = { c = "cond:cond3", b = "b:reg[0]", e = "b:reg[2:1]", t = "off:off8" }
 
 [[insn]]
@@ -1759,7 +1861,7 @@ semantics = "if (test(k.cond, R[a] & 255, k.imm & 255, 8)) pc = pc + off"
 
   [[insn.form]]
   name     = "cond_reg_imm"
-  encoding = "1001_0001  aaak_kkkk  tttt_tttt"
+  encoding = "1001_1000  aaak_kkkk  tttt_tttt"
   fields   = { k = "k:condimm5", t = "off:off8" }
 
 
@@ -1835,16 +1937,18 @@ semantics = "if ((R[a] & mask) == 0) pc = pc + off"
 
   [[insn.form]]
   name     = "reg_mask"
-  encoding = "1001_0110  aaam_mmmm  tttt_tttt"
+  encoding = "1001_0001  aaam_mmmm  tttt_tttt"
   fields   = { m = "mask:immbit5", t = "off:off8" }
 
   # The same test against the mask table instead of a single bit - branch on
-  # whether a FIELD is empty.  It is nowhere near the other branches in the
-  # map, because the branch row had one slot left and this needed two; bit 0
-  # still separates clear from set, as it does at 0x96 and 0x97.
+  # whether a whole FIELD is empty.  Same byte 1, same 5 bits, different table:
+  # +1 of the row reads them as immbit5 and +5 reads them as immask5, which is
+  # the relationship every ALU group has between its two mask forms.  Clear and
+  # set are separated by BIT 3 rather than bit 0 - brclear is the br row, brset
+  # is the br8 row one below - so both spellings of each land in one column.
   [[insn.form]]
   name     = "reg_mask5"
-  encoding = "1000_0100  aaam_mmmm  tttt_tttt"
+  encoding = "1001_0101  aaam_mmmm  tttt_tttt"
   fields   = { m = "mask:immask5", t = "off:off8" }
 
 [[insn]]
@@ -1860,16 +1964,18 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 
   [[insn.form]]
   name     = "reg_mask"
-  encoding = "1001_0111  aaam_mmmm  tttt_tttt"
+  encoding = "1001_1001  aaam_mmmm  tttt_tttt"
   fields   = { m = "mask:immbit5", t = "off:off8" }
 
   # The same test against the mask table instead of a single bit - branch on
-  # whether a FIELD is empty.  It is nowhere near the other branches in the
-  # map, because the branch row had one slot left and this needed two; bit 0
-  # still separates clear from set, as it does at 0x96 and 0x97.
+  # whether a whole FIELD is empty.  Same byte 1, same 5 bits, different table:
+  # +1 of the row reads them as immbit5 and +5 reads them as immask5, which is
+  # the relationship every ALU group has between its two mask forms.  Clear and
+  # set are separated by BIT 3 rather than bit 0 - brclear is the br row, brset
+  # is the br8 row one below - so both spellings of each land in one column.
   [[insn.form]]
   name     = "reg_mask5"
-  encoding = "1000_0101  aaam_mmmm  tttt_tttt"
+  encoding = "1001_1101  aaam_mmmm  tttt_tttt"
   fields   = { m = "mask:immask5", t = "off:off8" }
 
 
@@ -2059,7 +2165,13 @@ semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2; R[c] = M1
 # Relative and absolute both take a full 16 bits and both reach the whole
 # address space, so the choice between them is not about range - it is whether
 # the code is position independent.  Short relative jumps are already covered
-# by `br` at 0x8e, two bytes and +/-127.
+# by the two-byte `jmpr` form at 0x9f, +/-127.
+#
+# THE FOUR OF THEM ARE A 2x2 AND THE OPCODES SAY SO.  Column .4 of each row is
+# pc-relative and column .6 is absolute, the row picks jump or call, so jmpr /
+# jmp / callr / call are 0x94 / 0x96 / 0x9c / 0x9e.  Relative-versus-absolute
+# is bit 1 and jump-versus-call is bit 3, which is the pair a linker relaxing a
+# call into a callr has to tell apart.
 #
 # MNEMONICS ARE A GUESS.  I have taken `jmp`/`call` as absolute and `jmpr`/
 # `callr` as relative.  If you would rather have one mnemonic each with the
@@ -2074,7 +2186,7 @@ syntax   = "{target}"
 semantics = "pc = pc + target"
 
   # THE SHORT FORM IS A BRANCH WEARING A JUMP'S NAME, and the encoding says so:
-  # 0x9e is the compare-and-branch datapath with its condition pinned to
+  # 0x9f is the compare-and-branch datapath with its condition pinned to
   # `eq, r0, r0`.  A register compared for equality with itself is always true,
   # so the condition field costs nothing and the whole instruction is an opcode
   # and a displacement byte.
@@ -2086,12 +2198,12 @@ semantics = "pc = pc + target"
   # every other operand that has more than one width.
   [[insn.form]]
   name     = "rel8"
-  encoding = "1001_1110  tttt_tttt"
+  encoding = "1001_1111  tttt_tttt"
   fields   = { t = "target:off8" }
 
   [[insn.form]]
   name     = "rel16"
-  encoding = "1001_1000  iiii_iiii  jjjj_jjjj"
+  encoding = "1001_0100  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 [[insn]]
@@ -2103,7 +2215,7 @@ semantics = "pc = target"
 
   [[insn.form]]
   name     = "abs16"
-  encoding = "1001_1001  iiii_iiii  jjjj_jjjj"
+  encoding = "1001_0110  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 [[insn]]
@@ -2115,7 +2227,7 @@ semantics = "lr = pc; pc = pc + target"
 
   [[insn.form]]
   name     = "rel16"
-  encoding = "1001_1010  iiii_iiii  jjjj_jjjj"
+  encoding = "1001_1100  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 [[insn]]
@@ -2127,7 +2239,7 @@ semantics = "lr = pc; pc = target"
 
   [[insn.form]]
   name     = "abs16"
-  encoding = "1001_1011  iiii_iiii  jjjj_jjjj"
+  encoding = "1001_1110  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 # --- the indirect call ------------------------------------------------------
@@ -2155,10 +2267,28 @@ semantics = "lr = pc; pc = R[a]"
 
   [[insn.form]]
   name     = "reg"
-  encoding = "1001_1101  aaa0_0000"
+  encoding = "1001_0111  aaa0_0000"
 
 
-# Return is just pc = lr, so it needs no operands and fits in one byte.
+# Return is just pc = lr, so it needs no operands and fits in one byte - and
+# being one byte is what decides where it lives.
+#
+# IT IS THE ONE PC WRITER OUTSIDE 1001_xxxx, deliberately.  The control-flow
+# block is exactly two rows and holds exactly sixteen instructions once the two
+# mask branches come home to their columns; ret is the seventeenth, and it is
+# also the only one-byte instruction that was living out there.  Every other
+# one-byte opcode is in 0000_xxxx, so that is where it goes.
+#
+# It fits that region on its own terms rather than as an exile.  The one-byte
+# block is instructions with nothing left to say - `add r0, r0, #1`, `mov r0,
+# #0`, `ld` with its register implied - and `ret` is `jmp lr` with its operand
+# implied, which is the same kind of thing.  It is also, after the ALU, the
+# most executed instruction in any program, which is what a one-byte opcode is
+# for.
+#
+# Nothing decodes worse for it: decode is a flat 256-entry table and always was,
+# so "the pc writers are 1001_xxxx" is a claim about how the map READS, not a
+# mask any hardware applies.
 [[insn]]
 mnemonic = "ret"
 summary  = "pc = lr"
@@ -2167,7 +2297,7 @@ syntax   = ""
 semantics = "pc = lr"
 
   [[insn.form]]
-  encoding = "1001_1100"
+  encoding = "0000_0001"
 
 
 # --- halt / nop -------------------------------------------------------------
@@ -2180,7 +2310,19 @@ semantics = "pc = lr"
 # on the instruction that was wrong.
 #
 # It costs nothing.  Neither instruction has operands, so the two encodings are
-# interchangeable, and nop being 0x01 makes it no less of a nop.
+# interchangeable, and nop being 0x0f makes it no less of a nop.
+#
+# NOP IS AT THE FAR END OF THE ROW, at 0x0f, which is the same argument run the
+# other way.  0x00 is what a mistake lands on and 0x01 is one past it, so those
+# two slots go to halt and ret - the two instructions that stop or unwind, both
+# of them pc writers with no operands.  Putting nop as far from them as the row
+# reaches keeps the sled failure out of the neighbourhood of the stop, and it
+# bookends the one-byte block: control flow at one end, nothing at the other,
+# abbreviations in between.
+#
+# `ret` on a wild jump is not as safe as `halt` and is not meant to be - lr
+# holds whatever it held - but it is far better than a sled, because it lands
+# somewhere a debugger can name.
 [[insn]]
 mnemonic = "halt"
 summary  = "stop the machine"
@@ -2200,7 +2342,7 @@ syntax   = ""
 semantics = ""
 
   [[insn.form]]
-  encoding = "0000_0001"
+  encoding = "0000_1111"
 
 
 # =============================================================================

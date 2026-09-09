@@ -40,12 +40,14 @@ const MODES = [
   { id: 'rri10',   c: '#CBE5A0', label: 'Two registers, 10-bit', bits: 'reg 3 + reg 3 + int 10',          note: 'the wide displacement and immediate forms' },
 
   { id: 'ri5',     c: '#C6BEEC', label: 'One register, 5-bit signed', bits: 'reg 3 + int 5, signed',      note: '&minus;16 to 15, and the tied load displacement' },
-  { id: 'rib5',    c: '#F2D6F2', label: 'One register, 5-bit mask',   bits: 'reg 3 + table 5',            note: 'the same five bits read as one of 32 masks: 1&lt;&lt;n and its complement' },
+  { id: 'rib5',    c: '#F2D6F2', label: 'One register, 5-bit bit mask',   bits: 'reg 3 + table 5',         note: 'the same five bits read as one of 32 masks: 1&lt;&lt;n and its complement' },
+  { id: 'rim5',    c: '#DDB3E4', label: 'One register, 5-bit field mask', bits: 'reg 3 + table 5',         note: 'the identical layout read through #immask5 instead &mdash; fields, nibbles, bytes and the SWAR stripes' },
   { id: 'ri16',    c: '#DEC6F0', label: 'One register, 16-bit', bits: 'reg 3 + int 16 (split)',           note: 'mov rd, #imm16' },
 
   { id: 'crrt',    c: '#F5C2DC', label: 'Condition, two registers, target', bits: 'reg 3 (split) + cond 3 + reg 3 + int 8', note: 'br cond, ra, rb, target' },
   { id: 'ckt',     c: '#E4A2C4', label: 'Packed condition, register, target', bits: 'reg 3 + cond+const 5 + int 8', note: 'one five-bit field holds the condition AND the constant' },
-  { id: 'rmt',     c: '#F2B5A5', label: 'Register, mask, target', bits: 'reg 3 + table 5 + int 8',        note: 'brset &middot; brclear' },
+  { id: 'rmt',     c: '#F2B5A5', label: 'Register, bit mask, target', bits: 'reg 3 + table 5 + int 8',    note: 'brset &middot; brclear, on one bit' },
+  { id: 'rimt',    c: '#E09A98', label: 'Register, field mask, target', bits: 'reg 3 + table 5 + int 8',   note: 'the same three fields read through #immask5: brset &middot; brclear on a whole field' },
   { id: 't8',      c: '#FAD4D4', label: 'Target only, 8-bit',    bits: 'int 8',                           note: 'the short jmpr' },
   { id: 't16',     c: '#F0AEAE', label: 'Target only, 16-bit',   bits: 'int 16 (split)',                  note: 'jmp &middot; jmpr &middot; call &middot; callr' },
 ];
@@ -67,17 +69,19 @@ function modeOf(c) {
     if (n === 3) return has('reg:3') && parts.filter((p) => p === 'reg:3').length === 3 ? 'rrr' : 'rri3';
     if (n === 2) {
       if (parts.every((p) => p === 'reg:3')) return 'rr';
-      // Same layout as imm5, different value table - and unlike imm3 against
+      // Same layout, three different value tables - and unlike imm3 against
       // shift3, which are one set of values reinterpreted, these are disjoint
-      // vocabularies: signed -16..15 against 32 single-bit masks.
-      return has('immbit5') ? 'rib5' : 'ri5';
+      // vocabularies: signed -16..15, against 32 single-bit masks, against 32
+      // field and stripe masks.  Three colours, near each other because the
+      // bit layout is identical and the decoder's work is the same.
+      return has('immbit5') ? 'rib5' : has('immask5') ? 'rim5' : 'ri5';
     }
     return has('reg:3') ? 'r' : 't8';
   }
   // three bytes
   if (n === 1) return 't16';
   if (n === 2) return 'ri16';
-  if (n === 3) return has('condimm5') ? 'ckt' : has('immbit5') ? 'rmt' : 'rri10';
+  if (n === 3) return has('condimm5') ? 'ckt' : has('immbit5') ? 'rmt' : has('immask5') ? 'rimt' : 'rri10';
   return 'crrt';
 }
 
@@ -121,9 +125,12 @@ function preferred(d) {
 // #off3, #off10, #imm5, #imm16 - which is the number a programmer actually
 // needs and the one thing the mnemonic never says.
 //
-// immbit5 prints its own name instead of a width.  Five bits is not what makes
-// it what it is; being 32 single-bit masks is, and #immbit5 says so where
-// #imm5 would be an outright lie about which values fit.
+// immbit5 and immask5 print their own names instead of a width.  Five bits is
+// not what makes either what it is; being 32 single-bit masks, or 32 field and
+// stripe masks, is - and #immbit5 / #immask5 say so where #imm5 would be an
+// outright lie about which values fit.  They are also the only way to tell the
+// two apart in the cell, since they share a layout and differ only in the table
+// the five bits index.
 function shape(insn, form) {
   const decl = Object.fromEntries((insn.operands ?? []).map((o) => [o.name, o]));
 
@@ -151,7 +158,7 @@ function shape(insn, form) {
     if (d?.pcrel || n === 'target') return 'target';
     const enc = form?.encType.get(raw);
     if (!enc) return n;                         // pinned or tied: no field
-    if (enc === 'immbit5') return 'immbit5';
+    if (enc === 'immbit5' || enc === 'immask5') return enc;
     // Only a SIZED immediate gets a width.  A condition is an enum - cond3 is
     // the type's name, not a useful thing to print after "cond" - and a target
     // gets its reach from the mode label instead, which says so in words.
@@ -502,7 +509,7 @@ w(`</div>`);
 w(`</section>`);
 
 w(`<footer>Generated from <code>isa/fructus.toml</code> by <code>tools/gen-opcode-map.js</code>. ` +
-  `Modes come from each form's bit layout, not its name. Where two layouts differ only in how one field is <em>read</em> they share a colour: <code>#imm3</code> and <code>#shift3</code> are one set of values reinterpreted, with no extra hardware behind either. <code>#imm5</code> and <code>#1&lt;&lt;n</code> are kept apart because their vocabularies are disjoint &mdash; signed &minus;16 to 15 against 32 masks. `+
+  `Modes come from each form's bit layout, not its name. Where two layouts differ only in how one field is <em>read</em> they share a colour: <code>#imm3</code> and <code>#shift3</code> are one set of values reinterpreted, with no extra hardware behind either. The three <code>reg&nbsp;3 + 5</code> layouts are kept apart because their vocabularies are disjoint: <code>#imm5</code> is signed &minus;16 to 15, <code>#immbit5</code> is 32 single-bit masks, <code>#immask5</code> is 32 field and stripe masks. Identical bits, three unrelated sets of values, so three neighbouring colours rather than one. `+
   `Opcodes <code>12</code> and <code>13</code> carry several mnemonics apiece: the unary operations share two first bytes and separate on a field in byte&nbsp;1.</footer>`);
 w(`<div class="tip" id="tip" role="tooltip" hidden></div>`);
 w(`<script>`);
