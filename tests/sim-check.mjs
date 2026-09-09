@@ -15,6 +15,7 @@
 // =============================================================================
 
 import { assemble, callRoutine, machine, spec } from './harness.mjs';
+import { BUILTIN } from '../tools/sim.js';
 
 const M32 = (1n << 32n) - 1n, B31 = 1n << 31n, B32 = 1n << 32n;
 let fails = 0, checks = 0;
@@ -555,6 +556,52 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
         `halt=0x${opcodeOf('halt').toString(16)} ret=0x${opcodeOf('ret').toString(16)}`);
   check('nop bookends the far end', NOP === 0x0f, `nop=0x${NOP.toString(16)}`);
   console.log('ok    halt is opcode zero: zeroed memory stops the machine');
+}
+
+// --- clz: four routines, every input, and the cost of each -------------------
+// The reference is BUILTIN.clz - the same function tools/sim.js evaluates the
+// spec's `semantics` against, and the same one rtl/unary.sv is checked with.
+// So software, hardware and simulator are all measured against one definition
+// rather than three transcriptions of it.
+//
+// EXHAUSTIVE, because the inputs that break a clz are the boundaries: 0, 1,
+// 0x8000, and the value either side of every nibble edge.  65536 calls each is
+// cheap enough that there is no reason to sample.
+//
+// The cycle counts are pinned because they are the whole point of the file -
+// clz exists in snippets/ to price the TENTATIVE opcode against ~45 logic
+// cells, and a figure nobody checks is a figure that goes stale.
+{
+  const { code, syms } = assemble('snippets/clz.s');
+  const EXIT = 0xfffc;
+  const run = (entry, x) => {
+    m.reset();
+    callRoutine(m, code, entry, EXIT, { 0: x, 7: EXIT });
+    return { y: m.R[0], c: m.cycles() };
+  };
+
+  // name, its cycle range, and whether it must be right at zero
+  const CASES = [
+    ['clz',     21, 25],
+    ['clz2',    16, 35],
+    ['clz_nz',  19, 23],
+    ['clz_big', 14, 15],
+  ];
+  for (const [name, lo, hi] of CASES) {
+    let bad = -1, best = Infinity, worst = 0;
+    for (let x = 0; x < 65536; x++) {
+      const { y, c } = run(syms.get(name), x);
+      if (y !== BUILTIN.clz(x) && bad < 0) bad = x;
+      if (c < best) best = c;
+      if (c > worst) worst = c;
+    }
+    check(`${name} is clz`, bad < 0,
+          bad < 0 ? '' : `wrong at 0x${bad.toString(16)}: want ${BUILTIN.clz(bad)}`);
+    check(`${name} costs ${lo}..${hi}`, best === lo && worst === hi,
+          `measured ${best}..${worst}`);
+  }
+  // clz_big is the fastest and flattest, which is the reason it is there.
+  console.log('ok    snippets/clz.s: 4 routines x 65536 inputs, and their cycle counts');
 }
 
 console.log(`${checks} checks, ${fails} failures`);

@@ -16,6 +16,23 @@ node tools/gen-customasm.js --noat > build/fructus-noat.asm
 
 fail=0
 
+# --- the spec's own invariants ----------------------------------------------
+# `npm run check` and `npm test` used to be separate commands, so a spec that
+# failed its own invariants could still pass the whole suite - which happened:
+# an illustrative line in a comment was read as an opcode-map claim, check.js
+# said so, and the suite stayed green because nothing here ran it.
+#
+# It runs FIRST because everything below is generated from the file it
+# validates: the ruledefs, the RTL, the opcode map.  Checking the generated
+# artifacts while the source is invalid tests the wrong thing.
+if out=$(node tools/check.js 2>&1); then
+    printf 'ok    isa/fructus.toml: %s\n' "$(printf '%s' "$out" | grep -E '^[0-9]+ forms')"
+else
+    printf 'FAIL  isa/fructus.toml does not satisfy its own invariants\n'
+    printf '%s\n' "$out" | grep -A 20 '^FAIL'
+    fail=1
+fi
+
 # --- everything must assemble in r5 mode ------------------------------------
 for src in snippets/*.s libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/data.s tests/branch-cost.s tests/microtan-smoke.s; do
     cat build/fructus.asm "$src" > build/_t.asm
