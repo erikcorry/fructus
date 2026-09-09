@@ -117,10 +117,10 @@ you out.
 ### rtl/
 
 Generated, not written. `rtl/immgen.sv` produces the 16-bit immediate right-hand
-side for the 58 opcodes that have one — every ALU and shift group, `mov`, the
-load and store displacements, and `brclear`/`brset` — from `immreg` and
-`opcode[2:0]` alone, with no control line at all. 79 LUT4 and three LUT levels
-on an iCE40 UP5K.
+side for every instruction that has one — the ALU and shift groups, `mov`, the
+load and store displacements, `brclear`/`brset`, and the packed branch's
+`condimm5` constant — from `immreg`, `opcode[2:0]` and one control line. 109
+LUT4 and three LUT levels on an iCE40 UP5K.
 
 It costs that little because of properties of the *values* in the spec, not of
 the circuit: `immbit5` and `immask5` are each sixteen entries plus their exact
@@ -129,12 +129,26 @@ masked to four bits, which is what the shifter does anyway, so there is no
 `shift3` table in hardware at all. Both are checked by `npm run check`, which
 names the hardware cost when an edit breaks them.
 
-`rtl/rhs.sv` puts four microcode lines on top of it: take immgen's output or one
-of `#-1 #0 #1 #2`, and read the result as a value or as a register number. The
-register overrides come free — those four constants have low three bits `r7 r0
-r1 r2`, so the same two bits pick either, and `r7` is `lr`. That set is exactly
-what the one-byte abbreviations need, with `r2` spare, and `npm run rtl` fails
-if a new abbreviation needs something outside it. 39 LUT4 on top of immgen.
+`rtl/rhs.sv` puts **one four-bit microcode field** on top of it, choosing a
+register, a constant, or immgen in one of its two readings:
+
+```
+ 0  r0         4  reserved     8  #0      12  immgen, as condimm5
+ 1  r1         5  r5           9  #1      13  port B, from the bytes
+ 2  reserved   6  sp          10  #2      14  #-2
+ 3  reserved   7  lr          11  immgen  15  #-1
+```
+
+The encoding is what makes it nearly free. `src[3]=0` is a register and
+`src[2:0]` *is* its number, so `regnum` is wiring; `src[3]=1` reads `src[2:0]` as
+a 3-bit **signed** constant, so `konst` is one signal fanned out thirteen ways.
+That is why `#-2` and `#-1` sit at 14 and 15 rather than in numeric order. Two
+cells more than the four separate control bits it replaces, at the same depth,
+for a microcode bit back — and the three reserved codes cost nothing to reserve,
+since they decode as r2/r3/r4 today and the microcode never emits them.
+
+The constants are exactly what the one-byte abbreviations need, and `npm run
+rtl` fails if a new one needs something outside them.
 
 Port B's register number comes off the instruction bytes rather than out of
 immgen, so the register file's read overlaps the immediate unit instead of
@@ -144,8 +158,11 @@ it there, and an `x` reaching the ALU means the microcode asked for an immediate
 from an instruction that has none.
 
 The suite regenerates the file and fails if the committed copy has drifted, then
-runs 24,576 vectors — built from the same TOML by a path sharing no code with
+runs 50,640 vectors — built from the same TOML by a path sharing no code with
 the generator — against them under `iverilog`, skipping if `iverilog` is absent.
+All sixteen source codes are swept, the reserved three included, so a change
+that gives them a meaning has to say so there rather than silently altering
+what they do.
 It also decodes real bytes with `tools/decode.js` to confirm that
 `{byte1[1:0], opcode[0]}` really is ALU port B for every three-operand form,
 which is what the `+6`/`+7` output claims.

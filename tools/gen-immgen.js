@@ -9,10 +9,11 @@
 // for every instruction that has one: the ALU and shift groups, mov, the load
 // and store displacements, and the two mask branches.  58 opcodes.
 //
-// Its only inputs are `immreg` - the last two instruction bytes fetched - and
-// `opcode[2:0]`.  There is no control line from the microcode word, which is
-// what this file exists to demonstrate; every distinction it needs is already
-// in those five bits.  See rtl/immgen.sv's own header for why.
+// Its inputs are `immreg` - the last two instruction bytes fetched - and
+// `opcode[2:0]`, plus ONE control line.  Every distinction but one is already
+// in those five bits; the exception is the packed branch, whose five-bit field
+// is a condimm5 index rather than a signed imm5 and sits in the same column.
+// See rtl/immgen.sv's own header for why that line is worth a microcode bit.
 //
 // THE VALUE TABLES ARE READ FROM THE SPEC, not transcribed.  tests/immgen-
 // check.mjs generates its vectors from the same TOML and runs them against the
@@ -37,6 +38,9 @@ for (let n = 0; n < 16; n++) {
 for (let n = 0; n < 8; n++)
   if ((t.imm3.values[n] & 15) !== (t.shift3.values[n] & 15))
     throw new Error(`shift3[${n}] is not imm3[${n}] & 15`);
+
+const caseBody = (name, vals, w) =>
+  vals.map((v, n) => `        ${w}'d${n}: ${name} = ${hex16(v)};`).join('\n');
 
 const caseTable = (name, vals, w, sel) =>
   `    always_comb case (${sel})\n` +
@@ -66,6 +70,8 @@ process.stdout.write(`// =======================================================
 //      +4  imm10     signed, spanning two bytes
 //      +5  immask5   32 field and stripe masks
 //      +6, +7              the three-operand forms: NO IMMEDIATE, x
+//
+//    and \`cimm\` selects a sixth mode at +0, for the packed branch alone.
 //
 // 2. +6 AND +7 ARE DELIBERATELY UNDEFINED.  Everything there takes its
 //    right-hand side from a register, and rtl/rhs.sv gets that register's
@@ -121,12 +127,22 @@ process.stdout.write(`// =======================================================
 // through condimm5, which fuses a condition with a constant rather than being a
 // plain immediate.  The branch unit decodes that one for itself.
 //
-// MEASURED on an iCE40 UP5K: 79 SB_LUT4, three LUT levels, 100 MHz placed.
+// WHY cimm IS A MICROCODE BIT AND NOT DECODED HERE.  immgen could work it out
+// for itself - the packed branch is 0x90 and 0x98, so \`(op & 0xf7) == 0x90\` -
+// and that was the first design.  It is a seven-input function of the opcode
+// REGISTER, so it lands two LUT levels in front of the mode mux, and measured
+// in one harness against the other it costs a level and a quarter of the clock:
+// 115 SB_LUT4 at four levels and 71 MHz, against 109 at three levels and 91.
+// A registered microcode line arrives at level zero and the mux absorbs it.
+//
+// MEASURED on an iCE40 UP5K: 109 SB_LUT4, three LUT levels, 91 MHz placed -
+// the same depth and the same clock as the version without the branch mode.
 // =============================================================================
 
 module immgen (
     input  logic [15:0] ir,     // immreg: the last two instruction bytes
     input  logic [2:0]  sel,    // opcode[2:0]
+    input  logic        cimm,   // microcode: read +0's five bits as condimm5
     output logic [15:0] imm
 );
 
@@ -144,21 +160,40 @@ ${caseTable('lo3', t.imm3.values.map((v) => v & 15), 3, 'k3').replace(/16'h([0-9
     wire [15:0] i3v = {{12{neg}}, lo3};
 
     // --- +1 / +5: immbit5 and immask5, sharing one complement layer ---------
-    wire [3:0] n4 = ir[3:0];
+    wire [4:0] n5 = ir[4:0];
+    wire [3:0] n4 = n5[3:0];
     logic [15:0] tbit, tmask;
 ${caseTable('tbit', t.immbit5.values.slice(0, 16), 4, 'n4')}
 ${caseTable('tmask', t.immask5.values.slice(0, 16), 4, 'n4')}
     wire [15:0] tsel = (sel[2] ? tmask : tbit) ^ {16{ir[4]}};
 
+    // --- +0 again, for the packed branch ------------------------------------
+    // \`br cond, ra, #imm5\` puts a condimm5 index in the same five bits that
+    // every other +0 form reads as a signed integer, so this is a whole table
+    // rather than a reinterpretation of one.  It is 32 entries indexed directly,
+    // and it is two LUT levels - the same depth as the mask tables beside it -
+    // so it joins the mode mux rather than sitting in front of it.
+    logic [15:0] ccon;
+    always_comb case (n5)
+${caseBody('ccon', spec.optype.condimm5.values.map((e) => e[1]), 5)}
+    endcase
+
     // --- the mode mux -------------------------------------------------------
     // +6 and +7 have no immediate; x rather than 0 both lets the mapper treat
     // them as don't-cares and makes a microcode misuse visible in simulation.
-    always_comb case (sel)
-        3'd0:        imm = i5;
-        3'd1, 3'd5:  imm = tsel;
-        3'd2, 3'd3:  imm = i3v;
-        3'd4:        imm = i10;
-        default:     imm = 16'hxxxx;
+    //
+    // cimm is ignored anywhere but +0.  Asserting it elsewhere is a microcode
+    // bug, and folding it away rather than driving x there keeps the mux at one
+    // level: the selector is four bits but only one of them ever splits a case.
+    always_comb case ({cimm, sel})
+        4'b1_000:             imm = ccon;
+        4'b0_000:             imm = i5;
+        4'b0_001, 4'b0_101,
+        4'b1_001, 4'b1_101:   imm = tsel;
+        4'b0_010, 4'b0_011,
+        4'b1_010, 4'b1_011:   imm = i3v;
+        4'b0_100, 4'b1_100:   imm = i10;
+        default:              imm = 16'hxxxx;
     endcase
 
 endmodule

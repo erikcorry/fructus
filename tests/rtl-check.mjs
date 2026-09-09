@@ -45,7 +45,11 @@ const sext = (v, n) => (v & (1 << (n - 1))) ? v - (1 << n) : v;
 // This is the whole specification of the block.  `sel` is opcode[2:0]; `ir` is
 // immreg, holding the last two bytes fetched.
 const k3 = (ir, sel) => ((ir & 3) << 1) | (sel & 1);   // {byte1[1:0], opcode[0]}
-const want = (ir, sel) => {
+const CIMM = spec.optype.condimm5.values.map((e) => e[1]);
+const want = (ir, sel, cimm) => {
+  // cimm reads +0's five bits as a condimm5 index instead of a signed integer,
+  // and is ignored anywhere else - asserting it there is a microcode bug.
+  if (cimm && sel === 0) return CIMM[ir & 31];
   switch (sel) {
     case 0: return sext(ir & 31, 5);                     // imm5
     case 1: return t.immbit5.values[ir & 31];            // immbit5
@@ -94,31 +98,35 @@ const want = (ir, sel) => {
 
 const vecs = [];
 for (let sel = 0; sel <= 5; sel++)
-  for (let low = 0; low < 1024; low++)
-    for (const high of [0x0000, 0xfc00, 0x5400, 0xa800]) {
-      const ir = high | low;
-      vecs.push(`${u16(ir).toString(16).padStart(4, '0')} ${sel} ${u16(want(ir, sel)).toString(16).padStart(4, '0')}`);
-    }
+  for (const cimm of [0, 1])
+    for (let low = 0; low < 1024; low++)
+      for (const high of [0x0000, 0xfc00, 0x5400, 0xa800]) {
+        const ir = high | low;
+        vecs.push(`${u16(ir).toString(16).padStart(4, '0')} ${sel} ${cimm} `
+                + `${u16(want(ir, sel, cimm)).toString(16).padStart(4, '0')}`);
+      }
 
 mkdirSync('build', { recursive: true });
 writeFileSync('build/immgen-vectors.txt', vecs.join('\n') + '\n');
 writeFileSync('build/immgen-tb.sv', `module tb;
     logic [15:0] ir, expect_, got;
     logic [2:0] sel;
+    logic cimm;
     integer f, n = 0, bad = 0, r;
-    immgen u (.ir(ir), .sel(sel), .imm(got));
+    immgen u (.ir(ir), .sel(sel), .cimm(cimm), .imm(got));
     initial begin
         f = $fopen("build/immgen-vectors.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
         while (!$feof(f)) begin
-            r = $fscanf(f, "%h %d %h\\n", ir, sel, expect_);
-            if (r == 3) begin
+            r = $fscanf(f, "%h %d %d %h\\n", ir, sel, cimm, expect_);
+            if (r == 4) begin
                 #1;
                 n = n + 1;
                 if (got !== expect_) begin
                     bad = bad + 1;
                     if (bad < 6)
-                        $display("  MISMATCH ir=%h sel=%0d want=%h got=%h", ir, sel, expect_, got);
+                        $display("  MISMATCH ir=%h sel=%0d cimm=%0d want=%h got=%h",
+                                 ir, sel, cimm, expect_, got);
                 end
             end
         end
@@ -137,55 +145,65 @@ for (const f of ['build/immgen-tb.vvp', 'build/immgen-tb.sv', 'build/immgen-vect
 let failed = /FAIL/.test(out);
 
 // =============================================================================
-// rtl/rhs.sv - the four microcode lines on top of immgen
+// rtl/rhs.sv - the one microcode field on top of immgen
 // =============================================================================
-// The reference is the module's contract stated once: pick immgen's output or a
-// constant, then read that as a value or as a register number.  regval stands in
-// for the register file, so the check covers the wiring rather than the file.
+// The reference is the module's contract stated once: sixteen codes choosing a
+// register, a constant, or immgen in one of its two readings.  regval stands in
+// for the register file, so this covers the wiring rather than the file.
+//
+// ALL SIXTEEN CODES ARE SWEPT, the three reserved ones included.  They are not
+// meant to be emitted, but they decode as r2/r3/r4 today by accident of the
+// wiring and the check pins that: a later change that gives them a meaning has
+// to come here and say so rather than silently altering what they do.
 {
-  const K = [-1, 0, 1, 2];                       // must match tools/gen-rhs.js
+  // must match tools/gen-rhs.js
+  const REG = { 0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7 };   // src[3]=0
+  const KON = { 0: 0, 1: 1, 2: 2, 6: -2, 7: -1 };                    // src[3]=1
+  const MODE_IMM = 3, MODE_CIMM = 4, MODE_PORTB = 5;
   const rows = [];
   const rnd = (() => { let s = 2463534242;
     return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
 
   for (let sel = 0; sel <= 7; sel++)
-    for (let kUse = 0; kUse <= 1; kUse++)
-      for (let k = 0; k < 4; k++)
-        for (let asReg = 0; asReg <= 1; asReg++)
-          for (let i = 0; i < 24; i++) {
-            // immgen drives x at +6 and +7, so the only combination that would
-            // read it there is a microcode bug rather than a case to check.
-            if (!asReg && !kUse && sel >= 6) continue;
-            const ir = rnd() & 0xffff, regval = rnd() & 0xffff;
-            const val = kUse ? u16(K[k]) : u16(want(ir, sel));
-            const num = kUse ? (u16(K[k]) & 7) : k3(ir, sel);
-            const rhs = asReg ? regval : val;
-            rows.push([ir, sel, kUse, k, asReg, regval, num, rhs]
-              .map((v, j) => (j === 0 || j === 5 || j === 7)
-                ? u16(v).toString(16).padStart(4, '0') : v).join(' '));
-          }
+    for (let src = 0; src < 16; src++)
+      for (let i = 0; i < 12; i++) {
+        const hi = src >> 3, c = src & 7;
+        const isReg = !hi || c === MODE_PORTB;
+        const isImm = hi && (c === MODE_IMM || c === MODE_CIMM);
+        // immgen drives x at +6 and +7, so reading it there is a microcode bug
+        // rather than a case with an answer.
+        if (isImm && sel >= 6) continue;
+        const ir = rnd() & 0xffff, regval = rnd() & 0xffff;
+        const num = hi ? k3(ir, sel) : REG[c];
+        const rhs = isReg ? regval
+                  : isImm ? u16(want(ir, sel, c === MODE_CIMM))
+                  : u16(KON[c]);
+        rows.push([ir, sel, src, regval, num, rhs]
+          .map((v, j) => (j === 0 || j === 3 || j === 5)
+            ? u16(v).toString(16).padStart(4, '0') : v).join(' '));
+      }
 
   writeFileSync('build/rhs-vectors.txt', rows.join('\n') + '\n');
   writeFileSync('build/rhs-tb.sv', `module tb;
     logic [15:0] ir, regval, xrhs, grhs;
     logic [2:0] sel, xnum, gnum;
-    logic k_use, as_reg; logic [1:0] k;
+    logic [3:0] src;
     integer f, n = 0, bad = 0, r;
-    rhs u (.ir(ir), .sel(sel), .k_use(k_use), .k(k), .as_reg(as_reg),
-           .regval(regval), .regnum(gnum), .rhs(grhs));
+    rhs u (.ir(ir), .sel(sel), .src(src), .regval(regval),
+           .regnum(gnum), .rhs(grhs));
     initial begin
         f = $fopen("build/rhs-vectors.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
         while (!$feof(f)) begin
-            r = $fscanf(f, "%h %d %d %d %d %h %d %h\\n",
-                        ir, sel, k_use, k, as_reg, regval, xnum, xrhs);
-            if (r == 8) begin
+            r = $fscanf(f, "%h %d %d %h %d %h\\n",
+                        ir, sel, src, regval, xnum, xrhs);
+            if (r == 6) begin
                 #1; n = n + 1;
                 if (grhs !== xrhs || gnum !== xnum) begin
                     bad = bad + 1;
-                    if (bad < 6) $display("  MISMATCH ir=%h sel=%0d k_use=%0d k=%0d as_reg=%0d: "
-                        , ir, sel, k_use, k, as_reg,
-                        "want rhs=%h num=%0d, got rhs=%h num=%0d", xrhs, xnum, grhs, gnum);
+                    if (bad < 6)
+                        $display("  MISMATCH ir=%h sel=%0d src=%0d: want rhs=%h num=%0d, got rhs=%h num=%0d",
+                                 ir, sel, src, xrhs, xnum, grhs, gnum);
                 end
             end
         end
