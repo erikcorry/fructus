@@ -116,12 +116,11 @@ you out.
 
 ### rtl/
 
-Generated, not written. `rtl/immgen.sv` produces the right-hand side for the 82
-opcodes that have one — every ALU and shift group, `mov`, the load and store
-displacements, `brclear`/`brset`, and at `+6`/`+7` the third *register number*
-of the three-operand forms on the same wires, for the microcode to interpret —
-from `immreg` and `opcode[2:0]` alone, with no control line at all. 81 LUT4 and
-three LUT levels on an iCE40 UP5K.
+Generated, not written. `rtl/immgen.sv` produces the 16-bit immediate right-hand
+side for the 58 opcodes that have one — every ALU and shift group, `mov`, the
+load and store displacements, and `brclear`/`brset` — from `immreg` and
+`opcode[2:0]` alone, with no control line at all. 79 LUT4 and three LUT levels
+on an iCE40 UP5K.
 
 It costs that little because of properties of the *values* in the spec, not of
 the circuit: `immbit5` and `immask5` are each sixteen entries plus their exact
@@ -135,11 +134,18 @@ of `#-1 #0 #1 #2`, and read the result as a value or as a register number. The
 register overrides come free — those four constants have low three bits `r7 r0
 r1 r2`, so the same two bits pick either, and `r7` is `lr`. That set is exactly
 what the one-byte abbreviations need, with `r2` spare, and `npm run rtl` fails
-if a new abbreviation needs something outside it. 38 LUT4 on top of immgen.
+if a new abbreviation needs something outside it. 39 LUT4 on top of immgen.
+
+Port B's register number comes off the instruction bytes rather than out of
+immgen, so the register file's read overlaps the immediate unit instead of
+waiting for it — four LUT levels and 38 MHz against six and 31, with a real 8×16
+file behind it. That is also why immgen drives `x` at `+6`/`+7`: nothing reads
+it there, and an `x` reaching the ALU means the microcode asked for an immediate
+from an instruction that has none.
 
 The suite regenerates the file and fails if the committed copy has drifted, then
-runs 32,768 vectors — built from the same TOML by a path sharing no code with
-the generator — against it under `iverilog`, skipping if `iverilog` is absent.
+runs 24,576 vectors — built from the same TOML by a path sharing no code with
+the generator — against them under `iverilog`, skipping if `iverilog` is absent.
 It also decodes real bytes with `tools/decode.js` to confirm that
 `{byte1[1:0], opcode[0]}` really is ALU port B for every three-operand form,
 which is what the `+6`/`+7` output claims.

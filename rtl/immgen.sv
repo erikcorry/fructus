@@ -20,18 +20,20 @@
 //      +2  imm3      the small-constant table  (+3 is its second opcode)
 //      +4  imm10     signed, spanning two bytes
 //      +5  immask5   32 field and stripe masks
-//      +6, +7    rb        the third register's NUMBER, zero extended
+//      +6, +7              the three-operand forms: NO IMMEDIATE, x
 //
-// 2. +6 AND +7 RIDE THE SAME WIRES.  The three-register forms encode their
-//    third register as {byte1[1:0], opcode[0]} - the ninth register bit stolen
-//    into the opcode - which is bit for bit the imm3 index.  So the same three
-//    bits come out of the same place, and what changes is only whether the low
-//    nibble is looked up in imm3 or passed through.  Downstream there is ONE
-//    right-hand-side bus and a microcode control line saying whether to use it
-//    as a value or as a register-file address.
+// 2. +6 AND +7 ARE DELIBERATELY UNDEFINED.  Everything there takes its
+//    right-hand side from a register, and rtl/rhs.sv gets that register's
+//    number straight off the instruction bytes rather than from here - so this
+//    block computing it too would be a second copy of the same three wires,
+//    free to drift from the first.
 //
-//    That covers the ALU and shift triples, and push/pop's triples too: they
-//    spell the field identically (`z = "c:reg[0]", c = "c:reg[2:1]"`).
+//    Driving x rather than a tidy zero is the point: an x reaching the ALU says
+//    the microcode asked for an immediate from an instruction that has none,
+//    which is a bug, and it should be loud in simulation rather than quietly
+//    plausible.  0x16 and 0x17 make that concrete - they are `mov rd, #imm16`,
+//    where opcode[2:0] is the DESTINATION REGISTER and not a mode selector at
+//    all, so this block's output there is meaningless for a third reason again.
 //
 // 3. opcode[0] IS sel[0].  The imm3 index is {byte1[1:0], opcode[0]} - the spec
 //    spells this `imm3[0]`, so the pair of opcodes at +2 and +3 ARE the low
@@ -69,16 +71,12 @@
 // displacement, which is after byte 2 has shifted byte 1 upwards.  Read the
 // operands into the ALU input latches early, or give byte 1 its own register.
 //
-// br's TWO-REGISTER FORM RIDES THIS BLOCK; its packed form does not.  The
-// two-register branches sit at +6 and +7 with the ALU and shift triples, and
-// their registers are arranged so that port B comes out of here like everyone
-// else's - which is why `br cond, ra, rb` encodes `a` in the split field and
-// `b` in byte1[4:2], the other way round from how it is written.  br's +0 form
-// reads five bits through condimm5, which packs a condition and a constant
-// together rather than being a plain immediate, so the branch unit decodes that
-// one for itself.
+// NEITHER br FORM RIDES THIS BLOCK.  The two-register branches are at +6 and
+// +7, where there is no immediate; and the packed form at +0 reads five bits
+// through condimm5, which fuses a condition with a constant rather than being a
+// plain immediate.  The branch unit decodes that one for itself.
 //
-// MEASURED on an iCE40 UP5K: 81 SB_LUT4, three LUT levels, 91 MHz placed.
+// MEASURED on an iCE40 UP5K: 79 SB_LUT4, three LUT levels, 100 MHz placed.
 // =============================================================================
 
 module immgen (
@@ -106,13 +104,8 @@ module immgen (
     endcase
     // Index 0 is the only entry whose top twelve bits are set: -1 for the ALU,
     // and 15 to a shifter, which masks.  One gate, not a second table.
-    //
-    // At +6 and +7 the same three bits are a register number rather than a
-    // table index, so they go out unchanged and zero extended.  Every bit of
-    // this is a four-input function of {k3, sel[2]}, which is why carrying the
-    // register forms costs nothing over carrying imm3 alone.
-    wire neg = (k3 == 3'd0) & ~sel[2];
-    wire [15:0] i3v = sel[2] ? {13'd0, k3} : {{12{neg}}, lo3};
+    wire neg = (k3 == 3'd0);
+    wire [15:0] i3v = {{12{neg}}, lo3};
 
     // --- +1 / +5: immbit5 and immask5, sharing one complement layer ---------
     wire [3:0] n4 = ir[3:0];
@@ -156,13 +149,14 @@ module immgen (
     wire [15:0] tsel = (sel[2] ? tmask : tbit) ^ {16{ir[4]}};
 
     // --- the mode mux -------------------------------------------------------
-    // Every one of the eight selectors now means something, so there is no
-    // don't-care case and no x on this bus.
+    // +6 and +7 have no immediate; x rather than 0 both lets the mapper treat
+    // them as don't-cares and makes a microcode misuse visible in simulation.
     always_comb case (sel)
         3'd0:        imm = i5;
         3'd1, 3'd5:  imm = tsel;
+        3'd2, 3'd3:  imm = i3v;
         3'd4:        imm = i10;
-        default:     imm = i3v;   // +2, +3 the imm3 table; +6, +7 the register
+        default:     imm = 16'hxxxx;
     endcase
 
 endmodule

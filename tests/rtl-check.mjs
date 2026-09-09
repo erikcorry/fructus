@@ -10,13 +10,13 @@
 // file.  Neither side reads the other, so agreement means the circuits
 // implement the tables rather than that one transcription matches another.
 //
-// WHAT IS SWEPT.  All eight modes, every (5-bit field, mode) pair, every
-// (3-bit index, opcode bit) pair, and imm10 over its whole 10-bit range - with
-// the untouched upper bits of immreg varied, because a circuit that
-// accidentally reads them would otherwise pass.  Modes +6 and +7 carry the
-// three-operand forms' third REGISTER NUMBER rather than a value, and are
-// checked against the encoding's own field spec: reg[0] comes from the opcode
-// and reg[2:1] from byte1, which is what makes them the imm3 index's twin.
+// WHAT IS SWEPT.  Every (5-bit field, mode) pair, every (3-bit index, opcode
+// bit) pair, and imm10 over its whole 10-bit range - with the untouched upper
+// bits of immreg varied, because a circuit that accidentally reads them would
+// otherwise pass.  Modes +6 and +7 have no immediate and immgen drives x there,
+// so they are not checked; what IS checked is the encoding property rhs.sv
+// relies on instead - that port B's register number is {byte1[1:0], opcode[0]}
+// for every three-operand form.
 //
 // Needs iverilog.  Skips with a message rather than failing when it is absent,
 // so the suite still runs on a machine without the FPGA tools installed.
@@ -52,7 +52,8 @@ const want = (ir, sel) => {
     case 2: case 3: return t.imm3.values[k3(ir, sel)];   // imm3
     case 4: return sext(ir & 1023, 10);                  // imm10
     case 5: return t.immask5.values[ir & 31];            // immask5
-    case 6: case 7: return k3(ir, sel);                  // rb, zero extended
+    // 6 and 7 have no immediate: rtl/rhs.sv takes port B's number from the
+    // bytes directly, so immgen drives x and there is nothing to check.
   }
 };
 
@@ -63,6 +64,9 @@ const want = (ir, sel) => {
 // and compare.  A change to the field layout then fails here instead of quietly
 // making this file check the wrong thing.
 {
+  // rtl/rhs.sv COMPUTES PORT B'S NUMBER AS {byte1[1:0], opcode[0]} without
+  // consulting the decoder, so this is where that shortcut is justified.
+  //
   // WHICH OPERAND PORT B IS depends on the instruction, and naming it here is
   // the point of the check rather than an inconvenience.  add and shl call it
   // `b`; push and pop call it `c` (and have a `b` of their own, so the name has
@@ -89,7 +93,7 @@ const want = (ir, sel) => {
 }
 
 const vecs = [];
-for (let sel = 0; sel <= 7; sel++)
+for (let sel = 0; sel <= 5; sel++)
   for (let low = 0; low < 1024; low++)
     for (const high of [0x0000, 0xfc00, 0x5400, 0xa800]) {
       const ir = high | low;
@@ -149,6 +153,9 @@ let failed = /FAIL/.test(out);
       for (let k = 0; k < 4; k++)
         for (let asReg = 0; asReg <= 1; asReg++)
           for (let i = 0; i < 24; i++) {
+            // immgen drives x at +6 and +7, so the only combination that would
+            // read it there is a microcode bug rather than a case to check.
+            if (!asReg && !kUse && sel >= 6) continue;
             const ir = rnd() & 0xffff, regval = rnd() & 0xffff;
             const val = kUse ? u16(K[k]) : u16(want(ir, sel));
             const num = kUse ? (u16(K[k]) & 7) : k3(ir, sel);

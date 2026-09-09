@@ -37,15 +37,17 @@
 //
 // (The four constants are also imm3[0..3], which is a coincidence rather than a
 // dependency - but it means the imm3 table could generate them if the sixteen
-// LUTs below ever mattered.  They do not: this whole module is 38 LUT4 on top
-// of immgen's 81.)
+// LUTs below ever mattered.  They do not: this whole module is 39 LUT4 on top
+// of immgen's 79.)
 //
-// regnum COMES OFF THE INSTRUCTION BYTES DIRECTLY, not off the selected value,
-// even though immgen's +6/+7 output has the same three bits in it.  Taking it
-// from immgen would put the whole immediate unit in front of the register file:
-// measured with a real 8x16 file behind it, that is six LUT levels and 31 MHz
-// against four levels and 37 MHz for the version below, because here the file's
-// read overlaps immgen entirely instead of waiting for it.
+// regnum COMES OFF THE INSTRUCTION BYTES DIRECTLY, not out of immgen, and that
+// is why immgen drives x at +6 and +7 rather than putting the same three bits
+// on its output.  Sourcing it from immgen would put the whole immediate unit in
+// front of the register file: measured with a real 8x16 file behind it, that is
+// six LUT levels and 31 MHz, against four levels and 38 MHz for the version
+// below, because here the file's read overlaps immgen entirely instead of
+// waiting for it.  It also cost 2 LUT4 in immgen to compute a number this
+// module already had, and two copies of one expression can drift.
 // =============================================================================
 
 module rhs (
