@@ -52,11 +52,25 @@
 // would take exactly the two inputs every other ALU operation takes, lhs and
 // rhs, and need nothing else routed to it.
 //
-// The depth looks free: rhs is four LUT levels away (immgen three, the rhs mux
-// one) and the unary operations are four levels from lhs, so the output mux
-// lands at five either way.  It is not built that way yet because it has not
-// been measured, and because it would fix the operation numbering to the imm3
-// values rather than to the raw field - a real constraint on adding the eighth.
+// IT LOOKS FREE AND IS NOT.  Measured with the whole right-hand-side chain in
+// both harnesses, so the only difference is where the selector comes from:
+//
+//     selector off the instruction register   342 cells   5 levels   49.2 MHz
+//     selector off the rhs bus                334 cells   7 levels   38.4 MHz
+//
+// Eight cells for two LUT levels.  The reasoning that says it should be free -
+// rhs is four levels away, the unary operations are four levels from lhs, so
+// the mux lands at five either way - misses that the mux is TWO levels for a
+// five-way 16-bit select, and that with the selector arriving at level zero
+// ABC folds its first level into the logic producing the data.  clz's final
+// encoder LUT can compute "my value, already gated by whether clz is selected",
+// because the selector is a spare input at that point.  Arriving at level four
+// it cannot, and the mux becomes two levels bolted on the end.
+//
+// Which is the same rule that put cimm in the microcode word rather than
+// decoding it here: a control signal that arrives EARLY gets absorbed, one that
+// arrives LATE gets added.  Three selector wires from the instruction register
+// are not the cost; the folding they permit is worth two levels.
 //
 // popcount TAKES THE TOP BIT OUT OF THE ADDER.  A nibble count's bit 2 is set
 // only for 1111, and then its low bits are zero - so the total reaches 16 only
