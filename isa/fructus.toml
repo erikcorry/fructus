@@ -714,9 +714,25 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   THE UNARY OPERATIONS HAVE A ROW OF THEIR OWN, which they did not before -
 #   they shared mov's, three constants and eight operations in eight opcodes.
 #   Nothing about that was wrong, but the two have nothing to do with each other
-#   and the row read as two half-rows.  Five of the eight slots are free now, so
+#   and the row read as two half-rows.  Six of the eight slots are free now, so
 #   a unary operation that wants a whole opcode - one with a real second operand,
 #   or one whose selector will not fit in two bits - has somewhere to go.
+#
+#   AND THE ROW'S +0 SLOT IS AN EXPANSION PATH WORTH SAYING OUT LOUD.  0011_1000
+#   is free and has the `dddi_iiii` shape: one register and FIVE spare bits.  A
+#   unary whose destination is tied to its source - `rd = f(rd)`, the same tie
+#   `ld rd, [rd, #off5]` already uses - spends nothing on a second register, so
+#   those five bits are all selector:
+#
+#       byte 0 = 0011_1000, byte 1 = dddi_iiii
+#       -> 32 single-register unary operations
+#
+#   That is four times the two-opcode form's eight, out of ONE opcode, and +1
+#   and +5 could do the same again if it ever came to it.  So the eight slots at
+#   0011_101s are not a ceiling on unary operations; they are the ceiling on
+#   unary operations that want a separate destination.  Nothing occupies +0 yet
+#   because nothing needs it - it is written down so that "the unary encoding is
+#   full" is never a reason to put an operation somewhere worse.
 #
 #   THE UNARY OPERATIONS ARE STILL IN THE RIGHT COLUMN, and the column is the
 #   whole argument for putting them here.  Byte 1 of a unary op is
