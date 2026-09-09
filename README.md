@@ -39,7 +39,7 @@ on your `PATH`:
 cargo install customasm        # or grab a release binary
 npm install                    # one dependency: a TOML parser
 npm run gen                    # generate build/fructus.asm from the spec
-npm test                       # 71 checks, ~44,000 assertions
+npm test                       # 82 checks, ~800,000 assertions
 ```
 
 Then assemble and run something. `customasm` takes several input files, so the
