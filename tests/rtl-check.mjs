@@ -23,6 +23,7 @@
 // =============================================================================
 
 import { loadSpec } from '../tools/isa.js';
+import { BUILTIN } from '../tools/sim.js';
 import { buildDecoder, decode } from '../tools/decode.js';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -218,6 +219,59 @@ endmodule
   const o = execFileSync('vvp', ['build/rhs-tb.vvp'], { encoding: 'utf8' });
   process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
   for (const f of ['build/rhs-tb.vvp', 'build/rhs-tb.sv', 'build/rhs-vectors.txt']) rmSync(f, { force: true });
+  if (/FAIL/.test(o)) failed = true;
+}
+
+// =============================================================================
+// rtl/unary.sv - the eight-way unary block
+// =============================================================================
+// The reference is the SIMULATOR's own implementations, not a transcription of
+// them: tools/sim.js evaluates the spec's `semantics` strings against exactly
+// these functions, so agreeing with them is agreeing with what the ISA says the
+// instructions compute.
+//
+// Every operation is swept over its WHOLE input space - 65536 values each, five
+// operations - because these are cheap to enumerate completely and a sampled
+// sweep would miss precisely the interesting inputs: clz at 0 and 1, popcount
+// at 0xffff, bitrev's fixed points.
+{
+  const OPS = { 0: 'sxt8', 1: 'zxt8', 2: 'clz', 3: 'bitrev', 4: 'popcount' };
+  const rows = [];
+  for (const [sel, name] of Object.entries(OPS))
+    for (let a = 0; a < 65536; a++)
+      rows.push(`${a.toString(16).padStart(4, '0')} ${sel} `
+              + `${u16(BUILTIN[name](a)).toString(16).padStart(4, '0')}`);
+  writeFileSync('build/unary-vectors.txt', rows.join('\n') + '\n');
+  writeFileSync('build/unary-tb.sv', `module tb;
+    logic [15:0] a, y, want_;
+    logic [2:0] sel;
+    integer f, n = 0, bad = 0, r;
+    unary u (.a(a), .sel(sel), .y(y));
+    initial begin
+        f = $fopen("build/unary-vectors.txt", "r");
+        if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
+        while (!$feof(f)) begin
+            r = $fscanf(f, "%h %d %h\\n", a, sel, want_);
+            if (r == 3) begin
+                #1; n = n + 1;
+                if (y !== want_) begin
+                    bad = bad + 1;
+                    if (bad < 6)
+                        $display("  MISMATCH a=%h sel=%0d want=%h got=%h", a, sel, want_, y);
+                end
+            end
+        end
+        if (bad == 0) $display("ok    rtl/unary.sv: %0d vectors from the spec, all correct", n);
+        else $display("FAIL  rtl/unary.sv: %0d of %0d wrong", bad, n);
+        $finish;
+    end
+endmodule
+`);
+  execFileSync('iverilog', ['-g2012', '-o', 'build/unary-tb.vvp',
+                            'rtl/unary.sv', 'build/unary-tb.sv'], { stdio: 'inherit' });
+  const o = execFileSync('vvp', ['build/unary-tb.vvp'], { encoding: 'utf8' });
+  process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
+  for (const f of ['build/unary-tb.vvp', 'build/unary-tb.sv', 'build/unary-vectors.txt']) rmSync(f, { force: true });
   if (/FAIL/.test(o)) failed = true;
 }
 

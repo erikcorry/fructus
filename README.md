@@ -150,6 +150,18 @@ since they decode as r2/r3/r4 today and the microcode never emits them.
 The constants are exactly what the one-byte abbreviations need, and `npm run
 rtl` fails if a new one needs something outside them.
 
+`rtl/unary.sv` is the eight-way unary block — `sxt8`, `zxt8`, `clz`, `bitrev`,
+`popcount`, and three free slots. Its selector is `{byte1[1:0], opcode[0]}`, the
+same three bits that carry ALU port B, so it needs no decode of its own. Only
+the selector table is generated: adding an operation to the spec fails the build
+rather than silently producing a block that doesn't implement it. 95 LUT4, five
+LUT levels, 56 MHz.
+
+`bitrev` is a permutation of sixteen nets and `sxt8`/`zxt8` are a fanout and a
+constant, so the block's entire cost is `clz`, `popcount` and the mux. Both of
+those are written the cheap way, and both have a note in the file saying what
+the alternative was and what it measured.
+
 Port B's register number comes off the instruction bytes rather than out of
 immgen, so the register file's read overlaps the immediate unit instead of
 waiting for it — four LUT levels and 38 MHz against six and 31, with a real 8×16
@@ -158,8 +170,11 @@ it there, and an `x` reaching the ALU means the microcode asked for an immediate
 from an instruction that has none.
 
 The suite regenerates the file and fails if the committed copy has drifted, then
-runs 50,640 vectors — built from the same TOML by a path sharing no code with
+runs 378,320 vectors — built from the same TOML by a path sharing no code with
 the generator — against them under `iverilog`, skipping if `iverilog` is absent.
+The unary operations are swept over their *whole* input space, all 65536 values
+each, because a sampled sweep misses exactly the interesting inputs: dropping
+popcount's carry-free top bit is wrong for one input in 65536, `0xffff`.
 All sixteen source codes are swept, the reserved three included, so a change
 that gives them a meaning has to say so there rather than silently altering
 what they do.

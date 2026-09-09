@@ -75,7 +75,7 @@ if node tests/microtan-check.mjs; then :; else fail=1; fi
 # rather than being tested in place.  The vectors come from the TOML too, by a
 # path that shares no code with the generator.
 mkdir -p rtl
-for f in immgen rhs; do
+for f in immgen rhs unary; do
     node "tools/gen-$f.js" > "build/_$f.sv"
     if cmp -s "build/_$f.sv" "rtl/$f.sv"; then
         printf 'ok    rtl/%s.sv is up to date with isa/fructus.toml\n' "$f"
@@ -121,5 +121,5 @@ else
     printf 'FAIL  tests/longimm.s --noat rejected %s instructions, expected 3\n' "$n"; fail=1
 fi
 
-rm -f build/_t.asm build/_err build/_immgen.sv build/_rhs.sv
+rm -f build/_t.asm build/_err build/_immgen.sv build/_rhs.sv build/_unary.sv
 exit $fail

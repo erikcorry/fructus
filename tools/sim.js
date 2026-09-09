@@ -183,7 +183,9 @@ export function test(cond, x, y, w) {
   }
 }
 
-const BUILTIN = {
+// The unary operations, exported so tests can use the simulator's own
+// implementations as their reference rather than a second transcription.
+export const BUILTIN = {
   sxt8:     (x) => (((x & 0xff) ^ 0x80) - 0x80),
   zxt8:     (x) => x & 0xff,
   shl:      (x, n) => x << n,
