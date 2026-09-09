@@ -110,13 +110,22 @@ ${listed}
 // would take exactly the two inputs every other ALU operation takes, lhs and
 // rhs, and need nothing else routed to it.
 //
-// IT LOOKS FREE AND IS NOT.  Measured with the whole right-hand-side chain in
-// both harnesses, so the only difference is where the selector comes from:
+// IT COSTS TWO LUT LEVELS, WHICH IS NOT THE SAME AS COSTING ANYTHING.  Measured
+// with the whole right-hand-side chain in both harnesses, so the only
+// difference is where the selector comes from:
 //
 //     selector off the instruction register   342 cells   5 levels   49.2 MHz
 //     selector off the rhs bus                334 cells   7 levels   38.4 MHz
 //
-// Eight cells for two LUT levels.  The reasoning that says it should be free -
+// WHETHER THAT MATTERS DEPENDS ON WHAT SETS THE CLOCK, and this measurement
+// does not say.  A 16-bit add is 9.8 ns on its own and worse once routed; if it
+// is the critical path then the unary block has slack, two levels of slack cost
+// nothing, and three selector wires dragged across the layout to a unit that is
+// NOT critical are a real cost in a fabric where routing is already 60% of the
+// delay.  The numbers above are the price; they are not the decision.  Decide it
+// against a placed design with the datapath in it, not against this pair.
+//
+// The reasoning that says it should be free -
 // rhs is four levels away, the unary operations are four levels from lhs, so
 // the mux lands at five either way - misses that the mux is TWO levels for a
 // five-way 16-bit select, and that with the selector arriving at level zero

@@ -616,14 +616,19 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   middle of the abbreviations.
 #   ------------------------------------------------------------------------
 #
-#   0001_0ddd                mov  rd, #imm16            3 bytes
+#   1010_0ddd                mov  rd, #imm16            3 bytes
 #
-#   The wide-immediate form takes the WHOLE first row because it spends three
-#   opcode bits on the destination register - it is the general shape, not a
-#   special case, and jmp and call reuse it.  Eight opcodes buys an addressing
-#   form, not just a mov.  Putting it first keeps the row it occupies whole,
-#   and leaves the free slots gathered at the end of the second row rather
-#   than stranded in the middle of the block.
+#   IT IS THE ONLY INSTRUCTION THAT SPENDS OPCODE BITS ON A REGISTER, and that
+#   is why it sits at the bottom of the map rather than the top.  Every other
+#   row in 0001_xxxx through 0011_xxxx is a COLUMN structure - the low three
+#   bits pick an addressing form and byte 1 has the shape that column implies -
+#   and this row's low three bits are a destination register instead.  A single
+#   row that reads differently from the eleven around it is worth moving out of
+#   them, and the free space at 1010_xxxx is where it costs nothing.
+#
+#   Moving it up also let the memory block close ranks: ld and st each own a
+#   whole row now, in one contiguous run, and mov's constants and the unary
+#   operations stopped sharing.
 #
 #   --- the memory block, 001T_Sfff -----------------------------------------
 #   Three independent bit fields, which is what keeps the decoder small:
@@ -654,8 +659,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   the next:
 #
 #       0x02 ld   / 0x03 ld8        the one-byte implicit pair
-#       0x18 st   / 0x20 st8        the store rows
-#       0x28 ld   / 0x30 ld8        the load rows
+#       0x10 st   / 0x18 st8        the store rows
+#       0x20 ld   / 0x28 ld8        the load rows
 #       0x80 push / 0x81 push8      and the same for pop at 0x88
 #       0x90 br   / 0x98 br8        and again at 0x96 / 0x9e
 #
@@ -672,31 +677,32 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   order.  Nothing decodes differently either way - it is a table that people
 #   read, and it reads better in this order.
 #
-#     0001_1000  -- free               0010_1000  ld   rd,[rd,#off5]
-#     0001_101i  st   rs,[ra,#imm3]    0010_101i  ld   rd,[ra,#imm3]
-#     0001_1100  st   rs,[ra,#imm10]   0010_1100  ld   rd,[ra,#imm10]
-#     0010_0000  -- free               0011_0000  ld8  rd,[rd,#off5]
-#     0010_001i  st8  rs,[ra,#imm3]    0011_001i  ld8  rd,[ra,#imm3]
-#     0010_0100  st8  rs,[ra,#imm10]   0011_0100  ld8  rd,[ra,#imm10]
+#     0001_0000  -- free               0010_0000  ld   rd,[rd,#off5]
+#     0001_001i  st   rs,[ra,#imm3]    0010_001i  ld   rd,[ra,#imm3]
+#     0001_0100  st   rs,[ra,#imm10]   0010_0100  ld   rd,[ra,#imm10]
+#     0001_1000  -- free               0010_1000  ld8  rd,[rd,#off5]
+#     0001_101i  st8  rs,[ra,#imm3]    0010_101i  ld8  rd,[ra,#imm3]
+#     0001_1100  st8  rs,[ra,#imm10]   0010_1100  ld8  rd,[ra,#imm10]
 #   ------------------------------------------------------------------------
 #
 #   --- the last row before the ALU: constants and the unary operations ------
 #
-#   0011_1000                mov  rd, #imm5             2 bytes
-#   0011_1001                mov  rd, #immbit5          2 bytes
-#   0011_101s                unary ops, 8 in TWO opcodes 2 bytes
-#   0011_1100                -- free
-#   0011_1101                mov  rd, #immask5          2 bytes
-#   0011_1110                -- free
-#   0011_1111                -- free
+#   0011_0000                mov  rd, #imm5             2 bytes
+#   0011_0001                mov  rd, #immbit5          2 bytes
+#   0011_0010 .. 0011_0100   -- free
+#   0011_0101                mov  rd, #immask5          2 bytes
+#   0011_0110 .. 0011_0111   -- free
 #
-#   THIS ROW IS AN ALU GROUP WITHOUT AN ALU OPERATION, and it is numbered as
+#   0011_1000 .. 0011_1001   -- free
+#   0011_101s                unary ops, 8 in TWO opcodes 2 bytes
+#   0011_1100 .. 0011_1111   -- free
+#
+#   THE mov ROW IS AN ALU GROUP WITHOUT AN ALU OPERATION, and it is numbered as
 #   one.  `mov rd, #imm` is `or rd, #imm` with the register half thrown away, so
 #   the row lines its constant forms up on the same columns the six ALU groups
-#   below use: +0 imm5, +1 immbit5, +5 immask5.  The unary operations take the
-#   two-register columns +2 and +3, exactly as the ALU's imm3 forms do.
+#   below use: +0 imm5, +1 immbit5, +5 immask5.
 #
-#   That leaves 0x3c empty, which is the imm10 column and is deliberate: `mov
+#   That leaves 0x34 empty, which is the imm10 column and is deliberate: `mov
 #   rd, #imm10` would be a strictly worse `mov rd, #imm16` - three bytes either
 #   way, six fewer bits of range - so the slot has nothing to hold.  Putting
 #   immask5 there to close the gap would have cost more than it saved: a reader
@@ -705,7 +711,14 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   would need a special case for one opcode.  An empty slot in the right place
 #   is cheaper than a full one in the wrong place, and there are 137 free.
 #
-#   THE UNARY OPERATIONS ARE IN THE RIGHT COLUMN NOW, and the column is the
+#   THE UNARY OPERATIONS HAVE A ROW OF THEIR OWN, which they did not before -
+#   they shared mov's, three constants and eight operations in eight opcodes.
+#   Nothing about that was wrong, but the two have nothing to do with each other
+#   and the row read as two half-rows.  Five of the eight slots are free now, so
+#   a unary operation that wants a whole opcode - one with a real second operand,
+#   or one whose selector will not fit in two bits - has somewhere to go.
+#
+#   THE UNARY OPERATIONS ARE STILL IN THE RIGHT COLUMN, and the column is the
 #   whole argument for putting them here.  Byte 1 of a unary op is
 #
 #       d d d a a a s s      destination, source, operation selector
@@ -949,7 +962,7 @@ semantics = "R[d] = M8[R[a] + off]"
 
   [[insn.form]]
   name     = "reg_off5"
-  encoding = "0011_0000  aaao_oooo"
+  encoding = "0010_1000  aaao_oooo"
   fields   = { o = "off:imm5" }
   tie      = { d = "a" }             # one field serves as address and dest
 
@@ -964,7 +977,7 @@ semantics = "R[d] = M8[R[a] + off]"
   # it is what makes room for a separate destination and address in two bytes.
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_001i  ddda_aajj"
+  encoding = "0010_101i  ddda_aajj"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   # Three bytes, and in exchange everything is independent and nothing is
@@ -976,7 +989,7 @@ semantics = "R[d] = M8[R[a] + off]"
   #     byte 2:  i i i i i i i i   off bits 7..0
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0011_0100  ddda_aaii  iiii_iiii"
+  encoding = "0010_1100  ddda_aaii  iiii_iiii"
   fields   = { i = "off:imm10" }
 
 
@@ -1022,18 +1035,18 @@ semantics = "R[d] = M16[R[a] + off]"
 
   [[insn.form]]
   name     = "reg_off5"
-  encoding = "0010_1000  aaao_oooo"
+  encoding = "0010_0000  aaao_oooo"
   fields   = { o = "off:imm5" }
   tie      = { d = "a" }
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0010_101i  ddda_aajj"
+  encoding = "0010_001i  ddda_aajj"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0010_1100  ddda_aaii  iiii_iiii"
+  encoding = "0010_0100  ddda_aaii  iiii_iiii"
   fields   = { i = "off:imm10" }
 
 
@@ -1058,12 +1071,12 @@ semantics = "M8[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0010_001i  sssa_aajj"
+  encoding = "0001_101i  sssa_aajj"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0010_0100  sssa_aaii  iiii_iiii"
+  encoding = "0001_1100  sssa_aaii  iiii_iiii"
   fields   = { i = "off:imm10" }
 
 
@@ -1080,12 +1093,12 @@ semantics = "M16[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0001_101i  sssa_aajj"
+  encoding = "0001_001i  sssa_aajj"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0001_1100  sssa_aaii  iiii_iiii"
+  encoding = "0001_0100  sssa_aaii  iiii_iiii"
   fields   = { i = "off:imm10" }
 
 
@@ -1131,7 +1144,7 @@ semantics = "R[d] = imm"
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0011_1000  dddi_iiii"
+  encoding = "0011_0000  dddi_iiii"
   fields   = { i = "imm:imm5" }
 
   # The same two-byte shape, the same five bits, read through immbit5 instead
@@ -1145,14 +1158,14 @@ semantics = "R[d] = imm"
   # field.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0011_1001  dddi_iiii"
+  encoding = "0011_0001  dddi_iiii"
   fields   = { i = "imm:immbit5" }
 
   # And the mask table.  Loading 0x00ff or 0xf000 was three bytes before this;
   # a routine that masks with a constant usually has to build it first.
   [[insn.form]]
   name     = "reg_immask5"
-  encoding = "0011_1101  dddi_iiii"
+  encoding = "0011_0101  dddi_iiii"
   fields   = { i = "imm:immask5" }
 
   # Destination in the opcode byte, then a whole 16-bit immediate.  No
@@ -1166,7 +1179,7 @@ semantics = "R[d] = imm"
   # bits 15..8.
   [[insn.form]]
   name     = "reg_imm16"
-  encoding = "0001_0ddd  iiii_iiii  jjjj_jjjj"
+  encoding = "1010_0ddd  iiii_iiii  jjjj_jjjj"
   fields   = { i = "imm:int16[7:0]", j = "imm:int16[15:8]" }
 
 
