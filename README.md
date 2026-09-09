@@ -90,6 +90,7 @@ isa/fructus.toml      the ISA: encodings, operand types, semantics, rationale
 isa/abi.s             the calling convention, as a file that assembles
 isa/mos6502.toml      the NMOS 6502 opcode table, for comparison - not part of Fructus
 tools/                the toolchain, all driven by the TOML
+rtl/                  hardware, generated from the spec - see below
 libc/                 a tiny libc, sized for a machine with 64K
 snippets/             worked routines, with their byte counts measured
 tangerine/            the Microtan monitor ROM
@@ -106,11 +107,31 @@ tests/                the test suite
 | `npm run microtan -- <rom>` | runs a ROM on the simulated board |
 | `npm run map` | the opcode map: `build/opcodes.html` and `docs/opcodes.svg` |
 | `npm run map6502` | the same map for the NMOS 6502: `build/6502.html` and `docs/6502.svg` |
+| `npm run rtl` | `rtl/immgen.sv`, the immediate unit, from the spec's value tables |
+| `npm test` | everything |
 
 Heading for hardware: [docs/fpga-toolchain.md](docs/fpga-toolchain.md) is the
 open-source iCE40 toolchain, how to install it and the two things that catch
 you out.
-| `npm test` | everything |
+
+### rtl/
+
+Generated, not written. `rtl/immgen.sv` produces the 16-bit immediate right-hand
+side for the 58 opcodes that have one — every ALU and shift group, `mov`, the
+load and store displacements, and `brclear`/`brset` — from `immreg` and
+`opcode[2:0]` alone, with no control line from the microcode word. 79 LUT4 and
+three LUT levels on an iCE40 UP5K.
+
+It costs that little because of properties of the *values* in the spec, not of
+the circuit: `immbit5` and `immask5` are each sixteen entries plus their exact
+complements, so the two share one complement layer; and `shift3` is `imm3`
+masked to four bits, which is what the shifter does anyway, so there is no
+`shift3` table in hardware at all. Both are checked by `npm run check`, which
+names the hardware cost when an edit breaks them.
+
+The suite regenerates the file and fails if the committed copy has drifted, then
+runs 24,576 vectors — built from the same TOML by a path sharing no code with
+the generator — against it under `iverilog`, skipping if `iverilog` is absent.
 
 `tools/isa.js` reads the spec; `tools/decode.js` turns bytes back into
 operands; `tools/sim.js` executes the `semantics` expressions. The generator and

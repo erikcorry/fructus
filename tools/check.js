@@ -61,6 +61,48 @@ for (const [name, t] of Object.entries(types)) {
 }
 
 // =============================================================================
+// Relationships BETWEEN tables that the hardware is built on
+// =============================================================================
+// The checks above ask whether each table is well formed.  These ask whether
+// two tables still stand in the relation that rtl/immgen.sv exploits to collapse
+// them - which is a property of the VALUES, invisible to any per-table check,
+// and silently destroyed by an ordinary-looking edit.
+//
+// Breaking one of these is allowed.  What is not allowed is breaking it without
+// noticing, so the failure names the cost rather than forbidding the change.
+{
+  const u16 = (v) => (v >>> 0) & 0xffff;
+
+  // immbit5 and immask5 are each sixteen values plus their complements, so the
+  // two tables share ONE complement layer: choose the sixteen-entry half with
+  // opcode[2], then XOR with the field's top bit.  An entry above 15 that is
+  // not the complement of the one sixteen below it needs its own 32-entry
+  // lookup, which is a second XOR layer - about 16 LUT4 on an iCE40.
+  for (const name of ['immbit5', 'immask5']) {
+    const v = types[name]?.values;
+    if (!v || v.length !== 32) continue;
+    for (let n = 0; n < 16; n++)
+      if (u16(v[n] ^ v[n + 16]) !== 0xffff)
+        err(`optype ${name}: entry ${n + 16} is not the complement of entry ${n}, `
+          + `so the two mask tables can no longer share a complement layer`);
+  }
+
+  // imm3 and shift3 differ at index 0 alone - -1 against 15 - and every shift
+  // masks its right-hand side to four bits, so -1 IS 15 to a shift.  That is
+  // why the immediate unit has no shift3 table and no `is_shift` input: shift3
+  // is an assembler vocabulary, there to reject `shl rd, ra, #-1`, and the
+  // datapath never distinguishes it.  Change a value so the masks differ and
+  // the hardware needs a second table and a control line to select it.
+  const i3 = types.imm3?.values, s3 = types.shift3?.values;
+  if (i3 && s3 && i3.length === s3.length)
+    for (let n = 0; n < i3.length; n++)
+      if ((i3[n] & 15) !== (s3[n] & 15))
+        err(`optype shift3: entry ${n} is ${s3[n]}, but imm3[${n}] & 15 is ${i3[n] & 15}; `
+          + `the shifter masks to four bits, so these must agree or the immediate `
+          + `unit needs a separate shift3 table`);
+}
+
+// =============================================================================
 // Combo tables: every entry must mean something no other entry means
 // =============================================================================
 // A combo entry is a PREDICATE on a register, and two entries that denote the

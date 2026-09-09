@@ -69,6 +69,21 @@ if node tests/libgcc-check.mjs; then :; else fail=1; fi
 # --- the Microtan board: reset, ROM window, keyboard, display ----------------
 if node tests/microtan-check.mjs; then :; else fail=1; fi
 
+# --- the RTL immediate unit, against the spec's own value tables -------------
+# rtl/immgen.sv is generated from isa/fructus.toml, so it is regenerated here
+# before it is checked: a committed copy that has drifted from the spec fails
+# rather than being tested in place.  The vectors come from the TOML too, by a
+# path that shares no code with the generator.
+mkdir -p rtl
+node tools/gen-immgen.js > build/_immgen.sv
+if cmp -s build/_immgen.sv rtl/immgen.sv; then
+    printf 'ok    rtl/immgen.sv is up to date with isa/fructus.toml\n'
+else
+    printf 'FAIL  rtl/immgen.sv is stale - run `npm run rtl`\n'; fail=1
+fi
+rm -f build/_immgen.sv
+if node tests/immgen-check.mjs; then :; else fail=1; fi
+
 # --- snippet arithmetic, which assembling cannot check -----------------------
 for t in tests/fpadd-check.mjs tests/fpsub-check.mjs; do
     if out=$(node "$t" 2>&1) && ! printf '%s' "$out" | grep -q MISMATCH; then
@@ -104,5 +119,5 @@ else
     printf 'FAIL  tests/longimm.s --noat rejected %s instructions, expected 3\n' "$n"; fail=1
 fi
 
-rm -f build/_t.asm build/_err
+rm -f build/_t.asm build/_err build/_immgen.sv
 exit $fail
