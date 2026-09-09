@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // =============================================================================
-// immgen-check.mjs - rtl/immgen.sv against the spec, not against itself
+// rtl-check.mjs - rtl/*.sv against the spec, not against themselves
 // =============================================================================
 //
-//   node tests/immgen-check.mjs
+//   node tests/rtl-check.mjs
 //
 // The vectors are built here from isa/fructus.toml's own value tables, and the
-// Verilog is built by tools/gen-immgen.js from the same file.  Neither reads
-// the other, so agreement means the circuit implements the tables rather than
-// that one transcription matches another.
+// Verilog is built by tools/gen-immgen.js and tools/gen-rhs.js from the same
+// file.  Neither side reads the other, so agreement means the circuits
+// implement the tables rather than that one transcription matches another.
 //
 // WHAT IS SWEPT.  All eight modes, every (5-bit field, mode) pair, every
 // (3-bit index, opcode bit) pair, and imm10 over its whole 10-bit range - with
@@ -32,7 +32,7 @@ const have = (cmd) => {
   catch { return false; }
 };
 if (!have('iverilog')) {
-  console.log('skip  tests/immgen-check.mjs: iverilog not installed');
+  console.log('skip  tests/rtl-check.mjs: iverilog not installed');
   process.exit(0);
 }
 
@@ -130,4 +130,70 @@ execFileSync('iverilog', ['-g2012', '-o', 'build/immgen-tb.vvp', 'rtl/immgen.sv'
 const out = execFileSync('vvp', ['build/immgen-tb.vvp'], { encoding: 'utf8' });
 process.stdout.write(out.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
 for (const f of ['build/immgen-tb.vvp', 'build/immgen-tb.sv', 'build/immgen-vectors.txt']) rmSync(f, { force: true });
-process.exit(/FAIL/.test(out) ? 1 : 0);
+let failed = /FAIL/.test(out);
+
+// =============================================================================
+// rtl/rhs.sv - the four microcode lines on top of immgen
+// =============================================================================
+// The reference is the module's contract stated once: pick immgen's output or a
+// constant, then read that as a value or as a register number.  regval stands in
+// for the register file, so the check covers the wiring rather than the file.
+{
+  const K = [-1, 0, 1, 2];                       // must match tools/gen-rhs.js
+  const rows = [];
+  const rnd = (() => { let s = 2463534242;
+    return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
+
+  for (let sel = 0; sel <= 7; sel++)
+    for (let kUse = 0; kUse <= 1; kUse++)
+      for (let k = 0; k < 4; k++)
+        for (let asReg = 0; asReg <= 1; asReg++)
+          for (let i = 0; i < 24; i++) {
+            const ir = rnd() & 0xffff, regval = rnd() & 0xffff;
+            const val = kUse ? u16(K[k]) : u16(want(ir, sel));
+            const num = kUse ? (u16(K[k]) & 7) : k3(ir, sel);
+            const rhs = asReg ? regval : val;
+            rows.push([ir, sel, kUse, k, asReg, regval, num, rhs]
+              .map((v, j) => (j === 0 || j === 5 || j === 7)
+                ? u16(v).toString(16).padStart(4, '0') : v).join(' '));
+          }
+
+  writeFileSync('build/rhs-vectors.txt', rows.join('\n') + '\n');
+  writeFileSync('build/rhs-tb.sv', `module tb;
+    logic [15:0] ir, regval, xrhs, grhs;
+    logic [2:0] sel, xnum, gnum;
+    logic k_use, as_reg; logic [1:0] k;
+    integer f, n = 0, bad = 0, r;
+    rhs u (.ir(ir), .sel(sel), .k_use(k_use), .k(k), .as_reg(as_reg),
+           .regval(regval), .regnum(gnum), .rhs(grhs));
+    initial begin
+        f = $fopen("build/rhs-vectors.txt", "r");
+        if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
+        while (!$feof(f)) begin
+            r = $fscanf(f, "%h %d %d %d %d %h %d %h\\n",
+                        ir, sel, k_use, k, as_reg, regval, xnum, xrhs);
+            if (r == 8) begin
+                #1; n = n + 1;
+                if (grhs !== xrhs || gnum !== xnum) begin
+                    bad = bad + 1;
+                    if (bad < 6) $display("  MISMATCH ir=%h sel=%0d k_use=%0d k=%0d as_reg=%0d: "
+                        , ir, sel, k_use, k, as_reg,
+                        "want rhs=%h num=%0d, got rhs=%h num=%0d", xrhs, xnum, grhs, gnum);
+                end
+            end
+        end
+        if (bad == 0) $display("ok    rtl/rhs.sv: %0d vectors from the spec, all correct", n);
+        else $display("FAIL  rtl/rhs.sv: %0d of %0d wrong", bad, n);
+        $finish;
+    end
+endmodule
+`);
+  execFileSync('iverilog', ['-g2012', '-o', 'build/rhs-tb.vvp',
+                            'rtl/immgen.sv', 'rtl/rhs.sv', 'build/rhs-tb.sv'], { stdio: 'inherit' });
+  const o = execFileSync('vvp', ['build/rhs-tb.vvp'], { encoding: 'utf8' });
+  process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
+  for (const f of ['build/rhs-tb.vvp', 'build/rhs-tb.sv', 'build/rhs-vectors.txt']) rmSync(f, { force: true });
+  if (/FAIL/.test(o)) failed = true;
+}
+
+process.exit(failed ? 1 : 0);

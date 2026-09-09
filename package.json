@@ -7,7 +7,7 @@
   "scripts": {
     "check": "node tools/check.js",
     "gen": "mkdir -p build && node tools/gen-customasm.js > build/fructus.asm && node tools/gen-customasm.js --noat > build/fructus-noat.asm",
-    "rtl": "mkdir -p rtl && node tools/gen-immgen.js > rtl/immgen.sv && echo \"rtl/immgen.sv\"",
+    "rtl": "mkdir -p rtl && node tools/gen-immgen.js > rtl/immgen.sv && node tools/gen-rhs.js > rtl/rhs.sv && echo \"rtl/immgen.sv rtl/rhs.sv\"",
     "test": "sh tests/run.sh",
     "sim": "node tools/sim.js",
     "microtan": "node tools/microtan.js",

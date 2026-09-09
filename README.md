@@ -107,7 +107,7 @@ tests/                the test suite
 | `npm run microtan -- <rom>` | runs a ROM on the simulated board |
 | `npm run map` | the opcode map: `build/opcodes.html` and `docs/opcodes.svg` |
 | `npm run map6502` | the same map for the NMOS 6502: `build/6502.html` and `docs/6502.svg` |
-| `npm run rtl` | `rtl/immgen.sv`, the immediate unit, from the spec's value tables |
+| `npm run rtl` | `rtl/immgen.sv` and `rtl/rhs.sv`, from the spec's value tables |
 | `npm test` | everything |
 
 Heading for hardware: [docs/fpga-toolchain.md](docs/fpga-toolchain.md) is the
@@ -129,6 +129,13 @@ complements, so the two share one complement layer; and `shift3` is `imm3`
 masked to four bits, which is what the shifter does anyway, so there is no
 `shift3` table in hardware at all. Both are checked by `npm run check`, which
 names the hardware cost when an edit breaks them.
+
+`rtl/rhs.sv` puts four microcode lines on top of it: take immgen's output or one
+of `#-1 #0 #1 #2`, and read the result as a value or as a register number. The
+register overrides come free — those four constants have low three bits `r7 r0
+r1 r2`, so the same two bits pick either, and `r7` is `lr`. That set is exactly
+what the one-byte abbreviations need, with `r2` spare, and `npm run rtl` fails
+if a new abbreviation needs something outside it. 38 LUT4 on top of immgen.
 
 The suite regenerates the file and fails if the committed copy has drifted, then
 runs 32,768 vectors — built from the same TOML by a path sharing no code with
