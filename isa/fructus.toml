@@ -387,7 +387,7 @@ values = [
 # permits the exchange says so with `swap_operands`.
 #
 # THERE IS NO `al`.  An unconditional branch is a register compared for
-# equality with itself, which is why the two-byte form at 0x9f pins `eq, r0,
+# equality with itself, which is why the two-byte form at 0x94 pins `eq, r0,
 # r0` rather than spending a condition slot on "always".  `nv` is not encoded
 # either - a branch that never happens is a nop the assembler can just not
 # emit.  Both slots go to the overflow conditions instead.
@@ -681,7 +681,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #       0x18 st   / 0x20 st8        the store rows
 #       0x28 ld   / 0x30 ld8        the load rows
 #       0x80 push / 0x81 push8      and the same for pop at 0x88
-#       0x90 br   / 0x98 br8        and again at 0x92 / 0x9a
+#       0x90 br   / 0x98 br8        and again at 0x96 / 0x9e
 #
 #   The 16-bit form is the common one - a byte load is the special case, a byte
 #   push is an argument rather than a register save - so it gets the name
@@ -856,18 +856,18 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   1001_0000                br      <cond,#imm5>, ra, target
 #   1001_0001                brclear ra, #immbit5, target
-#   1001_001b                br      <cond>, ra, rb, target    TWO opcodes
-#   1001_0100                jmpr    target             3 bytes, pc relative
+#   1001_0010                jmp     target             3 bytes, absolute
+#   1001_0011                jmpr    target             3 bytes, pc relative
+#   1001_0100                jmpr    target             2 bytes, SHORT form
 #   1001_0101                brclear ra, #immask5, target
-#   1001_0110                jmp     target             3 bytes, absolute
-#   1001_0111                call    ra                 2 bytes, INDIRECT
+#   1001_011z                br      <cond>, ra, rb, target    TWO opcodes
 #   1001_1000                br8     <cond,#imm5>, ra, target
 #   1001_1001                brset   ra, #immbit5, target
-#   1001_101b                br8     <cond>, ra, rb, target    TWO opcodes
-#   1001_1100                callr   target             3 bytes, pc relative
+#   1001_1010                call    target             3 bytes, absolute
+#   1001_1011                callr   target             3 bytes, pc relative
+#   1001_1100                call    ra                 2 bytes, INDIRECT
 #   1001_1101                brset   ra, #immask5, target
-#   1001_1110                call    target             3 bytes, absolute
-#   1001_1111                jmpr    target             2 bytes, SHORT form
+#   1001_111z                br8     <cond>, ra, rb, target    TWO opcodes
 #   1010_0000 .. 1011_1111   -- free, 32 slots
 #
 #   THE TWO ROWS ARE br AND br8, EIGHT APART, which is the same relationship
@@ -882,9 +882,14 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   else in the map:
 #
 #     .0 .1 .5   aaa?_????   one register and a 5-bit field
-#     .2 .3      ccca_aaee   two registers and a condition
-#     .4 .6      iiii_iiii   a 16-bit target and no register at all
-#     .7                     the two-byte odds and ends
+#     .6 .7      cccb_bbee   two registers and a condition
+#     .2 .3      iiii_iiii   a 16-bit target and no register at all
+#     .4                     the two two-byte forms
+#
+#   AND EVERY COLUMN IS A PAIR SPLIT BY BIT 3, though what the split means
+#   depends on the column: .0, .6 and .7 are br against br8, .1 and .5 are
+#   brclear against brset, and .2, .3 and .4 are a jump against the call that
+#   reaches the same way.  Nothing in the block is unpaired.
 #
 #   .0, .1 AND .5 ARE THE ALU'S CONSTANT COLUMNS, and that is not an analogy.
 #   Byte 1 of `br cond, ra, #imm5` is `aaak_kkkk` and byte 1 of `brclear ra,
@@ -894,15 +899,25 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   +0 / +1 / +5 relationship every ALU group has.  So the branches on a mask
 #   sit in the mask columns, and clear-versus-set is the row rather than bit 0.
 #
-#   .4 AND .6 SPLIT RELATIVE FROM ABSOLUTE.  Column .4 is pc-relative and column
-#   .6 is absolute; the row then says jump or call.  Four instructions, two
-#   bits, and the pair a linker cares about - jmpr against jmp, callr against
-#   call - differ in one bit position rather than in the low bit of a run.
+#   .6 AND .7 ARE THE THREE-REGISTER COLUMNS, and that is why the two-register
+#   branches are there rather than at .2 and .3.  Byte 1 of `br cond, ra, rb` is
+#   `ccca_aaee` and byte 1 of `add rd, ra, rb` is `ddda_aacc`: ra is byte1[4:2]
+#   in both, and the second source is byte1[1:0] plus the stolen opcode bit in
+#   both.  Only the top field differs - a condition where the ALU has a
+#   destination - so the register decode is not merely similar, it is the same
+#   wires.  rtl/immgen.sv emits that register number at +6 and +7 for every
+#   opcode in those columns, the ALU triples and these branches alike.
 #
-#   .7 HOLDS WHAT IS LEFT: the two forms that are two bytes rather than three.
-#   `call ra` is a register and `jmpr target` a short displacement, so they
-#   share no byte-1 layout with each other or with anything above them.  A
-#   column of leftovers is honest; scattering them through the gaps would not be.
+#   .2 AND .3 ARE THE FOUR WIDE TARGETS, AS A 2x2.  Bit 0 is absolute against
+#   pc-relative and bit 3 is jump against call, so jmp / jmpr / call / callr are
+#   0x92 / 0x93 / 0x9a / 0x9b and every pair a linker relaxes between differs in
+#   exactly one bit.  All four have the same byte 1 - a 16-bit target and no
+#   register - so they are adjacent columns rather than alternating ones.
+#
+#   .4 HOLDS THE TWO FORMS THAT ARE TWO BYTES RATHER THAN THREE, and it keeps
+#   the jump-against-call sense of bit 3: `jmpr target` short above, `call ra`
+#   indirect below.  They share no byte-1 layout with each other, which is what
+#   makes a column of leftovers honest rather than untidy.
 #   ------------------------------------------------------------------------
 #
 #   11xx_xxxx                -- free, a quarter of the map
@@ -1804,13 +1819,29 @@ semantics = "R[d] = popcount(R[a])"
 # The two-register form is the `rsb` three-register encoding with its
 # DESTINATION field replaced by a 3-bit condition, plus a displacement byte:
 #
-#     byte 0:  1 0 0 1 w 0 1 b    0x92/0x93 for br, 0x9a/0x9b for br8
-#     byte 1:  c c c a a a e e    condition, first reg, second reg bits 2 and 1
+#     byte 0:  1 0 0 1 w 1 1 z    0x96/0x97 for br, 0x9e/0x9f for br8
+#     byte 1:  c c c b b b e e    condition, SECOND reg, first reg bits 2 and 1
 #     byte 2:  t t t t t t t t    signed displacement from the next instruction
 #
 # w IS THE WIDTH BIT and it is bit 3 in both forms: clear for br, set for br8,
 # which puts the byte-wide row eight opcodes below the word-wide one exactly as
-# st/st8 and ld/ld8 sit.  b is still the second register's low bit.
+# st/st8 and ld/ld8 sit.
+#
+# THE TWO REGISTERS ARE THE OTHER WAY ROUND FROM THE SYNTAX, and that is what
+# lets the comparison be an `rsb` with no extra multiplexing.  `rsb rd, ra, rb`
+# computes rb - ra: the SPLIT field minus the byte1[4:2] field.  `br cond, ra,
+# rb` tests the flags of R[a] - R[b].  For those to be the same subtraction, the
+# first register NAMED has to sit in the split field, so `a` takes z and ee
+# while `b` takes byte1[4:2].
+#
+# Read as datapath rather than as syntax there is no reversal at all:
+#
+#     byte1[4:2]              always ALU port A
+#     {byte1[1:0], opcode[0]} always ALU port B
+#
+# and every three-operand instruction in the map obeys it - the ALU triples, the
+# shift triples, push and pop's triples, and now both branches.  rtl/immgen.sv
+# emits port B's register number at +6 and +7 for all of them.
 #
 # Three of the register bits and all of the register decode are therefore
 # shared with the ALU three-register forms; only byte 1's top field changes
@@ -1845,8 +1876,8 @@ swap_operands = ["a", "b"]
 
   [[insn.form]]
   name     = "cond_reg_reg"
-  encoding = "1001_101b  ccca_aaee  tttt_tttt"
-  fields   = { c = "cond:cond3", b = "b:reg[0]", e = "b:reg[2:1]", t = "off:off8" }
+  encoding = "1001_111z  cccb_bbee  tttt_tttt"
+  fields   = { c = "cond:cond3", z = "a:reg[0]", e = "a:reg[2:1]", t = "off:off8" }
 
 [[insn]]
 mnemonic = "br8"
@@ -1880,8 +1911,8 @@ swap_operands = ["a", "b"]
 
   [[insn.form]]
   name     = "cond_reg_reg"
-  encoding = "1001_001b  ccca_aaee  tttt_tttt"
-  fields   = { c = "cond:cond3", b = "b:reg[0]", e = "b:reg[2:1]", t = "off:off8" }
+  encoding = "1001_011z  cccb_bbee  tttt_tttt"
+  fields   = { c = "cond:cond3", z = "a:reg[0]", e = "a:reg[2:1]", t = "off:off8" }
 
 [[insn]]
 mnemonic = "br"
@@ -2165,13 +2196,14 @@ semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2; R[c] = M1
 # Relative and absolute both take a full 16 bits and both reach the whole
 # address space, so the choice between them is not about range - it is whether
 # the code is position independent.  Short relative jumps are already covered
-# by the two-byte `jmpr` form at 0x9f, +/-127.
+# by the two-byte `jmpr` form at 0x94, +/-127.
 #
-# THE FOUR OF THEM ARE A 2x2 AND THE OPCODES SAY SO.  Column .4 of each row is
-# pc-relative and column .6 is absolute, the row picks jump or call, so jmpr /
-# jmp / callr / call are 0x94 / 0x96 / 0x9c / 0x9e.  Relative-versus-absolute
-# is bit 1 and jump-versus-call is bit 3, which is the pair a linker relaxing a
-# call into a callr has to tell apart.
+# THE FOUR OF THEM ARE A 2x2 AND THE OPCODES SAY SO.  They occupy the adjacent
+# columns .2 and .3 of both rows - jmp / jmpr / call / callr at 0x92 / 0x93 /
+# 0x9a / 0x9b - because all four have the same byte 1, a 16-bit target and no
+# register field.  Bit 0 is absolute against pc-relative and bit 3 is jump
+# against call, so every pair a linker relaxes between differs in exactly one
+# bit: jmp -> jmpr is bit 0, jmp -> call is bit 3.
 #
 # MNEMONICS ARE A GUESS.  I have taken `jmp`/`call` as absolute and `jmpr`/
 # `callr` as relative.  If you would rather have one mnemonic each with the
@@ -2186,7 +2218,7 @@ syntax   = "{target}"
 semantics = "pc = pc + target"
 
   # THE SHORT FORM IS A BRANCH WEARING A JUMP'S NAME, and the encoding says so:
-  # 0x9f is the compare-and-branch datapath with its condition pinned to
+  # 0x94 is the compare-and-branch datapath with its condition pinned to
   # `eq, r0, r0`.  A register compared for equality with itself is always true,
   # so the condition field costs nothing and the whole instruction is an opcode
   # and a displacement byte.
@@ -2198,12 +2230,12 @@ semantics = "pc = pc + target"
   # every other operand that has more than one width.
   [[insn.form]]
   name     = "rel8"
-  encoding = "1001_1111  tttt_tttt"
+  encoding = "1001_0100  tttt_tttt"
   fields   = { t = "target:off8" }
 
   [[insn.form]]
   name     = "rel16"
-  encoding = "1001_0100  iiii_iiii  jjjj_jjjj"
+  encoding = "1001_0011  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 [[insn]]
@@ -2215,7 +2247,7 @@ semantics = "pc = target"
 
   [[insn.form]]
   name     = "abs16"
-  encoding = "1001_0110  iiii_iiii  jjjj_jjjj"
+  encoding = "1001_0010  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 [[insn]]
@@ -2227,7 +2259,7 @@ semantics = "lr = pc; pc = pc + target"
 
   [[insn.form]]
   name     = "rel16"
-  encoding = "1001_1100  iiii_iiii  jjjj_jjjj"
+  encoding = "1001_1011  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 [[insn]]
@@ -2239,7 +2271,7 @@ semantics = "lr = pc; pc = target"
 
   [[insn.form]]
   name     = "abs16"
-  encoding = "1001_1110  iiii_iiii  jjjj_jjjj"
+  encoding = "1001_1010  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 # --- the indirect call ------------------------------------------------------
@@ -2267,7 +2299,7 @@ semantics = "lr = pc; pc = R[a]"
 
   [[insn.form]]
   name     = "reg"
-  encoding = "1001_0111  aaa0_0000"
+  encoding = "1001_1100  aaa0_0000"
 
 
 # Return is just pc = lr, so it needs no operands and fits in one byte - and

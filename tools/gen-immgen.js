@@ -5,9 +5,10 @@
 //
 //   node tools/gen-immgen.js > rtl/immgen.sv
 //
-// One combinational block that produces the 16-bit immediate right-hand side
-// for every instruction that has one: the ALU and shift groups, mov, the load
-// and store displacements, and the two mask branches.  58 opcodes.
+// One combinational block that produces the right-hand side for every
+// instruction that has one: the ALU and shift groups, mov, the load and store
+// displacements, the two mask branches, and - at +6 and +7 - the third REGISTER
+// NUMBER of the three-operand forms, on the same wires.  82 opcodes.
 //
 // Its only inputs are `immreg` - the last two instruction bytes fetched - and
 // `opcode[2:0]`.  There is no control line from the microcode word, which is
@@ -65,19 +66,30 @@ process.stdout.write(`// =======================================================
 //      +2  imm3      the small-constant table  (+3 is its second opcode)
 //      +4  imm10     signed, spanning two bytes
 //      +5  immask5   32 field and stripe masks
-//      +6, +7        the three-register forms: no immediate, don't care
+//      +6, +7    rb        the third register's NUMBER, zero extended
 //
-// 2. opcode[0] IS sel[0].  The imm3 index is {byte1[1:0], opcode[0]} - the spec
+// 2. +6 AND +7 RIDE THE SAME WIRES.  The three-register forms encode their
+//    third register as {byte1[1:0], opcode[0]} - the ninth register bit stolen
+//    into the opcode - which is bit for bit the imm3 index.  So the same three
+//    bits come out of the same place, and what changes is only whether the low
+//    nibble is looked up in imm3 or passed through.  Downstream there is ONE
+//    right-hand-side bus and a microcode control line saying whether to use it
+//    as a value or as a register-file address.
+//
+//    That covers the ALU and shift triples, and push/pop's triples too: they
+//    spell the field identically (\`z = "c:reg[0]", c = "c:reg[2:1]"\`).
+//
+// 3. opcode[0] IS sel[0].  The imm3 index is {byte1[1:0], opcode[0]} - the spec
 //    spells this \`imm3[0]\`, so the pair of opcodes at +2 and +3 ARE the low
 //    index bit.  It is already an input; the index costs no logic.
 //
-// 3. THE TWO 5-BIT TABLES SHARE THEIR COMPLEMENT HALF.  For both immbit5 and
+// 4. THE TWO 5-BIT TABLES SHARE THEIR COMPLEMENT HALF.  For both immbit5 and
 //    immask5 the upper sixteen entries are exact bitwise complements of the
 //    lower sixteen - asserted by the generator, not assumed - and sel[2] is
 //    what distinguishes the two (+1 against +5).  So the sixteen-entry halves
 //    are chosen first and the complement XOR is applied once, not twice.
 //
-// 4. imm3 AND shift3 ARE ONE TABLE.  They differ at index 0 alone, -1 against
+// 5. imm3 AND shift3 ARE ONE TABLE.  They differ at index 0 alone, -1 against
 //    15, and the shifter masks its right-hand side to four bits, so -1 IS 15 to
 //    a shift.  shift3 is an assembler vocabulary - it exists to reject
 //    \`shl rd, ra, #-1\` - and the datapath never needs to know about it.
@@ -103,7 +115,16 @@ process.stdout.write(`// =======================================================
 // displacement, which is after byte 2 has shifted byte 1 upwards.  Read the
 // operands into the ALU input latches early, or give byte 1 its own register.
 //
-// MEASURED on an iCE40 UP5K: 79 SB_LUT4, three LUT levels, 100 MHz placed.
+// br's TWO-REGISTER FORM RIDES THIS BLOCK; its packed form does not.  The
+// two-register branches sit at +6 and +7 with the ALU and shift triples, and
+// their registers are arranged so that port B comes out of here like everyone
+// else's - which is why \`br cond, ra, rb\` encodes \`a\` in the split field and
+// \`b\` in byte1[4:2], the other way round from how it is written.  br's +0 form
+// reads five bits through condimm5, which packs a condition and a constant
+// together rather than being a plain immediate, so the branch unit decodes that
+// one for itself.
+//
+// MEASURED on an iCE40 UP5K: 81 SB_LUT4, three LUT levels, 91 MHz placed.
 // =============================================================================
 
 module immgen (
@@ -122,8 +143,13 @@ module immgen (
 ${caseTable('lo3', t.imm3.values.map((v) => v & 15), 3, 'k3').replace(/16'h([0-9a-f]{4})/g, (_, h) => `4'h${h.slice(-1)}`)}
     // Index 0 is the only entry whose top twelve bits are set: -1 for the ALU,
     // and 15 to a shifter, which masks.  One gate, not a second table.
-    wire neg = (k3 == 3'd0);
-    wire [15:0] i3v = {{12{neg}}, lo3};
+    //
+    // At +6 and +7 the same three bits are a register number rather than a
+    // table index, so they go out unchanged and zero extended.  Every bit of
+    // this is a four-input function of {k3, sel[2]}, which is why carrying the
+    // register forms costs nothing over carrying imm3 alone.
+    wire neg = (k3 == 3'd0) & ~sel[2];
+    wire [15:0] i3v = sel[2] ? {13'd0, k3} : {{12{neg}}, lo3};
 
     // --- +1 / +5: immbit5 and immask5, sharing one complement layer ---------
     wire [3:0] n4 = ir[3:0];
@@ -133,14 +159,13 @@ ${caseTable('tmask', t.immask5.values.slice(0, 16), 4, 'n4')}
     wire [15:0] tsel = (sel[2] ? tmask : tbit) ^ {16{ir[4]}};
 
     // --- the mode mux -------------------------------------------------------
-    // +6 and +7 are the three-register forms and have no immediate; leaving
-    // them x rather than 0 lets the mapper treat them as don't-cares.
+    // Every one of the eight selectors now means something, so there is no
+    // don't-care case and no x on this bus.
     always_comb case (sel)
         3'd0:        imm = i5;
         3'd1, 3'd5:  imm = tsel;
-        3'd2, 3'd3:  imm = i3v;
         3'd4:        imm = i10;
-        default:     imm = 16'hxxxx;
+        default:     imm = i3v;   // +2, +3 the imm3 table; +6, +7 the register
     endcase
 
 endmodule

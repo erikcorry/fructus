@@ -10,17 +10,20 @@
 // the other, so agreement means the circuit implements the tables rather than
 // that one transcription matches another.
 //
-// WHAT IS AND IS NOT SWEPT.  Every (5-bit field, mode) pair is exercised, every
-// (3-bit imm3 index, opcode bit) pair, and imm10 over its whole 10-bit range -
-// with the untouched upper bits of immreg varied, because a circuit that
-// accidentally reads them would otherwise pass.  Modes +6 and +7 are the
-// three-register forms and produce no immediate, so they are not checked.
+// WHAT IS SWEPT.  All eight modes, every (5-bit field, mode) pair, every
+// (3-bit index, opcode bit) pair, and imm10 over its whole 10-bit range - with
+// the untouched upper bits of immreg varied, because a circuit that
+// accidentally reads them would otherwise pass.  Modes +6 and +7 carry the
+// three-operand forms' third REGISTER NUMBER rather than a value, and are
+// checked against the encoding's own field spec: reg[0] comes from the opcode
+// and reg[2:1] from byte1, which is what makes them the imm3 index's twin.
 //
 // Needs iverilog.  Skips with a message rather than failing when it is absent,
 // so the suite still runs on a machine without the FPGA tools installed.
 // =============================================================================
 
 import { loadSpec } from '../tools/isa.js';
+import { buildDecoder, decode } from '../tools/decode.js';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 
@@ -33,25 +36,60 @@ if (!have('iverilog')) {
   process.exit(0);
 }
 
-const t = loadSpec().optype;
+const spec = loadSpec();
+const t = spec.optype;
 const u16 = (v) => (v >>> 0) & 0xffff;
 const sext = (v, n) => (v & (1 << (n - 1))) ? v - (1 << n) : v;
 
 // --- the reference, straight off the tables ---------------------------------
 // This is the whole specification of the block.  `sel` is opcode[2:0]; `ir` is
 // immreg, holding the last two bytes fetched.
+const k3 = (ir, sel) => ((ir & 3) << 1) | (sel & 1);   // {byte1[1:0], opcode[0]}
 const want = (ir, sel) => {
   switch (sel) {
-    case 0: return sext(ir & 31, 5);                                  // imm5
-    case 1: return t.immbit5.values[ir & 31];                         // immbit5
-    case 2: case 3: return t.imm3.values[((ir & 3) << 1) | (sel & 1)]; // imm3
-    case 4: return sext(ir & 1023, 10);                               // imm10
-    case 5: return t.immask5.values[ir & 31];                         // immask5
+    case 0: return sext(ir & 31, 5);                     // imm5
+    case 1: return t.immbit5.values[ir & 31];            // immbit5
+    case 2: case 3: return t.imm3.values[k3(ir, sel)];   // imm3
+    case 4: return sext(ir & 1023, 10);                  // imm10
+    case 5: return t.immask5.values[ir & 31];            // immask5
+    case 6: case 7: return k3(ir, sel);                  // rb, zero extended
   }
 };
 
+// --- what +6 and +7 carry, checked against the DECODER --------------------
+// k3 below asserts that the third register of a three-operand form is
+// {byte1[1:0], opcode[0]}.  Rather than trust that reading of the spec, decode
+// real bytes with tools/decode.js - the same decoder the roundtrip test uses -
+// and compare.  A change to the field layout then fails here instead of quietly
+// making this file check the wrong thing.
+{
+  // WHICH OPERAND PORT B IS depends on the instruction, and naming it here is
+  // the point of the check rather than an inconvenience.  add and shl call it
+  // `b`; push and pop call it `c` (and have a `b` of their own, so the name has
+  // to be explicit); and br calls it `a`, because the branch's registers are
+  // deliberately the other way round from its syntax so that the comparison is
+  // an `rsb` - see the br section of isa/fructus.toml.
+  const portB = { 0x46: 'b', 0x6e: 'b', 0x86: 'c', 0x8e: 'c', 0x96: 'a', 0x9e: 'a' };
+  const dec = buildDecoder(spec);
+  for (const [base, name] of Object.entries(portB)) {
+    for (let lowbit = 0; lowbit <= 1; lowbit++)
+      for (let byte1 = 0; byte1 < 256; byte1++) {
+        const op = Number(base) + lowbit;
+        const got = decode(dec, [op, byte1, 0], 0)?.ops?.[name];
+        if (got === undefined) {
+          console.log(`FAIL  0x${op.toString(16)} has no operand named ${name}`); process.exit(1);
+        }
+        if (got !== k3(byte1, op & 7)) {
+          console.log(`FAIL  0x${op.toString(16)} byte1=${byte1}: operand ${name} decodes to `
+                    + `r${got}, but {byte1[1:0], opcode[0]} is r${k3(byte1, op & 7)}`);
+          process.exit(1);
+        }
+      }
+  }
+}
+
 const vecs = [];
-for (let sel = 0; sel <= 5; sel++)
+for (let sel = 0; sel <= 7; sel++)
   for (let low = 0; low < 1024; low++)
     for (const high of [0x0000, 0xfc00, 0x5400, 0xa800]) {
       const ir = high | low;
