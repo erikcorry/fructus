@@ -134,6 +134,74 @@ function relAssert(name, t) {
 // =============================================================================
 
 // The cartesian product of the per-operand fan-outs a form needs.  Table and
+// --- other spellings of a table entry's predicate ----------------------------
+// `x <= k` and `x < k+1` are one predicate, and so are `x <u 1` and `x == 0`.
+// A programmer writes whichever reads better, so the assembler has to accept
+// both and encode the one the table holds.
+//
+// The equivalence is decided on TRUTH SETS, not on a rule about +/-1, because
+// the interesting cases are not all of that shape - the unsigned bound of one
+// collapsing to a zero test is the obvious one.
+//
+// AT THE INSTRUCTION'S OWN WIDTH, which is the subtlety.  br reads this table at
+// 16 bits and br8 at 8, so `hi #255` and `hs #256` are one predicate for br and
+// two different ones for br8, where 256 masks to 0.  Deriving per instruction
+// rather than per table is what lets br accept the spelling while br8 correctly
+// refuses it.  The width is the last argument of the `test(...)` call in the
+// instruction's own semantics.
+//
+// Candidates are every cond3 spelling against each entry's constant and its two
+// neighbours.  That is enough: an equivalence between different conditions can
+// only shift the boundary by one, because the predicates are half-lines.
+function truthBits(cond, k, w) {
+  const mask = (1 << w) - 1, half = 1 << (w - 1);
+  const sgn = (v) => ((v & mask) >= half ? (v & mask) - (1 << w) : (v & mask));
+  const kw = k & mask, ks = sgn(kw);
+  let out = '';
+  for (let x = 0; x <= mask; x++) {
+    const xs = sgn(x), d = xs - ks;
+    let r;
+    switch (cond) {
+      case 'eq': r = x === kw; break;              case 'ne': r = x !== kw; break;
+      case 'lt': r = xs <  ks; break;              case 'le': r = xs <= ks; break;
+      case 'gt': r = xs >  ks; break;              case 'ge': r = xs >= ks; break;
+      case 'lo': r = x  <  kw; break;              case 'ls': r = x  <= kw; break;
+      case 'hi': r = x  >  kw; break;              case 'hs': r = x  >= kw; break;
+      case 'vs': r = d < -half || d >= half; break;
+      case 'vc': r = !(d < -half || d >= half); break;
+      default:   return null;
+    }
+    out += r ? '1' : '0';
+  }
+  return out;
+}
+
+function synonyms(et, w) {
+  const conds = Object.keys(spec.optype.cond3.swapped ?? {})
+    .concat(spec.optype.cond3.names);
+  const key = (c, k) => truthBits(c, k, w);
+  const canon = new Map();                       // predicate -> table index
+  et.values.forEach((v, idx) => { const kk = key(v[0], v[1]); if (kk) canon.set(kk, idx); });
+
+  // Spellings are compared on the ENCODED constant, not the written one.  A
+  // rule asserts `(k_imm & 0xffff) == ...`, so `le #-32768` and `le #32768` are
+  // one rule that accepts both spellings - emitting each separately gives
+  // customasm two identical rules, which it rejects as ambiguous.
+  const tagOf = (c, k) => `${c} ${k & 0xffff}`;
+  const out = [], seen = new Set(et.values.map((v) => tagOf(v[0], v[1])));
+  for (const [, k] of et.values)
+    for (const kk of [k - 1, k, k + 1])
+      for (const c of conds) {
+        const tag = tagOf(c, kk);
+        if (seen.has(tag)) continue;
+        const idx = canon.get(key(c, kk));
+        if (idx === undefined) continue;
+        seen.add(tag);            // adjacent entries propose each other's
+        out.push([[c, kk], idx]);  // neighbours, so most candidates recur
+      }
+  return out;
+}
+
 // combo operands each contribute one branch per table entry; everything else
 // contributes exactly one.
 function product(lists) {
@@ -183,14 +251,26 @@ function rulesFor(insn, form, formIdx, swapped = false) {
     }
 
     if (et && et.kind === 'combo') {
-      // Every table entry, plus each rewrite spelling - which encodes the index
-      // of the entry it canonicalises onto, so `hs #1` assembles as `ne #0`.
+      // Every table entry, plus every OTHER SPELLING OF THE SAME PREDICATE,
+      // which encodes the index of the entry it canonicalises onto - so
+      // `hs #1` assembles as `ne #0` and `hi #255` as `hs #256`.
+      //
+      // These are derived, not listed.  A hand-written list was fine while the
+      // constants were an imm3 index and there were thirteen of them, and it
+      // silently stopped covering the table the moment the constants were freed:
+      // nothing tells you that `hi #255` has quietly become unassemblable.
+      const width = Number((/\btest\s*\([^()]*,\s*(\d+)\s*\)/.exec(insn.semantics ?? '') ?? [])[1]) || 16;
       const alts = et.values.map((entry, idx) => ({ entry, idx }));
-      for (const rw of et.rewrite ?? []) {
-        const idx = et.values.findIndex((v) => v.every((x, k) => x === rw.to[k]));
-        if (idx < 0)
-          throw new Error(`${insn.mnemonic}: rewrite target [${rw.to}] is not in the table`);
-        alts.push({ entry: rw.from, idx });
+      alts.push(...synonyms(et, width).map(([entry, idx]) => ({ entry, idx })));
+      // customasm refuses two rules with the same text and the same size even
+      // when they are identical, so never emit one twice.
+      {
+        const once = new Set();
+        for (let i = alts.length - 1; i >= 0; i--) {
+          const e = alts[i].entry;
+          const k = e.map((v) => typeof v === 'number' ? (v & 0xffff) : v).join(' ');
+          if (once.has(k)) alts.splice(i, 1); else once.add(k);
+        }
       }
       return alts.map(({ entry, idx }) => {
         const patt = {}, asserts = [], pins = {};

@@ -468,8 +468,19 @@ swapped = { gt = "lt", ge = "le", hi = "lo", hs = "ls", cs = "ls" }
 # `x <= k` and `x < k+1` are one predicate with two spellings, and so are
 # `x <u 1` and `x == 0`.  check.js compares TRUTH SETS rather than spellings, so
 # a slot spent on a synonym fails the build instead of quietly halving the table.
-# Every `le`, `gt`, `ls` and `hi` a programmer writes is therefore a rewrite onto
-# whichever `lt`, `ge`, `lo` or `hs` entry means the same thing.
+#
+# THE OTHER SPELLINGS ARE DERIVED, NOT LISTED.  Every `le`, `gt`, `ls` and `hi`
+# a programmer writes assembles onto whichever entry means the same thing, and
+# tools/gen-customasm.js works out which by comparing truth sets rather than by
+# consulting a table of rewrites.  There used to be such a table - thirteen
+# hand-written lines - and it was fine while the constants were an imm3 index.
+# The moment they were freed it silently stopped covering them: nothing tells
+# you that `hi #255` has quietly become unassemblable when `hs #256` arrives.
+#
+# The derivation is per INSTRUCTION, not per table, because br reads these five
+# bits at 16 bits and br8 at 8.  `hi #255` and `hs #256` are one predicate for
+# br and two different ones for br8, where 256 masks to zero - so br accepts the
+# spelling and br8 correctly refuses it.
 [optype.condimm5]
 kind   = "combo"
 bits   = 5
@@ -516,22 +527,6 @@ values = [
 # `ls` and `hi` could be completed the same way against the `lo` and `hs`
 # entries (`lo #k` is `ls #k-1` for k >= 1) and deliberately are not, until
 # something wants them.
-rewrite = [
-  { from = ["le", -2], to = ["lt", -1] },
-  { from = ["le", -1], to = ["lt",  0] },
-  { from = ["le",  0], to = ["lt",  1] },
-  { from = ["le",  1], to = ["lt",  2] },
-  { from = ["le",  3], to = ["lt",  4] },
-  { from = ["gt", -2], to = ["ge", -1] },
-  { from = ["gt", -1], to = ["ge",  0] },
-  { from = ["gt",  0], to = ["ge",  1] },
-  { from = ["gt",  1], to = ["ge",  2] },
-  { from = ["gt",  7], to = ["ge",  8] },
-  # an unsigned lower bound of 1 is a zero test
-  { from = ["lo",  1], to = ["eq",  0] },
-  { from = ["hs",  1], to = ["ne",  0] },
-]
-
 # The 3-bit table immediate.
 #
 # The field does NOT hold the value; it holds an INDEX into `values`.  So a
