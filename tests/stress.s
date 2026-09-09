@@ -107,9 +107,12 @@ btarget:
         br      lo, r3, #6, btarget       ; 3  condimm5, imm3 constant
         br      lt, r3, #4, btarget       ; 3  condimm5, signed loop bound
         br      ge, r3, #8, btarget       ; 3  condimm5, signed loop bound
-        br      vs, r3, #-1, btarget      ; 3  does r3++ overflow
-        br      vs, r3, #1, btarget       ; 3  does r3-- underflow
-        br      vs, r3, #2, btarget       ; 3  tagged decrement underflows
+        br      ge, r3, #32767, btarget   ; 3  does r3++ overflow
+        br      ge, r3, #32766, btarget   ; 3  does r3 += 2 overflow
+        br      lt, r3, #-32767, btarget  ; 3  does r3-- underflow
+        br      lt, r3, #-32766, btarget  ; 3  tagged decrement underflows
+        br      lo, r3, #256, btarget     ; 3  does r3 fit in a byte
+        br      hs, r3, #256, btarget     ; 3  ... and the other way
         br      hs, r3, #1, btarget       ; 3  REWRITE -> ne #0
         br      lo, r3, #1, btarget       ; 3  REWRITE -> eq #0
         br      gt, r3, #1, btarget       ; 3  REWRITE -> ge #2

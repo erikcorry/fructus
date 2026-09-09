@@ -405,106 +405,76 @@ names   = ["lt", "lo", "le", "ls", "eq", "ne", "vs", "vc"]
 aliases = { cc = "lo" }
 swapped = { gt = "lt", ge = "le", hi = "lo", hs = "ls", cs = "ls" }
 
-# The 32-entry condition-plus-constant table used by the single-register branch
-# forms.
+# FIVE BITS THAT CARRY A CONDITION AND A CONSTANT TOGETHER, so a compare against
+# a small literal is one three-byte instruction rather than a load and a branch.
 #
-# A `combo` type packs SEVERAL values into one field: the field holds an index,
-# and each table entry supplies one value per name in `parts`.  In a syntax
-# template the parts are reached as `{k.cond}` and `{k.imm}` for an operand
-# named `k`, so one 5-bit field prints and parses as two operands.
+# THE ENTRIES ARE WRITTEN THE WAY A PROGRAMMER WRITES THEM - `br lt, ra, #4`
+# means R[a] < 4 - and the hardware computes something else.  That gap is worth
+# stating carefully, because it decides which 32 pairs are worth having.
 #
-# This form has only one register, so the operand-swapping trick is unavailable
-# and both directions of every comparison must appear in the table explicitly.
-# That is most of why it wants 32 entries rather than 16.
+# The register sits at byte1[7:5], the slot `rsb rd, rd, #imm` uses for ALU port
+# A, and the constant reaches port B like every other immediate.  The ALU
+# subtracts port A from port B, so what is actually computed is
 #
-# Note what that implies about the hardware: since entries name `gt` and `hs`,
-# which cond3 has no encoding for, the LUT's output is not simply a cond3 value
-# and a constant.  It must also carry the operand order - whether the compare
-# is `ra - imm` or `imm - ra`.  A 32-entry lookup can emit whatever control
-# signals it likes, so this costs nothing, but the table is (condition,
-# constant, order) rather than (condition, constant).
+#     imm - R[a]        and not      R[a] - imm
 #
-# ---------------------------------------------------------------------------
-# WHY THESE CONSTANTS
-# ---------------------------------------------------------------------------
-# The signed and equality conditions compare against 0, 1, -1 and 2.
-# Comparisons against zero dominate, then its two neighbours, then 2.
+# with the flags of that subtraction.  Two consequences, and only two:
 #
-# THE UNSIGNED BOUNDS ARE THE imm3 TABLE, and that is not a coincidence.  The
-# reason to test `lo` or `hs` against a constant is almost always the carry out
-# of a widened add, and the constant that test needs is the one that was ADDED:
+#   THE CONDITION IS MIRRORED.  Testing C on the flags of `imm - R[a]` answers
+#   `imm C R[a]`, so answering `R[a] cond imm` means encoding mirror(cond) - lt
+#   for gt, le for ge, and so on.  This costs nothing: cond3 already carries an
+#   operand-order bit for exactly this, which is how twelve spellings fit into
+#   eight encodings.  eq and ne are their own mirrors.
 #
-#       add     r1, r1, #k              ; XL += k
-#       br    hs, r1, #k, no_carry    ; sum >= k means no carry
+#   THERE IS NO `vs` HERE, and that is the second consequence rather than an
+#   omission.  Overflow is not symmetric - overflow(x - k) and overflow(k - x)
+#   differ at the two points where the true difference is exactly +/-32768 - so
+#   a `vs` entry would be the one thing the mirror could not carry.  It could be
+#   repaired exactly, since overflow(x - k) is overflow((k-1) - x) for every k,
+#   but there is no need: THE OVERFLOW TESTS ARE ORDINARY COMPARISONS.
 #
-# `k` there is drawn from imm3, so the useful unsigned bounds are exactly imm3 -
-# not powers of two.  Under powers of two, 3 and 6 were addable but not
-# testable, so `+= 3` and `+= 6` cost eight bytes and a scratch register while
-# `+= 1, 2, 4, 8` cost six.  See snippets/add32.s.
+#       x++  overflows   <=>  x >= 32767      ge #32767
+#       x+=2 overflows   <=>  x >= 32766      ge #32766
+#       x--  underflows  <=>  x <  -32767     lt #-32767
+#       x-=2 underflows  <=>  x <  -32766     lt #-32766
 #
-# imm3 has eight values but contributes only six pairs, because two are
-# degenerate unsigned: `lo #0` is never true and `hs #0` always is, while
-# `hs #-1` means "equals 0xffff", which `eq #-1` already says.
+#   Four plain signed comparisons, mirroring like everything else, and one more
+#   test than the three `vs` entries they replace.  `vs` stays in cond3 for the
+#   two-register branch, where both operands are registers and the subtraction
+#   is already the right way round.
 #
-# ---------------------------------------------------------------------------
-# NO ENTRY MAY MEAN WHAT ANOTHER ENTRY MEANS
-# ---------------------------------------------------------------------------
-# Distinct (condition, constant) spellings are NOT distinct predicates.  For
-# integers `x <= k` is `x < k+1` and `x > k` is `x >= k+1`, and an unsigned
-# lower bound of 1 is a zero test - so six of the entries this table used to
-# hold were duplicates of six others:
+#   WHO THESE ARE FOR, because it decides the step sizes.  Not C - signed
+#   overflow is undefined there and a compiler will not ask.  These are for a
+#   dynamic language runtime with unboxed small integers, checking whether an
+#   increment has left fixnum range and has to box.  A bare fixnum steps by one,
+#   so ++ and -- are the tests; a fixnum with a one-bit tag is stored shifted up
+#   and steps by TWO, so += 2 and -= 2 are the same question for a tagged
+#   representation.  That is the whole reason both step sizes are here.
 #
-#       le #0  ==  lt #1          lo #1  ==  eq #0
-#       gt #0  ==  ge #1          hs #1  ==  ne #0
-#       le #1  ==  lt #2
-#       gt #1  ==  ge #2
+#   AND WHY THEY NEED NOT MAKE SENSE TO br8.  An unboxed number fills a whole
+#   register, so a 16-bit test is the only test there is; `br8 ge, ra, #32767`
+#   compares a byte against -1 and means nothing, which costs nothing.  check.js
+#   only objects when two entries agree at BOTH widths, and these differ from
+#   everything at 16.
 #
-# check.js proves this the only way that is actually sound: it evaluates every
-# entry over every register value it could see, at BOTH comparison widths, and
-# compares the truth sets.  Two entries are only wasteful if they agree at 8
-# bits AND at 16, since br8 and br share this table.
+# WHICH IS WHY THE CONSTANTS ARE FREE NOW.  They used to be pinned to imm3 so
+# the five bits could ride the imm3 lookup that already existed.  They no longer
+# do: rtl/immgen.sv holds a 32-entry table of its own for this mode, indexed by
+# the same five bits, so a constant here costs what any other constant costs and
+# 256 is exactly as cheap as 2.  The domain is int16 and the only real limit is
+# that there are 32 slots.
 #
-# Those six are now `rewrite` entries below rather than table slots.  Nothing is
-# lost at the source level - the assembler still accepts `br hs, r1, #1` and
-# quietly encodes `ne #0`, which matters because that spelling is exactly the
-# carry test for `+= 1` and should keep looking like the general pattern.
-#
-# WHAT THE SIX FREED SLOTS BOUGHT
-#   vs #-1, vs #1     overflow of x+1 and x-1, so a raw counter can test
-#                     "does x++ overflow" and "does x-- underflow" directly
-#   vs #2             the same underflow test for a tagged smallint, where a
-#                     decrement of one is two in the representation
-#   lt #4, ge #8      two signed bounds past 2, which is where ordinary counted
-#                     loops live.  Deliberately DIFFERENT bounds rather than a
-#                     complementary pair: the corpus should say which bound
-#                     matters before a second one is spent.  They also bring
-#                     `le #3` and `gt #7` with them, by the identity above.
-#
-# ONE SLOT IS FREE, and there is a known claim on it.  `vs #-2` would complete
-# the tagged pair - overflow of x+2, the tagged increment - but -2 is not in
-# imm3, so it cannot be had without widening the constant field to four bits and
-# taking the LUT output to eight.  Deliberately not done: the tagged case is
-# asymmetric as a result, covering decrement but not increment.
+# NO TWO ENTRIES MAY MEAN THE SAME THING, which is a stronger rule than it looks:
+# `x <= k` and `x < k+1` are one predicate with two spellings, and so are
+# `x <u 1` and `x == 0`.  check.js compares TRUTH SETS rather than spellings, so
+# a slot spent on a synonym fails the build instead of quietly halving the table.
+# Every `le`, `gt`, `ls` and `hi` a programmer writes is therefore a rewrite onto
+# whichever `lt`, `ge`, `lo` or `hs` entry means the same thing.
 [optype.condimm5]
 kind   = "combo"
 bits   = 5
 parts  = ["cond", "imm"]
-
-# Where each part draws its values from.  This is the point of the table: its
-# output is not five bits of index but SEVEN bits of control -
-#
-#     3 bits   which of the eight cond3 comparisons
-#     1 bit    the operand order, which is what turns `lt` into `gt` and `lo`
-#              into `hi`; with it, four bits select one of the twelve
-#              comparisons the ISA actually has
-#     3 bits   which of the eight imm3 constants
-#
-# so these 32 entries are a hand-picked 32 of the 96 combinations available.
-# check.js verifies that no entry escapes those domains, because one that did
-# would need wider control signals than this and quietly cost hardware, and that
-# no two entries mean the same thing - which spelling distinctness alone does
-# not catch, since `x <= k` and `x < k+1` are the same predicate.
-domain = { cond = "cond3", imm = "imm3" }
+domain = { cond = "cond3", imm = "int16" }
 values = [
   # signed and equality, against 0, 1, -1 and 2
   ["eq",  0], ["ne",  0], ["lt",  0], ["ge",  0],
@@ -513,14 +483,25 @@ values = [
   ["eq",  2], ["ne",  2], ["lt",  2], ["ge",  2],
   # two signed bounds past 2, where counted loops live
   ["lt",  4], ["ge",  8],
-  # overflow: does x++ overflow, does x-- underflow, and the tagged decrement
-  ["vs", -1], ["vs",  1], ["vs",  2],
-  # unsigned, against the imm3 constants an `add` can actually use.  1 is absent
-  # because `lo #1` and `hs #1` are zero tests; they are rewrites below.
-  ["lo",  2], ["hs",  2], ["lo",  3], ["hs",  3],
-  ["lo",  4], ["hs",  4], ["lo",  6], ["hs",  6],
+  # the four overflow tests, as plain comparisons.  Only one spelling of each:
+  # `ge #32767` and `eq #32767` are the same predicate at 16 bits, since 32767
+  # is the largest signed value there is, and a slot spent on the synonym would
+  # buy nothing.
+  ["ge", 32767], ["ge", 32766], ["lt", -32767], ["lt", -32766],
+  # unsigned, against the constants a bound check actually uses.  1 is absent
+  # because `lo #1` and `hs #1` are zero tests, and `eq #0` and `ne #0` are too.
+  ["lo",  2], ["hs",  2],             ["hs",  3],
+  ["lo",  4], ["hs",  4], ["lo",  6],
   ["lo",  8], ["hs",  8],
-  # one slot free - see the note on vs #-2 above
+  # IS IT A BYTE.  The entry the freed constants bought, and it pays for itself
+  # in libgcc: __umulhisi3 asks whether its larger operand fits in eight bits,
+  # which was `lsr r5, r0, #8` then `br eq, r5, #0` - five bytes, two
+  # instructions and the assembler scratch - and is one three-byte instruction
+  # with no scratch now.  Both senses, because a branch needs whichever way its
+  # fall-through goes.  `lo #3` and `hs #6` paid for them and for the fourth
+  # overflow test: they were the least useful entries in the block, since three
+  # and six are not shapes anything actually bounds against.
+  ["lo", 256], ["hs", 256],
 ]
 
 # Spellings the assembler accepts and canonicalises onto an entry that IS in the
@@ -851,7 +832,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   --- control flow, all of it, in exactly two rows -------------------------
 #   EVERY OPCODE THAT WRITES THE PC IS 1001_xxxx AND NOTHING ELSE IS - with one
 #   deliberate exception, `ret`, which is one byte and lives with the other
-#   one-byte instructions at 0000_1100.  Sixteen slots, sixteen instructions,
+#   one-byte instructions at 0000_0001.  Sixteen slots, sixteen instructions,
 #   nothing spilling into a neighbouring row.
 #
 #   1001_0000                br      <cond,#imm5>, ra, target
@@ -901,12 +882,12 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   .6 AND .7 ARE THE THREE-REGISTER COLUMNS, and that is why the two-register
 #   branches are there rather than at .2 and .3.  Byte 1 of `br cond, ra, rb` is
-#   `ccca_aaee` and byte 1 of `add rd, ra, rb` is `ddda_aacc`: ra is byte1[4:2]
-#   in both, and the second source is byte1[1:0] plus the stolen opcode bit in
+#   `cccb_bbee` and byte 1 of `add rd, ra, rb` is `ddda_aacc`: byte1[4:2] is ALU
+#   port A in both and byte1[1:0] plus the stolen opcode bit is ALU port B in
 #   both.  Only the top field differs - a condition where the ALU has a
 #   destination - so the register decode is not merely similar, it is the same
-#   wires.  rtl/immgen.sv emits that register number at +6 and +7 for every
-#   opcode in those columns, the ALU triples and these branches alike.
+#   wires.  The branch's two registers are the other way round from its syntax
+#   for exactly that reason; see the br section below.
 #
 #   .2 AND .3 ARE THE FOUR WIDE TARGETS, AS A 2x2.  Bit 0 is absolute against
 #   pc-relative and bit 3 is jump against call, so jmp / jmpr / call / callr are
