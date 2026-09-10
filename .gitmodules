@@ -3,3 +3,8 @@
 	url = https://github.com/gcc-mirror/gcc.git
 	branch = releases/gcc-16
 	shallow = true
+[submodule "vendor/binutils-gdb"]
+	path = vendor/binutils-gdb
+	url = https://sourceware.org/git/binutils-gdb.git
+	branch = binutils-2_47-branch
+	shallow = true
