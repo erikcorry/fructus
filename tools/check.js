@@ -14,7 +14,7 @@
 // =============================================================================
 
 import { parse } from 'smol-toml';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -57,6 +57,58 @@ for (const [name, t] of Object.entries(types)) {
       if (v.length !== t.parts.length)
         err(`optype ${name}: entry [${v}] has ${v.length} values for ${t.parts.length} parts`);
     dup(t.values.map((v) => v.join(' ')), 'entries');
+  }
+}
+
+// =============================================================================
+// The object format, against binutils itself
+// =============================================================================
+// e_machine is `unsigned char e_machine[2]` - sixteen bits - and NOTHING in the
+// toolchain range-checks a value assigned to it.  A wider constant compiles, is
+// written through bfd_put_16, and silently loses its top bits: the header says
+// one thing and every object produced says another, with no error anywhere.
+// That is the same shape as the byte-order trap tests/data.s exists to pin, so
+// it is asserted here rather than trusted.
+//
+// The collision check reads the REAL include/elf/common.h out of the
+// vendor/binutils-gdb submodule, so it keeps working as binutils allocates new
+// official numbers.  A copy of the list here would be right on the day it was
+// written and wrong afterwards.  If the submodule is not checked out the check
+// says so and skips, rather than passing silently.
+{
+  const elf = spec.elf;
+  if (!elf) err('no [elf] section: the object format is part of the spec');
+  else {
+    if (!Number.isInteger(elf.machine) || elf.machine < 0 || elf.machine > 0xffff)
+      err(`[elf] machine 0x${(elf.machine ?? 0).toString(16)} does not fit e_machine's 16 bits, `
+        + `and nothing downstream would tell you - bfd_put_16 truncates in silence`);
+
+    const hdr = join(root, 'vendor/binutils-gdb/include/elf/common.h');
+    if (!existsSync(hdr)) {
+      console.log('note: vendor/binutils-gdb not checked out, so [elf] machine '
+                + 'was NOT checked for collisions');
+    } else {
+      const text = readFileSync(hdr, 'utf8');
+      const claimed = new Map();
+      for (const m of text.matchAll(/#define\s+(EM_[A-Z0-9_]+)\s+(0x[0-9a-fA-F]+|\d+)/g))
+        claimed.set(Number(m[2]), m[1]);
+      const clash = claimed.get(elf.machine);
+      if (clash)
+        err(`[elf] machine 0x${elf.machine.toString(16)} is already ${clash} in `
+          + `include/elf/common.h`);
+      else
+        console.log(`elf: machine 0x${elf.machine.toString(16)} (${elf.machine_id}) is `
+                  + `unclaimed among the ${claimed.size} values in binutils`);
+    }
+  }
+
+  // The relocations only have to be internally coherent - a pc-relative field
+  // that is not signed cannot reach backwards, which is never what is meant.
+  for (const r of spec.reloc ?? []) {
+    if (![8, 16].includes(r.bits))
+      err(`reloc ${r.name}: ${r.bits} bits, but every Fructus field is 8 or 16`);
+    if (r.pcrel && !r.signed)
+      err(`reloc ${r.name}: pc-relative but unsigned, so it could not branch backwards`);
   }
 }
 

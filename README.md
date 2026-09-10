@@ -101,7 +101,7 @@ tests/                the test suite
 
 | | |
 |---|---|
-| `npm run check` | validates the six encoding invariants, prints the opcode census |
+| `npm run check` | validates the encoding invariants and the object format, prints the opcode census |
 | `npm run gen` | emits `build/fructus.asm`, a customasm ruledef |
 | `npm run sim -- <bin>` | runs a flat binary. `--trace`, `--pc`, `--sp`, `--max` |
 | `npm run microtan -- <rom>` | runs a ROM on the simulated board |

@@ -228,6 +228,76 @@ taken_branch_penalty = 1
 
 
 # =============================================================================
+# Object format
+# =============================================================================
+# What a binutils port has to agree with the rest of the world about.  None of
+# this is used yet - there is no gas or bfd port - but both of these are values
+# that several files must hold identically, which is what this file is for.
+
+# THE ELF MACHINE NUMBER.  e_machine is `unsigned char e_machine[2]` - SIXTEEN
+# BITS - and nothing in the toolchain range-checks a value assigned to it: a
+# wider constant is written through bfd_put_16 and silently loses its top bits,
+# leaving a header that disagrees with every object it produces.  check.js
+# asserts the width for that reason, and asserts non-collision against the real
+# include/elf/common.h in vendor/binutils-gdb rather than a copy that goes stale.
+#
+# 0xfc75 is unofficial.  include/elf/common.h asks that new unofficial values be
+# large random numbers, because generic mnemonics converge - 0xdead, 0xbeef,
+# 0xf00d and 0xfeed are all taken, and MN10200 and MN10300 burned two of them
+# between them.  FC75 reads as FCTS, a contraction of Fructus, which has the
+# opposite property: colliding needs another project with this project's name.
+# Nothing within 512 of it is claimed.  The expectation, as the header says, is
+# that a maintained target eventually asks the registry for a blessed number.
+[elf]
+machine    = 0xfc75          # EM_FRUCTUS, unofficial
+machine_id = "EM_FRUCTUS"
+class      = 32              # ELFCLASS32: the CONTAINER is elf32, the addresses
+                             # are 16-bit.  msp430 is 16-bit and uses
+                             # elf32-msp430.c the same way; pdp11 is a.out and is
+                             # not the model to copy.
+max_page   = 4               # no MMU, so do not align sections to 4 KiB and
+                             # spend most of a 64 KiB address space on padding
+
+# THE RELOCATIONS, all four of them generic.  Every address in a Fructus program
+# is one of three things, so the port needs no relocation of its own:
+#
+#   pcrel = true   the field holds a displacement from the address of the NEXT
+#                  instruction, not from the field's own address.  Getting that
+#                  bias wrong produces branches off by the instruction length,
+#                  which assembles clean and fails at run time - the assembler
+#                  already encodes it as `rel_off = off - $ - <nbytes>`.
+#   signed = true  a displacement out of range is a link-time error, not a
+#                  silent wrap.  In bfd terms complain_overflow_signed.
+[[reloc]]
+name   = "BFD_RELOC_8_PCREL"
+bits   = 8
+pcrel  = true
+signed = true
+used_by = "br, br8, brclear, brset, jmpr rel8 - the off8 displacement"
+
+[[reloc]]
+name   = "BFD_RELOC_16_PCREL"
+bits   = 16
+pcrel  = true
+signed = true
+used_by = "jmpr rel16, callr rel16"
+
+[[reloc]]
+name   = "BFD_RELOC_16"
+bits   = 16
+pcrel  = false
+signed = false
+used_by = "jmp abs16, call abs16, mov rd #imm16, and the dw directive"
+
+[[reloc]]
+name   = "BFD_RELOC_8"
+bits   = 8
+pcrel  = false
+signed = false
+used_by = "the #d8 directive"
+
+
+# =============================================================================
 # Operand types
 # =============================================================================
 
