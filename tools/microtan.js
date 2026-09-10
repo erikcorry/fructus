@@ -10,14 +10,13 @@
 //     0x0001           the keyboard port.  One byte.
 //     0x0200 - 0x03ff  the screen.  32 x 16 characters, one byte each,
 //                      row major, written directly by the CPU.
-//     0xfc00 - 0xffff  ROM, 1K, read only.
-//     0xfffd           where the CPU starts.
+//     0xc000 - 0xffff  ROM, 16K, read only.
+//     0xfffa - 0xffff  the vectors.
 //
-// THE RESET ADDRESS IS THREE BYTES FROM THE TOP, AND THAT IS THE POINT.  On the
-// 6502, 0xfffc is a vector the hardware reads.  Here execution simply begins at
-// 0xfffd - and `jmp target` is a three-byte instruction, so 0xfffd, 0xfffe and
-// 0xffff hold exactly one jump and nothing is wasted.  The vector and the code
-// that uses it are the same three bytes.
+// The vectors are the 6502's, and the hardware reads them rather than executing
+// them: three little-endian 16-bit addresses, NMI at 0xfffa, reset at 0xfffc,
+// IRQ and BRK at 0xfffe.  So a machine starts by loading the word at 0xfffc
+// into the program counter.  ld/fructus-rom16k.ld is what fills them in.
 //
 // THE KEYBOARD HANDSHAKE.  A key press is queued, and delivered to 0x0001 only
 // when that byte reads zero.  The monitor zeroes it after picking a character
@@ -40,8 +39,8 @@ export const MICROTAN = {
   name:   'Microtan 65',
   key:    0x0001,
   screen: { base: 0x0200, cols: 32, rows: 16 },
-  rom:    { base: 0xfc00, size: 0x0400 },
-  reset:  0xfffd,
+  rom:    { base: 0xc000, size: 0x4000 },
+  vectors: { nmi: 0xfffa, reset: 0xfffc, irq: 0xfffe },
 };
 
 export class Microtan extends Machine {
@@ -53,7 +52,7 @@ export class Microtan extends Machine {
     this.romHi = layout.rom.base + layout.rom.size - 1;
     this.romWrites = 0;
     this.keyPoll = 32;          // instructions between interrupt opportunities
-    this.pc = layout.reset;
+    this.pc = 0;                // until a ROM is loaded and the vector is read
   }
 
   // ROM is read only.  A store into it is silently dropped, as it would be on
@@ -70,6 +69,14 @@ export class Microtan extends Machine {
     if (bytes.length > this.L.rom.size)
       throw new Error(`ROM is ${bytes.length} bytes, the socket holds ${this.L.rom.size}`);
     this.mem.set(bytes, this.L.rom.base);
+    return this.resetVector();
+  }
+
+  // Start where 0xfffc says to.  Reading it through rd16 charges the bus the
+  // way the hardware would, so a cycle count starts from the same place a real
+  // machine does.
+  resetVector() {
+    this.pc = this.rd16(this.L.vectors.reset);
     return this;
   }
 

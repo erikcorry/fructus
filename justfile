@@ -12,6 +12,19 @@ build  := justfile_directory() / 'build/binutils'
 default:
     @just --list --unsorted
 
+# ------------------------------------------------------------------- system --
+
+# Install the apt packages the toolchain and the tests need.
+install-deps:
+    @sudo apt-get install -y build-essential bison flex m4 texinfo \
+        iverilog yosys nextpnr-ice40
+    @echo
+    @echo "bison, flex and m4 generate ld's and binutils' parsers, which are not"
+    @echo "shipped pre-generated; texinfo supplies makeinfo for the manuals;"
+    @echo "iverilog, yosys and nextpnr-ice40 are for the rtl/ checks."
+    @echo
+    @echo "Not from apt: node (nvm here), and customasm (cargo install customasm)."
+
 # ---------------------------------------------------------------- toolchain --
 
 # Regenerate the binutils sources that come from isa/fructus.toml.
@@ -39,6 +52,33 @@ install-tools: build-tools
     @ls {{prefix}}/bin
     @echo
     @echo 'export PATH={{prefix}}/bin:$PATH'
+
+# Link sources into a flat 16K ROM image the emulator can load.
+rom *sources='rom/hello.s': build-tools
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p build/rom
+    objs=""
+    for src in {{sources}}; do
+        obj="build/rom/$(basename "$src" .s).o"
+        {{build}}/gas/as-new -o "$obj" "$src"
+        objs="$objs $obj"
+    done
+    {{build}}/ld/ld-new -T ld/fructus-rom16k.ld -o build/rom/image.elf $objs
+    # 0xff is what an unprogrammed EPROM reads as, and pad-to fixes the size at
+    # 16K whatever the program leaves unused.
+    {{build}}/binutils/objcopy -O binary --gap-fill 0xff --pad-to 0x10000 \
+        build/rom/image.elf build/fructus.rom
+    text=$({{build}}/binutils/readelf -S build/rom/image.elf \
+           | sed -n 's/.*\.text  *PROGBITS  *[0-9a-f]*  *[0-9a-f]*  *\([0-9a-f]*\).*/\1/p')
+    lo=$(od -A n -t x1 -j 16380 -N 1 build/fructus.rom | tr -d ' ')
+    hi=$(od -A n -t x1 -j 16381 -N 1 build/fructus.rom | tr -d ' ')
+    echo "build/fructus.rom: 16384 bytes, $((16#$text)) in .text"
+    echo "reset vector at 0xfffc: 0x$hi$lo"
+
+# Run a ROM image on the microtan board.
+run-rom rom='build/fructus.rom' *args:
+    @node tools/microtan.js {{rom}} {{args}}
 
 # Remove the toolchain build tree.  The installed copy is left alone.
 clean-tools:

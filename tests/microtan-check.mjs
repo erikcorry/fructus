@@ -25,12 +25,15 @@ const boot = (keys) => {
   return m;
 };
 
-// --- it starts at 0xfffd, and only a three-byte jmp fits there ---------------
+// --- the reset vector, read rather than executed -----------------------------
 {
   const m = new Microtan(spec).loadRom(code);
-  check('reset address', m.pc === 0xfffd, `pc=0x${m.pc.toString(16)}`);
+  check('reset vector is read from 0xfffc',
+        m.pc === (code[0x3ffc] | (code[0x3ffd] << 8)),
+        `pc=0x${m.pc.toString(16)}`);
   m.batch(1);
-  check('reset jumps into the ROM', m.pc >= MICROTAN.rom.base && m.pc < 0xfffd,
+  check('reset points into the ROM',
+        m.pc >= MICROTAN.rom.base && m.pc < MICROTAN.vectors.nmi,
         `after one instruction pc=0x${m.pc.toString(16)}`);
 }
 

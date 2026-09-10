@@ -16,9 +16,9 @@
 #
 # The flags: gdb and the simulator roughly triple the build and nothing here
 # needs them.  MAKEINFO=true stands in for a makeinfo that is usually absent.
-# objdump and readelf are named directly rather than building all-binutils,
-# because ar, windres and dlltool want bison and flex to regenerate parsers
-# that modern binutils no longer ships.
+# objdump, readelf and objcopy are named directly rather than building
+# all-binutils, because ar, windres and dlltool want bison and flex to
+# regenerate parsers that modern binutils no longer ships.
 # =============================================================================
 set -e
 cd "$(dirname "$0")/.."
@@ -38,11 +38,11 @@ cd build/binutils
     --disable-libdecnumber --disable-readline --disable-libctf \
     --disable-nls --disable-werror --disable-gold
 
-make -j"$(nproc)" MAKEINFO=true all-gas all-opcodes
+make -j"$(nproc)" MAKEINFO=true all-gas all-opcodes all-ld
 make MAKEINFO=true configure-binutils
-make -C binutils -j"$(nproc)" MAKEINFO=true objdump readelf
+make -C binutils -j"$(nproc)" MAKEINFO=true objdump readelf objcopy
 
 echo
 echo "built:  build/binutils/gas/as-new"
-echo "        build/binutils/binutils/objdump"
-echo "        build/binutils/binutils/readelf"
+echo "        build/binutils/ld/ld-new"
+echo "        build/binutils/binutils/{objdump,readelf,objcopy}"

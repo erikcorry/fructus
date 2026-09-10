@@ -16,8 +16,8 @@
 
 #bankdef rom
 {
-    #addr 0xfc00
-    #size 0x400
+    #addr 0xc000
+    #size 0x4000
     #outp 0
     #fill
 }
@@ -45,6 +45,10 @@ poll:
 done:
         halt
 
-; The reset entry.  Three bytes to the top of memory, and `jmp` is three bytes.
-#addr 0xfffd
-        jmp     start
+; The vectors, which the hardware reads rather than executes: three
+; little-endian addresses.  Nothing here handles an interrupt, so NMI and IRQ
+; restart the machine rather than land somewhere arbitrary.
+#addr 0xfffa
+        dw      start           ; 0xfffa  NMI
+        dw      start           ; 0xfffc  reset
+        dw      start           ; 0xfffe  IRQ / BRK
