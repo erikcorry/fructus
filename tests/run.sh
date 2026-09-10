@@ -109,6 +109,25 @@ for f in immgen rhs unary; do
 done
 if node tests/rtl-check.mjs; then :; else fail=1; fi
 
+# --- the binutils opcode table, if the submodule is checked out --------------
+# opcodes/ is what gas and the disassembler SHARE, so a stale table would make
+# the assembler and the ISA disagree silently.  Skipped rather than failed when
+# the submodule is absent, which is the normal state for a plain clone.
+if [ -d vendor/binutils-gdb/opcodes ]; then
+    for f in "include/opcode/fructus.h:--header" "opcodes/fructus-opc.c:--table"; do
+        path=${f%%:*}; flag=${f##*:}
+        node tools/gen-opcodes.js "$flag" > build/_opc.tmp
+        if cmp -s build/_opc.tmp "vendor/binutils-gdb/$path"; then
+            printf 'ok    binutils %s is up to date with isa/fructus.toml\n' "$path"
+        else
+            printf 'FAIL  binutils %s is stale - run `npm run binutils`\n' "$path"; fail=1
+        fi
+        rm -f build/_opc.tmp
+    done
+else
+    printf 'skip  vendor/binutils-gdb not checked out, opcode table not checked\n'
+fi
+
 # --- snippet arithmetic, which assembling cannot check -----------------------
 for t in tests/fpadd-check.mjs tests/fpsub-check.mjs; do
     if out=$(node "$t" 2>&1) && ! printf '%s' "$out" | grep -q MISMATCH; then
