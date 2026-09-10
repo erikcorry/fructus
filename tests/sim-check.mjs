@@ -16,6 +16,7 @@
 
 import { assemble, callRoutine, machine, spec } from './harness.mjs';
 import { BUILTIN } from '../tools/sim.js';
+import { writeFileSync, rmSync } from 'node:fs';
 
 const M32 = (1n << 32n) - 1n, B31 = 1n << 31n, B32 = 1n << 32n;
 let fails = 0, checks = 0;
@@ -556,6 +557,74 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
         `halt=0x${opcodeOf('halt').toString(16)} ret=0x${opcodeOf('ret').toString(16)}`);
   check('nop bookends the far end', NOP === 0x0f, `nop=0x${NOP.toString(16)}`);
   console.log('ok    halt is opcode zero: zeroed memory stops the machine');
+}
+
+// --- iseq / isset: the row that is two instructions --------------------------
+// Which comparator a column gets is hard-wired to the low three bits, so the
+// thing that can go wrong is a column wired to the wrong one - and that is
+// invisible to the assembler, which is happy to encode either.  So each form is
+// run for values that AGREE and values that DIFFER: a column stuck on `eq` when
+// it should be `set`, or the reverse, gets one of the two wrong.
+//
+// The result must be exactly 1 or 0 and never anything else, because the
+// one-byte `xor r0, r0, #1` negates it by flipping bit 0 alone.
+{
+  const asm = `start:
+        iseq    r0, r0, #7
+        isset   r1, r1, #0x0100
+        iseq    r2, r3, #4
+        iseq    r4, r5, #500
+        isset   r5, r5, #0xf0f0
+        iseq    r6, r7, r1
+        xor     r0, r0, #1
+        halt
+`;
+  writeFileSync('build/_isq.s', asm);
+  const { code } = assemble('build/_isq.s');
+
+  // The reference walks the same sequence rather than naming its answers,
+  // because the order matters: `isset r1, r1` overwrites r1 before
+  // `iseq r6, r7, r1` reads it, and a hand-written expectation gets that wrong.
+  const model = (R) => {
+    const r = R.slice();
+    r[0] = r[0] === 7 ? 1 : 0;
+    r[1] = (r[1] & 0x0100) !== 0 ? 1 : 0;
+    r[2] = r[3] === 4 ? 1 : 0;
+    r[4] = r[5] === 500 ? 1 : 0;
+    r[5] = (r[5] & 0xf0f0) !== 0 ? 1 : 0;
+    r[6] = r[7] === r[1] ? 1 : 0;
+    r[0] ^= 1;                                    // the one-byte negation
+    return r;
+  };
+
+  const inputs = [
+    [7, 0x0100, 0, 4,   0, 500, 0, 1],
+    [6, 0x0200, 0, 5,   0, 499, 0, 0],
+    [7, 0x0000, 0, 4,   0, 500, 0, 0xf0f0],
+    [0, 0xffff, 0, 0,   0, 0,   0, 0],
+    [7, 0x0100, 0, 4,   0, 0,   0, 1],
+  ];
+  let bad = -1, why = '';
+  inputs.forEach((R, i) => {
+    m.mem.fill(0); m.load(code); m.R.fill(0);
+    for (let k = 0; k < 8; k++) m.R[k] = R[k];
+    m.pc = 0; m.halted = false; m.count = 0;
+    m.run({ max: 200 });
+    const want = model(R), got = [...m.regs()];
+    for (const k of [0, 1, 2, 4, 5, 6])
+      if (bad < 0 && got[k] !== want[k]) { bad = i; why = `r${k} = ${got[k]}, want ${want[k]}`; }
+    // every answer must be exactly 1 or 0, since xor #1 negates by bit 0 alone
+    for (const k of [1, 2, 4, 5, 6])
+      if (bad < 0 && got[k] !== 0 && got[k] !== 1) { bad = i; why = `r${k} = ${got[k]}, not a 0 or 1`; }
+  });
+  check('iseq/isset answer 1 or 0 per column', bad < 0, `case ${bad}: ${why}`);
+
+  // and the one-byte negation really is one byte and really is xor #1
+  const one = assemble('build/_isq.s').code;
+  check('xor r0, r0, #1 is one byte', one[code.length - 2] === 0x0c,
+        `byte before halt is 0x${one[code.length - 2].toString(16)}`);
+  rmSync('build/_isq.s', { force: true });
+  console.log('ok    iseq/isset: every column, agreeing and differing operands');
 }
 
 // --- clz: four routines, every input, and the cost of each -------------------

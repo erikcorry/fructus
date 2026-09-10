@@ -1,15 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="945" height="1958" viewBox="0 0 945 1958" role="img" aria-label="Fructus opcode map" font-family="ui-monospace,'DejaVu Sans Mono','Liberation Mono',Menlo,monospace" fill="#16181D">
-<rect width="945" height="1958" fill="#ffffff"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="945" height="2023" viewBox="0 0 945 2023" role="img" aria-label="Fructus opcode map" font-family="ui-monospace,'DejaVu Sans Mono','Liberation Mono',Menlo,monospace" fill="#16181D">
+<rect width="945" height="2023" fill="#ffffff"/>
 <text x="26" y="37" font-size="10" fill="#6A7180" letter-spacing="1.4">FRUCTUS · 16-BIT · FIRST-BYTE DECODE</text>
 <text x="26" y="76" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="34" font-weight="700" fill="#16181D">Opcode Map</text>
 <text x="26" y="98" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#6A7180">Instruction length comes from the first byte alone, so this table is the whole decoder.</text>
-<text x="26" y="130" font-size="20" font-weight="600" fill="#16181D">119</text>
+<text x="26" y="130" font-size="20" font-weight="600" fill="#16181D">128</text>
 <text x="26" y="144" font-size="8.5" fill="#9AA1AE" letter-spacing="1.2">ASSIGNED</text>
-<text x="101.6" y="130" font-size="20" font-weight="600" fill="#16181D">137</text>
+<text x="101.6" y="130" font-size="20" font-weight="600" fill="#16181D">128</text>
 <text x="101.6" y="144" font-size="8.5" fill="#9AA1AE" letter-spacing="1.2">FREE</text>
 <text x="166.6" y="130" font-size="20" font-weight="600" fill="#16181D">17</text>
 <text x="166.6" y="144" font-size="8.5" fill="#9AA1AE" letter-spacing="1.2">ADDRESSING MODES</text>
-<text x="291.8" y="130" font-size="20" font-weight="600" fill="#16181D">48</text>
+<text x="291.8" y="130" font-size="20" font-weight="600" fill="#16181D">51</text>
 <text x="291.8" y="144" font-size="8.5" fill="#9AA1AE" letter-spacing="1.2">INSTRUCTION ENTRIES</text>
 <rect x="26" y="156" width="893" height="2" fill="#16181D"/>
 <text x="118" y="191" font-size="10" fill="#6A7180" text-anchor="middle">·0</text>
@@ -80,8 +80,11 @@
 <text x="483" y="277" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
 <text x="395" y="294" font-size="13" font-weight="600" fill="#000">mov</text>
 <text x="395" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r0, #0</text>
-<rect x="494" y="263" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
-<text x="502" y="278" font-size="9" fill="#B9BFC9">0c</text>
+<rect x="494" y="263" width="104" height="62" rx="3" fill="#F8CE8B"/>
+<text x="502" y="277" font-size="9" fill="rgba(0,0,0,.45)">0c</text>
+<text x="590" y="277" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
+<text x="502" y="294" font-size="13" font-weight="600" fill="#000">xor</text>
+<text x="502" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r0, #1</text>
 <rect x="601" y="263" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
 <text x="609" y="278" font-size="9" fill="#B9BFC9">0d</text>
 <rect x="708" y="263" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
@@ -742,76 +745,117 @@
 <text x="911" y="1512" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">3B</text>
 <text x="823" y="1529" font-size="13" font-weight="600" fill="#000">mov</text>
 <text x="823" y="1543" font-size="8.5" fill="rgba(0,0,0,.62)">rd, #imm16</text>
-<text x="26" y="1582" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="11.5" fill="#9AA1AE">Rows below a8 are omitted: 88 unbroken free opcodes run from a8 to ff.</text>
-<text x="26" y="1612" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="700" fill="#6A7180" letter-spacing="1.5">ADDRESSING MODES</text>
-<rect x="26" y="1636" width="14" height="14" rx="2" fill="#F8CE8B"/>
-<text x="48" y="1647" font-size="11.5" font-weight="600" fill="#16181D">One-byte abbreviation</text>
-<text x="48" y="1661" font-size="9.5" fill="#6A7180">every operand pinned</text>
-<text x="307.6666666666667" y="1647" font-size="10" fill="#6A7180" text-anchor="end">10</text>
-<rect x="323.6666666666667" y="1636" width="14" height="14" rx="2" fill="#E3A863"/>
-<text x="345.6666666666667" y="1647" font-size="11.5" font-weight="600" fill="#16181D">One-byte special</text>
-<text x="345.6666666666667" y="1661" font-size="9.5" fill="#6A7180">no operands at all</text>
-<text x="605.3333333333334" y="1647" font-size="10" fill="#6A7180" text-anchor="end">3</text>
-<rect x="621.3333333333334" y="1636" width="14" height="14" rx="2" fill="#9AC4E8"/>
-<text x="643.3333333333334" y="1647" font-size="11.5" font-weight="600" fill="#16181D">Three registers</text>
-<text x="643.3333333333334" y="1661" font-size="9.5" fill="#6A7180">reg 3 (split) + reg 3 + reg 3</text>
-<text x="903" y="1647" font-size="10" fill="#6A7180" text-anchor="end">20</text>
-<rect x="26" y="1682" width="14" height="14" rx="2" fill="#B9D9F2"/>
-<text x="48" y="1693" font-size="11.5" font-weight="600" fill="#16181D">Two registers</text>
-<text x="48" y="1707" font-size="9.5" fill="#6A7180">reg 3 + reg 3</text>
-<text x="307.6666666666667" y="1693" font-size="10" fill="#6A7180" text-anchor="end">4</text>
-<rect x="323.6666666666667" y="1682" width="14" height="14" rx="2" fill="#D2E7F8"/>
-<text x="345.6666666666667" y="1693" font-size="11.5" font-weight="600" fill="#16181D">One register</text>
-<text x="345.6666666666667" y="1707" font-size="9.5" fill="#6A7180">reg 3</text>
-<text x="605.3333333333334" y="1693" font-size="10" fill="#6A7180" text-anchor="end">5</text>
-<rect x="621.3333333333334" y="1682" width="14" height="14" rx="2" fill="#A6D9B4"/>
-<text x="643.3333333333334" y="1693" font-size="11.5" font-weight="600" fill="#16181D">Two registers, 3-bit table</text>
-<text x="643.3333333333334" y="1707" font-size="9.5" fill="#6A7180">table 3 (split) + reg 3 + reg 3</text>
-<text x="903" y="1693" font-size="10" fill="#6A7180" text-anchor="end">24</text>
-<rect x="26" y="1728" width="14" height="14" rx="2" fill="#CBE5A0"/>
-<text x="48" y="1739" font-size="11.5" font-weight="600" fill="#16181D">Two registers, 10-bit</text>
-<text x="48" y="1753" font-size="9.5" fill="#6A7180">reg 3 + reg 3 + int 10</text>
-<text x="307.6666666666667" y="1739" font-size="10" fill="#6A7180" text-anchor="end">9</text>
-<rect x="323.6666666666667" y="1728" width="14" height="14" rx="2" fill="#C6BEEC"/>
-<text x="345.6666666666667" y="1739" font-size="11.5" font-weight="600" fill="#16181D">One register, 5-bit signed</text>
-<text x="345.6666666666667" y="1753" font-size="9.5" fill="#6A7180">reg 3 + int 5, signed</text>
-<text x="605.3333333333334" y="1739" font-size="10" fill="#6A7180" text-anchor="end">11</text>
-<rect x="621.3333333333334" y="1728" width="14" height="14" rx="2" fill="#F2D6F2"/>
-<text x="643.3333333333334" y="1739" font-size="11.5" font-weight="600" fill="#16181D">One register, 5-bit bit mask</text>
-<text x="643.3333333333334" y="1753" font-size="9.5" fill="#6A7180">reg 3 + table 5</text>
-<text x="903" y="1739" font-size="10" fill="#6A7180" text-anchor="end">5</text>
-<rect x="26" y="1774" width="14" height="14" rx="2" fill="#DDB3E4"/>
-<text x="48" y="1785" font-size="11.5" font-weight="600" fill="#16181D">One register, 5-bit field mask</text>
-<text x="48" y="1799" font-size="9.5" fill="#6A7180">reg 3 + table 5</text>
-<text x="307.6666666666667" y="1785" font-size="10" fill="#6A7180" text-anchor="end">5</text>
-<rect x="323.6666666666667" y="1774" width="14" height="14" rx="2" fill="#DEC6F0"/>
-<text x="345.6666666666667" y="1785" font-size="11.5" font-weight="600" fill="#16181D">One register, 16-bit</text>
-<text x="345.6666666666667" y="1799" font-size="9.5" fill="#6A7180">reg 3 + int 16 (split)</text>
-<text x="605.3333333333334" y="1785" font-size="10" fill="#6A7180" text-anchor="end">8</text>
-<rect x="621.3333333333334" y="1774" width="14" height="14" rx="2" fill="#F5C2DC"/>
-<text x="643.3333333333334" y="1785" font-size="11.5" font-weight="600" fill="#16181D">Condition, two registers, target</text>
-<text x="643.3333333333334" y="1799" font-size="9.5" fill="#6A7180">reg 3 (split) + cond 3 + reg 3 + int 8</text>
-<text x="903" y="1785" font-size="10" fill="#6A7180" text-anchor="end">4</text>
-<rect x="26" y="1820" width="14" height="14" rx="2" fill="#E4A2C4"/>
-<text x="48" y="1831" font-size="11.5" font-weight="600" fill="#16181D">Packed condition, register, target</text>
-<text x="48" y="1845" font-size="9.5" fill="#6A7180">reg 3 + cond+const 5 + int 8</text>
-<text x="307.6666666666667" y="1831" font-size="10" fill="#6A7180" text-anchor="end">2</text>
-<rect x="323.6666666666667" y="1820" width="14" height="14" rx="2" fill="#F2B5A5"/>
-<text x="345.6666666666667" y="1831" font-size="11.5" font-weight="600" fill="#16181D">Register, bit mask, target</text>
-<text x="345.6666666666667" y="1845" font-size="9.5" fill="#6A7180">reg 3 + table 5 + int 8</text>
-<text x="605.3333333333334" y="1831" font-size="10" fill="#6A7180" text-anchor="end">2</text>
-<rect x="621.3333333333334" y="1820" width="14" height="14" rx="2" fill="#E09A98"/>
-<text x="643.3333333333334" y="1831" font-size="11.5" font-weight="600" fill="#16181D">Register, field mask, target</text>
-<text x="643.3333333333334" y="1845" font-size="9.5" fill="#6A7180">reg 3 + table 5 + int 8</text>
-<text x="903" y="1831" font-size="10" fill="#6A7180" text-anchor="end">2</text>
-<rect x="26" y="1866" width="14" height="14" rx="2" fill="#FAD4D4"/>
-<text x="48" y="1877" font-size="11.5" font-weight="600" fill="#16181D">Target only, 8-bit</text>
-<text x="48" y="1891" font-size="9.5" fill="#6A7180">int 8</text>
-<text x="307.6666666666667" y="1877" font-size="10" fill="#6A7180" text-anchor="end">1</text>
-<rect x="323.6666666666667" y="1866" width="14" height="14" rx="2" fill="#F0AEAE"/>
-<text x="345.6666666666667" y="1877" font-size="11.5" font-weight="600" fill="#16181D">Target only, 16-bit</text>
-<text x="345.6666666666667" y="1891" font-size="9.5" fill="#6A7180">int 16 (split)</text>
-<text x="605.3333333333334" y="1877" font-size="10" fill="#6A7180" text-anchor="end">4</text>
-<rect x="26" y="1912" width="893" height="1" fill="#E2E5EA"/>
-<text x="26" y="1932" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="11" fill="#9AA1AE">Generated from isa/fructus.toml by tools/gen-opcode-map.js.</text>
+<text x="57" y="1598" font-size="10" fill="#6A7180" text-anchor="end">a8</text>
+<rect x="66" y="1563" width="104" height="62" rx="3" fill="#C6BEEC"/>
+<text x="74" y="1577" font-size="9" fill="rgba(0,0,0,.45)">a8</text>
+<text x="162" y="1577" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
+<text x="74" y="1594" font-size="13" font-weight="600" fill="#000">iseq</text>
+<text x="74" y="1608" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #imm5</text>
+<rect x="173" y="1563" width="104" height="62" rx="3" fill="#F2D6F2"/>
+<text x="181" y="1577" font-size="9" fill="rgba(0,0,0,.45)">a9</text>
+<text x="269" y="1577" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
+<text x="181" y="1594" font-size="13" font-weight="600" fill="#000">isset</text>
+<text x="181" y="1608" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #immbit5</text>
+<rect x="280" y="1563" width="104" height="62" rx="3" fill="#A6D9B4"/>
+<text x="288" y="1577" font-size="9" fill="rgba(0,0,0,.45)">aa</text>
+<text x="376" y="1577" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
+<text x="288" y="1594" font-size="13" font-weight="600" fill="#000">iseq</text>
+<text x="288" y="1608" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #imm3</text>
+<rect x="387" y="1563" width="104" height="62" rx="3" fill="#A6D9B4"/>
+<text x="395" y="1577" font-size="9" fill="rgba(0,0,0,.45)">ab</text>
+<text x="483" y="1577" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
+<text x="395" y="1594" font-size="13" font-weight="600" fill="#000">iseq</text>
+<text x="395" y="1608" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #imm3</text>
+<rect x="494" y="1563" width="104" height="62" rx="3" fill="#CBE5A0"/>
+<text x="502" y="1577" font-size="9" fill="rgba(0,0,0,.45)">ac</text>
+<text x="590" y="1577" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">3B</text>
+<text x="502" y="1594" font-size="13" font-weight="600" fill="#000">iseq</text>
+<text x="502" y="1608" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, #imm10</text>
+<rect x="601" y="1563" width="104" height="62" rx="3" fill="#DDB3E4"/>
+<text x="609" y="1577" font-size="9" fill="rgba(0,0,0,.45)">ad</text>
+<text x="697" y="1577" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
+<text x="609" y="1594" font-size="13" font-weight="600" fill="#000">isset</text>
+<text x="609" y="1608" font-size="8.5" fill="rgba(0,0,0,.62)">rd, rd, #immask5</text>
+<rect x="708" y="1563" width="104" height="62" rx="3" fill="#9AC4E8"/>
+<text x="716" y="1577" font-size="9" fill="rgba(0,0,0,.45)">ae</text>
+<text x="804" y="1577" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
+<text x="716" y="1594" font-size="13" font-weight="600" fill="#000">iseq</text>
+<text x="716" y="1608" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, rb</text>
+<rect x="815" y="1563" width="104" height="62" rx="3" fill="#9AC4E8"/>
+<text x="823" y="1577" font-size="9" fill="rgba(0,0,0,.45)">af</text>
+<text x="911" y="1577" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
+<text x="823" y="1594" font-size="13" font-weight="600" fill="#000">iseq</text>
+<text x="823" y="1608" font-size="8.5" fill="rgba(0,0,0,.62)">rd, ra, rb</text>
+<text x="26" y="1647" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="11.5" fill="#9AA1AE">Rows below b0 are omitted: 80 unbroken free opcodes run from b0 to ff.</text>
+<text x="26" y="1677" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="700" fill="#6A7180" letter-spacing="1.5">ADDRESSING MODES</text>
+<rect x="26" y="1701" width="14" height="14" rx="2" fill="#F8CE8B"/>
+<text x="48" y="1712" font-size="11.5" font-weight="600" fill="#16181D">One-byte abbreviation</text>
+<text x="48" y="1726" font-size="9.5" fill="#6A7180">every operand pinned</text>
+<text x="307.6666666666667" y="1712" font-size="10" fill="#6A7180" text-anchor="end">11</text>
+<rect x="323.6666666666667" y="1701" width="14" height="14" rx="2" fill="#E3A863"/>
+<text x="345.6666666666667" y="1712" font-size="11.5" font-weight="600" fill="#16181D">One-byte special</text>
+<text x="345.6666666666667" y="1726" font-size="9.5" fill="#6A7180">no operands at all</text>
+<text x="605.3333333333334" y="1712" font-size="10" fill="#6A7180" text-anchor="end">3</text>
+<rect x="621.3333333333334" y="1701" width="14" height="14" rx="2" fill="#9AC4E8"/>
+<text x="643.3333333333334" y="1712" font-size="11.5" font-weight="600" fill="#16181D">Three registers</text>
+<text x="643.3333333333334" y="1726" font-size="9.5" fill="#6A7180">reg 3 (split) + reg 3 + reg 3</text>
+<text x="903" y="1712" font-size="10" fill="#6A7180" text-anchor="end">22</text>
+<rect x="26" y="1747" width="14" height="14" rx="2" fill="#B9D9F2"/>
+<text x="48" y="1758" font-size="11.5" font-weight="600" fill="#16181D">Two registers</text>
+<text x="48" y="1772" font-size="9.5" fill="#6A7180">reg 3 + reg 3</text>
+<text x="307.6666666666667" y="1758" font-size="10" fill="#6A7180" text-anchor="end">4</text>
+<rect x="323.6666666666667" y="1747" width="14" height="14" rx="2" fill="#D2E7F8"/>
+<text x="345.6666666666667" y="1758" font-size="11.5" font-weight="600" fill="#16181D">One register</text>
+<text x="345.6666666666667" y="1772" font-size="9.5" fill="#6A7180">reg 3</text>
+<text x="605.3333333333334" y="1758" font-size="10" fill="#6A7180" text-anchor="end">5</text>
+<rect x="621.3333333333334" y="1747" width="14" height="14" rx="2" fill="#A6D9B4"/>
+<text x="643.3333333333334" y="1758" font-size="11.5" font-weight="600" fill="#16181D">Two registers, 3-bit table</text>
+<text x="643.3333333333334" y="1772" font-size="9.5" fill="#6A7180">table 3 (split) + reg 3 + reg 3</text>
+<text x="903" y="1758" font-size="10" fill="#6A7180" text-anchor="end">26</text>
+<rect x="26" y="1793" width="14" height="14" rx="2" fill="#CBE5A0"/>
+<text x="48" y="1804" font-size="11.5" font-weight="600" fill="#16181D">Two registers, 10-bit</text>
+<text x="48" y="1818" font-size="9.5" fill="#6A7180">reg 3 + reg 3 + int 10</text>
+<text x="307.6666666666667" y="1804" font-size="10" fill="#6A7180" text-anchor="end">10</text>
+<rect x="323.6666666666667" y="1793" width="14" height="14" rx="2" fill="#C6BEEC"/>
+<text x="345.6666666666667" y="1804" font-size="11.5" font-weight="600" fill="#16181D">One register, 5-bit signed</text>
+<text x="345.6666666666667" y="1818" font-size="9.5" fill="#6A7180">reg 3 + int 5, signed</text>
+<text x="605.3333333333334" y="1804" font-size="10" fill="#6A7180" text-anchor="end">12</text>
+<rect x="621.3333333333334" y="1793" width="14" height="14" rx="2" fill="#F2D6F2"/>
+<text x="643.3333333333334" y="1804" font-size="11.5" font-weight="600" fill="#16181D">One register, 5-bit bit mask</text>
+<text x="643.3333333333334" y="1818" font-size="9.5" fill="#6A7180">reg 3 + table 5</text>
+<text x="903" y="1804" font-size="10" fill="#6A7180" text-anchor="end">6</text>
+<rect x="26" y="1839" width="14" height="14" rx="2" fill="#DDB3E4"/>
+<text x="48" y="1850" font-size="11.5" font-weight="600" fill="#16181D">One register, 5-bit field mask</text>
+<text x="48" y="1864" font-size="9.5" fill="#6A7180">reg 3 + table 5</text>
+<text x="307.6666666666667" y="1850" font-size="10" fill="#6A7180" text-anchor="end">6</text>
+<rect x="323.6666666666667" y="1839" width="14" height="14" rx="2" fill="#DEC6F0"/>
+<text x="345.6666666666667" y="1850" font-size="11.5" font-weight="600" fill="#16181D">One register, 16-bit</text>
+<text x="345.6666666666667" y="1864" font-size="9.5" fill="#6A7180">reg 3 + int 16 (split)</text>
+<text x="605.3333333333334" y="1850" font-size="10" fill="#6A7180" text-anchor="end">8</text>
+<rect x="621.3333333333334" y="1839" width="14" height="14" rx="2" fill="#F5C2DC"/>
+<text x="643.3333333333334" y="1850" font-size="11.5" font-weight="600" fill="#16181D">Condition, two registers, target</text>
+<text x="643.3333333333334" y="1864" font-size="9.5" fill="#6A7180">reg 3 (split) + cond 3 + reg 3 + int 8</text>
+<text x="903" y="1850" font-size="10" fill="#6A7180" text-anchor="end">4</text>
+<rect x="26" y="1885" width="14" height="14" rx="2" fill="#E4A2C4"/>
+<text x="48" y="1896" font-size="11.5" font-weight="600" fill="#16181D">Packed condition, register, target</text>
+<text x="48" y="1910" font-size="9.5" fill="#6A7180">reg 3 + cond+const 5 + int 8</text>
+<text x="307.6666666666667" y="1896" font-size="10" fill="#6A7180" text-anchor="end">2</text>
+<rect x="323.6666666666667" y="1885" width="14" height="14" rx="2" fill="#F2B5A5"/>
+<text x="345.6666666666667" y="1896" font-size="11.5" font-weight="600" fill="#16181D">Register, bit mask, target</text>
+<text x="345.6666666666667" y="1910" font-size="9.5" fill="#6A7180">reg 3 + table 5 + int 8</text>
+<text x="605.3333333333334" y="1896" font-size="10" fill="#6A7180" text-anchor="end">2</text>
+<rect x="621.3333333333334" y="1885" width="14" height="14" rx="2" fill="#E09A98"/>
+<text x="643.3333333333334" y="1896" font-size="11.5" font-weight="600" fill="#16181D">Register, field mask, target</text>
+<text x="643.3333333333334" y="1910" font-size="9.5" fill="#6A7180">reg 3 + table 5 + int 8</text>
+<text x="903" y="1896" font-size="10" fill="#6A7180" text-anchor="end">2</text>
+<rect x="26" y="1931" width="14" height="14" rx="2" fill="#FAD4D4"/>
+<text x="48" y="1942" font-size="11.5" font-weight="600" fill="#16181D">Target only, 8-bit</text>
+<text x="48" y="1956" font-size="9.5" fill="#6A7180">int 8</text>
+<text x="307.6666666666667" y="1942" font-size="10" fill="#6A7180" text-anchor="end">1</text>
+<rect x="323.6666666666667" y="1931" width="14" height="14" rx="2" fill="#F0AEAE"/>
+<text x="345.6666666666667" y="1942" font-size="11.5" font-weight="600" fill="#16181D">Target only, 16-bit</text>
+<text x="345.6666666666667" y="1956" font-size="9.5" fill="#6A7180">int 16 (split)</text>
+<text x="605.3333333333334" y="1942" font-size="10" fill="#6A7180" text-anchor="end">4</text>
+<rect x="26" y="1977" width="893" height="1" fill="#E2E5EA"/>
+<text x="26" y="1997" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="11" fill="#9AA1AE">Generated from isa/fructus.toml by tools/gen-opcode-map.js.</text>
 </svg>

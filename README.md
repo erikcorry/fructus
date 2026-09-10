@@ -8,9 +8,9 @@ kind of machine a 6502 ran on — a narrow memory bus where every instruction by
 is a cycle you pay for — so the design question behind almost every decision in
 here is *what does this cost in bytes*.
 
-Right now: **91 encoding forms over 119 of the 256 first bytes, 137 free.**
+Right now: **97 encoding forms over 127 of the 256 first bytes, 129 free.**
 
-![The Fructus opcode map: 119 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
+![The Fructus opcode map: 127 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
 
 Both this and an interactive version with per-cell tooltips come from
 `npm run map`.
@@ -39,7 +39,7 @@ on your `PATH`:
 cargo install customasm        # or grab a release binary
 npm install                    # one dependency: a TOML parser
 npm run gen                    # generate build/fructus.asm from the spec
-npm test                       # 82 checks, ~800,000 assertions
+npm test                       # 83 checks, ~800,000 assertions
 ```
 
 Then assemble and run something. `customasm` takes several input files, so the

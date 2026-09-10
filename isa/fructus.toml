@@ -597,7 +597,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   0000_1001                or   r0, r1, #0  = mov     1 byte
 #   0000_1010                or   r1, r0, #0  = mov     1 byte
 #   0000_1011                mov  r0, #0                1 byte
-#   0000_1100 .. 0000_1110   -- free, 3 one-byte slots
+#   0000_1100                xor  r0, r0, #1            1 byte
+#   0000_1101 .. 0000_1110   -- free, 2 one-byte slots
 #   0000_1111                nop                        1 byte
 #
 #   THE TWO ENDS OF THIS ROW ARE THE TWO INSTRUCTIONS THAT DO NOTHING USEFUL,
@@ -617,6 +618,23 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   ------------------------------------------------------------------------
 #
 #   1010_0ddd                mov  rd, #imm16            3 bytes
+#   1010_1000                iseq  rd, rd, #imm5      2 bytes
+#   1010_1001                isset rd, rd, #immbit5    2 bytes
+#   1010_101i                iseq  rd, ra, #imm3      TWO opcodes
+#   1010_1100                iseq  rd, ra, #imm10     3 bytes
+#   1010_1101                isset rd, rd, #immask5    2 bytes
+#   1010_111b                iseq  rd, ra, rb         TWO opcodes
+#
+#   TWO INSTRUCTIONS IN ONE ROW, chosen by column: the two MASK columns take
+#   `isset` and the other six take `iseq`.  See the block above the definitions
+#   for why that is regular rather than irregular, and what it buys - a one-bit
+#   extract, branchless selection, and a bool-returning function with no branch
+#   in it at all, which is the case a compiler hits constantly.
+#
+#   The only new decode is which comparator, and it is hard-wired to the low
+#   three bits.  Everything else - the five immediate modes, the register
+#   fields - is the row shape every ALU group already has, so rtl/immgen.sv
+#   feeds this row without knowing it exists.
 #
 #   IT IS THE ONLY INSTRUCTION THAT SPENDS OPCODE BITS ON A REGISTER, and that
 #   is why it sits at the bottom of the map rather than the top.  Every other
@@ -924,6 +942,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   indirect below.  They share no byte-1 layout with each other, which is what
 #   makes a column of leftovers honest rather than untidy.
 #   ------------------------------------------------------------------------
+#
+#   1010_1xxx                iseq / isset               see above
+#   1011_0000 .. 1011_1111   -- free, 16 slots
 #
 #   11xx_xxxx                -- free, a quarter of the map
 #
@@ -1398,6 +1419,18 @@ operands = [
 ]
 syntax   = "{d}, {a}, #{imm}"
 semantics = "R[d] = R[a] ^ imm"
+
+  # NEGATING A PREDICATE IS ONE BYTE.  iseq and isset return 1 or 0 and never
+  # anything else, so `xor rd, rd, #1` is exactly `!` on their result - and r0
+  # is where a return value lives, so a bool-returning function that wants `!=`
+  # where it computed `==` ends with this and a `ret`, two bytes in total.
+  #
+  # It costs one of the three free one-byte slots, and pins both operands, which
+  # is what an abbreviation is.
+  [[insn.form]]
+  name     = "r0_not"
+  encoding = "0000_1100"
+  fix      = { d = 0, a = 0, imm = 1 }
 
   [[insn.form]]
   name     = "reg_imm5"
@@ -2014,6 +2047,118 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
   encoding = "1001_1101  aaam_mmmm  tttt_tttt"
   fields   = { m = "mask:immask5", t = "off:off8" }
 
+
+
+# --- iseq / isset -----------------------------------------------------------
+# TWO INSTRUCTIONS IN ONE ROW, and which one you get depends on the column.
+#
+#     iseq  rd, a, b     rd = (a == b)      1 or 0
+#     isset rd, a, b     rd = (a & b) != 0  1 or 0
+#
+# That looks irregular and is the same shape br already has: brclear and brset
+# read the same five bits through immbit5 and immask5 and mean different things
+# by column, and the ALU's +1 and +5 are per-operation rather than universal.
+# The rule here is simply that the mask columns take `isset` and everything else
+# takes `iseq`:
+#
+#     +0   iseq  rd, rd, #imm5        is this register some small constant
+#     +1   isset rd, rd, #immbit5     EXTRACT ONE BIT, as a 0 or 1
+#     +2   iseq  rd, ra, #imm3        TWO opcodes
+#     +3     "
+#     +4   iseq  rd, ra, #imm10       is this register some wide constant
+#     +5   isset rd, rd, #immask5     is any bit of this field set
+#     +6   iseq  rd, ra, rb           TWO opcodes
+#     +7     "
+#
+# THE ONLY NEW DECODE IS WHICH COMPARATOR, and it is hard-wired to the low three
+# bits: +1 and +5 are `set`, the other six are `eq`.  No operand chooses it, no
+# microcode line carries it, and the immediate reaches the comparator down the
+# same path it reaches the ALU - rtl/immgen.sv already produces imm5, immbit5,
+# imm3, imm10 and immask5 from those columns for every other row in the map.
+#
+# WHAT IT BUYS.  Three things, and the third is the one that motivated it.
+#
+#   A ONE-BIT EXTRACT.  `isset rd, rd, #immbit5` is bit n of a register as a 0
+#   or a 1, in two bytes, with no shift and no mask-then-compare.
+#
+#   BRANCHLESS SELECTION.  A predicate as a VALUE rather than as control flow -
+#   which on a machine whose taken branches cost an extra cycle, and whose
+#   pipeline will be shorter than its memory, is often the cheaper shape.
+#
+#   BOOL-RETURNING FUNCTIONS WITH NO BRANCH AT ALL.  A C function returning
+#   `a == b` compiles to one `iseq` and a `ret`, where before it needed a
+#   branch, two `mov`s and a join.  That is the case a compiler hits constantly
+#   and the reason this earns a row.
+#
+# The result is 1 or 0 and never anything else, so `xor rd, rd, #1` inverts a
+# predicate - which is why the one-byte `xor r0, r0, #1` exists at 0000_1100.
+# `!=` from a bool-returning function is one byte.
+
+[[insn]]
+mnemonic = "iseq"
+summary  = "rd = 1 if ra equals rb, else 0"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = R[a] == R[b]"
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "1010_111b  ddda_aacc"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+[[insn]]
+mnemonic = "iseq"
+summary  = "rd = 1 if ra equals a constant, else 0"
+operands = [
+  { name = "d",   type = "reg" },
+  { name = "a",   type = "reg" },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, {a}, #{imm}"
+semantics = "R[d] = R[a] == imm"
+
+  [[insn.form]]
+  name     = "reg_imm5"
+  encoding = "1010_1000  dddi_iiii"
+  fields   = { i = "imm:imm5" }
+  tie      = { a = "d" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm3"
+  encoding = "1010_101i  ddda_aajj"
+  fields   = { i = "imm:imm3[0]", j = "imm:imm3[2:1]" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm10"
+  encoding = "1010_1100  ddda_aaii  iiii_iiii"
+  fields   = { i = "imm:imm10" }
+
+[[insn]]
+mnemonic = "isset"
+summary  = "rd = 1 if ra and the mask share a bit, else 0"
+operands = [
+  { name = "d",    type = "reg" },
+  { name = "a",    type = "reg" },
+  { name = "mask", type = "int16" },
+]
+syntax   = "{d}, {a}, #{mask}"
+semantics = "R[d] = (R[a] & mask) != 0"
+
+  [[insn.form]]
+  name     = "reg_immbit5"
+  encoding = "1010_1001  dddi_iiii"
+  fields   = { i = "mask:immbit5" }
+  tie      = { a = "d" }
+
+  [[insn.form]]
+  name     = "reg_immask5"
+  encoding = "1010_1101  dddi_iiii"
+  fields   = { i = "mask:immask5" }
+  tie      = { a = "d" }
 
 # --- push / pop -------------------------------------------------------------
 # Push and pop are separate microcode state machines and the first opcode

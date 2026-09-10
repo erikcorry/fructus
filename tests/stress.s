@@ -124,6 +124,17 @@ btarget:
         brclear r4, #1, btarget           ; 3  the low bit is clear
         brclear r4, #0x7fff, btarget      ; 3  NOTHING but the sign bit is set
         brset   r4, #0xfffe, btarget      ; 3  some bit other than 0 is set
+; --- iseq / isset: one row, two instructions, chosen by column --------------
+        iseq    r0, r0, #7              ; 2  +0  imm5, dest tied to source
+        isset   r1, r1, #0x0100         ; 2  +1  immbit5: extract bit 8
+        iseq    r2, r3, #4              ; 2  +2/+3  imm3
+        iseq    r2, r3, #-1             ; 2  the other opcode of the pair
+        iseq    r4, r5, #500            ; 3  +4  imm10, -512..511
+        isset   r5, r5, #0xf0f0         ; 2  +5  immask5: any bit of the field
+        iseq    r6, r7, r1              ; 2  +6/+7  three registers
+        iseq    r7, r6, r5              ; 2
+        xor     r0, r0, #1              ; 1  ONE BYTE: negate a predicate
+
         jmp     0x1234
         jmpr    start
         call    0x1234
