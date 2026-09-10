@@ -1,0 +1,5 @@
+[submodule "vendor/gcc"]
+	path = vendor/gcc
+	url = https://github.com/gcc-mirror/gcc.git
+	branch = releases/gcc-16
+	shallow = true
