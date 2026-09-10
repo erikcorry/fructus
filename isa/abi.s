@@ -186,6 +186,69 @@
 ; walk a list and call things.
 ;
 ; ----------------------------------------------------------------------------
+; A GCC PORT CAN EXPRESS THIS, BUT NOT THE OBVIOUS WAY
+; ----------------------------------------------------------------------------
+;
+; The sliding rule is the one part of this file that a compiler back end might
+; simply be unable to implement, so it was worth checking rather than assuming.
+; It was traced through the GCC 16 tree in vendor/gcc.  The answer is yes, with
+; one trap that is invisible until it fails at run time.
+;
+; GCC's CALL_USED_REGISTERS is a static array, one convention per target, and
+; pdp11 - the closest reference target, 16-bit with 8 registers - uses exactly
+; that.  But since GCC 10 a target may declare SEVERAL ABIs:
+;
+;     TARGET_FNTYPE_ABI      (const_tree type)     the ABI of a function TYPE
+;     TARGET_INSN_CALLEE_ABI (const rtx_insn *)    the ABI at a call site
+;
+; with NUM_ABI_IDS = 12 available.  FNTYPE_ABI is handed the function TYPE,
+; which is exactly what the sliding rule is a function of - arity and return
+; width are both in the type - so the three conventions above become three ABI
+; ids and a small pure mapping.  aarch64, riscv and i386 all do this today.
+;
+; THE TRAP IS ON THE CALLEE SIDE.  Two predicates sit side by side in GCC:
+;
+;     call_used_or_fixed_reg_p (regno)          reads the STATIC array
+;     crtl->abi->clobbers_full_reg_p (regno)    reads THIS function's ABI
+;
+; The first is the one every back end reaches for, it is what pdp11 and its
+; peers use throughout, and for a sliding convention it is WRONG.  The second is
+; correct: function.cc's prepare_function_start sets
+;
+;     crtl->abi = &fndecl_abi (cfun->decl).base_abi ();
+;
+; unconditionally, so the function being compiled does know its own ABI.
+;
+; For riscv the distinction is a footnote - only its vector registers slide, so
+; riscv_save_reg_p tests the static array first and adds a separate clause for
+; V registers.  Here it is not a footnote: r2 and r3 are ordinary integer
+; registers whose convention slides, so a Fructus port must use
+; crtl->abi->clobbers_full_reg_p as its PRIMARY test in save_reg_p, not as an
+; extra clause.  Every place the port writes call_used_or_fixed_reg_p out of
+; habit is a place where a two-argument function forgets to save r2 - and that
+; fails in the CALLER, after returning, which is the worst kind of bug to own.
+;
+; The call site needs one more thing: TARGET_INSN_CALLEE_ABI does not re-derive
+; the ABI, it reads it back out of the call insn.  riscv plants it as a USE of
+; an UNSPEC_CALLEE_CC in the call pattern at expand time, while the callee's
+; type is still in hand.  That is what makes indirect calls work at all, since
+; by the time the RTL passes ask what a call clobbers the tree type is gone -
+; and it lands exactly where the section above already reasons: the convention
+; comes from the pointer's DECLARED type, and a pointer cast to the wrong arity
+; is undefined behaviour.  GCC's mechanism and this file agree independently.
+;
+; So the port needs, and no more than:
+;
+;     CALL_USED_REGISTERS         the widest row - r0 r1 r2 r3 r5 clobbered
+;     fructus_fntype_abi          count r0..r3 used by the signature -> 0/1/2
+;     three predefined_function_abi, lazily built, clearing the slid bits
+;     UNSPEC_CALLEE_CC            planted by the call expander
+;     fructus_save_reg_p          crtl->abi->clobbers_full_reg_p FIRST
+;
+; The risk is not the volume of code.  It is that three targets in the whole
+; tree exercise this path, so bugs found there will be ours to diagnose.
+;
+; ----------------------------------------------------------------------------
 ; WHAT A PUSH ACTUALLY COSTS
 ; ----------------------------------------------------------------------------
 ;
