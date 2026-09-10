@@ -13,17 +13,15 @@
 // fits imm5, immbit5, imm3 and imm10; `and rd, rd, #0xff00' fits only immask5
 // and imm10.  Choosing between those is the whole job.
 //
-// So this emits the FORM table: one row per (instruction, form), carrying the
+// So this emits the form table: one row per (instruction, form), carrying the
 // syntax to parse, the constraints each operand must satisfy, and where the
 // bits go.  gas walks it shortest-first and takes the first row that accepts
-// what was written - which is exactly what tools/gen-customasm.js arranges for
-// customasm, by a different route.  THAT IS THE POINT: two assemblers, one
-// spec, and tests/run.sh compares their bytes.
+// what was written, which is what tools/gen-customasm.js arranges for customasm
+// by a different route - two assemblers reading one spec.
 //
-// WHAT IS NOT HERE.  No mnemonic is special-cased and no operand kind is
-// hand-coded in tc-fructus.c; if this table cannot express a form, the form
-// does not assemble, and the generator says so rather than emitting something
-// plausible.  The assertions below are the enforcement.
+// No mnemonic is special-cased and no operand kind is hand-coded in
+// tc-fructus.c.  If this table cannot express a form, the generator says so;
+// the assertions below are where that happens.
 // =============================================================================
 
 import { loadSpec, decodeEncoding, nameIndex } from './isa.js';
@@ -54,11 +52,10 @@ function relocFor(et, pcrel) {
 // One (insn, form) pair -> one row
 // =============================================================================
 //
-// A row's SLOTS are the things the syntax asks the programmer to write, in the
-// order they are written.  That is not quite the operand list: a combo operand
-// - condimm5 - is written as two separate pieces, `{k.cond}` and `#{k.imm}`,
-// so it becomes two slots.  The first of them carries the encoded value; the
-// second only constrains it.
+// A row's slots are the things the syntax asks the programmer to write, in the
+// order they are written.  A combo operand - condimm5 - is written as two
+// pieces, `{k.cond}` and `#{k.imm}`, so it becomes two slots: the first carries
+// the encoded value and the second only constrains it.
 function rowsFor(insn, form, swapped) {
   const { runs, encType, nbytes } = decodeEncoding(insn, form);
   const ops = insn.operands ?? [];
@@ -113,7 +110,7 @@ function rowsFor(insn, form, swapped) {
       s.tie = ref.get(target);
     }
 
-    // How it is WRITTEN is the logical type; what it ENCODES to is et.
+    // How it is written is the logical type; what it encodes to is et.
     if (s.kind === null)
       s.kind = lt.kind === 'reg'  ? 'FR_REG'
              : lt.kind === 'enum' ? 'FR_COND'
@@ -180,19 +177,17 @@ for (const insn of spec.insn)
     if (insn.swap_operands) rows.push(rowsFor(insn, form, true));
   }
 
-// SHORTEST FIRST, and stable within a size so the spec's own order breaks ties.
-// gas takes the first row that accepts what was written, so this ordering IS
-// the "prefer the smaller encoding" rule - there is no size search in gas.
+// Shortest first, and stable within a size so the spec's own order breaks ties.
+// gas takes the first row that accepts what was written, so this ordering is
+// the "prefer the smaller encoding" rule; there is no size search in gas.
 rows.sort((a, b) => a.nbytes - b.nbytes);
 
 // --- which row a first byte decodes to ---------------------------------------
 // The disassembler needs the same rows, reached the other way round.  It is a
-// LIST per opcode, not one row, because THE MNEMONIC IS NOT A FUNCTION OF BYTE
-// 0.  Length is - that is `length_from_first_byte`, and the ISA commits to it -
-// but the unary block deliberately packs sxt8, clz and popcount into opcode
-// 0x32 and tells them apart with two bits of byte 1.  A flat 256-entry name
-// table cannot express that: it names whichever form was listed first and
-// disassembles clz as sxt8.
+// list per opcode rather than one row, because length is a function of byte 0
+// - `length_from_first_byte`, which the ISA commits to - while the mnemonic is
+// not: the unary block packs sxt8, clz and popcount into opcode 0x32 and tells
+// them apart with two bits of byte 1.
 //
 // So each entry carries the byte-1 mask and match that selects it, in the same
 // order tools/decode.js tries them, and the first match wins in both.
@@ -220,21 +215,16 @@ firstCand.push(cand.length);
 // The properties gas relies on, asserted here
 // =============================================================================
 
-// EVERY FIELD THAT CAN CARRY A RELOCATION IS A WHOLE NUMBER OF BYTES, STORED
-// LOW BYTE FIRST, AT THE END OF ITS INSTRUCTION.  All three halves matter:
+// Every field that can carry a relocation is a whole number of bytes, stored
+// low byte first, at the end of its instruction.  All three parts earn their
+// keep:
 //
 //   whole bytes, low byte first  makes applying a fixup `number_to_chars_
-//                                littleendian' and nothing else - no masking,
-//                                no field surgery, no per-form code
-//   at the end                   makes md_pcrel_from uniform: fx_where +
-//                                fr_address + fx_size IS the address of the
-//                                next instruction, for all eleven pcrel forms,
-//                                and tc_gen_reloc's addend bias is just
-//                                fx_size
-//
-// Get the bias wrong and branches come out off by an instruction length, which
-// assembles clean and fails at run time.  So it is checked over the whole spec
-// rather than remembered.
+//                                littleendian' and nothing else
+//   at the end                   makes md_pcrel_from uniform - fx_where +
+//                                fr_address + fx_size is the address of the
+//                                next instruction for all eleven pcrel forms,
+//                                and tc_gen_reloc's addend bias is fx_size
 for (const r of rows) {
   const wanted = r.slots.map((s, i) => [s, i]).filter(([s]) => s.reloc !== 'FR_R_NONE');
   for (const [slot, i] of wanted) {
@@ -245,9 +235,9 @@ for (const r of rows) {
       throw new Error(`${r.tag}: relocatable field is ${W} bits at bit ${lo}, `
                     + `wanted ${slot.bits} ending the instruction`);
     // Reading the instruction's bytes upwards must give the value's bytes from
-    // least significant to most.  A field laid out the OTHER way round is one
-    // contiguous run rather than W/8 byte-sized ones, so both the count and the
-    // placement are checked - a big-endian 16-bit field fails on the count.
+    // least significant to most.  Both the count and the placement are
+    // checked, since a field laid out the other way round comes back as one
+    // contiguous run rather than W/8 byte-sized ones.
     const ok = ps.length === W / 8
             && ps.every((p) => p.width === 8 && p.ilo === lo + (W - 8) - p.vlo);
     if (!ok)
@@ -274,10 +264,10 @@ for (const r of rows)
 //
 // The table holds 32 (condition, constant) pairs, and a programmer may write a
 // different pair that means the same thing - `le #3` for `lt #4`, `hs #1` for
-// `ne #0`.  Those are found by comparing TRUTH SETS at the instruction's own
-// width, not by a rule about +/-1, because the interesting ones are not all of
-// that shape.  Identical logic lives in gen-customasm.js; the two agree because
-// tests/run.sh assembles the same source with both.
+// `ne #0`.  Those are found by comparing truth sets at the instruction's own
+// width, rather than by a rule about +/-1, because the interesting ones are not
+// all of that shape.  Identical logic lives in gen-customasm.js; the two agree
+// because tests/run.sh assembles the same source with both.
 function truthBits(cond, k, w) {
   const mask = (1 << w) - 1, half = 1 << (w - 1);
   const sgn = (v) => (v & mask) >= half ? (v & mask) - (1 << w) : (v & mask);
@@ -324,7 +314,7 @@ for (const w of WIDTHS) {
     accept.push({ cond: e[0], imm: u16(e[1]), index: i, width: w });
     seen.add(tag(e[0], e[1]));
     const b = truthBits(e[0], e[1], w);
-    if (b && !canon.has(b)) canon.set(b, i);      // the FIRST entry, so the table's
+    if (b && !canon.has(b)) canon.set(b, i);      // the first entry, so the table's
   });                                             // own order decides collisions
   for (const [, k] of cd)
     for (const kk of [k - 1, k, k + 1])
@@ -341,12 +331,11 @@ for (const w of WIDTHS) {
 // Aliases: pure text rewrites, exactly as customasm gets them
 // =============================================================================
 //
-// An alias has no encoding.  It matches a syntax, captures each operand's TEXT
+// An alias has no encoding.  It matches a syntax, captures each operand's text
 // unexamined, and builds the line the target instruction would have been
-// written as - so the rewrite knows nothing about types and form selection then
+// written as, so the rewrite knows nothing about types and form selection then
 // runs normally.  `mov rd, rs' becomes `or rd, rs, #0', and shortest-first
-// selection finds the one-byte encoding when the registers are r0 and r1,
-// without either mechanism knowing about the other.
+// selection finds the one-byte encoding when the registers are r0 and r1.
 const aliases = (spec.alias ?? []).map((al) => {
   const slots = [];
   const syntax = al.syntax.replace(/\{([A-Za-z_]\w*)\}/g, (m, r) => {
@@ -393,10 +382,10 @@ if (mode === 'header') {
   process.stdout.write(`${banner}#ifndef _FRUCTUS_ASM_H_
 #define _FRUCTUS_ASM_H_
 
-/* THE FORM TABLE.  One row per (instruction, encoding form), sorted shortest
+/* The form table: one row per (instruction, encoding form), sorted shortest
    first, and gas takes the first row that accepts what the programmer wrote.
-   That ordering IS the "prefer the smaller encoding" rule - there is no size
-   search in the assembler, and no mnemonic is special-cased anywhere in it.  */
+   That ordering is the "prefer the smaller encoding" rule; there is no size
+   search in the assembler.  */
 
 /* How an operand is written.  FR_CC and FR_CK are the two halves of a
    condimm5, which is written as a condition and a constant in different places
@@ -468,16 +457,15 @@ typedef struct fructus_form
 extern const fructus_form fructus_forms[];
 extern const unsigned int fructus_nforms;
 
-/* Which rows a first byte can decode to.  A LIST, because the mnemonic is not a
-   function of byte 0: length is - the ISA commits to that - but the unary block
-   packs sxt8, clz and popcount into opcode 0x32 and separates them with two
-   bits of byte 1.  Each entry carries the byte-1 mask and match that selects
-   it, and the first match wins.
+/* Which rows a first byte can decode to.  A list, because the mnemonic is not a
+   function of byte 0: length is - the ISA commits to that - while the unary
+   block packs sxt8, clz and popcount into opcode 0x32 and separates them with
+   two bits of byte 1.  Each entry carries the byte-1 mask and match that
+   selects it, and the first match wins.
 
-   Printing through the row's SYNTAX is what makes a listing reassemblable.  An
-   itype is a bit layout and not a syntax, so \`ld rd, [ra, #imm3]' and
-   \`add rd, ra, #imm3' share one, and a printer driven by the layout puts an
-   ALU op's punctuation on a load.  */
+   Printing through the row's syntax is what makes a listing reassemblable: an
+   itype is a bit layout, and \`ld rd, [ra, #imm3]' and \`add rd, ra, #imm3'
+   share one.  */
 typedef struct fructus_cand
 {
   unsigned char mask;		/* which bits of byte 1 select this row */
@@ -503,9 +491,9 @@ typedef struct fructus_condimm
 extern const fructus_condimm fructus_condimm_accept[];
 extern const unsigned int fructus_ncondimm_accept;
 
-/* An alias is a pure TEXT rewrite - it captures each operand's text unexamined
-   and builds the line the target would have been written as, then ordinary
-   form selection runs on that.  No types are involved.  */
+/* An alias is a text rewrite: it captures each operand's text unexamined and
+   builds the line the target would have been written as, then ordinary form
+   selection runs on that.  No types are involved.  */
 typedef struct fructus_alias
 {
   const char *  mnemonic;
@@ -517,15 +505,14 @@ typedef struct fructus_alias
 extern const fructus_alias fructus_aliases[];
 extern const unsigned int fructus_naliases;
 
-/* Every spelling of a register and of a condition the assembler accepts, flat.
-   Flat rather than indexed by encoding because the map is not one-to-one:
-   \`cs' and \`hs' both encode as \`ls', and an array with one name per index
-   would silently drop one of them.
+/* Every spelling of a register and of a condition the assembler accepts, flat
+   rather than indexed by encoding because the map is not one-to-one: \`cs' and
+   \`hs' both encode as \`ls'.
 
-   A condition's \`swapped' flag says it is a MIRRORED spelling - \`br gt, ra,
-   rb, L' is \`br lt, rb, ra, L'.  cond3 carries an operand-order bit, which is
-   how twelve spellings fit into eight encodings; a form marked swapped reads
-   only these and has its register places already exchanged.  */
+   A condition's \`swapped' flag marks a mirrored spelling: \`br gt, ra, rb, L'
+   is \`br lt, rb, ra, L'.  cond3 carries an operand-order bit, which is how
+   twelve spellings fit into eight encodings; a form marked swapped reads only
+   these and has its register places already exchanged.  */
 typedef struct fructus_name
 {
   const char *  name;

@@ -145,17 +145,16 @@ process.stdout.write(`// =======================================================
 // the block alone, and 87 MHz placed in a registered harness (three seeds:
 // 86.9 / 86.7 / 73.0).
 //
-// THE BYTE 1 RE-LAYOUT COST SIX LUT4 HERE, and this is the one place it cost
-// anything.  Measured against the same tools, the old layout was 105 SB_LUT4
-// and 87.3 / 88.4 / 80.2 MHz - so the same clock within placement noise, and
-// six more cells.
+// The byte 1 re-layout cost six LUT4 here, the one place it cost anything.
+// Measured against the same tools, the old layout was 105 SB_LUT4 and
+// 87.3 / 88.4 / 80.2 MHz: the same clock within placement noise, six fewer
+// cells.
 //
-// The six have a specific cause.  Before, \`i5\` was sext(ir[4:0]) and \`i10\` was
-// sext(ir[9:0]): THEIR LOW FIVE BITS WERE THE SAME WIRES, so five bits of the
-// mode mux below were free - whichever mode won, the answer was identical.
-// Now \`i5[4:0]\` is ir[7:3] and \`i10[4:0]\` is {ir[3:0], ir[15:14]}, which do not
-// coincide, so those five bits need real muxing.  It is one level wide rather
-// than deep, which is why the clock does not move.
+// The six have a specific cause.  Before, \`i5\` was sext(ir[4:0]) and \`i10\`
+// was sext(ir[9:0]), sharing their low five bits, so five bits of the mode mux
+// below were free.  Now \`i5[4:0]\` is ir[7:3] and \`i10[4:0]\` is
+// {ir[3:0], ir[15:14]}, which do not coincide, so those five bits need real
+// muxing - one level wide rather than deep, which is why the clock holds.
 //
 // What it buys is in software: a decoder extracting a signed imm10 from a
 // 16-bit load went from four instructions to one, and an imm5 from two to one,

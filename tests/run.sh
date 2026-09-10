@@ -64,6 +64,14 @@ if node tests/roundtrip.mjs $(ls snippets/*.s | grep -v clz) libc/*.s libgcc/*.s
 # is not built; see tools/build-binutils.sh.
 if node tests/dis-check.mjs $(ls snippets/*.s | grep -v clz) libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
 
+# --- and gas against customasm, byte for byte --------------------------------
+# The two assemblers choose encodings by different mechanisms - customasm ranks
+# rules by size and iterates, gas walks a shortest-first table and relaxes jmpr
+# - so identical output is evidence that both readings of the spec agree.
+# Files needing the assembler scratch are skipped; gas has no long-immediate
+# expansion.
+if node tests/gas-check.mjs $(ls snippets/*.s | grep -v clz) libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
+
 # --- the snippets, actually executed -----------------------------------------
 if node tests/sim-check.mjs; then :; else fail=1; fi
 

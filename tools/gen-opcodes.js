@@ -12,25 +12,23 @@
 // same machine - the fourth consumer of one file, after gen-customasm.js,
 // gen-opcode-map.js and the rtl/ generators.
 //
-// WHAT THE TABLE HOLDS, and why it is only four fields.  Fructus commits to
+// What the table holds, and why it is only four fields.  Fructus commits to
 // `length_from_first_byte`: the length of an instruction is a function of byte
 // 0 alone, so a disassembler needs no lookahead and the table is flat - 256
 // entries, indexed directly, no form bits to mask out.  moxie needs three
 // tables keyed by form; this needs one.
 //
 //   length   1, 2 or 3
-//   itype    the operand LAYOUT, derived from the encoding rather than named
+//   itype    the operand layout, derived from the encoding rather than named
 //            by hand - two forms with the same layout get the same itype even
 //            when they are different instructions
-//   pcrel    whether the immediate is a DISPLACEMENT.  Not part of the itype,
-//            because `jmpr rel16` and `jmp abs16` genuinely share a layout -
-//            what differs is how to read it, and a printer that misses the
-//            difference names the wrong address and looks right doing it
+//   pcrel    whether the immediate is a displacement.  Not part of the itype,
+//            because `jmpr rel16` and `jmp abs16` share a layout; what differs
+//            is how to read it
 //   name     the mnemonic, or NULL where the opcode is unused
 //
-// The VALUE TABLES come too, because an index is not a value: byte 1 of
-// `add rd, ra, #imm3` holds 6, and what the programmer wrote was `#8`.  A
-// disassembler without imm3[] prints the index and lies.
+// The value tables come too, because an index is not a value: byte 1 of
+// `add rd, ra, #imm3` holds 6 where the programmer wrote `#8`.
 // =============================================================================
 
 import { loadSpec } from './isa.js';
@@ -41,10 +39,10 @@ const { table } = buildDecoder(spec);
 const mode = process.argv.includes('--header') ? 'header' : 'table';
 
 // --- the itypes, derived ------------------------------------------------------
-// An itype is the sorted list of ENCODED operand types.  Sorted so that two
-// forms differing only in the order they happen to list operands collapse, and
-// encoded rather than logical so that `#off` at 3 bits and `#off` at 10 bits are
-// different layouts - which they are, to anything that has to decode them.
+// An itype is the sorted list of encoded operand types.  Sorted so that two
+// forms differing only in the order they list operands collapse, and encoded
+// rather than logical so that `#off` at 3 bits and `#off` at 10 bits count as
+// different layouts, which they are to anything that decodes them.
 const sigOf = (c) => {
   const parts = [...c.slices.keys()].map((op) => c.encType.get(op)).sort();
   return `${c.nbytes}B_${parts.join('_') || 'none'}`;
@@ -79,33 +77,29 @@ if (mode === 'header') {
   process.stdout.write(`${banner}#ifndef _FRUCTUS_H_
 #define _FRUCTUS_H_
 
-/* Every instruction's length is a function of its FIRST BYTE alone - that is a
-   documented commitment of the ISA, not an accident of the current encoding -
-   so this table is flat and indexed directly by that byte.  An unused opcode
-   has a NULL name and a length of 0.  */
+/* Every instruction's length is a function of its first byte alone - a
+   documented commitment of the ISA - so this table is flat and indexed
+   directly by that byte.  An unused opcode has a NULL name and a length of
+   0.  */
 
 typedef struct fructus_opc_info_t
 {
   unsigned char  length;    /* 1, 2 or 3; 0 if the opcode is unused */
   unsigned char  itype;     /* operand layout - one of the FRUCTUS_* below */
-  unsigned char  pcrel;     /* 1 if its immediate is a DISPLACEMENT */
+  unsigned char  pcrel;     /* 1 if its immediate is a displacement */
   const char *   name;      /* mnemonic, or NULL */
 } fructus_opc_info_t;
 
-/* WHY pcrel IS A FIELD AND NOT PART OF THE itype.  An itype is a bit LAYOUT,
+/* pcrel is a field rather than part of the itype.  An itype is a bit layout,
    and \`jmpr rel16' and \`jmp abs16' have the same one: a whole opcode byte then
    a 16-bit immediate, low byte first.  What differs is what the immediate
-   MEANS, and a disassembler that ignores the difference prints the raw
-   displacement where an address belongs - a listing that looks right and names
-   the wrong place.  Two itypes would say the layouts differ, which would be a
-   lie; this says the layouts are the same and the reading is not.  */
+   means, so the layouts stay one itype and the reading is recorded here.  */
 
 extern const fructus_opc_info_t fructus_opc_info[256];
 
 /* The operand layouts, derived from the encodings rather than named by hand.
    Two forms with the same layout share an itype even when they are different
-   instructions, which is exactly what a disassembler wants: the layout decides
-   how to print, the name decides what to call it.  */
+   instructions.  */
 
 enum fructus_itype
 {
@@ -113,17 +107,16 @@ enum fructus_itype
 ${ordered.map((s, i) => `  ${itypeName(s).padEnd(30)} = ${i + 1}${i < ordered.length - 1 ? ',' : ''}`).join('\n')}
 };
 
-/* An INDEX IS NOT A VALUE.  Byte 1 of \`add rd, ra, #imm3\` holds 6 and the
-   programmer wrote #8; a disassembler without these tables prints the index and
-   lies.  imm3 and shift3 are the same bits read through different tables, which
-   is why both are here.  */
+/* An index is not a value: byte 1 of \`add rd, ra, #imm3\` holds 6 where the
+   programmer wrote #8.  imm3 and shift3 are the same bits read through
+   different tables, which is why both are here.  */
 
 extern const unsigned short fructus_imm3[8];
 extern const unsigned short fructus_shift3[8];
 extern const unsigned short fructus_immbit5[32];
 extern const unsigned short fructus_immask5[32];
 
-/* condimm5 packs a CONDITION and a CONSTANT into five bits.  Both halves are
+/* condimm5 packs a condition and a constant into five bits.  Both halves are
    needed to print one, so they come as parallel arrays.  */
 extern const char * const  fructus_condimm5_cond[32];
 extern const short         fructus_condimm5_imm[32];

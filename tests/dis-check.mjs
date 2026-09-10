@@ -8,38 +8,21 @@
 // opcodes/fructus-dis.c and tools/decode.js are two independent readings of the
 // same `encoding` strings - one hand-written C over a generated table, one
 // JavaScript walking the TOML - so making them agree over a real corpus is
-// evidence about the ENCODING, not about one copy matching another.
+// evidence about the encoding rather than about one copy matching another.
 //
-// AND IT COMPARES THE OPERANDS.  An earlier version of this check compared
-// address, mnemonic and length only, and passed for weeks while
-// fructus-dis.c read every eight-bit displacement from byte 2 - which is right
-// for the three-byte branches and wrong for the two-byte jmpr, so a short jmpr
-// disassembled as a branch to itself.  Structure agreeing is not the same as
-// meaning agreeing.  Three real bugs have now come out of this file:
+// It compares the operands, not just the address, mnemonic and length.  The
+// structure agreeing is a much weaker statement: five bugs turned up here on
+// the first run that compared operand text, among them a two-byte jmpr that
+// named itself, `mov rd, #imm16' taking its register from the wrong byte, and
+// clz disassembling as sxt8.
 //
-//   off8 read from byte 2 unconditionally      short jmpr named itself
-//   `mov rd, #imm16' read rd from byte 1       it is in the OPCODE byte, and
-//                                              the old field position made the
-//                                              wrong read accidentally right
-//   rel16 printed as an absolute address       `jmpr' and `jmp' share a layout
-//                                              but not a meaning
+// Tiling is the other half.  Decoding runs linearly from byte 0 and must land
+// exactly on the end, so a wrong length anywhere shows up as a desynchronised
+// tail - this tests `length_from_first_byte' across a whole file at once.
 //
-// TILING IS THE OTHER HALF.  Decoding runs linearly from byte 0 and must land
-// exactly on the end: a wrong length anywhere desynchronises everything after
-// it, so this tests `length_from_first_byte' across a whole file at once.
-//
-// ONLY THE NUMERIC BASE IS NORMALISED.  objdump writes a mask as 0x8000 and we
-// write 32768; both are the same number and neither is wrong.  Everything else
-// - punctuation, brackets, operand order, register spelling, branch targets -
-// must match character for character.
-//
-// It did not always.  objdump used to print `ld r0, r1, #4' for `ld r0, [r1,
-// #4]', `mov r3, r3, #32767' for `mov r3, #32767', and a bare `add' for the
-// pinned one-byte forms - none reassemblable, all from keying the printer on
-// the ITYPE, which is a bit layout and not a syntax.  One layout serves
-// `ld rd, [ra, #imm3]' and `add rd, ra, #imm3'.  fructus-dis.c now prints
-// through the form table's syntax templates instead, so the class is gone
-// rather than the instances patched.
+// Only the numeric base is normalised.  objdump writes a mask as 0x8000 and we
+// write 32768; everything else - punctuation, brackets, operand order,
+// register spelling, branch targets - must match character for character.
 // =============================================================================
 
 import { execFileSync } from 'node:child_process';
@@ -55,7 +38,7 @@ const OD  = process.env.FRUCTUS_OBJDUMP || join(root, 'build/binutils/binutils/o
 
 if (!existsSync(AS) || !existsSync(OD)) {
   console.log('note: fructus-elf binutils not built, so the disassemblers were '
-            + 'NOT cross-checked (see tools/build-binutils.sh)');
+            + 'not cross-checked (see tools/build-binutils.sh)');
   process.exit(0);
 }
 
@@ -72,7 +55,7 @@ const norm = (s) => s
 
 let fail = 0;
 for (const src of process.argv.slice(2)) {
-  // customasm produces the bytes; gas is not the subject here, the DECODERS are.
+  // customasm produces the bytes; the decoders are what is under test.
   const inp = join(TMP, '_dis.asm'), bin = join(TMP, '_dis.bin');
   writeFileSync(inp, prelude + readFileSync(src, 'utf8'));
   execFileSync(CA, ['-q', '-f', 'binary', '-o', bin, inp]);

@@ -50,11 +50,11 @@ const CIMM = spec.optype.condimm5.values.map((e) => e[1]);
 const want = (ir, sel, cimm) => {
   // cimm reads +0's five bits as a condimm5 index instead of a signed integer,
   // and is ignored anywhere else - asserting it there is a microcode bug.
-  // A five-bit field is byte1[7:3], and byte 1 is immreg's LOW half while only
+  // A five-bit field is byte1[7:3], and byte 1 is immreg's low half while only
   // two bytes have been fetched.  The ten-bit one is the odd case: its low two
   // bits are byte1[7:6] and its top eight are byte 2, and by the time byte 2
-  // has arrived byte 1 has shifted into immreg's HIGH half - so the halves sit
-  // at opposite ends of this register even though they are adjacent in the
+  // has arrived byte 1 has shifted into immreg's high half - so the halves sit
+  // at opposite ends of this register though they are adjacent in the
   // instruction stream.  See rtl/immgen.sv's header.
   const f5 = (ir >> 3) & 31;
   if (cimm && sel === 0) return CIMM[f5];

@@ -9,17 +9,16 @@
 # tests/dis-check.mjs looks for exactly those and skips itself if they are
 # absent, so the suite is green on a machine that has never run this.
 #
-# THE TARGET FILES ARE ON A BRANCH IN THE SUBMODULE, not patches applied here:
-# vendor/binutils-gdb's `fructus' branch carries bfd/{cpu,elf32}-fructus.c,
-# gas/config/tc-fructus.[ch], the generated opcodes/fructus-{opc,asm}.c and the
-# mechanical target lists.  `npm run binutils' regenerates the generated half.
+# The target files live on the `fructus' branch of vendor/binutils-gdb, which
+# carries bfd/{cpu,elf32}-fructus.c, gas/config/tc-fructus.[ch], the generated
+# opcodes/fructus-{opc,asm}.c and the mechanical target lists.
+# `npm run binutils' regenerates the generated half.
 #
-# WHY THE FLAGS.  gdb and the simulator are not built because nothing here
-# needs them and they roughly triple the build.  MAKEINFO=true is because
-# makeinfo is usually absent and a missing manual should not fail a toolchain
-# build.  `all-binutils' is NOT used: ar, windres and dlltool want bison and
-# flex to regenerate parsers that modern binutils no longer ships, and objdump
-# and readelf need neither - so they are named directly.
+# The flags: gdb and the simulator roughly triple the build and nothing here
+# needs them.  MAKEINFO=true stands in for a makeinfo that is usually absent.
+# objdump and readelf are named directly rather than building all-binutils,
+# because ar, windres and dlltool want bison and flex to regenerate parsers
+# that modern binutils no longer ships.
 # =============================================================================
 set -e
 cd "$(dirname "$0")/.."

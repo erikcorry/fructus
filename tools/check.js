@@ -92,10 +92,9 @@ for (const [name, t] of Object.entries(types)) {
       const claimed = new Map();
       for (const m of text.matchAll(/#define\s+(EM_[A-Z0-9_]+)\s+(0x[0-9a-fA-F]+|\d+)/g))
         claimed.set(Number(m[2]), m[1]);
-      // The number must be OURS or nobody's.  Before the port landed this was
-      // a pure collision check; now that EM_FRUCTUS is in the header the same
-      // test has to accept our own entry - and still reject the case that
-      // matters, which is somebody else's name on our number.
+      // The number must be ours or nobody's: EM_FRUCTUS is in the header now,
+      // so the collision check has to accept our own entry while still
+      // rejecting somebody else's name on our number.
       const holder = claimed.get(elf.machine);
       if (holder && holder !== elf.machine_id)
         err(`[elf] machine 0x${elf.machine.toString(16)} is ${holder} in `
@@ -400,30 +399,24 @@ for (const insn of spec.insn) {
     for (const [a, b] of Object.entries(tie))
       if (!opByName[a] || !opByName[b]) err(`${tag}: tie ${a}=${b} names an unknown operand`);
 
-    // --- Invariant 4b: EVERY FIELD IS ONE CONTIGUOUS SLICE OF THE STREAM ----
+    // --- Invariant 4b: every field is one contiguous slice of the stream ----
     //
     // Load the instruction stream into a register, little endian, byte 0 at the
-    // bottom.  Every operand field must then be a single contiguous run of
-    // bits, in order - so extracting it is a shift and a mask, and extracting a
-    // SIGNED one that reaches the top of the register is a lone `asr'.
+    // bottom.  Every operand field is then a single contiguous run of bits, in
+    // order, so extracting it is a shift and a mask.
     //
-    // This is why byte 1 puts the first operand in the LOW bits and gives a
-    // split immediate its LOW bits: it is what makes the field come out
-    // contiguous once the bytes are in memory order.  Before that change the
-    // ten-bit displacement of `ld rd, [ra, #imm10]' arrived in two pieces six
-    // bits apart, and reassembling it cost four instructions against one.
+    // This is why byte 1 puts the first operand in the low bits and gives a
+    // split immediate its low bits: it makes the field contiguous once the
+    // bytes are in memory order.  It matters to a self-hosted disassembler or
+    // monitor, and to any implementation that buffers more than two bytes of
+    // the stream - an icache-line decoder sees exactly this register.  The
+    // two-byte immreg is the exception, holding {byte1, byte2} with byte 1 in
+    // the high half.
     //
-    // Who cares: a self-hosted disassembler or monitor, and any implementation
-    // that buffers more than two bytes of the stream - an icache-line decoder
-    // sees exactly this register.  The current two-byte immreg does NOT, because
-    // it holds {byte1, byte2} with byte 1 in the high half, which is the reverse
-    // of how those bytes sit in memory.  That narrow buffer is the special case.
-    //
-    // THE ONE ALLOWED EXCEPTION is a field that borrows its LOW bit from the
-    // opcode byte - the third-register selector, and the imm3 index.  Those are
-    // deliberate: the bit is in byte 0 because that is what keeps the opcode map
-    // dense.  So byte 0's share is checked separately and must be the field's
-    // low bits.  Any OTHER split is a mistake, and this is what says so.
+    // A field may borrow its low bit from the opcode byte - the third-register
+    // selector, and the imm3 index - because that is what keeps the opcode map
+    // dense.  Byte 0's share is checked separately and must be the field's low
+    // bits.
     for (const [opName, bits] of inStream) {
       if (bits.length < 2) continue;
       const inOpcode = bits.filter(([, sb]) => sb < 8).sort((a, b) => a[0] - b[0]);
@@ -444,21 +437,15 @@ for (const insn of spec.insn) {
       }
     }
 
-    // --- Invariant 4c: EVERY SIGNED IMMEDIATE IS TOP-ALIGNED ----------------
+    // --- Invariant 4c: every signed immediate is top-aligned ---------------
     //
-    // Contiguity makes a field a shift and a mask.  This makes a SIGNED one a
-    // single `asr': if the field's high bit is the top bit of the instruction,
+    // Contiguity makes a field a shift and a mask; this makes a signed one a
+    // single `asr'.  If the field's high bit is the top bit of the instruction
     // then in a register loaded from the stream it is already at the top, and
-    // one arithmetic shift right both positions it and sign extends it.
+    // one arithmetic shift right both positions and sign extends it.
     //
     //   iiii_iddd            imm5[4] at stream bit 15   asr r0, r0, #11
     //   iiaa_addd jjjj_jjjj  imm10[9] at stream bit 23  asr r0, r0, #6
-    //
-    // With byte 1 the other way round - dddi_iiii - imm5 lands at stream[12:8]
-    // and costs a shift first: two instructions instead of one, measured.  So
-    // this is the invariant that pays for byte 1 putting the first operand in
-    // the low bits, and it is exactly what an edit back to the old layout
-    // breaks.
     for (const [opName, bits] of inStream) {
       const t = types[encType.get(opName)];
       if (!t || t.kind !== 'int' || !t.signed) continue;
