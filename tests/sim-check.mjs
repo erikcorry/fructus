@@ -552,10 +552,23 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   // And the layout the argument above depends on: the two instructions a wild
   // jump is likeliest to hit are the two that stop or unwind, and nop is as far
   // from them as the one-byte row reaches.
-  check('halt and ret hold the bottom of the one-byte row',
-        opcodeOf('halt') === 0x00 && opcodeOf('ret') === 0x01,
-        `halt=0x${opcodeOf('halt').toString(16)} ret=0x${opcodeOf('ret').toString(16)}`);
-  check('nop bookends the far end', NOP === 0x0f, `nop=0x${NOP.toString(16)}`);
+  // Stated as PROPERTIES, not addresses.  These were pinned to 0x00/0x01/0x0f
+  // and the whole block moved, so the assertions failed for the right reason
+  // and had to be rewritten anyway - which is the argument for writing the
+  // property in the first place.
+  const oneByte = [];
+  for (const insn of spec.insn)
+    for (const form of insn.form ?? []) {
+      const bits = (form.encoding ?? '').replace(/[\s_]/g, '');
+      if (bits.length === 8 && /^[01]{8}$/.test(bits)) oneByte.push(parseInt(bits, 2));
+    }
+  oneByte.sort((a, b) => a - b);
+  check('halt and ret are the two lowest one-byte opcodes',
+        oneByte[0] === opcodeOf('halt') && oneByte[1] === opcodeOf('ret'),
+        `lowest are 0x${oneByte[0].toString(16)}, 0x${oneByte[1].toString(16)}`);
+  check('nop is the highest one-byte opcode, furthest from halt',
+        NOP === oneByte[oneByte.length - 1],
+        `nop=0x${NOP.toString(16)}, highest is 0x${oneByte[oneByte.length - 1].toString(16)}`);
   console.log('ok    halt is opcode zero: zeroed memory stops the machine');
 }
 
@@ -619,10 +632,15 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   });
   check('iseq/isset answer 1 or 0 per column', bad < 0, `case ${bad}: ${why}`);
 
-  // and the one-byte negation really is one byte and really is xor #1
-  const one = assemble('build/_isq.s').code;
-  check('xor r0, r0, #1 is one byte', one[code.length - 2] === 0x0c,
-        `byte before halt is 0x${one[code.length - 2].toString(16)}`);
+  // and the one-byte negation really is one byte - the opcode comes from the
+  // spec, because pinning it to a literal is what broke when the row moved
+  const notOp = (() => {
+    for (const insn of spec.insn)
+      for (const form of insn.form ?? [])
+        if (form.name === 'r0_not') return parseInt(form.encoding.replace(/_/g, ''), 2);
+  })();
+  check('xor r0, r0, #1 is one byte', code[code.length - 2] === notOp,
+        `byte before halt is 0x${code[code.length - 2].toString(16)}, want 0x${notOp.toString(16)}`);
   rmSync('build/_isq.s', { force: true });
   console.log('ok    iseq/isset: every column, agreeing and differing operands');
 }

@@ -667,7 +667,13 @@ function tooWide(name, bits) {
 
 const S  = opt.scratch;              // spelling, for use inside asm { } blocks
 const SN = nameIndex(types.reg, S);  // number, for use inside $assert
-const ALU = ['add', 'rsb', 'xor', 'or', 'and'];
+// Which mnemonics get a long-immediate fallback.  The requirement is a
+// three-operand register form to fall back ON: the expansion builds the
+// constant somewhere and then reads it as the second source, so an instruction
+// with no `rd, ra, rb` form cannot be rescued this way.  That is why `iseq` is
+// here and `isset` is not - the row's +6/+7 is iseq, and a wide mask has to go
+// through `and` instead.
+const ALU = ['add', 'rsb', 'xor', 'or', 'and', 'iseq'];
 
 emit('; --- long immediates ------------------------------------------------------');
 emit('; Reached only when no real encoding fits.  Assembler policy, not ISA:');

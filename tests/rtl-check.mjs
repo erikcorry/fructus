@@ -78,7 +78,19 @@ const want = (ir, sel, cimm) => {
   // to be explicit); and br calls it `a`, because the branch's registers are
   // deliberately the other way round from its syntax so that the comparison is
   // an `rsb` - see the br section of isa/fructus.toml.
-  const portB = { 0x46: 'b', 0x6e: 'b', 0x86: 'c', 0x8e: 'c', 0x96: 'a', 0x9e: 'a' };
+  // The base opcodes come from the SPEC, not from a list here - they moved once
+  // already when a row was renumbered, and a hardcoded 0x86 then checked an
+  // opcode that no longer had the operand it named.
+  const portB = {};
+  for (const insn of spec.insn)
+    for (const form of insn.form ?? []) {
+      const f = form.fields ?? {};
+      const name = Object.entries(f).find(([, v]) => /^[a-z]:reg\[0\]$/.test(v))?.[1]?.[0];
+      if (!name) continue;
+      const bits = (form.encoding ?? '').split(/\s+/)[0].replace(/_/g, '');
+      if (bits.length !== 8) continue;
+      portB[parseInt(bits.replace(/[a-z]/g, '0'), 2)] = name;
+    }
   const dec = buildDecoder(spec);
   for (const [base, name] of Object.entries(portB)) {
     for (let lowbit = 0; lowbit <= 1; lowbit++)

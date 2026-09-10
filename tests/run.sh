@@ -47,7 +47,13 @@ done
 # The decoder is a second reading of the same `encoding` strings, sharing no
 # code with the generator below the point where both parse the TOML.  If they
 # disagree about a field, the re-assembled bytes differ.
-if node tests/roundtrip.mjs snippets/*.s libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
+# snippets/clz.s and tests/data.s are excluded because they contain DATA: this
+# test decodes linearly from byte 0 and requires the whole file to tile as
+# instructions, which a lookup table cannot.  clz.s passed for a while by
+# accident - every byte of its two tables happened to be a valid opcode - and
+# stopped the moment a row moved and 0x08 became free.  That is the test being
+# right, not the file being wrong.
+if node tests/roundtrip.mjs $(ls snippets/*.s | grep -v clz) libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
 
 # --- the snippets, actually executed -----------------------------------------
 if node tests/sim-check.mjs; then :; else fail=1; fi
@@ -127,15 +133,15 @@ else
 fi
 
 # --- compiler mode drops the scratch, so the cases that need it must fail ----
-# Exactly three: the two where the destination is also the source, and the
+# Exactly four: the three where the destination is also the source, and the
 # store, which has no destination to borrow.
 cat build/fructus-noat.asm tests/longimm.s > build/_t.asm
 n=$("$CA" -q -o /dev/null build/_t.asm 2>&1 | sed 's/\x1b\[[0-9;]*m//g' \
     | grep -c '^error: failed to resolve instruction' || true)
-if [ "$n" = 3 ]; then
+if [ "$n" = 4 ]; then
     printf 'ok    tests/longimm.s --noat rejects %s instructions, as expected\n' "$n"
 else
-    printf 'FAIL  tests/longimm.s --noat rejected %s instructions, expected 3\n' "$n"; fail=1
+    printf 'FAIL  tests/longimm.s --noat rejected %s instructions, expected 4\n' "$n"; fail=1
 fi
 
 rm -f build/_t.asm build/_err build/_immgen.sv build/_rhs.sv build/_unary.sv
