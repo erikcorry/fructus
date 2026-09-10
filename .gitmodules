@@ -5,6 +5,6 @@
 	shallow = true
 [submodule "vendor/binutils-gdb"]
 	path = vendor/binutils-gdb
-	url = https://sourceware.org/git/binutils-gdb.git
-	branch = binutils-2_47-branch
+	url = https://github.com/erikcorry/binutils-gdb.git
+	branch = main
 	shallow = true
