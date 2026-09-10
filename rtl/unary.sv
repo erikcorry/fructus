@@ -13,7 +13,7 @@
 //   3  bitrev
 //   4  popcount
 //
-// The selector is {byte1[1:0], opcode[0]} - the same three bits that carry ALU
+// The selector is {byte1[7:6], opcode[0]} - the same three bits that carry ALU
 // port B and the imm3 index everywhere else, so the field needs no decode of
 // its own.  The operations are hand-written; only the table above is generated,
 // which is what makes adding an operation to the spec fail here rather than
@@ -90,7 +90,7 @@
 
 module unary (
     input  logic [15:0] a,
-    input  logic [2:0]  sel,     // {byte1[1:0], opcode[0]}
+    input  logic [2:0]  sel,     // {byte1[7:6], opcode[0]}
     output logic [15:0] y
 );
 

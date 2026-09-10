@@ -18,18 +18,19 @@ const spec = loadSpec();
 
 // --- who sits at which selector ---------------------------------------------
 // byte 0 is 0011_101s and byte 1 is ddda_aass, so the selector is
-// {byte1[1:0], opcode[0]} - which is the same three bits that carry ALU port B
+// {byte1[7:6], opcode[0]} - which is the same three bits that carry ALU port B
 // and the imm3 index everywhere else in the map.
 const slots = new Map();
 let base = null;
 for (const insn of spec.insn)
   for (const form of insn.form ?? []) {
-    // A unary form is a two-byte encoding whose byte 1 is `ddda_aa` plus TWO
-    // LITERAL bits, and whose byte 0 is fully literal.  Nothing else in the map
-    // has that shape - the imm3 forms put letters in those two bits - so the
-    // opcode pair is found rather than assumed.  It has moved once already.
+    // A unary form is a two-byte encoding whose byte 1 is TWO LITERAL BITS
+    // followed by `aaaddd'.  Nothing else in the map has that shape - the imm3
+    // forms put letters in those two bits - so the opcode pair is found rather
+    // than assumed.  It has moved twice now: once when the row moved, and once
+    // when byte 1 was reversed to put the first operand in the low bits.
     const bits = (form.encoding ?? '').replace(/[\s_]/g, '');
-    const m = /^([01]{8})ddda{3}([01]{2})$/.exec(bits);
+    const m = /^([01]{8})([01]{2})a{3}d{3}$/.exec(bits);
     if (!m) continue;
     const op = parseInt(m[1], 2), ss = parseInt(m[2], 2);
     const pair = op & ~1;
@@ -79,7 +80,7 @@ process.stdout.write(`// =======================================================
 //
 ${listed}
 //
-// The selector is {byte1[1:0], opcode[0]} - the same three bits that carry ALU
+// The selector is {byte1[7:6], opcode[0]} - the same three bits that carry ALU
 // port B and the imm3 index everywhere else, so the field needs no decode of
 // its own.  The operations are hand-written; only the table above is generated,
 // which is what makes adding an operation to the spec fail here rather than
@@ -156,7 +157,7 @@ ${listed}
 
 module unary (
     input  logic [15:0] a,
-    input  logic [2:0]  sel,     // {byte1[1:0], opcode[0]}
+    input  logic [2:0]  sel,     // {byte1[7:6], opcode[0]}
     output logic [15:0] y
 );
 

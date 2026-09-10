@@ -15,7 +15,7 @@
 // bits of immreg varied, because a circuit that accidentally reads them would
 // otherwise pass.  Modes +6 and +7 have no immediate and immgen drives x there,
 // so they are not checked; what IS checked is the encoding property rhs.sv
-// relies on instead - that port B's register number is {byte1[1:0], opcode[0]}
+// relies on instead - that port B's register number is {byte1[7:6], opcode[0]}
 // for every three-operand form.
 //
 // Needs iverilog.  Skips with a message rather than failing when it is absent,
@@ -45,18 +45,25 @@ const sext = (v, n) => (v & (1 << (n - 1))) ? v - (1 << n) : v;
 // --- the reference, straight off the tables ---------------------------------
 // This is the whole specification of the block.  `sel` is opcode[2:0]; `ir` is
 // immreg, holding the last two bytes fetched.
-const k3 = (ir, sel) => ((ir & 3) << 1) | (sel & 1);   // {byte1[1:0], opcode[0]}
+const k3 = (ir, sel) => (((ir >> 6) & 3) << 1) | (sel & 1);  // {byte1[7:6], opcode[0]}
 const CIMM = spec.optype.condimm5.values.map((e) => e[1]);
 const want = (ir, sel, cimm) => {
   // cimm reads +0's five bits as a condimm5 index instead of a signed integer,
   // and is ignored anywhere else - asserting it there is a microcode bug.
-  if (cimm && sel === 0) return CIMM[ir & 31];
+  // A five-bit field is byte1[7:3], and byte 1 is immreg's LOW half while only
+  // two bytes have been fetched.  The ten-bit one is the odd case: its low two
+  // bits are byte1[7:6] and its top eight are byte 2, and by the time byte 2
+  // has arrived byte 1 has shifted into immreg's HIGH half - so the halves sit
+  // at opposite ends of this register even though they are adjacent in the
+  // instruction stream.  See rtl/immgen.sv's header.
+  const f5 = (ir >> 3) & 31;
+  if (cimm && sel === 0) return CIMM[f5];
   switch (sel) {
-    case 0: return sext(ir & 31, 5);                     // imm5
-    case 1: return t.immbit5.values[ir & 31];            // immbit5
+    case 0: return sext(f5, 5);                          // imm5
+    case 1: return t.immbit5.values[f5];                 // immbit5
     case 2: case 3: return t.imm3.values[k3(ir, sel)];   // imm3
-    case 4: return sext(ir & 1023, 10);                  // imm10
-    case 5: return t.immask5.values[ir & 31];            // immask5
+    case 4: return sext(((ir & 0xff) << 2) | ((ir >> 14) & 3), 10);   // imm10
+    case 5: return t.immask5.values[f5];                 // immask5
     // 6 and 7 have no immediate: rtl/rhs.sv takes port B's number from the
     // bytes directly, so immgen drives x and there is nothing to check.
   }
@@ -64,12 +71,12 @@ const want = (ir, sel, cimm) => {
 
 // --- what +6 and +7 carry, checked against the DECODER --------------------
 // k3 below asserts that the third register of a three-operand form is
-// {byte1[1:0], opcode[0]}.  Rather than trust that reading of the spec, decode
+// {byte1[7:6], opcode[0]}.  Rather than trust that reading of the spec, decode
 // real bytes with tools/decode.js - the same decoder the roundtrip test uses -
 // and compare.  A change to the field layout then fails here instead of quietly
 // making this file check the wrong thing.
 {
-  // rtl/rhs.sv COMPUTES PORT B'S NUMBER AS {byte1[1:0], opcode[0]} without
+  // rtl/rhs.sv COMPUTES PORT B'S NUMBER AS {byte1[7:6], opcode[0]} without
   // consulting the decoder, so this is where that shortcut is justified.
   //
   // WHICH OPERAND PORT B IS depends on the instruction, and naming it here is
@@ -102,7 +109,7 @@ const want = (ir, sel, cimm) => {
         }
         if (got !== k3(byte1, op & 7)) {
           console.log(`FAIL  0x${op.toString(16)} byte1=${byte1}: operand ${name} decodes to `
-                    + `r${got}, but {byte1[1:0], opcode[0]} is r${k3(byte1, op & 7)}`);
+                    + `r${got}, but {byte1[7:6], opcode[0]} is r${k3(byte1, op & 7)}`);
           process.exit(1);
         }
       }

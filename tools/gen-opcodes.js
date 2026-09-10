@@ -12,7 +12,7 @@
 // same machine - the fourth consumer of one file, after gen-customasm.js,
 // gen-opcode-map.js and the rtl/ generators.
 //
-// WHAT THE TABLE HOLDS, and why it is only three fields.  Fructus commits to
+// WHAT THE TABLE HOLDS, and why it is only four fields.  Fructus commits to
 // `length_from_first_byte`: the length of an instruction is a function of byte
 // 0 alone, so a disassembler needs no lookahead and the table is flat - 256
 // entries, indexed directly, no form bits to mask out.  moxie needs three
@@ -22,6 +22,10 @@
 //   itype    the operand LAYOUT, derived from the encoding rather than named
 //            by hand - two forms with the same layout get the same itype even
 //            when they are different instructions
+//   pcrel    whether the immediate is a DISPLACEMENT.  Not part of the itype,
+//            because `jmpr rel16` and `jmp abs16` genuinely share a layout -
+//            what differs is how to read it, and a printer that misses the
+//            difference names the wrong address and looks right doing it
 //   name     the mnemonic, or NULL where the opcode is unused
 //
 // The VALUE TABLES come too, because an index is not a value: byte 1 of
@@ -84,8 +88,17 @@ typedef struct fructus_opc_info_t
 {
   unsigned char  length;    /* 1, 2 or 3; 0 if the opcode is unused */
   unsigned char  itype;     /* operand layout - one of the FRUCTUS_* below */
+  unsigned char  pcrel;     /* 1 if its immediate is a DISPLACEMENT */
   const char *   name;      /* mnemonic, or NULL */
 } fructus_opc_info_t;
+
+/* WHY pcrel IS A FIELD AND NOT PART OF THE itype.  An itype is a bit LAYOUT,
+   and \`jmpr rel16' and \`jmp abs16' have the same one: a whole opcode byte then
+   a 16-bit immediate, low byte first.  What differs is what the immediate
+   MEANS, and a disassembler that ignores the difference prints the raw
+   displacement where an address belongs - a listing that looks right and names
+   the wrong place.  Two itypes would say the layouts differ, which would be a
+   lie; this says the layouts are the same and the reading is not.  */
 
 extern const fructus_opc_info_t fructus_opc_info[256];
 
@@ -125,9 +138,10 @@ extern const char * const  fructus_cond_names[8];
   for (let b = 0; b < 256; b++) {
     const c = table[b][0];
     const hex = `0x${b.toString(16).padStart(2, '0')}`;
-    if (!c) { rows.push(`    { 0, FRUCTUS_UNUSED, NULL },${' '.repeat(8)}/* ${hex} */`); continue; }
-    rows.push(`    { ${c.nbytes}, ${itypeName(sigOf(c))}, "${c.insn.mnemonic}" },`
-            + ` `.repeat(Math.max(1, 44 - itypeName(sigOf(c)).length - c.insn.mnemonic.length))
+    if (!c) { rows.push(`    { 0, FRUCTUS_UNUSED, 0, NULL },${' '.repeat(8)}/* ${hex} */`); continue; }
+    const pcrel = (c.insn.operands ?? []).some((o) => o.pcrel && c.slices.has(o.name)) ? 1 : 0;
+    rows.push(`    { ${c.nbytes}, ${itypeName(sigOf(c))}, ${pcrel}, "${c.insn.mnemonic}" },`
+            + ` `.repeat(Math.max(1, 41 - itypeName(sigOf(c)).length - c.insn.mnemonic.length))
             + `/* ${hex} */`);
   }
   const cd = t.condimm5.values;

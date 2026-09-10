@@ -131,7 +131,7 @@ module rhs (
 
     // regnum only matters when a register is selected, so codes 8..15 other
     // than port B are don't-cares and one 3-bit mux serves both halves.
-    wire [2:0] k3 = {ir[1:0], sel[0]};
+    wire [2:0] k3 = {ir[7:6], sel[0]};
     assign regnum = src[3] ? k3 : c;
 
     assign rhs = use_reg ? regval : (use_imm ? imm : konst);

@@ -55,6 +55,15 @@ done
 # right, not the file being wrong.
 if node tests/roundtrip.mjs $(ls snippets/*.s | grep -v clz) libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
 
+# --- and binutils' disassembler against ours, operand by operand -------------
+# A THIRD reading of the encoding: hand-written C over the generated tables,
+# against the JavaScript that walks the TOML.  It compares the printed operands
+# and not just the mnemonic and length, which is the distinction that matters -
+# the earlier structure-only check passed for weeks while every eight-bit
+# displacement was read from the wrong byte.  Skips itself when the toolchain
+# is not built; see tools/build-binutils.sh.
+if node tests/dis-check.mjs $(ls snippets/*.s | grep -v clz) libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
+
 # --- the snippets, actually executed -----------------------------------------
 if node tests/sim-check.mjs; then :; else fail=1; fi
 

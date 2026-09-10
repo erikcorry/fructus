@@ -482,7 +482,7 @@ swapped = { gt = "lt", ge = "le", hi = "lo", hs = "ls", cs = "ls" }
 # means R[a] < 4 - and the hardware computes something else.  That gap is worth
 # stating carefully, because it decides which 32 pairs are worth having.
 #
-# The register sits at byte1[7:5], the slot `rsb rd, rd, #imm` uses for ALU port
+# The register sits at byte1[2:0], the slot `rsb rd, rd, #imm` uses for ALU port
 # A, and the constant reaches port B like every other immediate.  The ALU
 # subtracts port A from port B, so what is actually computed is
 #
@@ -1012,7 +1012,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   .6 AND .7 ARE THE THREE-REGISTER COLUMNS, and that is why the two-register
 #   branches are there rather than at .2 and .3.  Byte 1 of `br cond, ra, rb` is
-#   `cccb_bbee` and byte 1 of `add rd, ra, rb` is `ddda_aacc`: byte1[4:2] is ALU
+#   `cccb_bbee` and byte 1 of `add rd, ra, rb` is `ddda_aacc`: byte1[5:3] is ALU
 #   port A in both and byte1[1:0] plus the stolen opcode bit is ALU port B in
 #   both.  Only the top field differs - a condition where the ALU has a
 #   destination - so the register decode is not merely similar, it is the same
@@ -1087,7 +1087,7 @@ semantics = "R[d] = M8[R[a] + off]"
 
   [[insn.form]]
   name     = "reg_off5"
-  encoding = "0010_0000  aaao_oooo"
+  encoding = "0010_0000  oooo_oaaa"
   fields   = { o = "off:imm5" }
   tie      = { d = "a" }             # one field serves as address and dest
 
@@ -1102,7 +1102,7 @@ semantics = "R[d] = M8[R[a] + off]"
   # it is what makes room for a separate destination and address in two bytes.
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0010_001i  ddda_aajj"
+  encoding = "0010_001i  jjaa_addd"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   # Three bytes, and in exchange everything is independent and nothing is
@@ -1114,8 +1114,8 @@ semantics = "R[d] = M8[R[a] + off]"
   #     byte 2:  i i i i i i i i   off bits 7..0
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0010_0100  ddda_aaii  iiii_iiii"
-  fields   = { i = "off:imm10" }
+  encoding = "0010_0100  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "off:imm10[1:0]", j = "off:imm10[9:2]" }
 
 
 # --- ld -------------------------------------------------------------------
@@ -1160,19 +1160,19 @@ semantics = "R[d] = M16[R[a] + off]"
 
   [[insn.form]]
   name     = "reg_off5"
-  encoding = "0001_1000  aaao_oooo"
+  encoding = "0001_1000  oooo_oaaa"
   fields   = { o = "off:imm5" }
   tie      = { d = "a" }
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0001_101i  ddda_aajj"
+  encoding = "0001_101i  jjaa_addd"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0001_1100  ddda_aaii  iiii_iiii"
-  fields   = { i = "off:imm10" }
+  encoding = "0001_1100  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "off:imm10[1:0]", j = "off:imm10[9:2]" }
 
 
 # --- st8 / st -------------------------------------------------------------
@@ -1196,13 +1196,13 @@ semantics = "M8[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0001_001i  sssa_aajj"
+  encoding = "0001_001i  jjaa_asss"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0001_0100  sssa_aaii  iiii_iiii"
-  fields   = { i = "off:imm10" }
+  encoding = "0001_0100  iiaa_asss  jjjj_jjjj"
+  fields   = { i = "off:imm10[1:0]", j = "off:imm10[9:2]" }
 
 
 [[insn]]
@@ -1218,13 +1218,13 @@ semantics = "M16[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0000_101i  sssa_aajj"
+  encoding = "0000_101i  jjaa_asss"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0000_1100  sssa_aaii  iiii_iiii"
-  fields   = { i = "off:imm10" }
+  encoding = "0000_1100  iiaa_asss  jjjj_jjjj"
+  fields   = { i = "off:imm10[1:0]", j = "off:imm10[9:2]" }
 
 
 # --- mov --------------------------------------------------------------------
@@ -1269,7 +1269,7 @@ semantics = "R[d] = imm"
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0010_1000  dddi_iiii"
+  encoding = "0010_1000  iiii_iddd"
   fields   = { i = "imm:imm5" }
 
   # The same two-byte shape, the same five bits, read through immbit5 instead
@@ -1283,14 +1283,14 @@ semantics = "R[d] = imm"
   # field.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0010_1001  dddi_iiii"
+  encoding = "0010_1001  iiii_iddd"
   fields   = { i = "imm:immbit5" }
 
   # And the mask table.  Loading 0x00ff or 0xf000 was three bytes before this;
   # a routine that masks with a constant usually has to build it first.
   [[insn.form]]
   name     = "reg_immask5"
-  encoding = "0010_1101  dddi_iiii"
+  encoding = "0010_1101  iiii_iddd"
   fields   = { i = "imm:immask5" }
 
   # Destination in the opcode byte, then a whole 16-bit immediate.  No
@@ -1347,7 +1347,7 @@ semantics = "R[d] = R[a] + R[b]"
 
   [[insn.form]]
   name     = "three_reg"
-  encoding = "0011_111b  ddda_aacc"
+  encoding = "0011_111b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 
@@ -1386,7 +1386,7 @@ semantics = "R[d] = R[a] + imm"
   # immediate.  Prints as `add r3, r3, #20`.
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0011_1000  dddi_iiii"
+  encoding = "0011_1000  iiii_iddd"
   fields   = { i = "imm:imm5" }
   tie      = { a = "d" }
 
@@ -1397,7 +1397,7 @@ semantics = "R[d] = R[a] + imm"
   # asked for it here.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0011_1001  dddi_iiii"
+  encoding = "0011_1001  iiii_iddd"
   fields   = { i = "imm:immbit5" }
   tie      = { a = "d" }
 
@@ -1405,19 +1405,19 @@ semantics = "R[d] = R[a] + imm"
   # often added to as well as masked out.
   [[insn.form]]
   name     = "reg_immask5"
-  encoding = "0011_1101  dddi_iiii"
+  encoding = "0011_1101  iiii_iddd"
   fields   = { i = "imm:immask5" }
   tie      = { a = "d" }
 
   [[insn.form]]
   name     = "reg_reg_imm3"
-  encoding = "0011_101i  ddda_aajj"
+  encoding = "0011_101i  jjaa_addd"
   fields   = { i = "imm:imm3[0]", j = "imm:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0011_1100  ddda_aaii  iiii_iiii"
-  fields   = { i = "imm:imm10" }
+  encoding = "0011_1100  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
 # --- rsb / xor / or / and ---------------------------------------------------
@@ -1450,7 +1450,7 @@ semantics = "R[d] = R[b] - R[a]"
 
   [[insn.form]]
   name     = "three_reg"
-  encoding = "0100_011b  ddda_aacc"
+  encoding = "0100_011b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 [[insn]]
@@ -1466,19 +1466,19 @@ semantics = "R[d] = imm - R[a]"
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0100_0000  dddi_iiii"
+  encoding = "0100_0000  iiii_iddd"
   fields   = { i = "imm:imm5" }
   tie      = { a = "d" }
 
   [[insn.form]]
   name     = "reg_reg_imm3"
-  encoding = "0100_001i  ddda_aajj"
+  encoding = "0100_001i  jjaa_addd"
   fields   = { i = "imm:imm3[0]", j = "imm:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0100_0100  ddda_aaii  iiii_iiii"
-  fields   = { i = "imm:imm10" }
+  encoding = "0100_0100  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
 [[insn]]
@@ -1494,7 +1494,7 @@ semantics = "R[d] = R[a] ^ R[b]"
 
   [[insn.form]]
   name     = "three_reg"
-  encoding = "0100_111b  ddda_aacc"
+  encoding = "0100_111b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 [[insn]]
@@ -1522,7 +1522,7 @@ semantics = "R[d] = R[a] ^ imm"
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0100_1000  dddi_iiii"
+  encoding = "0100_1000  iiii_iddd"
   fields   = { i = "imm:imm5" }
   tie      = { a = "d" }
 
@@ -1543,7 +1543,7 @@ semantics = "R[d] = R[a] ^ imm"
   # entries here.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0100_1001  dddi_iiii"
+  encoding = "0100_1001  iiii_iddd"
   fields   = { i = "imm:immbit5" }
   tie      = { a = "d" }
 
@@ -1551,19 +1551,19 @@ semantics = "R[d] = R[a] ^ imm"
   # single bits.  Column .5 of the ALU block was reserved and empty.
   [[insn.form]]
   name     = "reg_immask5"
-  encoding = "0100_1101  dddi_iiii"
+  encoding = "0100_1101  iiii_iddd"
   fields   = { i = "imm:immask5" }
   tie      = { a = "d" }
 
   [[insn.form]]
   name     = "reg_reg_imm3"
-  encoding = "0100_101i  ddda_aajj"
+  encoding = "0100_101i  jjaa_addd"
   fields   = { i = "imm:imm3[0]", j = "imm:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0100_1100  ddda_aaii  iiii_iiii"
-  fields   = { i = "imm:imm10" }
+  encoding = "0100_1100  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
 [[insn]]
@@ -1579,7 +1579,7 @@ semantics = "R[d] = R[a] | R[b]"
 
   [[insn.form]]
   name     = "three_reg"
-  encoding = "0101_011b  ddda_aacc"
+  encoding = "0101_011b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 [[insn]]
@@ -1609,14 +1609,14 @@ semantics = "R[d] = R[a] | imm"
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0101_0000  dddi_iiii"
+  encoding = "0101_0000  iiii_iddd"
   fields   = { i = "imm:imm5" }
   tie      = { a = "d" }
 
   # BIT SET.  `or rd, rd, #1<<n` for any n, in two bytes.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0101_0001  dddi_iiii"
+  encoding = "0101_0001  iiii_iddd"
   fields   = { i = "imm:immbit5" }
   tie      = { a = "d" }
 
@@ -1624,19 +1624,19 @@ semantics = "R[d] = R[a] | imm"
   # single bits.  Column .5 of the ALU block was reserved and empty.
   [[insn.form]]
   name     = "reg_immask5"
-  encoding = "0101_0101  dddi_iiii"
+  encoding = "0101_0101  iiii_iddd"
   fields   = { i = "imm:immask5" }
   tie      = { a = "d" }
 
   [[insn.form]]
   name     = "reg_reg_imm3"
-  encoding = "0101_001i  ddda_aajj"
+  encoding = "0101_001i  jjaa_addd"
   fields   = { i = "imm:imm3[0]", j = "imm:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0101_0100  ddda_aaii  iiii_iiii"
-  fields   = { i = "imm:imm10" }
+  encoding = "0101_0100  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
 [[insn]]
@@ -1652,7 +1652,7 @@ semantics = "R[d] = R[a] & R[b]"
 
   [[insn.form]]
   name     = "three_reg"
-  encoding = "0101_111b  ddda_aacc"
+  encoding = "0101_111b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 [[insn]]
@@ -1668,7 +1668,7 @@ semantics = "R[d] = R[a] & imm"
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0101_1000  dddi_iiii"
+  encoding = "0101_1000  iiii_iddd"
   fields   = { i = "imm:imm5" }
   tie      = { a = "d" }
 
@@ -1678,7 +1678,7 @@ semantics = "R[d] = R[a] & imm"
   # off a value is one instruction now instead of a shl/lsr pair.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0101_1001  dddi_iiii"
+  encoding = "0101_1001  iiii_iddd"
   fields   = { i = "imm:immbit5" }
   tie      = { a = "d" }
 
@@ -1686,19 +1686,19 @@ semantics = "R[d] = R[a] & imm"
   # single bits.  Column .5 of the ALU block was reserved and empty.
   [[insn.form]]
   name     = "reg_immask5"
-  encoding = "0101_1101  dddi_iiii"
+  encoding = "0101_1101  iiii_iddd"
   fields   = { i = "imm:immask5" }
   tie      = { a = "d" }
 
   [[insn.form]]
   name     = "reg_reg_imm3"
-  encoding = "0101_101i  ddda_aajj"
+  encoding = "0101_101i  jjaa_addd"
   fields   = { i = "imm:imm3[0]", j = "imm:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0101_1100  ddda_aaii  iiii_iiii"
-  fields   = { i = "imm:imm10" }
+  encoding = "0101_1100  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
 # --- shl / asr / lsr --------------------------------------------------------
@@ -1726,7 +1726,7 @@ semantics = "R[d] = shl(R[a], R[b] & 15)"
 
   [[insn.form]]
   name     = "three_reg"
-  encoding = "0110_011b  ddda_aacc"
+  encoding = "0110_011b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 [[insn]]
@@ -1742,13 +1742,13 @@ semantics = "R[d] = shl(R[a], imm & 15)"
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0110_0000  dddi_iiii"
+  encoding = "0110_0000  iiii_iddd"
   fields   = { i = "imm:imm5" }
   tie      = { a = "d" }
 
   [[insn.form]]
   name     = "reg_reg_imm3"
-  encoding = "0110_001i  ddda_aajj"
+  encoding = "0110_001i  jjaa_addd"
   fields   = { i = "imm:shift3[0]", j = "imm:shift3[2:1]" }
 
 
@@ -1765,7 +1765,7 @@ semantics = "R[d] = asr(R[a], R[b] & 15)"
 
   [[insn.form]]
   name     = "three_reg"
-  encoding = "0110_111b  ddda_aacc"
+  encoding = "0110_111b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 [[insn]]
@@ -1781,13 +1781,13 @@ semantics = "R[d] = asr(R[a], imm & 15)"
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0110_1000  dddi_iiii"
+  encoding = "0110_1000  iiii_iddd"
   fields   = { i = "imm:imm5" }
   tie      = { a = "d" }
 
   [[insn.form]]
   name     = "reg_reg_imm3"
-  encoding = "0110_101i  ddda_aajj"
+  encoding = "0110_101i  jjaa_addd"
   fields   = { i = "imm:shift3[0]", j = "imm:shift3[2:1]" }
 
 
@@ -1804,7 +1804,7 @@ semantics = "R[d] = lsr(R[a], R[b] & 15)"
 
   [[insn.form]]
   name     = "three_reg"
-  encoding = "0111_011b  ddda_aacc"
+  encoding = "0111_011b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 [[insn]]
@@ -1820,13 +1820,13 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0111_0000  dddi_iiii"
+  encoding = "0111_0000  iiii_iddd"
   fields   = { i = "imm:imm5" }
   tie      = { a = "d" }
 
   [[insn.form]]
   name     = "reg_reg_imm3"
-  encoding = "0111_001i  ddda_aajj"
+  encoding = "0111_001i  jjaa_addd"
   fields   = { i = "imm:shift3[0]", j = "imm:shift3[2:1]" }
 
 
@@ -1877,7 +1877,7 @@ semantics = "R[d] = sxt8(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_0010  ddda_aa00"
+  encoding = "0011_0010  00aa_addd"
 
 [[insn]]
 mnemonic = "zxt8"
@@ -1891,7 +1891,7 @@ semantics = "R[d] = zxt8(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_0011  ddda_aa00"
+  encoding = "0011_0011  00aa_addd"
 
 # --- the three below are TENTATIVE ------------------------------------------
 [[insn]]
@@ -1906,7 +1906,7 @@ semantics = "R[d] = clz(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_0010  ddda_aa01"
+  encoding = "0011_0010  01aa_addd"
 
 [[insn]]
 mnemonic = "bitrev"
@@ -1920,7 +1920,7 @@ semantics = "R[d] = bitrev(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_0011  ddda_aa01"
+  encoding = "0011_0011  01aa_addd"
 
 [[insn]]
 mnemonic = "popcount"
@@ -1934,7 +1934,7 @@ semantics = "R[d] = popcount(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_0010  ddda_aa10"
+  encoding = "0011_0010  10aa_addd"
 
 
 # --- br8 / br -------------------------------------------------------------
@@ -1955,15 +1955,15 @@ semantics = "R[d] = popcount(R[a])"
 #
 # THE TWO REGISTERS ARE THE OTHER WAY ROUND FROM THE SYNTAX, and that is what
 # lets the comparison be an `rsb` with no extra multiplexing.  `rsb rd, ra, rb`
-# computes rb - ra: the SPLIT field minus the byte1[4:2] field.  `br cond, ra,
+# computes rb - ra: the SPLIT field minus the byte1[5:3] field.  `br cond, ra,
 # rb` tests the flags of R[a] - R[b].  For those to be the same subtraction, the
 # first register NAMED has to sit in the split field, so `a` takes z and ee
-# while `b` takes byte1[4:2].
+# while `b` takes byte1[5:3].
 #
 # Read as datapath rather than as syntax there is no reversal at all:
 #
-#     byte1[4:2]              always ALU port A
-#     {byte1[1:0], opcode[0]} always ALU port B
+#     byte1[5:3]              always ALU port A
+#     {byte1[7:6], opcode[0]} always ALU port B
 #
 # and every three-operand instruction in the map obeys it - the ALU triples, the
 # shift triples, push and pop's triples, and now both branches.  rtl/immgen.sv
@@ -2002,7 +2002,7 @@ swap_operands = ["a", "b"]
 
   [[insn.form]]
   name     = "cond_reg_reg"
-  encoding = "1010_111z  cccb_bbee  tttt_tttt"
+  encoding = "1010_111z  eebb_bccc  tttt_tttt"
   fields   = { c = "cond:cond3", z = "a:reg[0]", e = "a:reg[2:1]", t = "off:off8" }
 
 [[insn]]
@@ -2018,7 +2018,7 @@ semantics = "if (test(k.cond, R[a] & 255, k.imm & 255, 8)) pc = pc + off"
 
   [[insn.form]]
   name     = "cond_reg_imm"
-  encoding = "1010_1000  aaak_kkkk  tttt_tttt"
+  encoding = "1010_1000  kkkk_kaaa  tttt_tttt"
   fields   = { k = "k:condimm5", t = "off:off8" }
 
 
@@ -2037,7 +2037,7 @@ swap_operands = ["a", "b"]
 
   [[insn.form]]
   name     = "cond_reg_reg"
-  encoding = "1010_011z  cccb_bbee  tttt_tttt"
+  encoding = "1010_011z  eebb_bccc  tttt_tttt"
   fields   = { c = "cond:cond3", z = "a:reg[0]", e = "a:reg[2:1]", t = "off:off8" }
 
 [[insn]]
@@ -2053,7 +2053,7 @@ semantics = "if (test(k.cond, R[a], k.imm, 16)) pc = pc + off"
 
   [[insn.form]]
   name     = "cond_reg_imm"
-  encoding = "1010_0000  aaak_kkkk  tttt_tttt"
+  encoding = "1010_0000  kkkk_kaaa  tttt_tttt"
   fields   = { k = "k:condimm5", t = "off:off8" }
 
 
@@ -2094,7 +2094,7 @@ semantics = "if ((R[a] & mask) == 0) pc = pc + off"
 
   [[insn.form]]
   name     = "reg_mask"
-  encoding = "1010_0001  aaam_mmmm  tttt_tttt"
+  encoding = "1010_0001  mmmm_maaa  tttt_tttt"
   fields   = { m = "mask:immbit5", t = "off:off8" }
 
   # The same test against the mask table instead of a single bit - branch on
@@ -2105,7 +2105,7 @@ semantics = "if ((R[a] & mask) == 0) pc = pc + off"
   # is the br8 row one below - so both spellings of each land in one column.
   [[insn.form]]
   name     = "reg_mask5"
-  encoding = "1010_0101  aaam_mmmm  tttt_tttt"
+  encoding = "1010_0101  mmmm_maaa  tttt_tttt"
   fields   = { m = "mask:immask5", t = "off:off8" }
 
 [[insn]]
@@ -2121,7 +2121,7 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 
   [[insn.form]]
   name     = "reg_mask"
-  encoding = "1010_1001  aaam_mmmm  tttt_tttt"
+  encoding = "1010_1001  mmmm_maaa  tttt_tttt"
   fields   = { m = "mask:immbit5", t = "off:off8" }
 
   # The same test against the mask table instead of a single bit - branch on
@@ -2132,7 +2132,7 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
   # is the br8 row one below - so both spellings of each land in one column.
   [[insn.form]]
   name     = "reg_mask5"
-  encoding = "1010_1101  aaam_mmmm  tttt_tttt"
+  encoding = "1010_1101  mmmm_maaa  tttt_tttt"
   fields   = { m = "mask:immask5", t = "off:off8" }
 
 
@@ -2195,7 +2195,7 @@ semantics = "R[d] = R[a] == R[b]"
 
   [[insn.form]]
   name     = "three_reg"
-  encoding = "0111_111b  ddda_aacc"
+  encoding = "0111_111b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 [[insn]]
@@ -2211,19 +2211,19 @@ semantics = "R[d] = R[a] == imm"
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0111_1000  dddi_iiii"
+  encoding = "0111_1000  iiii_iddd"
   fields   = { i = "imm:imm5" }
   tie      = { a = "d" }
 
   [[insn.form]]
   name     = "reg_reg_imm3"
-  encoding = "0111_101i  ddda_aajj"
+  encoding = "0111_101i  jjaa_addd"
   fields   = { i = "imm:imm3[0]", j = "imm:imm3[2:1]" }
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0111_1100  ddda_aaii  iiii_iiii"
-  fields   = { i = "imm:imm10" }
+  encoding = "0111_1100  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 [[insn]]
 mnemonic = "isset"
@@ -2238,13 +2238,13 @@ semantics = "R[d] = (R[a] & mask) != 0"
 
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0111_1001  dddi_iiii"
+  encoding = "0111_1001  iiii_iddd"
   fields   = { i = "mask:immbit5" }
   tie      = { a = "d" }
 
   [[insn.form]]
   name     = "reg_immask5"
-  encoding = "0111_1101  dddi_iiii"
+  encoding = "0111_1101  iiii_iddd"
   fields   = { i = "mask:immask5" }
   tie      = { a = "d" }
 
@@ -2321,7 +2321,7 @@ semantics = "sp = sp - 1; M8[sp] = R[a]"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1001_0001  aaa0_0000"
+  encoding = "1001_0001  0000_0aaa"
 
 [[insn]]
 mnemonic = "push"
@@ -2332,7 +2332,7 @@ semantics = "sp = sp - 2; M16[sp] = R[a]"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1001_0000  aaa0_0000"
+  encoding = "1001_0000  0000_0aaa"
 
 [[insn]]
 mnemonic = "push"
@@ -2343,7 +2343,7 @@ semantics = "sp = sp - 2; M16[sp] = R[a]; sp = sp - 2; M16[sp] = R[b]"
 
   [[insn.form]]
   name     = "double"
-  encoding = "1001_0010  aaab_bb00"
+  encoding = "1001_0010  00bb_baaa"
 
 [[insn]]
 mnemonic = "push"
@@ -2355,7 +2355,7 @@ semantics = "sp = sp - 2; M16[sp] = R[a]; sp = sp - 2; M16[sp] = R[b]; sp = sp -
 
   [[insn.form]]
   name     = "triple"
-  encoding = "1001_011z  aaab_bbcc"
+  encoding = "1001_011z  ccbb_baaa"
   fields   = { z = "c:reg[0]", c = "c:reg[2:1]" }
 
 
@@ -2388,7 +2388,7 @@ semantics = "R[a] = M8[sp]; sp = sp + 1"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1001_1001  aaa0_0000"
+  encoding = "1001_1001  0000_0aaa"
 
 [[insn]]
 mnemonic = "pop"
@@ -2399,7 +2399,7 @@ semantics = "R[a] = M16[sp]; sp = sp + 2"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1001_1000  aaa0_0000"
+  encoding = "1001_1000  0000_0aaa"
 
 [[insn]]
 mnemonic = "pop"
@@ -2410,7 +2410,7 @@ semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2"
 
   [[insn.form]]
   name     = "double"
-  encoding = "1001_1010  aaab_bb00"
+  encoding = "1001_1010  00bb_baaa"
 
 [[insn]]
 mnemonic = "pop"
@@ -2422,7 +2422,7 @@ semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2; R[c] = M1
 
   [[insn.form]]
   name     = "triple"
-  encoding = "1001_111z  aaab_bbcc"
+  encoding = "1001_111z  ccbb_baaa"
   fields   = { z = "c:reg[0]", c = "c:reg[2:1]" }
 
 
@@ -2537,7 +2537,7 @@ semantics = "lr = pc; pc = R[a]"
 
   [[insn.form]]
   name     = "reg"
-  encoding = "1010_1100  aaa0_0000"
+  encoding = "1010_1100  0000_0aaa"
 
 
 # Return is just pc = lr, so it needs no operands and fits in one byte - and

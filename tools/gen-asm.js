@@ -27,6 +27,7 @@
 // =============================================================================
 
 import { loadSpec, decodeEncoding, nameIndex } from './isa.js';
+import { buildDecoder } from './decode.js';
 
 const spec = loadSpec();
 const t = spec.optype;
@@ -130,7 +131,9 @@ function rowsFor(insn, form, swapped) {
         s.bits = et.bits; s.signed = et.signed ? 1 : 0;
         s.reloc = relocFor(et, op.pcrel);
       } else if (et.kind === 'combo') {
-        // the anchor slot already says FR_CC
+        // The anchor slot already says FR_CC; what it still needs is the width
+        // the instruction compares at, which decides which spellings it takes.
+        s.bits = Number((/\btest\s*\([^()]*,\s*(\d+)\s*\)/.exec(insn.semantics ?? '') ?? [])[1]) || 16;
       } else if (et.kind !== 'reg' && et.kind !== 'enum') {
         throw new Error(`${insn.mnemonic}: cannot describe encoded type ${et.kind}`);
       }
@@ -165,6 +168,7 @@ function rowsFor(insn, form, swapped) {
   });
 
   return { mnemonic: insn.mnemonic, syntax, nbytes, slots, places, base,
+           insn, form, swapped,
            tag: `${insn.mnemonic}/${form.name}${swapped ? ' swapped' : ''}` };
 }
 
@@ -180,6 +184,37 @@ for (const insn of spec.insn)
 // gas takes the first row that accepts what was written, so this ordering IS
 // the "prefer the smaller encoding" rule - there is no size search in gas.
 rows.sort((a, b) => a.nbytes - b.nbytes);
+
+// --- which row a first byte decodes to ---------------------------------------
+// The disassembler needs the same rows, reached the other way round.  It is a
+// LIST per opcode, not one row, because THE MNEMONIC IS NOT A FUNCTION OF BYTE
+// 0.  Length is - that is `length_from_first_byte`, and the ISA commits to it -
+// but the unary block deliberately packs sxt8, clz and popcount into opcode
+// 0x32 and tells them apart with two bits of byte 1.  A flat 256-entry name
+// table cannot express that: it names whichever form was listed first and
+// disassembles clz as sxt8.
+//
+// So each entry carries the byte-1 mask and match that selects it, in the same
+// order tools/decode.js tries them, and the first match wins in both.
+const { table: decTable } = buildDecoder(spec);
+const cand = [], firstCand = [];
+for (let b = 0; b < 256; b++) {
+  firstCand.push(cand.length);
+  for (const c of decTable[b]) {
+    const w = c.nbytes * 8;
+    // Byte 2 is always a whole field - a displacement or an immediate - so
+    // discrimination never needs it.  Assert that rather than assume it.
+    if (c.nbytes === 3 && (c.mask & 0xff) !== 0)
+      throw new Error(`${c.insn.mnemonic}/${c.form.name}: byte 2 carries literal bits, `
+                    + `which the opcode map cannot discriminate on`);
+    const m1 = c.nbytes >= 2 ? (c.mask >>> (w - 16)) & 0xff : 0;
+    const l1 = c.nbytes >= 2 ? (c.lit  >>> (w - 16)) & 0xff : 0;
+    const k = rows.findIndex((r) => !r.swapped && r.insn === c.insn && r.form === c.form);
+    if (k < 0) throw new Error(`opcode 0x${b.toString(16)} decodes to a form with no row`);
+    cand.push({ mask: m1, match: l1, form: k });
+  }
+}
+firstCand.push(cand.length);
 
 // =============================================================================
 // The properties gas relies on, asserted here
@@ -266,31 +301,41 @@ function truthBits(cond, k, w) {
   return out;
 }
 
-// br reads the table at 16 bits and br8 at 8, so a spelling can be an identity
-// at one width and not the other.  Accept only what holds at BOTH.
+// THE COMPARISON WIDTH IS PART OF THE SPELLING.  br reads the table at 16 bits
+// and br8 at 8, and an identity at one width need not hold at the other - so
+// the accept list is per width, and a slot says which one it wants.
+//
+// Requiring both widths instead is subtly wrong, and cost `br le, r3, #0'.  At
+// 16 bits `le #0' is `lt #1'; at 8 bits `lt #1' and `lt #-32767' have the same
+// truth set, because -32767 & 255 is 1 - so the eight-bit table maps that set
+// to the later entry and the two widths disagree about which index to use.
+// The eight-bit coincidence has nothing to do with a sixteen-bit branch.
 const WIDTHS = [8, 16];
 const conds = Object.keys(t.cond3.swapped ?? {}).concat(t.cond3.names);
 const cd = t.condimm5.values;
 
-const accept = [];                      // { cond, imm, index }
-const seen = new Set();
+const accept = [];                      // { cond, imm, index, width }
 const tag = (c, k) => `${c} ${u16(k)}`;
-cd.forEach((e, i) => { accept.push({ cond: e[0], imm: u16(e[1]), index: i }); seen.add(tag(e[0], e[1])); });
 
-const canon = WIDTHS.map((w) => {
-  const m = new Map();
-  cd.forEach((e, i) => { const b = truthBits(e[0], e[1], w); if (b) m.set(b, i); });
-  return m;
-});
-for (const [, k] of cd)
-  for (const kk of [k - 1, k, k + 1])
-    for (const c of conds) {
-      if (seen.has(tag(c, kk))) continue;
-      const idxs = WIDTHS.map((w, j) => canon[j].get(truthBits(c, kk, w)));
-      if (idxs.some((v) => v === undefined) || idxs[0] !== idxs[1]) continue;
-      seen.add(tag(c, kk));
-      accept.push({ cond: c, imm: u16(kk), index: idxs[0] });
-    }
+for (const w of WIDTHS) {
+  const seen = new Set();
+  const canon = new Map();
+  cd.forEach((e, i) => {
+    accept.push({ cond: e[0], imm: u16(e[1]), index: i, width: w });
+    seen.add(tag(e[0], e[1]));
+    const b = truthBits(e[0], e[1], w);
+    if (b && !canon.has(b)) canon.set(b, i);      // the FIRST entry, so the table's
+  });                                             // own order decides collisions
+  for (const [, k] of cd)
+    for (const kk of [k - 1, k, k + 1])
+      for (const c of conds) {
+        if (seen.has(tag(c, kk))) continue;
+        const idx = canon.get(truthBits(c, kk, w));
+        if (idx === undefined) continue;
+        seen.add(tag(c, kk));
+        accept.push({ cond: c, imm: u16(kk), index: idx, width: w });
+      }
+}
 
 // =============================================================================
 // Aliases: pure text rewrites, exactly as customasm gets them
@@ -423,6 +468,26 @@ typedef struct fructus_form
 extern const fructus_form fructus_forms[];
 extern const unsigned int fructus_nforms;
 
+/* Which rows a first byte can decode to.  A LIST, because the mnemonic is not a
+   function of byte 0: length is - the ISA commits to that - but the unary block
+   packs sxt8, clz and popcount into opcode 0x32 and separates them with two
+   bits of byte 1.  Each entry carries the byte-1 mask and match that selects
+   it, and the first match wins.
+
+   Printing through the row's SYNTAX is what makes a listing reassemblable.  An
+   itype is a bit layout and not a syntax, so \`ld rd, [ra, #imm3]' and
+   \`add rd, ra, #imm3' share one, and a printer driven by the layout puts an
+   ALU op's punctuation on a load.  */
+typedef struct fructus_cand
+{
+  unsigned char mask;		/* which bits of byte 1 select this row */
+  unsigned char match;
+  short         form;		/* index into fructus_forms */
+} fructus_cand;
+
+extern const fructus_cand fructus_opcode_cand[];
+extern const short fructus_opcode_first[257];	/* [b] .. [b+1] is b's range */
+
 /* The condimm5 spellings the assembler accepts: the 32 table entries, plus
    every other way of writing the same predicate.  \`le #3' and \`lt #4' are one
    entry; so are \`hs #1' and \`ne #0'.  Derived by comparing truth sets at both
@@ -432,6 +497,7 @@ typedef struct fructus_condimm
   const char *   cond;
   unsigned short imm;		/* as written, masked to 16 bits */
   unsigned char  index;		/* the five-bit field it encodes to */
+  unsigned char  width;		/* the comparison width it holds at: 8 or 16 */
 } fructus_condimm;
 
 extern const fructus_condimm fructus_condimm_accept[];
@@ -527,9 +593,23 @@ ${table}
 
 const unsigned int fructus_nforms = ${rows.length};
 
+const fructus_cand fructus_opcode_cand[] =
+  {
+${cand.map((c) => `    { 0x${c.mask.toString(16).padStart(2, '0')}, `
+                + `0x${c.match.toString(16).padStart(2, '0')}, ${String(c.form).padStart(3)} }`).join(',\n')}
+  };
+
+const short fructus_opcode_first[257] =
+  {
+${(() => { const out = []; for (let i = 0; i < 257; i += 8)
+    out.push('    ' + firstCand.slice(i, i + 8).map((v) => String(v).padStart(3)).join(', ')
+             + (i + 8 < 257 ? ',' : '') + `   /* 0x${i.toString(16).padStart(2, '0')} */`);
+  return out.join('\n'); })()}
+  };
+
 const fructus_condimm fructus_condimm_accept[] =
   {
-${accept.map((a) => `    { "${a.cond}", 0x${a.imm.toString(16).padStart(4, '0')}, ${a.index} }`).join(',\n')}
+${accept.map((a) => `    { "${a.cond}", 0x${a.imm.toString(16).padStart(4, '0')}, ${a.index}, ${a.width} }`).join(',\n')}
   };
 
 const unsigned int fructus_ncondimm_accept = ${accept.length};

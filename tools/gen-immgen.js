@@ -86,7 +86,7 @@ process.stdout.write(`// =======================================================
 //    where opcode[2:0] is the DESTINATION REGISTER and not a mode selector at
 //    all, so this block's output there is meaningless for a third reason again.
 //
-// 3. opcode[0] IS sel[0].  The imm3 index is {byte1[1:0], opcode[0]} - the spec
+// 3. opcode[0] IS sel[0].  The imm3 index is {byte1[7:6], opcode[0]} - the spec
 //    spells this \`imm3[0]\`, so the pair of opcodes at +2 and +3 ARE the low
 //    index bit.  It is already an input; the index costs no logic.
 //
@@ -103,8 +103,8 @@ process.stdout.write(`// =======================================================
 //
 // FIELD POSITION IS A TIMING PROPERTY, AND IT IS A CONTRACT ON THE MICROCODE.
 // immreg holds the last two bytes fetched, so byte 1 moves as the third byte
-// arrives.  This block reads a five-bit field at ir[4:0] and the ten-bit field
-// at ir[9:0], which is correct if and only if:
+// arrives.  This block reads a five-bit field at ir[7:3] and the ten-bit field
+// from ir[7:0] and ir[15:14], which is correct if and only if:
 //
 //     ANY FIVE-BIT FIELD IS CONSUMED BEFORE THE THIRD BYTE IS FETCHED.
 //
@@ -112,7 +112,13 @@ process.stdout.write(`// =======================================================
 // brclear and brset it is a real ordering requirement, and the natural one: the
 // mask test does not need the displacement, so it overlaps the fetch of it and
 // costs nothing.  The ten-bit field is the opposite case - it cannot be read
-// until byte 2 arrives, and by then it is contiguous at ir[9:0].
+// until byte 2 arrives, and by then both of its pieces are in immreg.  They
+// are at opposite ends of it - the low two bits at ir[15:14] and the top eight
+// at ir[7:0] - because immreg holds byte 1 in the HIGH half, which is the
+// reverse of how those two bytes sit in memory.  In the stream itself the field
+// is contiguous, which is the property the encoding is built for; see
+// invariant 4b in tools/check.js.  Splitting it here is free either way: both
+// readings are wiring.
 //
 // Break that ordering and this block silently reads the wrong five bits.  There
 // is no signal that would catch it, which is why it is written down here.
@@ -135,8 +141,26 @@ process.stdout.write(`// =======================================================
 // 115 SB_LUT4 at four levels and 71 MHz, against 109 at three levels and 91.
 // A registered microcode line arrives at level zero and the mux absorbs it.
 //
-// MEASURED on an iCE40 UP5K: 109 SB_LUT4, three LUT levels, 91 MHz placed -
-// the same depth and the same clock as the version without the branch mode.
+// MEASURED on an iCE40 UP5K, yosys 0.52 + nextpnr-ice40 0.7: 111 SB_LUT4 for
+// the block alone, and 87 MHz placed in a registered harness (three seeds:
+// 86.9 / 86.7 / 73.0).
+//
+// THE BYTE 1 RE-LAYOUT COST SIX LUT4 HERE, and this is the one place it cost
+// anything.  Measured against the same tools, the old layout was 105 SB_LUT4
+// and 87.3 / 88.4 / 80.2 MHz - so the same clock within placement noise, and
+// six more cells.
+//
+// The six have a specific cause.  Before, \`i5\` was sext(ir[4:0]) and \`i10\` was
+// sext(ir[9:0]): THEIR LOW FIVE BITS WERE THE SAME WIRES, so five bits of the
+// mode mux below were free - whichever mode won, the answer was identical.
+// Now \`i5[4:0]\` is ir[7:3] and \`i10[4:0]\` is {ir[3:0], ir[15:14]}, which do not
+// coincide, so those five bits need real muxing.  It is one level wide rather
+// than deep, which is why the clock does not move.
+//
+// What it buys is in software: a decoder extracting a signed imm10 from a
+// 16-bit load went from four instructions to one, and an imm5 from two to one,
+// because every immediate is now a contiguous top-aligned slice of the
+// instruction stream.  See invariants 4b and 4c in tools/check.js.
 // =============================================================================
 
 module immgen (
@@ -147,11 +171,16 @@ module immgen (
 );
 
     // --- the two modes that are pure wiring ---------------------------------
-    wire [15:0] i5  = {{11{ir[4]}}, ir[4:0]};      // +0  imm5, and off5
-    wire [15:0] i10 = {{6{ir[9]}},  ir[9:0]};      // +4  imm10, contiguous
+    wire [15:0] i5  = {{11{ir[7]}}, ir[7:3]};      // +0  imm5, and off5
+    // imm10's two low bits ride in byte 1 and its top eight in byte 2, so in
+    // immreg - which holds {byte1, byte2} - the halves are at opposite ends.
+    // That is a property of THIS buffer holding byte 1 high, not of the
+    // encoding: in the stream, and in any wider fetch buffer, the field is one
+    // contiguous slice.  Either way it is wiring and costs no logic.
+    wire [15:0] i10 = {{6{ir[7]}}, ir[7:0], ir[15:14]};   // +4  imm10
 
     // --- +2 / +3: imm3, which is also shift3 --------------------------------
-    wire [2:0] k3 = {ir[1:0], sel[0]};
+    wire [2:0] k3 = {ir[7:6], sel[0]};
     logic [3:0] lo3;
 ${caseTable('lo3', t.imm3.values.map((v) => v & 15), 3, 'k3').replace(/16'h([0-9a-f]{4})/g, (_, h) => `4'h${h.slice(-1)}`)}
     // Index 0 is the only entry whose top twelve bits are set: -1 for the ALU,
@@ -160,12 +189,12 @@ ${caseTable('lo3', t.imm3.values.map((v) => v & 15), 3, 'k3').replace(/16'h([0-9
     wire [15:0] i3v = {{12{neg}}, lo3};
 
     // --- +1 / +5: immbit5 and immask5, sharing one complement layer ---------
-    wire [4:0] n5 = ir[4:0];
+    wire [4:0] n5 = ir[7:3];
     wire [3:0] n4 = n5[3:0];
     logic [15:0] tbit, tmask;
 ${caseTable('tbit', t.immbit5.values.slice(0, 16), 4, 'n4')}
 ${caseTable('tmask', t.immask5.values.slice(0, 16), 4, 'n4')}
-    wire [15:0] tsel = (sel[2] ? tmask : tbit) ^ {16{ir[4]}};
+    wire [15:0] tsel = (sel[2] ? tmask : tbit) ^ {16{ir[7]}};
 
     // --- +0 again, for the packed branch ------------------------------------
     // \`br cond, ra, #imm5\` puts a condimm5 index in the same five bits that

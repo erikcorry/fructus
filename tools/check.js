@@ -92,13 +92,20 @@ for (const [name, t] of Object.entries(types)) {
       const claimed = new Map();
       for (const m of text.matchAll(/#define\s+(EM_[A-Z0-9_]+)\s+(0x[0-9a-fA-F]+|\d+)/g))
         claimed.set(Number(m[2]), m[1]);
-      const clash = claimed.get(elf.machine);
-      if (clash)
-        err(`[elf] machine 0x${elf.machine.toString(16)} is already ${clash} in `
-          + `include/elf/common.h`);
-      else
+      // The number must be OURS or nobody's.  Before the port landed this was
+      // a pure collision check; now that EM_FRUCTUS is in the header the same
+      // test has to accept our own entry - and still reject the case that
+      // matters, which is somebody else's name on our number.
+      const holder = claimed.get(elf.machine);
+      if (holder && holder !== elf.machine_id)
+        err(`[elf] machine 0x${elf.machine.toString(16)} is ${holder} in `
+          + `include/elf/common.h, not ${elf.machine_id}`);
+      else if (!holder)
         console.log(`elf: machine 0x${elf.machine.toString(16)} (${elf.machine_id}) is `
                   + `unclaimed among the ${claimed.size} values in binutils`);
+      else
+        console.log(`elf: machine 0x${elf.machine.toString(16)} is ${elf.machine_id} in `
+                  + `include/elf/common.h, as the spec says`);
     }
   }
 
@@ -310,6 +317,7 @@ for (const insn of spec.insn) {
     // Resolve each letter to (operand, encoded type, which bits of it).
     const covered = new Map(); // operand name -> Set of covered bit indices
     const encType = new Map(); // operand name -> encoded type name
+    const inStream = new Map(); // operand name -> [[value bit, stream bit], ...]
     for (const [letter, positions] of letters) {
       const explicit = form.fields?.[letter];
       let opName, typeName, bitIdx;
@@ -351,10 +359,20 @@ for (const insn of spec.insn) {
 
       if (!covered.has(opName)) covered.set(opName, new Set());
       const set = covered.get(opName);
-      for (const b of bitIdx) {
+      bitIdx.forEach((b, k) => {
         if (set.has(b)) err(`${tag}: operand '${opName}' bit ${b} assigned twice`);
         set.add(b);
-      }
+        // Where this bit lands in a LITTLE-ENDIAN STREAM REGISTER - one loaded
+        // from the instruction stream, byte 0 at the bottom.  The encoding
+        // string is written MSB-first WITHIN each byte and byte 0 first, so
+        // getting from one to the other means finding the byte and then the
+        // bit inside it.
+        const pos = positions[k];
+        const byte = Math.floor(pos / 8);
+        const stream = byte * 8 + (7 - (pos % 8));
+        if (!inStream.has(opName)) inStream.set(opName, []);
+        inStream.get(opName).push([b, stream]);
+      });
     }
 
     // Invariant 2: the encoded bits exactly cover the encoded type.
@@ -381,6 +399,75 @@ for (const insn of spec.insn) {
       if (!opByName[opName]) err(`${tag}: fix names unknown operand '${opName}'`);
     for (const [a, b] of Object.entries(tie))
       if (!opByName[a] || !opByName[b]) err(`${tag}: tie ${a}=${b} names an unknown operand`);
+
+    // --- Invariant 4b: EVERY FIELD IS ONE CONTIGUOUS SLICE OF THE STREAM ----
+    //
+    // Load the instruction stream into a register, little endian, byte 0 at the
+    // bottom.  Every operand field must then be a single contiguous run of
+    // bits, in order - so extracting it is a shift and a mask, and extracting a
+    // SIGNED one that reaches the top of the register is a lone `asr'.
+    //
+    // This is why byte 1 puts the first operand in the LOW bits and gives a
+    // split immediate its LOW bits: it is what makes the field come out
+    // contiguous once the bytes are in memory order.  Before that change the
+    // ten-bit displacement of `ld rd, [ra, #imm10]' arrived in two pieces six
+    // bits apart, and reassembling it cost four instructions against one.
+    //
+    // Who cares: a self-hosted disassembler or monitor, and any implementation
+    // that buffers more than two bytes of the stream - an icache-line decoder
+    // sees exactly this register.  The current two-byte immreg does NOT, because
+    // it holds {byte1, byte2} with byte 1 in the high half, which is the reverse
+    // of how those bytes sit in memory.  That narrow buffer is the special case.
+    //
+    // THE ONE ALLOWED EXCEPTION is a field that borrows its LOW bit from the
+    // opcode byte - the third-register selector, and the imm3 index.  Those are
+    // deliberate: the bit is in byte 0 because that is what keeps the opcode map
+    // dense.  So byte 0's share is checked separately and must be the field's
+    // low bits.  Any OTHER split is a mistake, and this is what says so.
+    for (const [opName, bits] of inStream) {
+      if (bits.length < 2) continue;
+      const inOpcode = bits.filter(([, sb]) => sb < 8).sort((a, b) => a[0] - b[0]);
+      const rest     = bits.filter(([, sb]) => sb >= 8).sort((a, b) => a[0] - b[0]);
+      const run = (xs) => xs.every(([vb, sb], k) =>
+        k === 0 || (vb === xs[k - 1][0] + 1 && sb === xs[k - 1][1] + 1));
+
+      if (!run(rest))
+        err(`${tag}: operand '${opName}' is not one contiguous slice of a `
+          + `little-endian stream register (bits ${rest.map(([v, s]) => `${v}@${s}`).join(' ')}), `
+          + `so extracting it costs more than a shift and a mask`);
+      if (inOpcode.length) {
+        if (!run(inOpcode))
+          err(`${tag}: operand '${opName}' has a scattered share of byte 0`);
+        if (inOpcode[0][0] !== 0 || inOpcode[inOpcode.length - 1][0] !== inOpcode.length - 1)
+          err(`${tag}: operand '${opName}' borrows bits ${inOpcode.map((x) => x[0]).join(',')} `
+            + `from the opcode byte, but only its LOW bits may live there`);
+      }
+    }
+
+    // --- Invariant 4c: EVERY SIGNED IMMEDIATE IS TOP-ALIGNED ----------------
+    //
+    // Contiguity makes a field a shift and a mask.  This makes a SIGNED one a
+    // single `asr': if the field's high bit is the top bit of the instruction,
+    // then in a register loaded from the stream it is already at the top, and
+    // one arithmetic shift right both positions it and sign extends it.
+    //
+    //   iiii_iddd            imm5[4] at stream bit 15   asr r0, r0, #11
+    //   iiaa_addd jjjj_jjjj  imm10[9] at stream bit 23  asr r0, r0, #6
+    //
+    // With byte 1 the other way round - dddi_iiii - imm5 lands at stream[12:8]
+    // and costs a shift first: two instructions instead of one, measured.  So
+    // this is the invariant that pays for byte 1 putting the first operand in
+    // the low bits, and it is exactly what an edit back to the old layout
+    // breaks.
+    for (const [opName, bits] of inStream) {
+      const t = types[encType.get(opName)];
+      if (!t || t.kind !== 'int' || !t.signed) continue;
+      const top = bits.reduce((a, b) => (b[0] > a[0] ? b : a));
+      if (top[1] !== n - 1)
+        err(`${tag}: signed immediate '${opName}' has its high bit at stream `
+          + `bit ${top[1]}, not ${n - 1} - so sign extending it needs a shift `
+          + `before the asr, not just the asr`);
+    }
 
     forms.push({ tag, insn, form, n, nbytes: n / 8, mask, match,
                  mask0: Number((mask >> BigInt(n - 8)) & 0xffn),
