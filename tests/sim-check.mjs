@@ -691,5 +691,36 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   console.log('ok    snippets/clz.s: 4 routines x 65536 inputs, and their cycle counts');
 }
 
+// --- digits3: every input, the bytes either side, and the cost ---------------
+// The exactness argument in the file is about an error bound, and a bound is
+// the kind of claim that is right for 999 inputs and wrong for one - so all
+// 1000 are run.  The reference is String(), not arithmetic that could share a
+// mistake with the routine.
+//
+// Also checked: nothing is written outside buf[0..2], and r2, r3 and r4 - callee
+// saved for a two-argument function - come back untouched.  The cost is pinned
+// because the file claims it is flat.
+{
+  const { code, syms } = assemble('snippets/digits3.s');
+  const EXIT = 0xfffc, BUF = 0x4001;    // odd, so a word store would show
+  let bad = -1, why = '', best = Infinity, worst = 0;
+  for (let n = 0; n < 1000; n++) {
+    m.reset();
+    const r = callRoutine(m, code, syms.get('digits3'), EXIT,
+                          { 0: n, 1: BUF, 2: 0x2222, 3: 0x3333, 4: 0x4444, 7: EXIT });
+    const got = String.fromCharCode(...m.mem.slice(BUF, BUF + 3));
+    const c = m.cycles();
+    if (c < best) best = c;
+    if (c > worst) worst = c;
+    if (bad >= 0) continue;
+    if (got !== String(n).padStart(3, '0')) { bad = n; why = `wrote ${JSON.stringify(got)}`; }
+    else if (m.mem[BUF - 1] || m.mem[BUF + 3]) { bad = n; why = 'wrote outside buf[0..2]'; }
+    else if (r[2] !== 0x2222 || r[3] !== 0x3333 || r[4] !== 0x4444) { bad = n; why = 'clobbered a callee saved register'; }
+  }
+  check('digits3 is right', bad < 0, `n = ${bad}: ${why}`);
+  check('digits3 costs 44', best === 44 && worst === 44, `measured ${best}..${worst}`);
+  console.log('ok    snippets/digits3.s: 1000 inputs, and its cycle count');
+}
+
 console.log(`${checks} checks, ${fails} failures`);
 process.exit(fails ? 1 : 0);
