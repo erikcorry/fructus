@@ -9,6 +9,8 @@
     "gen": "mkdir -p build && node tools/gen-customasm.js > build/fructus.asm && node tools/gen-customasm.js --noat > build/fructus-noat.asm",
     "rtl": "mkdir -p rtl && node tools/gen-immgen.js > rtl/immgen.sv && node tools/gen-rhs.js > rtl/rhs.sv && node tools/gen-unary.js > rtl/unary.sv && echo \"rtl/immgen.sv rtl/rhs.sv rtl/unary.sv\"",
     "binutils": "node tools/gen-opcodes.js --header > vendor/binutils-gdb/include/opcode/fructus.h && node tools/gen-opcodes.js --table > vendor/binutils-gdb/opcodes/fructus-opc.c && node tools/gen-asm.js --header > vendor/binutils-gdb/include/opcode/fructus-asm.h && node tools/gen-asm.js --table > vendor/binutils-gdb/opcodes/fructus-asm.c && echo \"vendor/binutils-gdb/{include/opcode/fructus{,-asm}.h,opcodes/fructus-{opc,asm}.c}\"",
+    "gcc": "node tools/gen-gcc.js > vendor/gcc/gcc/config/fructus/fructus-isa.h && echo vendor/gcc/gcc/config/fructus/fructus-isa.h",
+    "torture": "node tools/torture.mjs",
     "test": "sh tests/run.sh",
     "sim": "node tools/sim.js",
     "microtan": "node tools/microtan.js",

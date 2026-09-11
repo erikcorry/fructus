@@ -45,6 +45,17 @@ let fail = 0, ok = 0, skip = 0, total = 0;
 for (const src of process.argv.slice(2)) {
   const text = readFileSync(src, 'utf8');
 
+  // customasm's own directives - `#res', `#d8' and the rest - begin with `#',
+  // which gas reads as a line comment: it would drop them without a word and
+  // then disagree about every byte after the first.  Not a gas bug, and not
+  // something this check can compare, so say so rather than fail.
+  const directive = /^\s*#[a-z]\w*/m.exec(text);
+  if (directive) {
+    console.log(`skip  ${src}: uses the customasm directive \`${directive[0].trim()}'`);
+    skip++;
+    continue;
+  }
+
   const gs = join(TMP, '_gas.s'), go = join(TMP, '_gas.o');
   writeFileSync(gs, '\t.text\n' + text);
   try {

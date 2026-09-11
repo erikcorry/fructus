@@ -145,6 +145,49 @@ else
     printf 'skip  vendor/binutils-gdb not checked out, opcode table not checked\n'
 fi
 
+# --- the GCC port's copies of things this repository owns --------------------
+# fructus-isa.h is generated, like the opcode table: it is the list of
+# constants the compiler may print, and a stale one lets the compiler emit an
+# immediate gas refuses.  lib1funcs.S is a copy, because libgcc has to build
+# from inside the GCC tree; the copy has to stay byte for byte the tested one.
+if [ -d vendor/gcc/gcc/config/fructus ]; then
+    node tools/gen-gcc.js > build/_isa.h
+    if cmp -s build/_isa.h vendor/gcc/gcc/config/fructus/fructus-isa.h; then
+        printf 'ok    gcc config/fructus/fructus-isa.h is up to date with isa/fructus.toml\n'
+    else
+        printf 'FAIL  gcc config/fructus/fructus-isa.h is stale - run `npm run gcc`\n'; fail=1
+    fi
+    rm -f build/_isa.h
+    if cmp -s libgcc/lib1funcs.s vendor/gcc/libgcc/config/fructus/lib1funcs.S; then
+        printf 'ok    gcc libgcc/config/fructus/lib1funcs.S is libgcc/lib1funcs.s\n'
+    else
+        printf 'FAIL  gcc libgcc/config/fructus/lib1funcs.S differs from libgcc/lib1funcs.s\n'; fail=1
+    fi
+else
+    printf 'skip  vendor/gcc has no fructus port checked out, its copies not checked\n'
+fi
+
+# --- the compiler keeps the sliding convention ------------------------------
+# Compiled code calling compiled code agrees with itself whatever the
+# convention, so the torture suite cannot see a wrong one.  tests/abi-caller.s
+# is written by hand: it puts sentinels in r2, r3 and r4, calls compiled
+# functions of each arity, and checks exactly the registers isa/abi.s says the
+# callee keeps.  Skipped when the compiler is not built; see tools/fcc.
+if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
+    for o in -O2 -O0; do
+        if tools/fcc $o tests/abi-caller.s tests/abi-callee.c -o build/_abi 2>build/_err \
+           && node tools/fcc-run.mjs build/_abi.bin; then
+            printf 'ok    compiled callees keep the sliding convention at %s\n' "$o"
+        else
+            printf 'FAIL  compiled callees break the sliding convention at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    rm -f build/_abi build/_abi.bin
+else
+    printf 'skip  the compiler is not built, the sliding convention not checked\n'
+fi
+
 # --- snippet arithmetic, which assembling cannot check -----------------------
 for t in tests/fpadd-check.mjs tests/fpsub-check.mjs; do
     if out=$(node "$t" 2>&1) && ! printf '%s' "$out" | grep -q MISMATCH; then

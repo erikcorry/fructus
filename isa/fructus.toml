@@ -2207,7 +2207,11 @@ operands = [
   { name = "imm", type = "int16" },
 ]
 syntax   = "{d}, {a}, #{imm}"
-semantics = "R[d] = R[a] == imm"
+# The immediate is compared as a 16-bit PATTERN.  Written `R[a] == imm' this
+# compared a register, which is 0..65535, against the signed value decoded
+# from imm10 - so `iseq r0, r0, #-205' was false for r0 = -205, where the
+# comparator sees 0xff33 on both ports.  The compiler found it.
+semantics = "R[d] = R[a] == (imm & 0xffff)"
 
   [[insn.form]]
   name     = "reg_imm5"

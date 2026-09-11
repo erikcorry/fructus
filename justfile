@@ -17,10 +17,11 @@ default:
 # Install the apt packages the toolchain and the tests need.
 install-deps:
     @sudo apt-get install -y build-essential bison flex m4 texinfo \
-        iverilog yosys nextpnr-ice40
+        libgmp-dev libmpfr-dev libmpc-dev iverilog yosys nextpnr-ice40
     @echo
     @echo "bison, flex and m4 generate ld's and binutils' parsers, which are not"
     @echo "shipped pre-generated; texinfo supplies makeinfo for the manuals;"
+    @echo "GMP, MPFR and MPC are what GCC does its constant arithmetic with;"
     @echo "iverilog, yosys and nextpnr-ice40 are for the rtl/ checks."
     @echo
     @echo "Not from apt: node (nvm here), and customasm (cargo install customasm)."
@@ -89,6 +90,25 @@ disassemble file:
     @{{build}}/gas/as-new -o build/_j.o {{file}}
     @{{build}}/binutils/objdump -d build/_j.o
 
+# ----------------------------------------------------------------- compiler --
+
+# Regenerate the GCC port's immediate tables from isa/fructus.toml.
+generate-gcc-sources:
+    @npm run --silent gcc
+
+# Configure and build the C compiler and libgcc.  Needs build-tools first.
+build-gcc: generate-gcc-sources
+    @sh tools/build-gcc.sh
+
+# Compile a C file for the simulator and run it; the exit status is main's.
+run-c file *flags='-O2':
+    @tools/fcc {{flags}} {{file}} -o build/_c
+    @node tools/fcc-run.mjs build/_c.bin --stats
+
+# GCC's C execute torture tests on the simulator, e.g. `just torture -O2 pr'.
+torture *args='-O2':
+    @node tools/torture.mjs {{args}}
+
 # ------------------------------------------------------------------ the spec --
 
 # Check isa/fructus.toml against its own invariants.
@@ -104,7 +124,7 @@ generate-rtl:
     @npm run --silent rtl
 
 # Everything the spec generates.
-generate: generate-ruledefs generate-rtl generate-tool-sources
+generate: generate-ruledefs generate-rtl generate-tool-sources generate-gcc-sources
 
 # Run the whole suite.  Skips the toolchain checks if it is not built.
 test:

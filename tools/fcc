@@ -1,0 +1,63 @@
+#!/bin/sh
+# =============================================================================
+# fcc - compile C for the simulator
+# =============================================================================
+#
+#   tools/fcc [gcc options] file.c ... -o prog
+#
+# Writes prog, an ELF executable, and prog.bin, the flat image that
+# tools/fcc-run.mjs loads.  With -c, -S or -E it is just the compiler.
+#
+# The compiler is the one in build/gcc and the libgcc it built.  The program
+# is linked with crt/crt0.s, the assembly libc in libc/, and ld/fructus-sim.ld.
+#
+# libc/ is written in the customasm dialect, which gas also reads but which has
+# no .globl: every label at the start of a line that does not begin with `.'
+# is exported, which is what customasm's flat namespace amounts to.
+# =============================================================================
+set -e
+root=$(cd "$(dirname "$0")/.." && pwd)
+B=$root/build
+X=$B/cross-bin
+CC="$B/gcc/gcc/xgcc -B$B/gcc/gcc/ -B$X/ -isystem $root/crt/include"
+
+out=a.out
+prev=
+for a in "$@"; do
+    [ "$prev" = -o ] && out=$a
+    case $a in -c|-S|-E) exec $CC "$@" ;; esac
+    prev=$a
+done
+
+# crt0 and libc, rebuilt whenever a source is newer than the archive.
+lib=$B/crt/libc.a
+mkdir -p $B/crt
+stale=
+[ -f $lib ] || stale=1
+for s in $root/crt/crt0.s $root/crt/libc.c $root/crt/include/*.h $root/libc/*.s $B/gcc/gcc/cc1; do
+    [ $s -nt $lib ] && stale=1
+done
+if [ -n "$stale" ]; then
+    rm -f $lib
+    $X/fructus-elf-as -o $B/crt/crt0.o $root/crt/crt0.s
+    for s in $root/libc/*.s; do
+        n=$(basename $s .s)
+        { printf '\t.text\n'
+          sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\):.*/\t.globl\t\1/p' $s
+          cat $s; } > $B/crt/$n.s
+        $X/fructus-elf-as -o $B/crt/$n.o $B/crt/$n.s
+        $X/fructus-elf-ar rc $lib $B/crt/$n.o
+    done
+    # The C half of the library.  It is one object, but a section per
+    # function, and the link below collects garbage, so a program still
+    # carries only what it calls.
+    $CC -Os -ffunction-sections -c $root/crt/libc.c -o $B/crt/libc-c.o
+    $X/fructus-elf-ar rc $lib $B/crt/libc-c.o
+    $X/fructus-elf-ranlib $lib
+fi
+
+# The image is RAM, code and data alike, so the one segment is RWX on purpose.
+$CC -nostdlib -T $root/ld/fructus-sim.ld -Wl,--no-warn-rwx-segments,--gc-sections \
+    $B/crt/crt0.o "$@" \
+    -Wl,--start-group $lib -L$B/gcc/fructus-elf/libgcc -lgcc -Wl,--end-group
+$X/fructus-elf-objcopy -O binary $out $out.bin
