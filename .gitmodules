@@ -1,7 +1,7 @@
 [submodule "vendor/gcc"]
 	path = vendor/gcc
-	url = https://github.com/gcc-mirror/gcc.git
-	branch = releases/gcc-16
+	url = https://github.com/erikcorry/gcc.git
+	branch = fructus
 	shallow = true
 [submodule "vendor/binutils-gdb"]
 	path = vendor/binutils-gdb
