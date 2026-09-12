@@ -184,6 +184,21 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
         fi
     done
     rm -f build/_abi build/_abi.bin
+
+    # --- setjmp and longjmp, which no epilogue unwinds ----------------------
+    # tests/setjmp.c sets three locals before the setjmp and checks them after
+    # a longjmp from twenty frames down, so it fails if libc/setjmp.s restores
+    # the wrong registers or loses sp.
+    for o in -O2 -O0; do
+        if tools/fcc $o tests/setjmp.c -o build/_sj 2>build/_err \
+           && node tools/fcc-run.mjs build/_sj.bin; then
+            printf 'ok    setjmp and longjmp at %s\n' "$o"
+        else
+            printf 'FAIL  setjmp and longjmp at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    rm -f build/_sj build/_sj.bin
 else
     printf 'skip  the compiler is not built, the sliding convention not checked\n'
 fi
