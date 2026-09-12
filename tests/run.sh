@@ -199,6 +199,21 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
         fi
     done
     rm -f build/_sj build/_sj.bin
+
+    # --- 32-bit division, against its own identity --------------------------
+    # tests/div32.c needs no reference implementation: a quotient and
+    # remainder are right exactly when a == q * b + r and r < b, and the
+    # multiply that checks it shares no code with the division.
+    for o in -O2 -O0; do
+        if tools/fcc $o tests/div32.c -o build/_d32 2>build/_err \
+           && node tools/fcc-run.mjs build/_d32.bin; then
+            printf 'ok    32-bit division at %s\n' "$o"
+        else
+            printf 'FAIL  32-bit division at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    rm -f build/_d32 build/_d32.bin
 else
     printf 'skip  the compiler is not built, the sliding convention not checked\n'
 fi
