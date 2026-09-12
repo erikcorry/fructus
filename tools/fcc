@@ -34,13 +34,16 @@ lib=$B/crt/libc.a
 mkdir -p $B/crt
 stale=
 [ -f $lib ] || stale=1
-for s in $root/crt/crt0.s $root/crt/libc.c $root/crt/include/*.h $root/libc/*.s $B/gcc/gcc/cc1; do
+for s in $root/crt/crt0.s $root/crt/libc.c $root/crt/include/*.h $root/libc/*.s \
+         $root/snippets/digits3.s $B/gcc/gcc/cc1; do
     [ $s -nt $lib ] && stale=1
 done
 if [ -n "$stale" ]; then
     rm -f $lib
     $X/fructus-elf-as -o $B/crt/crt0.o $root/crt/crt0.s
-    for s in $root/libc/*.s; do
+    # snippets/digits3.s comes along because printf's decimal conversion calls
+    # it: three digits at a time, with no divide anywhere.
+    for s in $root/libc/*.s $root/snippets/digits3.s; do
         n=$(basename $s .s)
         { printf '\t.text\n'
           sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\):.*/\t.globl\t\1/p' $s

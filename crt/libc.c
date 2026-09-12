@@ -301,6 +301,56 @@ puts (const char *s)
   return 0;
 }
 
+/* ---- decimal, without dividing ------------------------------------------ */
+
+/* snippets/digits3.s: three ASCII digits of a number under 1000, with no
+   divide at all - 41n is n/100 in fixed point, and each digit falls out of
+   the top four bits.  */
+extern void digits3 (unsigned, char *);
+
+/* The digits of V, written backwards from END, and at least WIDTH of them
+   with leading zeros - which is what a fraction needs.  Returns the first
+   digit written.
+
+   NOTHING HERE DIVIDES.  1000 is 1024 - 24, so 1024q = 1000q + 24q and a
+   divmod by 1000 needs no multiply wider than a pair of shifts; three digits
+   then come out of digits3 at once.  Normalising everything to 32 bits costs
+   the small values nothing, because the loop only runs while the value is
+   1024 or more, and it saves a second copy of all of this for 16-bit ones.  */
+static char *
+dec (unsigned long v, char *end, int width)
+{
+  char *start = end;
+
+  while (v >= 1000)
+    {
+      unsigned long q = 0, d = v;
+      while (d >= 1024)
+	{
+	  unsigned m = d & 1023;
+	  d >>= 10;			/* divide by 1024 */
+	  q += d;
+	  d = (d << 4) + (d << 3) + m;	/* 24d, and 1000q + d is still v */
+	}
+      if (d >= 1000)
+	q++, d -= 1000;
+      end -= 3;
+      digits3 ((unsigned) d, end);	/* a full three digits, zeros and all */
+      v = q;
+    }
+
+  /* The top chunk is under 1000 and its leading zeros are not wanted.  */
+  unsigned w = v;
+  char top[3];
+  digits3 (w, top);
+  for (int k = 2, first = w >= 100 ? 0 : w >= 10 ? 1 : 2; k >= first; k--)
+    *--end = top[k];
+
+  while (start - end < width)
+    *--end = '0';
+  return end;
+}
+
 /* A sink that either prints or fills a buffer, so one formatter serves
    printf and snprintf alike.  */
 struct sink { char *buf; size_t left; int count; };
@@ -356,9 +406,8 @@ vsnprintf (char *buf, size_t size, const char *fmt, va_list ap)
 
       char tmp[24], *p = tmp + sizeof tmp;
       const char *str = p;
+      int neg = 0, shift = 0;
       *--p = 0;
-      unsigned long u;
-      int neg = 0, base = 10;
       switch (*fmt)
 	{
 	case 'd': case 'i':
@@ -366,28 +415,33 @@ vsnprintf (char *buf, size_t size, const char *fmt, va_list ap)
 	    long v = lng ? va_arg (ap, long) : va_arg (ap, int);
 	    if (v < 0)
 	      neg = 1, v = -v;
-	    u = v;
-	    goto number;
+	    p = dec (v, p, 0);
+	    if (neg)
+	      *--p = '-';
+	    str = p;
+	    break;
 	  }
-	case 'x': case 'X': case 'p':
-	  base = 16;
-	  /* fall through */
 	case 'u':
-	  u = lng ? va_arg (ap, unsigned long) : va_arg (ap, unsigned int);
-	  if (*fmt == 'o')
-	    base = 8;
-	number:
-	  do
-	    *--p = "0123456789abcdef"[u % base];
-	  while (u /= base);
-	  if (neg)
-	    *--p = '-';
-	  str = p;
+	  str = p = dec (lng ? va_arg (ap, unsigned long)
+			     : va_arg (ap, unsigned int), p, 0);
 	  break;
+	/* Eight and sixteen are shifts and masks, so these never divide
+	   either, and the digits come out one at a time.  */
 	case 'o':
-	  base = 8;
-	  u = lng ? va_arg (ap, unsigned long) : va_arg (ap, unsigned int);
-	  goto number;
+	  shift = 3;
+	  /* fall through */
+	case 'x': case 'X': case 'p':
+	  {
+	    unsigned long u = lng ? va_arg (ap, unsigned long)
+				  : va_arg (ap, unsigned int);
+	    if (!shift)
+	      shift = 4;
+	    do
+	      *--p = "0123456789abcdef"[(unsigned) u & ((1u << shift) - 1)];
+	    while (u >>= shift);
+	    str = p;
+	    break;
+	  }
 	case 'c':
 	  *--p = va_arg (ap, int);
 	  str = p;
@@ -395,7 +449,9 @@ vsnprintf (char *buf, size_t size, const char *fmt, va_list ap)
 	case 'f': case 'g': case 'e':
 	  {
 	    /* Fixed point only, and only as far as an unsigned long reaches -
-	       enough for what a test prints.  Rounded to the precision.  */
+	       enough for what a test prints.  Rounded to the precision.  The
+	       fraction is the one place a width of leading zeros is wanted:
+	       0.5 to three places is "500", not "5".  */
 	    double v = va_arg (ap, double);
 	    int digits = prec < 0 ? 6 : prec;
 	    double scale = 1;
@@ -407,13 +463,12 @@ vsnprintf (char *buf, size_t size, const char *fmt, va_list ap)
 	    unsigned long frac = (v - whole) * scale + 0.5;
 	    if (frac >= scale)
 	      whole++, frac -= scale;
-	    for (int i = 0; i < digits; i++, frac /= 10)
-	      *--p = '0' + frac % 10;
 	    if (digits)
-	      *--p = '.';
-	    do
-	      *--p = '0' + whole % 10;
-	    while (whole /= 10);
+	      {
+		p = dec (frac, p, digits);
+		*--p = '.';
+	      }
+	    p = dec (whole, p, 0);
 	    if (neg)
 	      *--p = '-';
 	    str = p;
@@ -432,6 +487,13 @@ vsnprintf (char *buf, size_t size, const char *fmt, va_list ap)
 	  break;
 	}
       int len = strlen (str);
+      /* A zero-padded negative number keeps its sign in front of the zeros:
+	 "%05d" of -42 is -0042, not 00-42.  */
+      if (!left && zero && *str == '-')
+	{
+	  emit (&s, *str++);
+	  len--, width--;
+	}
       if (!left)
 	for (; width > len; width--)
 	  emit (&s, zero ? '0' : ' ');
