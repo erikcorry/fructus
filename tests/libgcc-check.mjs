@@ -245,5 +245,103 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
               `${full.toFixed(0)} cycles full width, ${half.toFixed(0)} narrow`);
 }
 
+// --- __udivmodhi4 and the four division helpers ------------------------------
+// The reference is JavaScript's own division, and the cases are not a sample
+// where they matter: b = 10 is checked for EVERY dividend, because that path
+// is a fixed-point estimate with one correction and its errors would live at
+// particular values rather than at random ones.
+{
+  let wrong = 0, eg = '';
+  const divmod = (a, b) => run('__udivmodhi4', { 0: a, 1: b });
+  const want = (a, b) => [Math.floor(a / b), a % b];
+
+  let cycTen = 0;
+  for (let a = 0; a <= 0xffff; a++) {
+    const q = divmod(a, 10), [wq, wr] = want(a, 10);
+    if (q.why !== 'stopped' || q.R[0] !== wq || q.R[1] !== wr || q.sp !== SP0 || q.R[4] !== R4) {
+      if (!wrong++) eg = `${a}/10 = ${wq},${wr}, got ${q.R[0]},${q.R[1]}`;
+    }
+    cycTen += q.cycles;
+  }
+  check('__udivmodhi4 by ten', wrong === 0, `${wrong} of 65536 wrong, e.g. ${eg}`);
+
+  let wrongP = 0, cycPow = 0, nPow = 0;
+  for (let k = 0; k < 16; k++)
+    for (let i = 0; i < 200; i++) {
+      const a = r16(), b = 1 << k;
+      const q = divmod(a, b), [wq, wr] = want(a, b);
+      if (q.why !== 'stopped' || q.R[0] !== wq || q.R[1] !== wr || q.R[4] !== R4) wrongP++;
+      cycPow += q.cycles; nPow++;
+    }
+  check('__udivmodhi4 by a power of two', wrongP === 0, `${wrongP} of ${nPow} wrong`);
+
+  let wrongG = 0, egG = '', cycGen = 0, nGen = 0;
+  const cases = [];
+  for (const a of edge) for (const b of edge) if (b) cases.push([a, b]);
+  for (let i = 0; i < 3000; i++) cases.push([r16(), r16() || 1]);
+  for (const b of [3, 7, 100, 1000]) for (let i = 0; i < 200; i++) cases.push([r16(), b]);
+  for (const [a, b] of cases) {
+    const q = divmod(a, b), [wq, wr] = want(a, b);
+    if (q.why !== 'stopped' || q.R[0] !== wq || q.R[1] !== wr || q.sp !== SP0 || q.R[4] !== R4) {
+      if (!wrongG++) egG = `${a}/${b} = ${wq},${wr}, got ${q.R[0]},${q.R[1]}`;
+    }
+    cycGen += q.cycles; nGen++;
+  }
+  check('__udivmodhi4 general', wrongG === 0, `${wrongG} of ${nGen} wrong, e.g. ${egG}`);
+
+  // DIVISION BY ZERO RETURNS JUNK AND MUST NOT HANG, which is the whole
+  // contract: C says nothing about the value.
+  const z = divmod(1234, 0);
+  check('__udivmodhi4 by zero terminates', z.why === 'stopped' && z.R[4] === R4,
+        `dividing by zero ${z.why}`);
+
+  // THE THREE PATHS, pinned by cost rather than by a byte count.  Ten is the
+  // worst divisor the general loop has - twelve iterations - so if its own path
+  // stopped being taken it would cost several times this.
+  const tenMean = cycTen / 65536, powMean = cycPow / nPow;
+  let cycEleven = 0;
+  for (let i = 0; i < 400; i++) cycEleven += divmod(r16(), 11).cycles;
+  check('the power-of-two path', powMean < 20, `${powMean.toFixed(1)} cycles, expected a mask and a shift`);
+  check('the divide-by-ten path', tenMean < 60 && tenMean < cycEleven / 400 / 2,
+        `ten costs ${tenMean.toFixed(1)} cycles against ${(cycEleven / 400).toFixed(1)} for eleven, ` +
+        `so the shift-and-add path is not being taken`);
+  console.log(`ok    __udivmodhi4: 65536 dividends by ten, ${nPow + nGen} more; ` +
+              `${powMean.toFixed(0)} / ${tenMean.toFixed(0)} / ${(cycGen / nGen).toFixed(0)} cycles ` +
+              `for a power of two / ten / a random divisor`);
+}
+
+// --- the wrappers, where the signs go back on --------------------------------
+// C truncates a quotient towards zero and gives the remainder the dividend's
+// sign, which is what Math.trunc and JavaScript's % do.
+{
+  let wrong = 0, eg = '';
+  const signed = [];
+  for (const a of [-32768, -32767, -1000, -10, -1, 0, 1, 10, 1000, 32767])
+    for (const b of [-32768, -1000, -10, -3, -1, 1, 3, 10, 1000, 32767])
+      signed.push([a, b]);
+  for (let i = 0; i < 2000; i++) signed.push([s16(r16()), s16(r16()) || 1]);
+
+  for (const [a, b] of signed) {
+    const d = run('__divhi3', { 0: a, 1: b }), md = run('__modhi3', { 0: a, 1: b });
+    const wq = Math.trunc(a / b) & 0xffff, wr = (a % b) & 0xffff;
+    if (d.why !== 'stopped' || d.R[0] !== wq || d.sp !== SP0 || d.R[4] !== R4
+        || md.why !== 'stopped' || md.R[0] !== wr || md.sp !== SP0 || md.R[4] !== R4) {
+      if (!wrong++) eg = `${a}/${b} = ${Math.trunc(a / b)},${a % b}, got ${s16(d.R[0])},${s16(md.R[0])}`;
+    }
+  }
+  check('__divhi3 and __modhi3', wrong === 0, `${wrong} of ${signed.length} wrong, e.g. ${eg}`);
+
+  let wrongU = 0, egU = '';
+  for (let i = 0; i < 2000; i++) {
+    const a = r16(), b = r16() || 1;
+    const u = run('__udivhi3', { 0: a, 1: b }), um = run('__umodhi3', { 0: a, 1: b });
+    if (u.R[0] !== Math.floor(a / b) || um.R[0] !== a % b || u.R[4] !== R4 || um.R[4] !== R4) {
+      if (!wrongU++) egU = `${a}/${b}: got ${u.R[0]}, ${um.R[0]}`;
+    }
+  }
+  check('__udivhi3 and __umodhi3', wrongU === 0, `${wrongU} wrong, e.g. ${egU}`);
+  console.log(`ok    the four division helpers: ${signed.length} signed pairs, 2000 unsigned`);
+}
+
 console.log(`${checks} checks, ${fails} failures`);
 process.exit(fails ? 1 : 0);

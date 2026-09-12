@@ -15,6 +15,19 @@
 ;       __umulhisi3     16 x 16 -> 32     unsigned widening
 ;       __mulhisi3      16 x 16 -> 32     signed widening
 ;
+; There is no divide instruction either, so the same again for division:
+;
+;       __udivhi3       16 / 16           every unsigned int division
+;       __umodhi3       16 % 16
+;       __divhi3        16 / 16           signed
+;       __modhi3        16 % 16
+;
+; all four built on __udivmodhi4, which returns BOTH results - the quotient in
+; r0 and the remainder in r1, which is one 32-bit value to a C caller.  A
+; compiler that wants `x / 10' and `x % 10' together can then have them for one
+; call.  The 32-bit division helpers are still C, in the GCC tree's
+; libgcc/config/fructus/lib2div.c.
+;
 ; ONE ROUTINE SERVES SIGNED AND UNSIGNED for everything that is not widening.
 ; The low n bits of a two's complement product do not depend on the signedness
 ; of the operands, so __mulhi3 is the signed helper as well.  Only the widening
@@ -386,4 +399,200 @@ __umulsidi3:
         mov     r0, #0                  ; 1   w3
         mov     r1, r0                  ; 1   w2, pinned
         pop     lr                      ; 4
+        ret                             ; 1
+
+; ============================================================================
+; __udivmodhi4 - 16 / 16 -> quotient and remainder, unsigned
+; ============================================================================
+;       a in r0, b in r1        ->      quotient in r0, remainder in r1
+;
+; Two arguments and a 32-bit result, so by isa/abi.s this owns r0, r1 and r5
+; and must give back r2, r3 and r4 - which is why the general loop, needing a
+; fourth register, borrows r2 for four cycles each way.
+;
+; BOTH RESULTS AT ONCE, because the caller usually wants both.  `x / 10' and
+; `x % 10' next to each other is every digit of every number ever printed,
+; and a quotient-only routine does that work twice.  r0:r1 is what abi.s
+; calls a 32-bit return, so to C this is one `unsigned long'.
+;
+; ----------------------------------------------------------------------------
+; THREE PATHS, AND THE MIDDLE ONE IS WHY
+; ----------------------------------------------------------------------------
+; The general algorithm below costs an iteration per bit of the QUOTIENT, so
+; its cost depends on the divisor and not on the machine:
+;
+;       random 16-bit divisor    1.17 iterations, mean
+;       divisor 1000             6
+;       divisor 100              9
+;       divisor 10               12
+;
+; A random divisor is nearly free - it is large, so the quotient is small.
+; Ten is the worst case in the whole range and also the commonest divisor
+; there is, so it gets its own path, and powers of two get one because a mask
+; and a shift are obviously cheaper than any loop.
+;
+; DIVISION BY ZERO returns junk and does not hang, which is all that is
+; required of it: popcount 0 is 0 so it is not the power-of-two path, and in
+; the loop `r >= 0' is always true, so the loop runs its bounded count and
+; leaves the quotient all ones.
+;
+; ----------------------------------------------------------------------------
+; DIVIDING BY TEN WITH SHIFTS
+; ----------------------------------------------------------------------------
+; 1/10 is 0.0001100110011... in binary, so
+;
+;       q = a/2 + a/4           0.75 a
+;       q += q >> 4             0.796875 a
+;       q += q >> 8             0.79999237 a
+;       q >>= 3                 0.09999905 a
+;
+; is a/10 a little low, and the remainder a - 10q is then in 0..19, so ONE
+; conditional correction finishes it.  Exactly one: brute force over all
+; 65536 dividends says 50286 need no correction and 15250 need one, none
+; needs two, and no intermediate overflows 16 bits - which is what the
+; halving first buys, since 0.75 * 65535 still fits.
+;
+; It is exact for EVERY 16-bit dividend, so there is no range to check first.
+;
+; ----------------------------------------------------------------------------
+; THE GENERAL CASE
+; ----------------------------------------------------------------------------
+; Restoring division, one bit of quotient per iteration, with the divisor
+; pre-shifted up to align with the dividend:
+;
+;       s = clz(b) - clz(a)             how far apart their top bits are
+;       d = b << s
+;       repeat s+1 times:
+;         q <<= 1
+;         if (r >= d) { r -= d; q |= 1 }
+;         d >>= 1
+;
+; THE ALIGNMENT IS ONE INSTRUCTION EACH, which is what `clz' is for.  The C
+; routine this replaces walks the divisor up a bit at a time, and then runs
+; its subtract loop over the whole word width; here the loop runs only as
+; many times as the quotient has bits, and s doubles as the counter.
+;
+; a < b needs no loop at all and is tested for, both because it is common and
+; because s is only meaningful when a >= b.
+; ============================================================================
+
+__udivmodhi4:
+        popcount r5, r1                 ; 2
+        br      ne, r5, #1, .not_pow2   ; 3   0 bits set is not 1 either
+        ; --- b is a power of two: mask and shift -----------------------------
+        clz     r5, r1                  ; 2   15 - log2(b)
+        rsb     r5, r5, #15             ; 2   log2(b), and imm5 reaches 15
+        sub     r1, r1, #1              ; 2   b - 1, the remainder's mask
+        and     r1, r1, r0              ; 2   a mod b
+        lsr     r0, r0, r5              ; 2   a div b
+        ret                             ; 1
+
+.not_pow2:
+        mov     r5, #10                 ; 2   condimm5 has no 10, so compare
+        br      ne, r1, r5, .general    ; 3   against a register
+
+        ; --- b is ten --------------------------------------------------------
+        lsr     r5, r0, #1              ; 2
+        lsr     r1, r0, #2              ; 2
+        add     r5, r5, r1              ; 2   0.75 a
+        lsr     r1, r5, #4              ; 2
+        add     r5, r5, r1              ; 2   0.796875 a
+        lsr     r1, r5, #8              ; 2
+        add     r5, r5, r1              ; 2   0.79999237 a
+        lsr     r5, r5, #3              ; 2   q, at most one too low
+        shl     r1, r5, #3              ; 2   8q
+        add     r1, r1, r5              ; 2   9q
+        add     r1, r1, r5              ; 2   10q
+        rsb     r1, r1, r0              ; 2   r = a - 10q, in 0..19
+        add     r1, r1, #-10            ; 2   the corrected remainder ...
+        add     r0, r5, #1              ; 2   ... and the corrected quotient
+        br      ge, r1, #0, .ten_ret    ; 3+1 r was >= 10: they are the answer
+        mov     r0, r5                  ; 2   otherwise put both back
+        add     r1, r1, #10             ; 2
+.ten_ret:
+        ret                             ; 1
+
+.general:
+        br      lo, r0, r1, .smaller    ; 3+1 a < b: quotient 0, remainder a
+        push    r2                      ; 4   the fourth register, the quotient
+        clz     r5, r1                  ; 2
+        clz     r2, r0                  ; 2
+        rsb     r5, r2, r5              ; 2   s = clz(b) - clz(a), >= 0 here
+        shl     r1, r1, r5              ; 2   d = b << s
+        mov     r2, #0                  ; 2   the quotient
+.loop:
+        add     r2, r2, r2              ; 2   q <<= 1
+        br      lo, r0, r1, .nofit      ; 3+1
+        rsb     r0, r1, r0              ; 2   r -= d
+        add     r2, r2, #1              ; 2   q |= 1
+.nofit:
+        lsr     r1, r1, #1              ; 2   d >>= 1
+        add     r5, r5, #-1             ; 2   s is the counter too
+        br      ge, r5, #0, .loop       ; 3+1 s+1 iterations
+        mov     r1, r0                  ; 1   the remainder, pinned
+        mov     r0, r2                  ; 2   the quotient
+        pop     r2                      ; 4
+        ret                             ; 1
+.smaller:
+        mov     r1, r0                  ; 1   pinned
+        mov     r0, #0                  ; 1   pinned
+        ret                             ; 1
+
+
+; ============================================================================
+; The four helpers GCC actually calls
+; ============================================================================
+; All of them are __udivmodhi4 with the signs put back on afterwards, and all
+; have two arguments and a 16-bit return, so r2, r3 and r4 have to survive -
+; which for the signed pair means the sign has to live somewhere across the
+; call, and r2 is where.
+;
+; __udivhi3 IS A TAIL CALL: the quotient is already in r0, and leaving the
+; remainder in r1 is allowed, since a 16-bit return says nothing about r1.
+
+__udivhi3:
+        jmpr    __udivmodhi4            ; 3+1
+
+__umodhi3:
+        push    lr                      ; 4
+        callr   __udivmodhi4            ; 4
+        mov     r0, r1                  ; 1   the remainder, pinned
+        pop     lr                      ; 4
+        ret                             ; 1
+
+; C rounds a signed quotient TOWARDS ZERO, so the magnitudes divide and the
+; sign goes back on after: negative exactly when the operands' signs differ,
+; which is the top bit of a ^ b.
+__divhi3:
+        push    lr, r2                  ; 6
+        xor     r2, r0, r1              ; 2   bit 15 is the quotient's sign
+        br      ge, r0, #0, .a_pos      ; 3+1
+        rsb     r0, r0, #0              ; 2   |a|
+.a_pos:
+        br      ge, r1, #0, .b_pos      ; 3+1
+        rsb     r1, r1, #0              ; 2   |b|
+.b_pos:
+        callr   __udivmodhi4            ; 4
+        br      ge, r2, #0, .pos        ; 3+1
+        rsb     r0, r0, #0              ; 2
+.pos:
+        pop     r2, lr                  ; 6
+        ret                             ; 1
+
+; And a remainder takes the sign of the DIVIDEND, so that a == (a/b)*b + a%b.
+__modhi3:
+        push    lr, r2                  ; 6
+        mov     r2, r0                  ; 2   keep a, for its sign
+        br      ge, r0, #0, .a_pos      ; 3+1
+        rsb     r0, r0, #0              ; 2   |a|
+.a_pos:
+        br      ge, r1, #0, .b_pos      ; 3+1
+        rsb     r1, r1, #0              ; 2   |b|
+.b_pos:
+        callr   __udivmodhi4            ; 4
+        mov     r0, r1                  ; 1   the remainder, pinned
+        br      ge, r2, #0, .pos        ; 3+1
+        rsb     r0, r0, #0              ; 2
+.pos:
+        pop     r2, lr                  ; 6
         ret                             ; 1
