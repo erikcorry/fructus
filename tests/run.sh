@@ -146,10 +146,11 @@ else
 fi
 
 # --- the GCC port's copies of things this repository owns --------------------
-# fructus-isa.h is generated, like the opcode table: it is the list of
+# Both are generated, like the opcode table.  fructus-isa.h is the list of
 # constants the compiler may print, and a stale one lets the compiler emit an
-# immediate gas refuses.  lib1funcs.S is a copy, because libgcc has to build
-# from inside the GCC tree; the copy has to stay byte for byte the tested one.
+# immediate gas refuses.  lib1funcs.S is libgcc/lib1funcs.s with the ELF
+# paperwork the GCC tree needs added to it - a .globl and a section per
+# routine, so that --gc-sections can drop what a program does not call.
 if [ -d vendor/gcc/gcc/config/fructus ]; then
     node tools/gen-gcc.js > build/_isa.h
     if cmp -s build/_isa.h vendor/gcc/gcc/config/fructus/fructus-isa.h; then
@@ -158,11 +159,13 @@ if [ -d vendor/gcc/gcc/config/fructus ]; then
         printf 'FAIL  gcc config/fructus/fructus-isa.h is stale - run `npm run gcc`\n'; fail=1
     fi
     rm -f build/_isa.h
-    if cmp -s libgcc/lib1funcs.s vendor/gcc/libgcc/config/fructus/lib1funcs.S; then
-        printf 'ok    gcc libgcc/config/fructus/lib1funcs.S is libgcc/lib1funcs.s\n'
+    node tools/gen-lib1funcs.js > build/_lib1.S
+    if cmp -s build/_lib1.S vendor/gcc/libgcc/config/fructus/lib1funcs.S; then
+        printf 'ok    gcc libgcc/config/fructus/lib1funcs.S is up to date with libgcc/lib1funcs.s\n'
     else
-        printf 'FAIL  gcc libgcc/config/fructus/lib1funcs.S differs from libgcc/lib1funcs.s\n'; fail=1
+        printf 'FAIL  gcc libgcc/config/fructus/lib1funcs.S is stale - run `npm run gcc`\n'; fail=1
     fi
+    rm -f build/_lib1.S
 else
     printf 'skip  vendor/gcc has no fructus port checked out, its copies not checked\n'
 fi

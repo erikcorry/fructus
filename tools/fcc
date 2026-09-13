@@ -45,9 +45,15 @@ if [ -n "$stale" ]; then
     # it: three digits at a time, with no divide anywhere.
     for s in $root/libc/*.s $root/snippets/digits3.s; do
         n=$(basename $s .s)
+        # A SECTION OF ITS OWN AS WELL AS A .globl, so that the --gc-sections
+        # in the link below can drop a routine nobody calls.  These files hold
+        # more than one: memcpy.s has memmove, memset.s has bzero, setjmp.s has
+        # longjmp, and without this a program that calls either one carries
+        # both.  Anything ahead of the first label stays in plain .text and is
+        # kept by the relocation that reaches it.
         { printf '\t.text\n'
-          sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\):.*/\t.globl\t\1/p' $s
-          cat $s; } > $B/crt/$n.s
+          sed 's/^\([A-Za-z_][A-Za-z0-9_]*\):/\t.section\t.text.\1,"ax"\n\t.globl\t\1\n\1:/' $s
+        } > $B/crt/$n.s
         $X/fructus-elf-as -o $B/crt/$n.o $B/crt/$n.s
         $X/fructus-elf-ar rc $lib $B/crt/$n.o
     done
@@ -55,8 +61,8 @@ if [ -n "$stale" ]; then
     # Each is one object, but a section per function, and the link below
     # collects garbage, so a program still carries only what it calls.
     for c in libc malloc; do
-        $CC -Os -ffunction-sections -c $root/crt/$c.c -o $B/crt/$c-c.o
-        $X/fructus-elf-ar rc $lib $B/crt/$c-c.o
+        $CC -Os -ffunction-sections -c $root/crt/$c.c -o $B/crt/$c.o
+        $X/fructus-elf-ar rc $lib $B/crt/$c.o
     done
     $X/fructus-elf-ranlib $lib
 fi
