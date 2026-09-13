@@ -38,10 +38,18 @@
 ; __mulqi3 exists as a name but a port only sees it if its machine description
 ; declares a QImode mult pattern, and there is no reason to.
 ;
-; A REAL PORT SPLITS THESE, one function per object, with the `#ifdef L_mulhi3`
-; guards lib1funcs.S conventionally uses, so a program that multiplies ints
-; does not link the 32-bit helpers.  There is no linker yet, so they are one
-; file and the boundaries are marked.
+; THESE ARE SPLIT ONE ROUTINE TO A SECTION, so that a program which multiplies
+; two ints does not link the 32-bit helper, the 64-bit helper and the whole of
+; division along with them - which it did, and which cost 528 bytes in a
+; program whose only use of any of it was a single calloc.
+;
+; Not by the `#ifdef L_mulhi3` guards lib1funcs.S conventionally uses: those
+; would put directives in THIS file, and it has to stay pure customasm, because
+; the suite assembles it with customasm, decodes the bytes back through the
+; disassembler, and compares gas against customasm byte for byte.  The copy in
+; the GCC tree is generated instead, by tools/gen-lib1funcs.js, with a .globl
+; and a section apiece.  It splits at the boundaries marked below, and refuses
+; to split anywhere a routine could be entered by falling through.
 ; ============================================================================
 
 

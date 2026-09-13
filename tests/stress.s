@@ -136,6 +136,7 @@ btarget:
         xor     r0, r0, #1              ; 1  ONE BYTE: negate a predicate
 
         jmp     0x1234
+        jmp     r5                        ; 1  through a register, not lr
         jmpr    start
         call    0x1234
         callr   start
