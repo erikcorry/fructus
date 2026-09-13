@@ -1,9 +1,11 @@
 # Fructus
 
-A 16-bit retrocomputer instruction set, and the toolchain that keeps it honest.
+A 16-bit proposed retrocomputer instruction set, and a toolchain that's
+complete enough to write code and evaluate how the ISA should be changed.
 
-Ports of gas, gcc, ld, objdump etc are provided.  A minimal libc and tuned
-math operations for libgcc are provided.  A simulator as available and a
+Ports of gas, gcc, ld, objdump etc are provided.  A minimal libc (with an O(1) malloc
+implementation) and tuned
+math operations for libgcc are provided.  A simulator as available, and a
 FPGA implementation is started, but far from complete.
 
 The design is RISC-inspired:
@@ -16,11 +18,12 @@ The design is RISC-inspired:
 - The stack pointer is a regular register, sp = r6
 - The return address is a regular register, lr = r7
 - No status flags, but explicit compare-branch and operations that write 0 or 1 to a regular register.
+- Modern calling convention. Arguments and return values are passed in registers where possible, including small structs.
 
 But we don't want to pay the typical code density penalty of RISC on a 64k machine
 - Compact encodings for two-register forms where rd is ra.
 - Compact encodings for smaller and common immediates like -16-15, single-bit-set, and common masks.
-- One-byte encodings for very popular ALU operations that hard code all arguments.
+- One-byte encodings for very popular ALU operations that hard code all three arguments.
 - The length of the instructions is 1-3 bytes and the first byte determines the length.
 - The intention is that the assembler programmer can code as if all three-register and two-register-imm16
   forms were available, but the tooling selects the shortest possible encoding. For C code, gcc is aware
@@ -33,27 +36,33 @@ kind of machine a 6502 ran on — a narrow memory bus where every instruction by
 is a cycle you pay for — so the design question behind almost every decision in
 here is *what does this cost in bytes*.
 
-Right now: **98 encoding forms over 128 of the 256 first bytes, 128 free.**
-
 ![The Fructus opcode map: 128 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
 
 Both this and an interactive version with per-cell tooltips come from
 `npm run map`.
 
-## The one idea
+The ALU is strictly two-input, single output. Comparator operations (conditional
+branch and the "? 1 : 0" instructions iseq, isset, isclear) have a fourth 3-bit
+input which selects the condition. Unary operations will be implemented as
+binary operations where the second (immediate) input selects the operation.
 
+Right now half the opcode space is still free. Some short forms have been specified
+that likely aren't worth it and will be removed. The FPGA implementation will provide
+input as to which features make sense.
+
+## The implementation structure
+
+To allow experimentation with the ISA
 [`isa/fructus.toml`](isa/fructus.toml) is the single source of truth. It holds
 every encoding, every operand type, and what every instruction *does*. The
 assembler, the decoder and the simulator are all generated from it or driven by
 it, so none of them can drift away from the spec or from each other.
 
-It is also, deliberately, a document. The file is about two thirds prose: what
-each decision cost, what was rejected, and why. If you only read one thing, read
-that file top to bottom.
-
 The one hand-maintained view left in it — the opcode map in the header comment —
-is checked against the encodings below it by `npm run check`, because it had
-already drifted once and nothing caught it.
+is checked against the encodings below it by `npm run check`.
+
+It also contains some of the considerations that went into the design so far, so
+it's part of the documentation.
 
 ## Quick start
 
@@ -61,6 +70,7 @@ You need [customasm](https://github.com/hlorenzi/customasm) (Rust, Apache-2.0)
 on your `PATH`:
 
 ```sh
+just install-deps
 cargo install customasm        # or grab a release binary
 npm install                    # one dependency: a TOML parser
 npm run gen                    # generate build/fructus.asm from the spec
@@ -140,6 +150,11 @@ open-source iCE40 toolchain, how to install it and the two things that catch
 you out.
 
 ### rtl/
+
+This part is very tentative and subject to change.  This is my first (AI-assisted)
+foray into FPGA design. So far there is decoding of the second input (the one with
+the immediate forms) and the unary section of the ALU, including popcount and
+clz.
 
 Generated, not written. `rtl/immgen.sv` produces the 16-bit immediate right-hand
 side for every instruction that has one — the ALU and shift groups, `mov`, the
