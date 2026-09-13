@@ -5,7 +5,7 @@
    libc/, and exit and abort from crt0.s.
 
    Output goes to __console, a byte-wide port the simulator's runner prints.
-   The heap grows up from the end of .bss; there is no free list.  */
+   malloc and its family are in crt/malloc.c.  */
 
 #include <stddef.h>
 #include <stdarg.h>
@@ -14,7 +14,6 @@
 #include <stdio.h>
 
 extern volatile unsigned char __console;
-extern char __bss_end[];
 
 /* ---- memory and strings ------------------------------------------------ */
 
@@ -195,53 +194,6 @@ strtol (const char *s, char **end, int base)
 
 int atoi (const char *s) { return strtol (s, NULL, 10); }
 long atol (const char *s) { return strtol (s, NULL, 10); }
-
-/* ---- the heap ----------------------------------------------------------- */
-
-/* Each block carries its size in the word in front of it, so that realloc
-   knows how much to copy.  Nothing is ever given back.  */
-static char *brk_ptr;
-
-void *
-malloc (size_t n)
-{
-  if (!brk_ptr)
-    brk_ptr = __bss_end;
-  size_t *p = (size_t *) brk_ptr;
-  char *sp = (char *) &p;		/* roughly where the stack is */
-  if (n > (size_t) (sp - brk_ptr) || (size_t) (sp - brk_ptr) - n < 1024)
-    return NULL;
-  *p = n;
-  brk_ptr += sizeof (size_t) + n;
-  return p + 1;
-}
-
-void *
-calloc (size_t n, size_t size)
-{
-  void *p = malloc (n * size);
-  if (p)
-    memset (p, 0, n * size);
-  return p;
-}
-
-void *
-realloc (void *old, size_t n)
-{
-  void *p = malloc (n);
-  if (p && old)
-    {
-      size_t had = ((size_t *) old)[-1];
-      memcpy (p, old, had < n ? had : n);
-    }
-  return p;
-}
-
-void
-free (void *p)
-{
-  (void) p;
-}
 
 /* ---- qsort: insertion sort, which is enough for a test ------------------ */
 

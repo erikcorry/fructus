@@ -230,6 +230,23 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
         fi
     done
     rm -f build/_d32 build/_d32.bin
+
+    # --- the heap, against the two things it must never do ------------------
+    # crt/malloc.c is cmpctmalloc cut down to two-byte headers and 256-byte
+    # pages.  tests/malloc.c needs no reference allocator: every live block is
+    # filled with a byte of its own and read back, so an overlap changes a
+    # neighbour, and malloc_free_bytes () is exact, so a page that goes
+    # missing is a number that does not match.
+    for o in -O2 -O0; do
+        if tools/fcc $o tests/malloc.c -o build/_mal 2>build/_err \
+           && node tools/fcc-run.mjs build/_mal.bin; then
+            printf 'ok    malloc hands out no byte twice and loses none at %s\n' "$o"
+        else
+            printf 'FAIL  malloc at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    rm -f build/_mal build/_mal.bin
 else
     printf 'skip  the compiler is not built, the sliding convention not checked\n'
 fi

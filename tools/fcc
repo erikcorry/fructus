@@ -34,7 +34,7 @@ lib=$B/crt/libc.a
 mkdir -p $B/crt
 stale=
 [ -f $lib ] || stale=1
-for s in $root/crt/crt0.s $root/crt/libc.c $root/crt/include/*.h $root/libc/*.s \
+for s in $root/crt/crt0.s $root/crt/*.c $root/crt/include/*.h $root/libc/*.s \
          $root/snippets/digits3.s $B/gcc/gcc/cc1; do
     [ $s -nt $lib ] && stale=1
 done
@@ -51,11 +51,13 @@ if [ -n "$stale" ]; then
         $X/fructus-elf-as -o $B/crt/$n.o $B/crt/$n.s
         $X/fructus-elf-ar rc $lib $B/crt/$n.o
     done
-    # The C half of the library.  It is one object, but a section per
-    # function, and the link below collects garbage, so a program still
-    # carries only what it calls.
-    $CC -Os -ffunction-sections -c $root/crt/libc.c -o $B/crt/libc-c.o
-    $X/fructus-elf-ar rc $lib $B/crt/libc-c.o
+    # The C half of the library: the odds and ends in libc.c, and the heap.
+    # Each is one object, but a section per function, and the link below
+    # collects garbage, so a program still carries only what it calls.
+    for c in libc malloc; do
+        $CC -Os -ffunction-sections -c $root/crt/$c.c -o $B/crt/$c-c.o
+        $X/fructus-elf-ar rc $lib $B/crt/$c-c.o
+    done
     $X/fructus-elf-ranlib $lib
 fi
 

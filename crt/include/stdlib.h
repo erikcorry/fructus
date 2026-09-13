@@ -23,6 +23,11 @@ void *calloc (size_t, size_t);
 void *realloc (void *, size_t);
 void free (void *);
 
+/* Not standard: everything the heap has not handed out.  A heap that has had
+   everything freed reports what it did at the start, so this is what a test
+   watches for a leak or a lost page.  */
+size_t malloc_free_bytes (void);
+
 void qsort (void *, size_t, size_t, int (*) (const void *, const void *));
 
 #endif
