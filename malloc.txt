@@ -1,0 +1,19 @@
+We will base malloc on cmpctmalloc, which is in $HOME/github/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c
+
+This has a license that lets us copy it into fructus (unlike the rest of esp-idf). It's by me.
+We need to adapt it to a 16 bit environment.
+
+It's a two level malloc. We will define pages to be 256 bytes. Any allocation > about 3/4 of a page
+will come from the page allocator, and cmpctmalloc will also get its pages from there. Within pages
+we use cmpctmalloc's bucket system. Allocations are two-byte rounded and aligned and within a page
+all offsets are <256.  This means the allocations have a two byte header, one pointing to the next
+allocation and one pointing at the previous one.  Free entries have the same header and a link
+field for the freelist that is 16 bit so it can go from page to page.  The low bit of each header
+byte is used for a free indicator.
+
+Please take the code, remove esp-idf-isms and adapt it for fructus' small word size.  Assume no
+locking is required. Unlike esp we don't allow allocation from interrupts and we won't have
+premption within malloc.  We won't be attempting to upstream any cmpctmalloc changes so just slash
+and burn. No ifdefs, this version of cmpctmalloc is for 16 bit fructus only. We'll only have
+one cmpctmalloc heap and we can statically allocate it, loading its address in the prologue of
+every malloc entry point and passing it to helper functions.

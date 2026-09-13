@@ -1,0 +1,50 @@
+Compacting GC, four-byte aligned.
+
+1 live bit per 32 bits of data. -> 3% overhead.
+
+Low two bits of addresses:
+00 Smi
+10 Smi
+01 Tagged pointer
+11 Invalid
+
+Assume heap is fixed size and contiguous
+
+Write barrier: Write a byte or bit when pointer goes upwards.
+Pages are 64 bytes large because we have >> 6 in imm.
+    st src, addr, off
+    brclear src, #1, .no_write_barrier  ; Smi write.
+    br ge, addr, src, .no_write_barrier ; Downwards pointer.
+    lsr tmp, addr, 6  ; Page number
+    mov tmp2, #1
+    st8 src, tmp2, #256  ; Fits 10 bit imm
+  .no_write_barrier
+
+32k is 512 pages, 64k is 1024 pages.
+Store write barrier at 0x100-0x4ff.
+1k of wb that is reachable from #imm10
+Only half k on BBC micro 32k layout.
+
+For each 64 page we also record the start of an
+object allocated there.  In the bump allocator.
+This also takes a byte per page, which is another
+1k on a 64k machine, or 512 bytes on a 32k machine.
+
+
+
+
+
+Allocation grows upwards so young objects are high.
+
+When memory fills up, pick a young gen edge eg 1/4 of memory.
+
+Use object-starts array to retroactively place the young gen
+border at an object that is either in the picked 64 byte page
+or one of the preceeding ones.
+
+During marking the write barrier bytes of young gen objects
+are used for mark stack overflow
+Use write barrier bytes to mark
+During marking the write barrier bytes of young gen objects
+are used for mark stack overflow young gen roots from lower
+objects live.

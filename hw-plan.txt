@@ -1,0 +1,153 @@
+Here's an attempt to classify the instructions in terms of how essential they are and whether they would be part of an initial very minimalist implementation:
+
+Stage 0 (essential - code gen will make heavy use of r5 temp register)
+
+add/rsb/xor/and/or/lsr reg-reg-reg
+mov reg, imm16
+br with reg-reg and 6 conditions other than overflow
+jmp #addr16
+call #addr16
+ret
+ld reg reg #imm3 (only #0 supported)
+st reg reg #imm3 (only #0 supported)
+
+Stage 1 (very important)
+
+shl: Can be emulated with repeated add.
+asr: Can be emulated with lsr and some boolean bitops
+
+Stage 2 (basic operations)
+
+push: Can be emulated with add -2 and store
+pop: Can be emulated with load and add 2
+
+Stage 3 (immediate operands)
+
+ALU mode reg-reg-imm3
+Addressing mode reg-imm5
+Support immediate non-zero offsets on ld and st
+br with immediate operands
+
+Stage 4 (PIC code)
+
+callr
+jmpr
+Get PC in LR with callr #0
+
+Stage 4 (8 bit operations)
+
+br8
+ld8
+st8
+pop8
+push8
+
+Stage 5 (system)
+
+Interrupts & rti
+Write protect bits per page
+halt insn
+
+Stage 6 (bit operations)
+
+brclear
+brset
+#immbit5 addressing for ALU
+
+Stage 7 (big immediates)
+
+reg, reg, #imm10 addressing mode
+
+Stage 8 (code size optimization)
+
+push reg reg
+push reg reg reg
+pop reg reg
+pop reg reg reg
+one-byte forms of r0++, r0--, etc.
+nop (previously emulated with or r0 r0 #0)
+halt
+
+Stage 9 (specialized instructions)
+
+Bitrev
+popcount
+clz
+sxt8
+zxt8
+overflow conditions for br and br8
+
+
+
+
+
+------------------
+
+Immediates: A 16 bit hidden reg, immreg, has the last two bytes from the insn
+stream as a little endian word.
+
+regport0 and regport1 can deliver any register to either side of the ALU.
+They each have an address port that picks the register
+
+regport0 address is one of:
+
+regport1 address is one of:
+  Low 3 bits of ucode rhs sources.     ; For single-byte instructions.
+  immreg[9:8]:[immreg[0]]              ; For reg, reg, reg
+
+ALU ports: lhs rhs op
+
+lhs sources:  5 bits from the ucode determine where the ALU gets its lhs.
+  Top 2 bits mux:
+    00 regport0
+    01 regport0
+    10 regport0
+    11 special register selector
+  Same 2 bits go to the mux in front of regport0's address input:
+    00 immreg[12:10])               ; For reg, reg, reg
+                                    ;     reg, reg, imm3 (including load)
+                                    ;     reg, reg, op (unary ops)
+    01 immreg[15:13])               ; For reg, imm5 (including load)
+                                    ;     conditional branches
+    10 ucode 3 bits                 ; 3 bits from the ucode to pick a register
+  Low 3 bits are copied to:
+    regport0 register address mux
+
+rhs sources:
+ 5 bits from the ucode determine where the ALU gets its rhs.
+   Top 2 bits:
+     00 regport1 output (low bit picks regport address mux)
+     01 regport1 output (low bit picks regport address mux)
+     10 immediate
+     11 ucode
+   Low 3 bits are copied to:
+     The regport1 register selector mux, ucode input
+     The immreg shifter:
+       000 immreg                                        ; For mov #imm16, jump, jumpr etc.
+       001 immreg[9:2]:immreg[1:0] sign extended to 16   ; For reg reg #imm10 mode
+       010 immreg[4:0] sign extended to 16               ; For reg #imm5 mode
+       011 imm3lut(immreg[9:8]:immreg[0])                ; For reg reg #imm3 mode, also for unary op
+       100 immbitlut(immreg[3:0])                        ; For brclear, brset, #immbit5
+       ; Here we could add "for free" other ways to treat the immreg, eg
+       : - instructions with 8 bit immediates and implicit register.
+       ; - Perhaps imm3 with no lut for a less hacky unary op selector
+     Sign extended and used for the 11 ucode input.
+
+ALU op: 4 lines from the ucode pick the ALU op
+  add
+  rsb
+  xor
+  and
+  or
+  shl
+  shr
+  asr
+  unary
+
+
+Destination:
+  1 line determines whether a register from the file gets the ALU output written.
+  3 lines select the register
+  1 line says write to the PC
+
+
