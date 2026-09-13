@@ -668,19 +668,28 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   0000_0000                halt                       1 byte
 #   0000_0001                ret                        1 byte
-#   0000_0010                ld   r0, [r0, #0]          1 byte
-#   0000_0011                ld8  r0, [r0, #0]          1 byte
-#   0000_0100                add  r0, r0, #1            1 byte
-#   0000_0101                add  r0, r0, #-1           1 byte
-#   0000_0110                add  r0, r0, #2            1 byte
-#   0000_0111                add  r0, r0, r1            1 byte
+#   0000_0010                jmp  r5                    1 byte
+#   0000_0011                ld   r0, [r0, #0]          1 byte
+#   0000_0100                ld8  r0, [r0, #0]          1 byte
+#   0000_0101                add  r0, r0, #1            1 byte
+#   0000_0110                add  r0, r0, #-1           1 byte
+#   0000_0111                add  r0, r0, #2            1 byte
 #   1000_0000                add  r1, r1, r0            1 byte
 #   1000_0001                or   r0, r1, #0  = mov     1 byte
 #   1000_0010                or   r1, r0, #0  = mov     1 byte
 #   1000_0011                mov  r0, #0                1 byte
 #   1000_0100                xor  r0, r0, #1            1 byte
-#   1000_0101 .. 1000_0110   -- free, 2 one-byte slots
+#   1000_0101                add  r0, r0, r1            1 byte
+#   1000_0110                -- free, 1 one-byte slot
 #   1000_0111                nop                        1 byte
+#
+#   THE THREE CONTROL-FLOW STUBS ARE THE FIRST THREE OPCODES, which is what
+#   putting `jmp r5' at 0x02 bought: halt, ret and a jump through a register
+#   are what this block has of control flow, and they are now adjacent.  It
+#   cost the low half its ninth member - the one-byte region is sixteen slots,
+#   not eight, so `add r0, r0, r1' moved out to 0x85 and joined `add r1, r1,
+#   r0' in the other half.  It could not go to 0000_1000: bit 3 is set there,
+#   and "is this one byte" is `(op & 0x78) == 0'.
 #
 #   THE TWO ENDS OF THE BLOCK ARE THE TWO INSTRUCTIONS THAT DO NOTHING USEFUL,
 #   and putting them there is the point.  halt and ret hold 0x00 and 0x01: both
@@ -695,9 +704,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   Everything between them is an ABBREVIATION - a form of some instruction
 #   that also exists in full elsewhere, with every operand pinned.  So the block
-#   reads as three things and not sixteen: two control-flow stubs, eleven pinned
-#   forms, one nop, and the free slots sit next to the nop rather than in the
-#   middle of the abbreviations.
+#   reads as three things and not sixteen: three control-flow stubs, eleven
+#   pinned forms, one nop, and the free slot sits next to the nop rather than in
+#   the middle of the abbreviations.
 #   ------------------------------------------------------------------------
 #
 #   1000_1ddd                mov  rd, #imm16            3 bytes
@@ -759,7 +768,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   both widths, the 16-bit one takes the lower opcode and the byte-wide one
 #   the next:
 #
-#       0x02 ld   / 0x03 ld8        the one-byte implicit pair
+#       0x03 ld   / 0x04 ld8        the one-byte implicit pair
 #       0x08 st   / 0x10 st8        the store rows
 #       0x18 ld   / 0x20 ld8        the load rows
 #       0x90 push / 0x91 push8      and the same for pop at 0x98
@@ -908,7 +917,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   The two free slots in each group are NOT where the single-byte implicit
 #   forms live; those are up in the unstructured one-byte region, where `add`
-#   already holds 0x04..0x07 and 0x80.  There is deliberately no general one-byte
+#   already holds 0x05..0x07, 0x80 and 0x85.  There is deliberately no one-byte
 #   `add rd, rs`: covering all 64 register pairs would cost a quarter of the
 #   map, while the two pairs that actually dominate cost two opcodes.
 #   ------------------------------------------------------------------------
@@ -1082,7 +1091,7 @@ semantics = "R[d] = M8[R[a] + off]"
 
   [[insn.form]]
   name     = "implicit"
-  encoding = "0000_0011"
+  encoding = "0000_0100"
   fix      = { d = 0, a = 0, off = 0 }
 
   [[insn.form]]
@@ -1155,7 +1164,7 @@ semantics = "R[d] = M16[R[a] + off]"
 
   [[insn.form]]
   name     = "implicit"
-  encoding = "0000_0010"
+  encoding = "0000_0011"
   fix      = { d = 0, a = 0, off = 0 }
 
   [[insn.form]]
@@ -1337,7 +1346,7 @@ semantics = "R[d] = R[a] + R[b]"
   # shortest-first regardless of the order they appear here.
   [[insn.form]]
   name     = "r0_r0_r1"
-  encoding = "0000_0111"
+  encoding = "1000_0101"
   fix      = { d = 0, a = 0, b = 1 }
 
   [[insn.form]]
@@ -1369,17 +1378,17 @@ semantics = "R[d] = R[a] + imm"
   # is pinned, so these carry no fields at all.
   [[insn.form]]
   name     = "inc_r0"
-  encoding = "0000_0100"
+  encoding = "0000_0101"
   fix      = { d = 0, a = 0, imm = 1 }
 
   [[insn.form]]
   name     = "dec_r0"
-  encoding = "0000_0101"
+  encoding = "0000_0110"
   fix      = { d = 0, a = 0, imm = -1 }
 
   [[insn.form]]
   name     = "inc2_r0"
-  encoding = "0000_0110"
+  encoding = "0000_0111"
   fix      = { d = 0, a = 0, imm = 2 }
 
   # Destination doubles as the first source, which frees five bits for the
@@ -2547,11 +2556,12 @@ semantics = "lr = pc; pc = R[a]"
 # Return is just pc = lr, so it needs no operands and fits in one byte - and
 # being one byte is what decides where it lives.
 #
-# IT IS THE ONE PC WRITER OUTSIDE 1001_xxxx, deliberately.  The control-flow
-# block is exactly two rows and holds exactly sixteen instructions once the two
-# mask branches come home to their columns; ret is the seventeenth, and it is
-# also the only one-byte instruction that was living out there.  Every other
-# one-byte opcode is in 0000_xxxx, so that is where it goes.
+# IT IS A PC WRITER OUTSIDE 1001_xxxx, deliberately - one of two now that
+# `jmp r5` has joined it at 0x02.  The control-flow block is exactly two rows
+# and holds exactly sixteen instructions once the two mask branches come home
+# to their columns; ret is the seventeenth, and it was the only one-byte
+# instruction living out there until jmp arrived.  Every other one-byte opcode
+# is in x000_0xxx, so that is where both of them go.
 #
 # It fits that region on its own terms rather than as an exile.  The one-byte
 # block is instructions with nothing left to say - `add r0, r0, #1`, `mov r0,
@@ -2572,6 +2582,43 @@ semantics = "pc = lr"
 
   [[insn.form]]
   encoding = "0000_0001"
+
+
+# A JUMP THROUGH A REGISTER, WHICH THE MACHINE OTHERWISE HAS NO WAY TO SPELL.
+# Without it an indirect jump has to go `mov lr, ra` and `ret`, which costs
+# three bytes and, far worse, destroys lr - so a function with a switch table
+# had to save lr as if it made calls, and a tail call through a function
+# pointer was impossible outright, since lr is holding the return address the
+# tail call exists to pass on.
+#
+# IT IS PINNED TO r5 BECAUSE ONE OPCODE IS WHAT IT IS WORTH.  A general
+# `jmp rd` would want eight opcodes out of a block that has two slots left,
+# and every use a compiler has for it - a switch table, a tail call through a
+# pointer, a dispatch - is free to choose which register holds the address.
+# r5 is the one to choose: never an argument, never a return value, caller
+# saved in every one of the three ABIs, and already the assembler's scratch,
+# so it is the register that is expendable at exactly the moments this
+# instruction is used.
+#
+# It sits with halt and ret because the three of them are what the one-byte
+# block has of control flow, and because it is the same kind of thing they
+# are: `ret` is `jmp r7` with its operand implied, and this is `jmp r5` with
+# its operand implied.  ret keeps 0x01 - a wild jump into erased memory
+# should still find the instructions that stop and unwind, not one that
+# jumps again through whatever r5 happens to hold.
+[[insn]]
+mnemonic = "jmp"
+summary  = "pc = ra"
+operands = [
+  { name = "a", type = "reg" },
+]
+syntax   = "{a}"
+semantics = "pc = R[a]"
+
+  [[insn.form]]
+  name     = "r5"
+  encoding = "0000_0010"
+  fix      = { a = 5 }
 
 
 # --- halt / nop -------------------------------------------------------------
