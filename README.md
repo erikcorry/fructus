@@ -50,18 +50,18 @@ Right now half the opcode space is still free. Some short forms have been specif
 that likely aren't worth it and will be removed. The FPGA implementation will provide
 input as to which features make sense.
 
-Current ALU instruction forms:
-- reg, reg, reg - 2-byte - Any three registers
-- reg, reg, imm3 - 2-byte - Immediate is one of -1, 0, 1, 2, 3, 4, 6, 8
-- reg, imm5 - 2-byte - Immediate between -16 and +15
-- reg, immbit5 - 2-byte - Immediate is any value 1 << n or its bitwise complement
-- reg, immmask5 - 2-byte - Immediate is one of the following or their complements: 
+Current ALU instruction forms (those requiring 9 bits take up two opcodes):
+- reg, reg, reg - *2-byte* - Any three registers
+- reg, reg, imm3 - *2-byte* - Immediate is one of -1, 0, 1, 2, 3, 4, 6, 8
+- reg, imm5 - *2-byte* - Immediate between -16 and +15
+- reg, immbit5 - *2-byte* - Immediate is any value 1 << n or its bitwise complement
+- reg, immmask5 - *2-byte* - Immediate is one of the following or their complements: 
   0xc000, 0x3000, 0x0c00, 0x0300, 0x00c0, 0x0030, 0x000c, 0x0003,
   0xf000, 0x0f00, 0x00f0, 0x000f, 0xff00, 0xf0f0, 0xcccc, 0xaaaa
-- reg, reg, imm10 - 3-byte - Immediate is any value between -512 and 511
-- reg (implicit in opcode), imm16 - 3-byte - Any immediate, only for mov and some control flow instructions
+- reg, reg, imm10 - *3-byte* - Immediate is any value between -512 and 511
+- reg (implicit in opcode), imm16 - *3-byte* - Any immediate, only for mov and some control flow instructions
 
-Current condition forms (all 2-byte, but the branch instructions add a third byte for the relative PC offset):
+Current condition forms (all *2-byte*, but the branch instructions add a third byte for the relative PC offset):
 - reg, reg, cond - The usual 8 conditions including overflow. Their inverses are achieved by reversing the two registers
 - reg, imm5 - The imm5 selects common constant-condition pairs
 - reg, immbit5 - Immediate as above is and-ed with the register and tested for zero (brclear, isclear) or non-zero (brset, isset)
@@ -165,6 +165,32 @@ tests/                the test suite
 Heading for hardware: [docs/fpga-toolchain.md](docs/fpga-toolchain.md) is the
 open-source iCE40 toolchain, how to install it and the two things that catch
 you out.
+
+### gcc
+
+There is a gas port and a gcc port.  g++ probably works with no exceptions.
+
+- char: 8 bit
+- short: 16 bit
+- int: 16 bit
+- pointer: 16 bit
+- long: 32 bit
+- long long: 64 bit
+
+The calling convention depends on the arity. `r2` and `r3` are caller-saved
+when the function takes an argument in them and callee-saved when it does not —
+a static approximation of interprocedural register allocation, using the only
+signal that costs nothing to distribute. `isa/abi.s` has the argument, including
+the case against.
+
+- r0: caller save
+- r1: caller save
+- r2: caller save if it passes an argument or returns a value
+- r3: caller save if it passes an argument or returns a value
+- r4: callee save
+- r5: caller save, used for large immediates
+- r6: sp, stack pointer
+- r7: lr, return address
 
 ### rtl/
 
@@ -315,8 +341,8 @@ headless and dumps the screen, which is how the tests drive it.
 256-entry table and the fetch unit never looks ahead. `tools/decode.js` asserts
 it, which the assembler structurally cannot — it only ever goes the other way.
 
-**Pointers are tagged in the low bit**.  If a V8-style VM is written for the ISA
-qw need immediate displacements to count *bytes* and not be
+**Pointers are tagged in the low bit**.  If a V8-style or SOM virtual machine is written for the ISA
+we need immediate displacements to count *bytes* and not be
 never scaled by access width. Field offsets come out odd (`ld rd, [rp, #-1]`),
 and a scaled displacement could not express them at all.
 
@@ -341,12 +367,6 @@ what it costs — the suite pins the count at one.
 
 **Unaligned 16-bit access is free**, with no fault and no penalty visible to
 software, which is what lets the stack pack byte arguments without padding.
-
-**The calling convention depends on the arity.** `r2` and `r3` are caller-saved
-when the function takes an argument in them and callee-saved when it does not —
-a static approximation of interprocedural register allocation, using the only
-signal that costs nothing to distribute. `isa/abi.s` has the argument, including
-the case against.
 
 **`halt` is opcode `0x00`,** so erased memory, an unwritten ROM and a wild jump
 into a zeroed page all stop where the mistake happened.
