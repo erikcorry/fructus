@@ -475,14 +475,29 @@ free (void *p)
 void *
 calloc (size_t n, size_t size)
 {
-  /* The product is computed wide, because two sizes that each fit in a word
-     can multiply to something that does not.  */
-  unsigned long total = (unsigned long) n * size;
-  if (total > 0xffffu)
+  /* Two sizes that each fit in a word can multiply to something that does
+     not, and the product must not be allowed to wrap.  Computing it widened
+     says so, but it costs a call to __mulsi3 - a whole 32-bit multiply to
+     look at a high half that is almost always zero.  TWO `clz' INSTRUCTIONS
+     ANSWER THE SAME QUESTION: if the two values need sixteen bits between
+     them, their product fits in one word.
+
+     That is conservative - it turns down a product that needs the full
+     sixteen bits, such as 256 * 255 - but every product it turns down is
+     larger than the heap and would fail in malloc anyway.  (The | 1 is
+     because clz of zero is not worth defining; it moves no other answer,
+     since setting bit 0 of a value that has any bit set changes nothing.)  */
+  if (__builtin_clz (n | 1) + __builtin_clz (size | 1) < 16)
     return NULL;
-  void *p = malloc ((size_t) total);
-  if (p != NULL)
-    memset (p, 0, (size_t) total);
+  size_t total = n * size;
+  void *p = malloc (total);
+  if (p == NULL)
+    return NULL;
+  /* memset gives back the address it was given, so this WOULD be a tail
+     jump - but the port has no sibcall pattern, and spelling it as `return
+     memset (...)' then costs two bytes to copy a value that is already
+     where it belongs.  */
+  memset (p, 0, total);
   return p;
 }
 
