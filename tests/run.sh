@@ -185,6 +185,22 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     done
     rm -f build/_abi build/_abi.bin
 
+    # --- and decomposes structs into their fields ---------------------------
+    # A field of any size takes a whole register, so the limit is four
+    # REGISTERS rather than eight bytes - and a struct whose fields do not all
+    # fit goes on the stack as a unit.  tests/abi-struct.s puts the fields
+    # where isa/abi.s says and checks what comes back.
+    for o in -O2 -O0; do
+        if tools/fcc $o tests/abi-struct.s tests/abi-struct.c -o build/_as 2>build/_err \
+           && node tools/fcc-run.mjs build/_as.bin; then
+            printf 'ok    structs are passed by their fields at %s\n' "$o"
+        else
+            printf 'FAIL  structs are not passed by their fields at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    rm -f build/_as build/_as.bin
+
     # --- setjmp and longjmp, which no epilogue unwinds ----------------------
     # tests/setjmp.c sets three locals before the setjmp and checks them after
     # a longjmp from twenty frames down, so it fails if libc/setjmp.s restores

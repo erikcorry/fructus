@@ -296,6 +296,15 @@
 ;   goes entirely on the stack.  At most one register is wasted, and the callee
 ;   never has to reassemble a value from two places.
 ;
+;   A STRUCT IS ONE VALUE FOR THIS RULE, even though its fields are assigned
+;   one at a time within the registers.  If they do not all fit, the whole
+;   struct goes on the stack rather than straddling.  The alternative costs
+;   the CALLEE: a struct half in registers and half on the stack has to be put
+;   back together in the prologue, field by field, because a byte-sized field
+;   takes a whole register and only one byte of stack - so the registers and
+;   the bytes do not even line up.  Wasting up to three registers on the rare
+;   struct that lands on the boundary is the cheaper end of that trade.
+;
 ;   NO BACKFILLING.  Once an argument has gone to the stack, every later
 ;   argument goes to the stack too, even a small one that would still fit.  This
 ;   is what keeps the stack block contiguous, which is what makes varargs work.
