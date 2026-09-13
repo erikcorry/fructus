@@ -2,8 +2,33 @@
 
 A 16-bit retrocomputer instruction set, and the toolchain that keeps it honest.
 
-Eight registers, byte-granular instructions of one to three bytes, no carry
-flag, no condition codes, and a 64 KiB address space. It is meant to run on the
+Ports of gas, gcc, ld, objdump etc are provided.  A minimal libc and tuned
+math operations for libgcc are provided.  A simulator as available and a
+FPGA implementation is started, but far from complete.
+
+The design is RISC-inspired:
+- The only memory operations are load, store, push, pop 
+- 8 16 bit registers, and all ALU instructions can use all 8.
+- Flat 16 bit address space.
+- All ALU operations have a regular three-register form, rd = ra * rb
+- There's also an immediate form with immediates +-1023: rd = ra * #imm
+- For larger immediates the assembler can transparently use a scratch register.
+- The stack pointer is a regular register, sp = r6
+- The return address is a regular register, lr = r7
+- No status flags, but explicit compare-branch and operations that write 0 or 1 to a regular register.
+
+But we don't want to pay the typical code density penalty of RISC on a 64k machine
+- Compact encodings for two-register forms where rd is ra.
+- Compact encodings for smaller and common immediates like -16-15, single-bit-set, and common masks.
+- One-byte encodings for very popular ALU operations that hard code all arguments.
+- The length of the instructions is 1-3 bytes and the first byte determines the length.
+- The intention is that the assembler programmer can code as if all three-register and two-register-imm16
+  forms were available, but the tooling selects the shortest possible encoding. For C code, gcc is aware
+  of the encoding tradeoffs and selects instructions to match.
+- Up to three arbitrary registers can be pushed or popped in a single two-byte instruction for compact
+  function prologs and epilogs.
+
+It is conceived to run on the
 kind of machine a 6502 ran on — a narrow memory bus where every instruction byte
 is a cycle you pay for — so the design question behind almost every decision in
 here is *what does this cost in bytes*.
@@ -252,13 +277,14 @@ make boot          # assemble tangerine/monitor.s and run it
 Interactive mode takes over the terminal; `--keys "..."` runs the same machine
 headless and dumps the screen, which is how the tests drive it.
 
-## A few things that are load-bearing
+## A design principles:
 
 **Instruction length comes from the first byte alone.** The decoder is a
 256-entry table and the fetch unit never looks ahead. `tools/decode.js` asserts
 it, which the assembler structurally cannot — it only ever goes the other way.
 
-**Pointers are tagged in the low bit**, so displacements count *bytes* and are
+**Pointers are tagged in the low bit**.  If a V8-style VM is written for the ISA
+qw need immediate displacements to count *bytes* and not be
 never scaled by access width. Field offsets come out odd (`ld rd, [rp, #-1]`),
 and a scaled displacement could not express them at all.
 
@@ -268,7 +294,8 @@ See `snippets/add32.s`.
 
 **`r5` belongs to the assembler.** Any immediate that does not fit its
 instruction expands through it, so no function can promise to preserve it. This
-is MIPS's `$at`, and it costs what MIPS's does.
+is MIPS's `$at`, and it costs what MIPS's does.  It can be disabled for gcc
+and assembler authors who are familiar with the restrictions on immediate range.
 
 The rule that follows is **don't keep anything in `r5` that has to survive** —
 not "check whether this particular instruction expands". Whether `lsr r5, lr, #14`
@@ -292,7 +319,7 @@ the case against.
 **`halt` is opcode `0x00`,** so erased memory, an unwritten ROM and a wild jump
 into a zeroed page all stop where the mistake happened.
 
-**A taken relative branch costs one cycle more than its length**, for the add
+**Current assumption: A taken relative branch costs one cycle more than its length**, for the add
 that produces `pc + off`; an absolute `jmp`, `call` or `ret` costs nothing
 beyond its bytes, because the target is latched as it is fetched or read
 straight from the register file. This is the 6502's behaviour — a branch is two
