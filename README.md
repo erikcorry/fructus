@@ -8,8 +8,10 @@ implementation) and tuned
 math operations for libgcc are provided.  A simulator as available, and a
 FPGA implementation is started, but far from complete.
 
+![The Fructus opcode map: 128 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
+
 The design is RISC-inspired:
-- The only memory operations are load, store, push, pop 
+- The only memory operations are load, store, push, pop
 - 8 16 bit registers, and all ALU instructions can use all 8.
 - Flat 16 bit address space.
 - All ALU operations have a regular three-register form, rd = ra * rb
@@ -22,7 +24,7 @@ The design is RISC-inspired:
 
 But we don't want to pay the typical code density penalty of RISC on a 64k machine
 - Compact encodings for two-register forms where rd is ra.
-- Compact encodings for smaller and common immediates like -16-15, single-bit-set, and common masks.
+- Compact encodings for smaller and common immediates like -16 to 15, single-bit-set, and common masks.
 - One-byte encodings for very popular ALU operations that hard code all three arguments.
 - The length of the instructions is 1-3 bytes and the first byte determines the length.
 - The intention is that the assembler programmer can code as if all three-register and two-register-imm16
@@ -36,9 +38,7 @@ kind of machine a 6502 ran on — a narrow memory bus where every instruction by
 is a cycle you pay for — so the design question behind almost every decision in
 here is *what does this cost in bytes*.
 
-![The Fructus opcode map: 128 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
-
-Both this and an interactive version with per-cell tooltips come from
+The non-interactive SVG opcode map above and the interactive HTML form with per-cell tooltips come from
 `npm run map`.
 
 The ALU is strictly two-input, single output. Comparator operations (conditional
@@ -49,6 +49,23 @@ binary operations where the second (immediate) input selects the operation.
 Right now half the opcode space is still free. Some short forms have been specified
 that likely aren't worth it and will be removed. The FPGA implementation will provide
 input as to which features make sense.
+
+Current ALU instruction forms:
+- reg, reg, reg - 2-byte - Any three registers
+- reg, reg, imm3 - 2-byte - Immediate is one of -1, 0, 1, 2, 3, 4, 6, 8
+- reg, imm5 - 2-byte - Immediate between -16 and +15
+- reg, immbit5 - 2-byte - Immediate is any value 1 << n or its bitwise complement
+- reg, immmask5 - 2-byte - Immediate is one of the following or their complements: 
+  0xc000, 0x3000, 0x0c00, 0x0300, 0x00c0, 0x0030, 0x000c, 0x0003,
+  0xf000, 0x0f00, 0x00f0, 0x000f, 0xff00, 0xf0f0, 0xcccc, 0xaaaa
+- reg, reg, imm10 - 3-byte - Immediate is any value between -512 and 511
+- reg (implicit in opcode), imm16 - 3-byte - Any immediate, only for mov and some control flow instructions
+
+Current condition forms (all 2-byte, but the branch instructions add a third byte for the relative PC offset):
+- reg, reg, cond - The usual 8 conditions including overflow. Their inverses are achieved by reversing the two registers
+- reg, imm5 - The imm5 selects common constant-condition pairs
+- reg, immbit5 - Immediate as above is and-ed with the register and tested for zero (brclear, isclear) or non-zero (brset, isset)
+- reg, immmask5 - Immediate as above is and-ed with the register and tested for zero (brclear, isclear) or non-zero (brset, isset)
 
 ## The implementation structure
 
