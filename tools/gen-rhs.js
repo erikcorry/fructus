@@ -170,7 +170,8 @@ module rhs (
     input  logic [3:0]  src,     // microcode: where the right-hand side comes from
     input  logic [15:0] regval,  // register file port B, addressed by regnum
     output logic [2:0]  regnum,  // -> register file port B address
-    output logic [15:0] rhs
+    output logic [15:0] value    // not \`rhs\`: a port named after its module
+                                 // is an error to verilator
 );
 
     wire [2:0] c = src[2:0];
@@ -196,7 +197,7 @@ module rhs (
     wire [15:0] imm16 = {ir[7:0], ir[15:8]};    // byte 1 low, byte 2 high
     wire [15:0] lit   = src[3] ? konst : imm16;
 
-    assign rhs = use_reg ? regval : (use_imm ? imm : lit);
+    assign value = use_reg ? regval : (use_imm ? imm : lit);
 
 endmodule
 `);

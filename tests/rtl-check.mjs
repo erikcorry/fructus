@@ -227,7 +227,7 @@ let failed = /FAIL/.test(out);
     logic [3:0] src;
     integer f, n = 0, bad = 0, r;
     rhs u (.ir(ir), .sel(sel), .src(src), .regval(regval),
-           .regnum(gnum), .rhs(grhs));
+           .regnum(gnum), .value(grhs));
     initial begin
         f = $fopen("build/rhs-vectors.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
