@@ -214,11 +214,20 @@ module predecode (
     output logic [1:0]  cond_src   // -> rtl/cond.sv
 );
 
+    // A table feeding flops that load together is exactly a synchronous ROM,
+    // and synthesis will put it in block RAM - with the slow clock-to-out and
+    // fixed placement this block exists to avoid.  The attribute keeps it in
+    // LUTs, and it has to sit on the case statement itself: yosys ignores it on
+    // the always block, on t, and on the flops, and (* keep *) on t does not
+    // stop the inference either.  Inside begin/end is where iverilog accepts it.
     logic [${W - 1}:0] t;             // {alu, lhs, rhs, dest, cond}
-    always_comb case (bus)
+    always_comb begin
+        (* rom_style = "logic" *)
+        case (bus)
 ${cases}
         default: t = ${W}'b${'x'.repeat(W)};
-    endcase
+        endcase
+    end
 
     always_ff @(posedge clk)
         if (dispatch) {alu_op, lhs_src, rhs_src, dest_src, cond_src} <= t;
