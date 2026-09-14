@@ -254,15 +254,41 @@ every byte 1; the column decides it everywhere but `call ra`. It once needed a
 microcode latch to survive the shifting instruction buffer; on `insn.sv` it is
 one line, and a tenth of the clock faster.
 
-`rtl/unary.sv` is the eight-way unary block — `sxt8`, `zxt8`, `clz`, `bitrev`,
-`popcount`, and three free slots. Its selector is `{byte1[7:6], opcode[0]}`, the
-same three bits that carry ALU port B, so it needs no decode of its own. Only
-the selector table is generated: adding an operation to the spec fails the build
-rather than silently producing a block that doesn't implement it. 95 LUT4, five
-LUT levels, 56 MHz.
+`rtl/dest.sv` is the write address, in the same style: a register the microcode
+names, or one of four places an instruction carries a register number. The rd
+field serves every ALU operation, load, `mov` and unary operation; the ra and
+port-B fields exist for the second and third registers of `pop`, and the opcode
+field for `mov rd, #imm16`. Codes 8 and 9 mean the same as in `lhs.sv`. Placed
+beside a register file, the field mux costs a third of the clock on the write
+path — which is still faster than a read through the ALU, but is the next path
+in line.
 
-`bitrev` is a permutation of sixteen nets and `sxt8`/`zxt8` are a fanout and a
-constant, so the block's entire cost is `clz`, `popcount` and the mux. Both of
+`rtl/alu.sv` is the ALU. The operation is a four-bit microcode field — the spec
+forbids decoding it from the opcode — and the generator assigns every
+instruction an operation from its `semantics`, failing on any it cannot place.
+`iseq` and `isset` are ALU operations, and neither needs a carry.
+
+Branches are decided beside it, not in it. `rtl/compare.sv` takes the same two
+operands and answers one bit, `taken`, that never enters the ALU's result;
+`rtl/cond.sv` supplies its condition. The packed branch's condimm5 entries are
+mirrored onto `imm - R[a]` and need a negate bit as well as cond3: `R[a] < k` is
+`not (k <= R[a])`, and cond3 spells `gt` only by exchanging registers. Every
+entry is checked against the simulator for all 65536 register values. Measured,
+the comparison had set the combined ALU's speed; apart, the ALU is a fifth
+faster on its own, and behind the register file both paths sit level at about
+26 MHz — where the register read in front of them is what sets the clock.
+
+`rtl/unary.sv` is the four-way unary block — `sxt8`, `clz`, `bitrev` and
+`popcount`. Its selector is two bits of the right-hand side the ALU already
+reads: the unary forms sit in the imm3 columns, immgen turns their index into a
+value, and bits 2:1 of that value pick the operation, so no selector lines run
+from decode. There is no `zxt8`: `and rd, rd, #0x00ff` is two bytes through
+immask5, and between registers `and rd, ra, #255` is three through imm10. Only the selector table is generated: adding an operation to the spec
+fails the build rather than silently producing a block that doesn't implement
+it.
+
+`bitrev` is a permutation of sixteen nets and `sxt8` a fanout, so the block's
+entire cost is `clz`, `popcount` and the mux. Both of
 those are written the cheap way, and both have a note in the file saying what
 the alternative was and what it measured.
 
@@ -274,7 +300,7 @@ it there, and an `x` reaching the ALU means the microcode asked for an immediate
 from an instruction that has none.
 
 The suite regenerates the file and fails if the committed copy has drifted, then
-runs 433,880 vectors and a clocked model of the instruction register — built
+runs 414,288 vectors and a clocked model of the instruction register — built
 from the same TOML by a path sharing no code with the generators — against them
 under `iverilog`, skipping if `iverilog` is absent.
 The unary operations are swept over their *whole* input space, all 65536 values

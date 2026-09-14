@@ -307,7 +307,7 @@ function dispatch(name, r, dest, src, n) {
 
   // Fill bytes chosen for the seam and for the (unsigned char) contract: the
   // last three carry rubbish in the high half of the argument, which memset
-  // must discard.  Drop the zxt8 and only those three fail.
+  // must discard.  Drop the `and #0x00ff` and only those three fail.
   const BYTES = [[0x00, 0x00], [0xff, 0xff], [0x5a, 0x5a],
                  [0x12ff, 0xff], [0xff00, 0x00], [0xabcd, 0xcd]];
 

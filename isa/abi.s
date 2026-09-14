@@ -322,10 +322,10 @@
 ;   do anything else with them, and the callee MUST NOT LOOK AT THEM.  A callee
 ;   that needs a clean 16-bit value says so itself:
 ;
-;       zxt8    r0, r0          ; unsigned char argument      2 bytes
+;       and     r0, r0, #0x00ff ; unsigned char argument      2 bytes
 ;       sxt8    r0, r0          ; signed char argument        2 bytes
 ;
-;   which is why those two instructions exist.  Putting the burden on the callee
+;   which is why sxt8 exists and 0x00ff is an immask5.  Putting the burden on the callee
 ;   costs two bytes in the functions that care and nothing anywhere else; the
 ;   other way round, every caller pays whether the callee looks or not.
 ;
@@ -544,7 +544,7 @@ leaf_example:
 ;       int16_t sum(unsigned char a, signed char b)
 
 byte_example:
-        zxt8    r0, r0                  ; a was unsigned                 2
+        and     r0, r0, #0x00ff         ; a was unsigned                 2
         sxt8    r1, r1                  ; b was signed                   2
         add     r0, r0, r1              ;                                1
         ret                             ;                                1

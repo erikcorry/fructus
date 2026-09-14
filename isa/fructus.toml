@@ -78,7 +78,7 @@
 #   pc                see below                          in `endian` order
 #   halted            set by `halt`
 #
-#   sxt8 zxt8         extend from 8 bits         clz bitrev popcount
+#   sxt8              extend from 8 bits         clz bitrev popcount
 #   shl lsr asr       shift by a count           test(cond, x, y, width)
 #
 # Operand names are in scope as themselves, already decoded: `off` is the
@@ -804,7 +804,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   0010_1110 .. 0010_1111   -- free
 #
 #   0011_0000 .. 0011_0001   -- free
-#   0011_001s                unary ops, 8 in TWO opcodes 2 bytes
+#   0011_001s                unary ops, 4 in TWO opcodes 2 bytes
 #   0011_0100 .. 0011_0111   -- free
 #
 #   THE mov ROW IS AN ALU GROUP WITHOUT AN ALU OPERATION, and it is numbered as
@@ -837,8 +837,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #       byte 0 = 0011_0000, byte 1 = dddi_iiii
 #       -> 32 single-register unary operations
 #
-#   That is four times the two-opcode form's eight, out of ONE opcode, and +1
-#   and +5 could do the same again if it ever came to it.  So the eight slots at
+#   That is eight times the two-opcode form's four, out of ONE opcode, and +1
+#   and +5 could do the same again if it ever came to it.  So the four at
 #   0011_001s are not a ceiling on unary operations; they are the ceiling on
 #   unary operations that want a separate destination.  Nothing occupies +0 yet
 #   because nothing needs it - it is written down so that "the unary encoding is
@@ -1843,36 +1843,44 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
 # A unary operation is a binary operation whose 3-bit immediate selects the
 # OPERATION instead of supplying a value.  The encoding is the reg-reg-imm3
 # shape reused byte for byte - same split immediate, same register positions,
-# same two-opcode pair - so register decode and field extraction are untouched
-# and only the interpretation of three bits changes.
+# same two-opcode pair - so register decode and field extraction are untouched.
 #
-# That makes this a THIRD reading of the same three bits: `imm3` reads them
-# through a value table, `shift3` through a shift-count table, and here they
-# are a raw 0..7 opcode extension with no table at all.
+# AND THE THREE BITS ARE READ THROUGH THE imm3 TABLE, like every other form in
+# these columns.  The hardware selects the operation with bits 2:1 of the imm3
+# VALUE, after the lookup, on the right-hand-side bus the ALU already reads -
+# so no selector lines run from decode to the ALU, and each operation sits at
+# the index whose value carries its code.  See rtl/unary.sv.
 #
-#     byte 0:  0 0 1 1 1 0 1 s    opcode pair 0x32/0x33, s = selector bit 0
-#     byte 1:  d d d a a a t t    dest, source, selector bits 2 and 1
+#     byte 0:  0 0 1 1 0 0 1 s    opcode pair 0x32/0x33, s = index bit 0
+#     byte 1:  s s a a a d d d    index bits 2 and 1, source, destination
 #
-# Once an operation is named its selector is constant, so each one below has a
+# Once an operation is named its index is constant, so each one below has a
 # fully literal encoding and takes no selector operand - those bits are simply
-# opcode bits to the assembler.  Eight operations for two first-byte opcodes.
+# opcode bits to the assembler.
 #
-#     sel  mnemonic    byte 0  byte 1 low bits
-#      0   sxt8         0x32   00
-#      1   zxt8         0x33   00
-#      2   clz          0x32   01     TENTATIVE
-#      3   bitrev       0x33   01     TENTATIVE
-#      4   popcount     0x32   10     TENTATIVE
-#      5   -- free      0x33   10
-#      6   -- free      0x32   11
-#      7   -- free      0x33   11
+#     index  value  rhs[2:1]  mnemonic   byte 0  byte 1 high bits
+#       0     -1       11     -- free     0x32   00
+#       1      0       00     clz         0x33   00     TENTATIVE
+#       2      1       00     -- free     0x32   01
+#       3      2       01     -- free     0x33   01
+#       4      3       01     popcount    0x32   10     TENTATIVE
+#       5      4       10     bitrev      0x33   10     TENTATIVE
+#       6      6       11     sxt8        0x32   11
+#       7      8       00     -- free     0x33   11
+#
+# FOUR OPERATIONS, NOT EIGHT.  A free index reads as whichever operation shares
+# its rhs[2:1], so a fifth unary operation needs a wider select - one more line
+# into the unary block - and not merely a free slot.
+#
+# THERE IS NO zxt8.  Zero extension in place is `and rd, rd, #0x00ff`, two bytes
+# through immask5, and between registers `and rd, ra, #255`, three through
+# imm10.  zxt8 bought only the separate source register, and a unary block
+# with four operations selects on two bits rather than three.
 #
 # neg and inv are deliberately absent: `rsb rd, ra, #0` and `xor rd, ra, #-1`
 # already express them in two bytes, and both 0 and -1 are in the imm3 table.
-# The extends are here because they have no equally cheap shortcut.  Zero
-# extension is `and rd, ra, #255`, but 255 is outside imm5 and not in the imm3
-# table, so it needs the three-byte imm10 form; sign extension would be a
-# shl/asr pair costing four bytes.  Both are two bytes here.
+# sxt8 is here because it has no equally cheap shortcut: sign extension would
+# be a shl/asr pair costing four bytes.
 
 [[insn]]
 mnemonic = "sxt8"
@@ -1886,23 +1894,8 @@ semantics = "R[d] = sxt8(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_0010  00aa_addd"
+  encoding = "0011_0010  11aa_addd"
 
-[[insn]]
-mnemonic = "zxt8"
-summary  = "rd = ra zero extended from 8 bits"
-operands = [
-  { name = "d", type = "reg" },
-  { name = "a", type = "reg" },
-]
-syntax   = "{d}, {a}"
-semantics = "R[d] = zxt8(R[a])"
-
-  [[insn.form]]
-  name     = "reg_reg"
-  encoding = "0011_0011  00aa_addd"
-
-# --- the three below are TENTATIVE ------------------------------------------
 [[insn]]
 mnemonic = "clz"
 summary  = "rd = count of leading zeros in ra"
@@ -1915,7 +1908,7 @@ semantics = "R[d] = clz(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_0010  01aa_addd"
+  encoding = "0011_0011  00aa_addd"
 
 [[insn]]
 mnemonic = "bitrev"
@@ -1929,7 +1922,7 @@ semantics = "R[d] = bitrev(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_0011  01aa_addd"
+  encoding = "0011_0011  10aa_addd"
 
 [[insn]]
 mnemonic = "popcount"

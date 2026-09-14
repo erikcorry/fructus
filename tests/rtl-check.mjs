@@ -23,7 +23,7 @@
 // =============================================================================
 
 import { loadSpec } from '../tools/isa.js';
-import { BUILTIN } from '../tools/sim.js';
+import { BUILTIN, test } from '../tools/sim.js';
 import { buildDecoder, decode } from '../tools/decode.js';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -68,6 +68,25 @@ const want = (insn, cimm) => {
     // 6 and 7 have no immediate: rtl/rhs.sv takes port B's number from the
     // bytes directly, so immgen drives x and there is nothing to check.
   }
+};
+
+// --- which code each unary operation answers to ------------------------------
+// Worked out from real bytes, not the generator: decode every unary instruction,
+// look its imm3 index up in the spec's table, and take bits 2:1 of the value -
+// which is what reaches rtl/unary.sv on the rhs bus.
+const unaryCodes = () => {
+  const dec = buildDecoder(spec), codes = {};
+  for (let op = 0; op < 256; op++)
+    for (const b1 of [0x00, 0x40, 0x80, 0xc0]) {
+      const d = decode(dec, [op, b1, 0], 0);
+      const m = /^R\[d\] = (\w+)\(R\[a\]\)$/.exec(d?.insn.semantics ?? '');
+      if (!m || d.nbytes !== 2 || !(m[1] in BUILTIN)) continue;
+      const index = ((b1 >> 6) << 1) | (op & 1);
+      const code = (u16(t.imm3.values[index]) >> 1) & 3;
+      if (codes[code] && codes[code] !== m[1]) throw new Error(`${m[1]} and ${codes[code]} share unary code ${code}`);
+      codes[code] = m[1];
+    }
+  return codes;
 };
 
 // --- what +6 and +7 carry, checked against the DECODER --------------------
@@ -261,19 +280,19 @@ endmodule
 }
 
 // =============================================================================
-// rtl/unary.sv - the eight-way unary block
+// rtl/unary.sv - the unary block
 // =============================================================================
 // The reference is the SIMULATOR's own implementations, not a transcription of
 // them: tools/sim.js evaluates the spec's `semantics` strings against exactly
 // these functions, so agreeing with them is agreeing with what the ISA says the
 // instructions compute.
 //
-// Every operation is swept over its WHOLE input space - 65536 values each, five
+// Every operation is swept over its WHOLE input space - 65536 values each, four
 // operations - because these are cheap to enumerate completely and a sampled
 // sweep would miss precisely the interesting inputs: clz at 0 and 1, popcount
 // at 0xffff, bitrev's fixed points.
 {
-  const OPS = { 0: 'sxt8', 1: 'zxt8', 2: 'clz', 3: 'bitrev', 4: 'popcount' };
+  const OPS = unaryCodes();
   const rows = [];
   for (const [sel, name] of Object.entries(OPS))
     for (let a = 0; a < 65536; a++)
@@ -282,7 +301,7 @@ endmodule
   writeFileSync('build/unary-vectors.txt', rows.join('\n') + '\n');
   writeFileSync('build/unary-tb.sv', `module tb;
     logic [15:0] a, y, want_;
-    logic [2:0] sel;
+    logic [1:0] sel;
     integer f, n = 0, bad = 0, r;
     unary u (.a(a), .sel(sel), .y(y));
     initial begin
@@ -481,6 +500,271 @@ endmodule
   process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
   for (const f of ['build/insn-tb.vvp', 'build/insn-tb.sv', 'build/insn-vectors.txt']) rmSync(f, { force: true });
   if (/FAIL/.test(o)) failed = true;
+}
+
+// =============================================================================
+// rtl/dest.sv - the write address
+// =============================================================================
+// First the SPEC: every register a multi-byte form writes - by this file's own
+// reading, statements beginning `R[x] =` - must follow exactly one of the four
+// fields under tools/decode.js.  Then the circuit: each such register decoded
+// from real bytes against its field's code, with random bytes elsewhere in the
+// instruction; the registers the microcode names; and all sixteen codes against
+// every byte 1 under a spread of opcodes, reserved codes pinned to the wiring.
+{
+  const rnd = (() => { let s = 362436069;
+    return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
+  const dec = buildDecoder(spec);
+  const FIELDS = [
+    (op, b1) => b1 & 7,                          // 8  rd
+    (op, b1) => (b1 >> 3) & 7,                   // 9  ra
+    (op) => op & 7,                              // 10 opcode
+    (op, b1) => ((b1 >> 6) << 1) | (op & 1),     // 11 port B
+  ];
+  const rows = [];
+  const row = (src, insn, want) => `${src} ${hex6(insn)} ${want}`;
+
+  const forms = new Map();
+  for (let op = 0; op < 256; op++)
+    for (let b1 = 0; b1 < 256; b1++) {
+      const e = decode(dec, [op, b1, 0], 0);
+      if (!e || e.nbytes === 1) continue;
+      for (const m of (e.insn.semantics ?? '').matchAll(/(?:^|;)\s*R\[([a-z])\]\s*=(?!=)/g)) {
+        const name = m[1], key = `${e.insn.mnemonic}/${e.form.name}:${name}`;
+        if (!forms.has(key)) forms.set(key, { key, follows: [true, true, true, true], seen: [] });
+        const f = forms.get(key);
+        FIELDS.forEach((fn, i) => { if (e.ops[name] !== fn(op, b1)) f.follows[i] = false; });
+        f.seen.push([op, b1, e.ops[name]]);
+      }
+    }
+  for (const f of forms.values()) {
+    const codes = f.follows.map((ok, i) => (ok ? 8 + i : null)).filter((c) => c !== null);
+    if (codes.length !== 1) {
+      console.log(`FAIL  ${f.key}: the written register follows ${codes.length ? 'several' : 'none'} of the four fields`);
+      failed = true; continue;
+    }
+    for (let i = 0; i < 24; i++) {
+      const [op, b1, want] = f.seen[rnd() % f.seen.length];
+      rows.push(row(codes[0], ((rnd() & 0xff) << 16) | (b1 << 8) | op, want));
+    }
+  }
+  for (let reg = 0; reg < 8; reg++)
+    for (let i = 0; i < 16; i++) rows.push(row(reg, rnd() & 0xffffff, reg));
+  for (let src = 0; src < 16; src++)
+    for (let b1 = 0; b1 < 256; b1++) {
+      const op = rnd() & 0xff;
+      const want = src < 8 ? src : FIELDS[src & 3](op, b1);
+      rows.push(row(src, ((rnd() & 0xff) << 16) | (b1 << 8) | op, want));
+    }
+
+  writeFileSync('build/dest-vectors.txt', rows.join('\n') + '\n');
+  writeFileSync('build/dest-tb.sv', `module tb;
+    logic [3:0] src, want_;
+    logic [23:0] insn;
+    logic [2:0] got;
+    integer f, n = 0, bad = 0, r;
+    dest u (.insn(insn), .src(src), .regnum(got));
+    initial begin
+        f = $fopen("build/dest-vectors.txt", "r");
+        if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
+        while (!$feof(f)) begin
+            r = $fscanf(f, "%d %h %d\\n", src, insn, want_);
+            if (r == 3) begin
+                #1; n = n + 1;
+                if (got !== want_[2:0]) begin
+                    bad = bad + 1;
+                    if (bad < 6)
+                        $display("  MISMATCH src=%0d insn=%h: want r%0d, got %b", src, insn, want_, got);
+                end
+            end
+        end
+        if (bad == 0) $display("ok    rtl/dest.sv: %0d vectors, ${forms.size} written registers from the decoder, all correct", n);
+        else $display("FAIL  rtl/dest.sv: %0d of %0d wrong", bad, n);
+        $finish;
+    end
+endmodule
+`);
+  execFileSync('iverilog', ['-g2012', '-o', 'build/dest-tb.vvp', 'rtl/dest.sv', 'build/dest-tb.sv'],
+               { stdio: 'inherit' });
+  const o = execFileSync('vvp', ['build/dest-tb.vvp'], { encoding: 'utf8' });
+  process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
+  for (const f of ['build/dest-tb.vvp', 'build/dest-tb.sv', 'build/dest-vectors.txt']) rmSync(f, { force: true });
+  if (/FAIL/.test(o)) failed = true;
+}
+
+// =============================================================================
+// rtl/alu.sv, rtl/compare.sv and rtl/cond.sv - against the simulator
+// =============================================================================
+// The reference is tools/sim.js: BUILTIN for the shifts and unary operations,
+// and `test` for every condition, which is what the spec's semantics call.
+// Nothing here restates the circuits' formulas.
+//
+// Operands are every pair from a set of edge values - zero, one, the sign
+// boundary, all ones, a byte's edge - plus equal pairs and random ones, because
+// a comparison is wrong at the edges and right almost everywhere else.
+//
+// Then END TO END, through cond.sv: real branch bytes decoded with
+// tools/decode.js - two-register, packed, brclear and brset - the condition and
+// mode cond.sv produces from them, and compare.sv's bit against the semantics.
+{
+  const rnd = (() => { let s = 521288629;
+    return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
+  const NAMES = spec.optype.cond3.names;
+  const UN = unaryCodes();
+  const OP = { add: 0, rsb: 1, iseq: 2, isset: 3, xor: 4, or: 5, and: 6, rhs: 7, shl: 8, lsr: 9, asr: 11, unary: 12 };
+  const E = [0, 1, 2, 0x7ffe, 0x7fff, 0x8000, 0x8001, 0xfffe, 0xffff, 0x00ff, 0x0100, 0x5555];
+  const pairs = [];
+  for (const a of E) for (const b of E) pairs.push([a, b]);
+  for (let i = 0; i < 400; i++) { const a = rnd() & 0xffff; pairs.push([a, a], [a, rnd() & 0xffff]); }
+  const run = (name, files, tbName) => {
+    execFileSync('iverilog', ['-g2012', '-o', `build/${tbName}.vvp`, ...files, `build/${tbName}.sv`], { stdio: 'inherit' });
+    const o = execFileSync('vvp', [`build/${tbName}.vvp`], { encoding: 'utf8' });
+    process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
+    for (const f of [`build/${tbName}.vvp`, `build/${tbName}.sv`, `build/${tbName}.txt`]) rmSync(f, { force: true });
+    if (/FAIL/.test(o)) failed = true;
+  };
+
+  // --- the ALU: op usel lhs rhs want ------------------------------------------
+  const rows = [];
+  const row = (op, l, r, w) => `${op} ${hex4(l)} ${hex4(r)} ${hex4(w)}`;
+  for (const [l, r] of pairs) {
+    rows.push(row(OP.add, l, r, l + r));
+    rows.push(row(OP.rsb, l, r, r - l));
+    rows.push(row(OP.iseq, l, r, l === r ? 1 : 0));
+    rows.push(row(OP.isset, l, r, (l & r) !== 0 ? 1 : 0));
+    rows.push(row(OP.xor, l, r, l ^ r));
+    rows.push(row(OP.or,  l, r, l | r));
+    rows.push(row(OP.and, l, r, l & r));
+    rows.push(row(OP.rhs, l, r, r));
+    for (const nm of ['shl', 'lsr', 'asr']) rows.push(row(OP[nm], l, r, BUILTIN[nm](l, r & 15)));
+    // the operation rides rhs[2:1]; every other bit of rhs is left random
+    for (const [code, nm] of Object.entries(UN))
+      rows.push(row(OP.unary, l, (r & ~6) | (Number(code) << 1), BUILTIN[nm](l)));
+  }
+  writeFileSync('build/alu-tb.txt', rows.join('\n') + '\n');
+  writeFileSync('build/alu-tb.sv', `module tb;
+    logic [3:0] op;
+    logic [15:0] l, r, want_, got;
+    integer f, n = 0, bad = 0, rr;
+    alu u (.lhs(l), .rhs(r), .op(op), .y(got));
+    initial begin
+        f = $fopen("build/alu-tb.txt", "r");
+        if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
+        while (!$feof(f)) begin
+            rr = $fscanf(f, "%d %h %h %h\\n", op, l, r, want_);
+            if (rr == 4) begin
+                #1; n = n + 1;
+                if (got !== want_) begin
+                    bad = bad + 1;
+                    if (bad < 6) $display("  MISMATCH op=%0d lhs=%h rhs=%h: want %h got %h", op, l, r, want_, got);
+                end
+            end
+        end
+        if (bad == 0) $display("ok    rtl/alu.sv: %0d vectors against tools/sim.js, all correct", n);
+        else $display("FAIL  rtl/alu.sv: %0d of %0d wrong", bad, n);
+        $finish;
+    end
+endmodule
+`);
+  run('alu', ['rtl/unary.sv', 'rtl/alu.sv'], 'alu-tb');
+
+  // --- the compare unit on its own: cond neg mask lhs rhs want ------------------
+  const cmp = [];
+  const crow = (c, ng, mk, l, r, w) => `${c} ${ng} ${mk} ${hex4(l)} ${hex4(r)} ${w}`;
+  for (const [l, r] of pairs)
+    for (const ng of [0, 1]) {
+      for (let c = 0; c < 8; c++) cmp.push(crow(c, ng, 0, l, r, (test(NAMES[c], r, l, 16) ? 1 : 0) ^ ng));
+      cmp.push(crow(NAMES.indexOf('eq'), ng, 1, l, r, ((l & r) === 0 ? 1 : 0) ^ ng));
+      cmp.push(crow(NAMES.indexOf('ne'), ng, 1, l, r, ((l & r) !== 0 ? 1 : 0) ^ ng));
+    }
+  writeFileSync('build/compare-tb.txt', cmp.join('\n') + '\n');
+  writeFileSync('build/compare-tb.sv', `module tb;
+    logic [2:0] c; logic ng, mk, want_; logic [15:0] l, r; wire got;
+    integer f, n = 0, bad = 0, rr;
+    compare u (.lhs(l), .rhs(r), .cond(c), .neg(ng), .mask(mk), .taken(got));
+    initial begin
+        f = $fopen("build/compare-tb.txt", "r");
+        if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
+        while (!$feof(f)) begin
+            rr = $fscanf(f, "%d %d %d %h %h %d\\n", c, ng, mk, l, r, want_);
+            if (rr == 6) begin
+                #1; n = n + 1;
+                if (got !== want_) begin
+                    bad = bad + 1;
+                    if (bad < 6) $display("  MISMATCH cond=%0d neg=%0d mask=%0d lhs=%h rhs=%h: want %0d got %b", c, ng, mk, l, r, want_, got);
+                end
+            end
+        end
+        if (bad == 0) $display("ok    rtl/compare.sv: %0d vectors against tools/sim.js, all correct", n);
+        else $display("FAIL  rtl/compare.sv: %0d of %0d wrong", bad, n);
+        $finish;
+    end
+endmodule
+`);
+  run('compare', ['rtl/compare.sv'], 'compare-tb');
+
+  // --- end to end: branch bytes -> cond.sv -> compare.sv ----------------------
+  // The microcode's source for each: 0 the two-register branch (rhs = R[a],
+  // lhs = R[b]), 1 the packed one (rhs = the constant, lhs = R[a]), 2 brclear
+  // and 3 brset (rhs = the mask, lhs = R[a]).
+  const dec = buildDecoder(spec);
+  const e2e = [];
+  const line = (src, insn, l, r, w) => `${src} ${hex6(insn)} ${hex4(l)} ${hex4(r)} ${w}`;
+  const kinds = new Set();
+  for (let op = 0; op < 256; op++) {
+    const d = decode(dec, [op, 0, 0], 0);
+    const sem = d?.insn.semantics ?? '';
+    const kind = /^if \(test\(cond, R\[a\], R\[b\], 16\)\)/.test(sem) ? 'two'
+               : /^if \(test\(k\.cond, R\[a\], k\.imm, 16\)\)/.test(sem) ? 'packed'
+               : /^if \(\(R\[a\] & mask\) == 0\)/.test(sem) ? 'clear'
+               : /^if \(\(R\[a\] & mask\) != 0\)/.test(sem) ? 'set' : null;
+    if (!kind) continue;
+    kinds.add(`${d.insn.mnemonic}/${d.form.name}`);
+    for (let b1 = 0; b1 < 256; b1++) {
+      const e = decode(dec, [op, b1, 0], 0);
+      if (!e) continue;
+      const insn = ((rnd() & 0xff) << 16) | (b1 << 8) | op;
+      for (let i = 0; i < 4; i++) {
+        const [va, vb] = pairs[rnd() % pairs.length];
+        if (kind === 'two') {
+          const cn = typeof e.ops.cond === 'string' ? e.ops.cond : NAMES[e.ops.cond];
+          e2e.push(line(0, insn, vb, va, test(cn, va, vb, 16) ? 1 : 0));
+        } else if (kind === 'packed') {
+          e2e.push(line(1, insn, va, u16(e.ops.k.imm), test(e.ops.k.cond, va, e.ops.k.imm, 16) ? 1 : 0));
+        } else {
+          const m = u16(e.ops.mask), hit = (va & m) !== 0;
+          e2e.push(line(kind === 'clear' ? 2 : 3, insn, va, m, (kind === 'clear' ? !hit : hit) ? 1 : 0));
+        }
+      }
+    }
+  }
+  writeFileSync('build/cond-tb.txt', e2e.join('\n') + '\n');
+  writeFileSync('build/cond-tb.sv', `module tb;
+    logic [1:0] src; logic [23:0] insn; logic [15:0] l, r; logic want_;
+    wire [2:0] c; wire ng, mk, got;
+    integer f, n = 0, bad = 0, rr;
+    cond k (.insn(insn), .src(src), .code(c), .neg(ng), .mask(mk));
+    compare u (.lhs(l), .rhs(r), .cond(c), .neg(ng), .mask(mk), .taken(got));
+    initial begin
+        f = $fopen("build/cond-tb.txt", "r");
+        if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
+        while (!$feof(f)) begin
+            rr = $fscanf(f, "%d %h %h %h %d\\n", src, insn, l, r, want_);
+            if (rr == 5) begin
+                #1; n = n + 1;
+                if (got !== want_) begin
+                    bad = bad + 1;
+                    if (bad < 6) $display("  MISMATCH src=%0d insn=%h lhs=%h rhs=%h: want %0d got %b", src, insn, l, r, want_, got);
+                end
+            end
+        end
+        if (bad == 0) $display("ok    rtl/cond.sv: %0d branches through the compare unit, ${kinds.size} branch forms, all correct", n);
+        else $display("FAIL  rtl/cond.sv: %0d of %0d wrong", bad, n);
+        $finish;
+    end
+endmodule
+`);
+  run('cond', ['rtl/compare.sv', 'rtl/cond.sv'], 'cond-tb');
 }
 
 process.exit(failed ? 1 : 0);

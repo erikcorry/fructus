@@ -86,7 +86,7 @@ start:
         shl     r2, r3, r4              ; 2  three-reg
 
         sxt8    r1, r2
-        zxt8    r1, r2
+        and     r1, r2, #0x00ff         ; 3  zero extension between registers, imm10
 
         push    lr
         push    lr, r4

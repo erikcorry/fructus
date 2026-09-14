@@ -1,0 +1,183 @@
+#!/usr/bin/env node
+// =============================================================================
+// gen-alu.js - the ALU and its operation code, from isa/fructus.toml
+// =============================================================================
+//
+//   node tools/gen-alu.js > rtl/alu.sv
+//
+// The operation is a four-bit microcode field; the spec says nothing may decode
+// it from the opcode byte.  What the spec does decide is which operation each
+// instruction needs, and this generator works that out from every instruction's
+// `semantics`.  An instruction whose semantics matches no operation - and is not
+// listed as served elsewhere - makes the generator fail, so a new instruction
+// cannot arrive without an answer to "which operation".
+//
+// Branch decisions are not the ALU's: rtl/compare.sv takes the same operands
+// and answers them.  Not yet: br8, push8 and pop8, by decision.
+// =============================================================================
+
+import { loadSpec } from './isa.js';
+
+const spec = loadSpec();
+
+// --- the operations -----------------------------------------------------------
+const OPS = [
+  { code: 0,  name: 'add',   does: 'lhs + rhs' },
+  { code: 1,  name: 'rsb',   does: 'rhs - lhs' },
+  { code: 2,  name: 'iseq',  does: 'lhs == rhs, as 0 or 1' },
+  { code: 3,  name: 'isset', does: '(lhs & rhs) != 0, as 0 or 1' },
+  { code: 4,  name: 'xor',   does: 'lhs ^ rhs' },
+  { code: 5,  name: 'or',    does: 'lhs | rhs' },
+  { code: 6,  name: 'and',   does: 'lhs & rhs' },
+  { code: 7,  name: 'rhs',   does: 'rhs' },
+  { code: 8,  name: 'shl',   does: 'lhs << rhs[3:0]' },
+  { code: 9,  name: 'lsr',   does: 'lhs >> rhs[3:0]' },
+  { code: 11, name: 'asr',   does: 'lhs >>> rhs[3:0]' },
+  { code: 12, name: 'unary', does: 'rtl/unary.sv on lhs, selected by rhs[2:1]' },
+];
+
+// --- which operation each instruction needs, from its semantics ---------------
+const RULES = [
+  [/^R\[d\] = M(8|16)\[R\[a\] \+ off\]$/,                  'add',   'the address'],
+  [/^M(8|16)\[R\[a\] \+ off\] = R\[s\]$/,                  'add',   'the address'],
+  [/^R\[d\] = imm$/,                                      'rhs'],
+  [/^R\[d\] = R\[a\] \+ (R\[b\]|imm)$/,                    'add'],
+  [/^R\[d\] = (R\[b\]|imm) - R\[a\]$/,                     'rsb'],
+  [/^R\[d\] = R\[a\] \^ (R\[b\]|imm)$/,                    'xor'],
+  [/^R\[d\] = R\[a\] \| (R\[b\]|imm)$/,                    'or'],
+  [/^R\[d\] = R\[a\] & (R\[b\]|imm)$/,                     'and'],
+  [/^R\[d\] = (shl|asr|lsr)\(R\[a\], (R\[b\]|imm) & 15\)$/, (m) => m[1]],
+  [/^R\[d\] = (sxt8|clz|bitrev|popcount)\(R\[a\]\)$/,       'unary'],
+  [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
+  [/^R\[d\] = \(R\[a\] & mask\) != 0$/,                    'isset'],
+  [/^sp = sp - 2; M16\[sp\] = R\[a\]/,                      'add',   'sp and #-2, per register'],
+  [/^R\[a\] = M16\[sp\]; sp = sp \+ 2/,                     'add',   'sp and #2, per register'],
+];
+const ELSEWHERE = [
+  [/^$/,                                                'nothing'],
+  [/^halted = 1$/,                                      'no datapath'],
+  [/^(lr = pc; )?pc = (lr|R\[a\]|target|pc \+ target)$/, 'the pc and its own adder'],
+  [/^if \(/,                                            'rtl/compare.sv'],
+];
+const LATER = new Set(['br8', 'push8', 'pop8']);
+
+const uses = new Map(OPS.map((o) => [o.name, []]));
+const skipped = [];
+for (const insn of spec.insn) {
+  const sem = insn.semantics ?? '';
+  if (LATER.has(insn.mnemonic)) { if (!skipped.includes(insn.mnemonic)) skipped.push(insn.mnemonic); continue; }
+  if (ELSEWHERE.some(([re]) => re.test(sem))) continue;
+  const rule = RULES.find(([re]) => re.test(sem));
+  if (!rule) throw new Error(`${insn.mnemonic}: no ALU operation matches "${sem}"`);
+  const [re, op, note] = rule;
+  const name = typeof op === 'function' ? op(sem.match(re)) : op;
+  const label = note ? `${insn.mnemonic} (${note})` : insn.mnemonic;
+  if (!uses.get(name).includes(label)) uses.get(name).push(label);
+}
+for (const o of OPS) if (!uses.get(o.name).length) throw new Error(`no instruction uses ${o.name}`);
+
+const wrap = (words, first, indent, width = 79) => {
+  const lines = [];
+  let cur = first, fresh = true;
+  for (const w of words) {
+    if (!fresh && cur.length + 1 + w.length > width) { lines.push(cur); cur = indent; fresh = true; }
+    cur += (fresh ? '' : ' ') + w;
+    fresh = false;
+  }
+  lines.push(cur);
+  return lines.join('\n');
+};
+const table = OPS.map((o) => `//   ${String(o.code).padStart(2)}  ${o.name.padEnd(6)} ${o.does}\n`
+  + wrap(uses.get(o.name).map((u, i, a) => (i < a.length - 1 ? `${u},` : u)).join(' ').split(' '),
+         '//            ', '//            ')).join('\n');
+const free = [...Array(16).keys()].filter((c) => !OPS.some((o) => o.code === c));
+
+process.stdout.write(`// =============================================================================
+// alu.sv - the ALU
+// =============================================================================
+//
+// GENERATED by tools/gen-alu.js from isa/fructus.toml.  Do not edit; edit the
+// spec or the generator and run \`npm run rtl\`.
+//
+// Two sixteen-bit inputs and one sixteen-bit output, as README.md says, and a
+// four-bit microcode field for the operation.  Every operation, and the
+// instructions whose semantics call for it:
+//
+${table}
+//
+//   ${free.join(', ')} are free.  Not yet: ${skipped.join(', ')}.
+//
+// BRANCHES ARE DECIDED BESIDE THE ALU, NOT IN IT.  rtl/compare.sv takes the
+// same two operands and answers one bit that never enters this block's result,
+// so nothing here waits for flags.  What stays is what writes a register: iseq
+// is the NOR of lhs ^ rhs and isset the OR of lhs & rhs, neither of which needs
+// the carry chain, so the only carry left in the ALU is add and rsb's own.
+//
+// THE CODES FOLLOW THE CIRCUIT.  Code bit 0 is the adder's subtract, so add and
+// rsb differ in one wire.  The shifts put their direction in bit 0 and
+// arithmetic in bit 1, so asr is 11 and 10 is free.
+//
+// MEASURED on an iCE40 UP5K, yosys 0.52 -nobram + nextpnr-ice40 0.7, logic
+// cells and the median of five placement seeds.  ALONE is registered operands
+// into the units and a flop behind each; the DATAPATH is placement A of
+// rtl/insn.sv - the instruction and microcode registered, rtl/lhs.sv and
+// rtl/rhs.sv reading an 8x16 register file, rtl/cond.sv, the units, flops:
+//
+//                                              alone             datapath
+//     one ALU with the comparison inside       500   37.9 MHz    1061   23.4 MHz
+//     THIS FILE alone                          515   45.0        1035   26.5
+//     rtl/compare.sv alone                     167   47.1         672   26.0
+//     THIS FILE and rtl/compare.sv together    540   45.3        1055   25.2
+//
+// SEPARATING THEM IS WORTH A FIFTH OF THE ALU'S CLOCK on its own, and a twelfth
+// behind the register file, for a second subtractor.  The comparison had set
+// the combined ALU's speed: its critical path ran from the subtract, through
+// the carry chain, N and V and the condition, to the negate.  Now the ALU's
+// path ends at its result mux, and the compare unit has headroom beside it.
+//
+// BEHIND THE REGISTER FILE THE TWO PATHS ARE LEVEL, at about 26 MHz each, and
+// what sets that is in front of both: a bare add in the same place measured
+// 38.0.  Reading a register through rtl/lhs.sv and rtl/rhs.sv is the next thing
+// to shorten, and rtl/insn.sv's placement C - register addresses from \`view\`
+// - is the measured way to do it.
+//
+// Two shapes were measured and not taken, with the comparison still inside:
+// splitting the result mux by speed into an inner mux over xor, or, and, rhs
+// and test and an eight-input outer one was no faster and twenty cells bigger,
+// because the width of the mux was never what set the clock; and signed lt as
+// (signs differ ? rhs[15] : ~C) instead of N ^ V was correct but inside the
+// seeds' noise.
+// =============================================================================
+
+module alu (
+    input  logic [15:0] lhs,     // register file port A: rtl/lhs.sv
+    input  logic [15:0] rhs,     // rtl/rhs.sv
+    input  logic [3:0]  op,      // microcode: which operation
+    output logic [15:0] y
+);
+
+    wire        sub  = op[0];
+    wire [15:0] sum  = rhs + (lhs ^ {16{sub}}) + {15'd0, sub};
+    wire [15:0] xorv = lhs ^ rhs;
+    wire [15:0] andv = lhs & rhs;
+    wire [3:0]  amt  = rhs[3:0];
+    wire [15:0] un;
+    unary u (.a(lhs), .sel(rhs[2:1]), .y(un));      // two bits of the imm3 value
+
+    always_comb case (op)
+        4'd0, 4'd1: y = sum;
+        4'd2:       y = {15'd0, ~|xorv};
+        4'd3:       y = {15'd0, |andv};
+        4'd4:       y = xorv;
+        4'd5:       y = lhs | rhs;
+        4'd6:       y = andv;
+        4'd7:       y = rhs;
+        4'd8:       y = lhs << amt;
+        4'd9:       y = lhs >> amt;
+        4'd11:      y = $signed(lhs) >>> amt;
+        4'd12:      y = un;
+        default:    y = 16'hxxxx;
+    endcase
+
+endmodule
+`);

@@ -5,30 +5,31 @@
 //
 //   node tools/gen-unary.js > rtl/unary.sv
 //
-// The eight-way unary block: sxt8, zxt8, clz, bitrev and popcount, plus three
-// free slots.  The OPERATIONS are hand-written below - they are real hardware
-// and the spec describes what they compute, not how - but the SELECTOR TABLE is
-// read out of the encodings, so an operation cannot be added to the spec
-// without this file either implementing it or refusing to run.
+// The four-way unary block: clz, popcount, bitrev and sxt8.  The OPERATIONS
+// are hand-written below - they are real hardware and the spec describes what
+// they compute, not how - but the SELECTOR TABLE is read out of the encodings,
+// so an operation cannot be added to the spec without this file either
+// implementing it or refusing to run.
 // =============================================================================
 
 import { loadSpec } from './isa.js';
 
 const spec = loadSpec();
+const imm3 = spec.optype.imm3.values;
 
 // --- who sits at which selector ---------------------------------------------
-// byte 0 is 0011_101s and byte 1 is ddda_aass, so the selector is
-// {byte1[7:6], opcode[0]} - which is the same three bits that carry ALU port B
-// and the imm3 index everywhere else in the map.
-const slots = new Map();
+// byte 0 is 0011_001s and byte 1 is ssaa_addd, so {byte1[7:6], opcode[0]} is an
+// imm3 INDEX, which rtl/immgen.sv turns into a VALUE on the rhs bus.  This block
+// reads bits 2:1 of the value - after the lookup - so its code for each
+// operation is (imm3[index] >> 1) & 3, and no selector wires run from decode.
+const slots = new Map();   // code -> { mnemonic, index, value }
 let base = null;
 for (const insn of spec.insn)
   for (const form of insn.form ?? []) {
     // A unary form is a two-byte encoding whose byte 1 is TWO LITERAL BITS
     // followed by `aaaddd'.  Nothing else in the map has that shape - the imm3
     // forms put letters in those two bits - so the opcode pair is found rather
-    // than assumed.  It has moved twice now: once when the row moved, and once
-    // when byte 1 was reversed to put the first operand in the low bits.
+    // than assumed.
     const bits = (form.encoding ?? '').replace(/[\s_]/g, '');
     const m = /^([01]{8})([01]{2})a{3}d{3}$/.exec(bits);
     if (!m) continue;
@@ -37,32 +38,41 @@ for (const insn of spec.insn)
     if (base === null) base = pair;
     else if (base !== pair)
       throw new Error(`unary forms are split across opcode pairs 0x${base.toString(16)} and 0x${pair.toString(16)}`);
-    const sel = (ss << 1) | (op & 1);
-    if (slots.has(sel)) throw new Error(`unary selector ${sel} claimed twice`);
-    slots.set(sel, insn.mnemonic);
+    const index = (ss << 1) | (op & 1);
+    const value = imm3[index];
+    const code = ((value & 0xffff) >> 1) & 3;
+    if (slots.has(code))
+      throw new Error(`${insn.mnemonic} and ${slots.get(code).mnemonic} both put ${code} on rhs[2:1]`);
+    slots.set(code, { mnemonic: insn.mnemonic, index, value });
   }
 if (base === null) throw new Error('no unary forms found in the spec');
 
 // --- what this file knows how to build --------------------------------------
 const IMPL = {
   sxt8:     'sxt',
-  zxt8:     'zxt',
   bitrev:   'rev',
   clz:      '{11\'d0, cl}',
   popcount: '{11\'d0, pc}',
 };
-for (const [sel, m] of slots)
-  if (!(m in IMPL)) throw new Error(`unary selector ${sel} is '${m}', which rtl/unary.sv does not implement`);
+for (const [code, s] of slots)
+  if (!(s.mnemonic in IMPL)) throw new Error(`unary code ${code} is '${s.mnemonic}', which rtl/unary.sv does not implement`);
 
-const rows = [...slots].sort((a, b) => a[0] - b[0])
-  .map(([sel, m]) => `        3'd${sel}: y = ${IMPL[m]};${' '.repeat(Math.max(1, 18 - IMPL[m].length))}// ${m}`)
+const sorted = [...slots].sort((a, b) => a[0] - b[0]);
+const rows = sorted
+  .map(([code, s]) => `        2'd${code}: y = ${IMPL[s.mnemonic]};${' '.repeat(Math.max(1, 18 - IMPL[s.mnemonic].length))}// ${s.mnemonic}`)
   .join('\n');
-const listed = [...slots].sort((a, b) => a[0] - b[0]).map(([s, m]) => `//   ${s}  ${m}`).join('\n');
+const listed = sorted.map(([code, s]) =>
+  `//     ${String(code).padStart(2)}    ${String(s.index).padStart(2)}      ${String(s.value).padStart(3)}      ${s.mnemonic}`).join('\n');
+const aliases = [...Array(8).keys()]
+  .filter((i) => ![...slots.values()].some((s) => s.index === i))
+  .map((i) => {
+    const code = ((imm3[i] & 0xffff) >> 1) & 3;
+    return `index ${i} (${imm3[i]}) reads as ${slots.get(code)?.mnemonic ?? 'nothing'}`;
+  });
+const fallback = slots.size < 4 ? `\n        default: y = 16'hxxxx;` : '';
 
-// popcount's nibble table and clz's priority encoder, both written out here so
-// the file has no dependencies.
 const pcRows = [...Array(16).keys()]
-  .map((n) => `        4'h${n.toString(16)}: ${'pcn'} = 3'd${n.toString(2).split('').filter((c) => c === '1').length};`)
+  .map((n) => `        4'h${n.toString(16)}: cnt4 = 3'd${n.toString(2).split('').filter((c) => c === '1').length};`)
   .join('\n');
 const clzRows = [...Array(16).keys()].map((i) => {
   const pat = '0'.repeat(i) + '1' + '?'.repeat(15 - i);
@@ -76,77 +86,62 @@ process.stdout.write(`// =======================================================
 // GENERATED by tools/gen-unary.js from isa/fructus.toml.  Do not edit; edit the
 // spec or the generator and run \`npm run rtl\`.
 //
-// Eight selector values at opcodes 0x${base.toString(16)} and 0x${(base + 1).toString(16)}, five of them used:
+// ${slots.size} operations at opcodes 0x${base.toString(16)} and 0x${(base + 1).toString(16)}, selected by rhs[2:1]:
 //
+//   code  imm3 index  rhs value  operation
 ${listed}
 //
-// The selector is {byte1[7:6], opcode[0]} - the same three bits that carry ALU
-// port B and the imm3 index everywhere else, so the field needs no decode of
-// its own.  The operations are hand-written; only the table above is generated,
-// which is what makes adding an operation to the spec fail here rather than
-// silently produce a block that does not implement it.
+// THE SELECTOR IS THE RIGHT-HAND SIDE, AFTER THE LOOKUP.  The unary forms sit
+// in the imm3 columns, so {byte1[7:6], opcode[0]} is an imm3 index, rtl/immgen.sv
+// turns it into a value and rtl/rhs.sv puts that on the bus the ALU already
+// reads.  This block takes two bits of the value, so it has exactly the inputs
+// every other ALU operation has - lhs and rhs - and no selector lines run from
+// decode to the ALU.  The indices no operation uses alias harmlessly:
 //
-// TWO OF THE FIVE ARE FREE.  bitrev is wiring and nothing else - a permutation
-// of sixteen nets - and sxt8/zxt8 are a fanout and a constant.  So the block's
-// entire cost and depth is clz and popcount, plus the mux.
+${aliases.map((a) => `//     ${a}`).join('\n')}
+//
+// TWO BITS, BECAUSE zxt8 IS GONE.  \`and rd, rd, #0x00ff\` is two bytes through
+// immask5, and with a separate source register zero extension is still one
+// instruction - \`and rd, ra, #255\`, three bytes through imm10 - so zxt8 only
+// ever saved a byte in that case.  Four operations leave one of the value's
+// three low bits unread, and WHICH one was measured rather than assumed - UP5K,
+// yosys 0.52 -nobram, nextpnr-ice40 0.7, medians of eight seeds, the ALU alone
+// and behind an 8x16 register file:
+//
+//     rhs[1:0]    45.8 MHz alone    26.1 MHz behind the file
+//     rhs[2:1]    46.9              25.9
+//
+// Level: the select is not on the critical path at either bit, since behind
+// the file the late arrival is the register value into clz and popcount.  So
+// the choice was made on the encoding, and bits 2:1 keep the codes clz 0,
+// popcount 3, bitrev 4 and sxt8 6.
+//
+// A FOUR-WAY MUX IS WHAT MADE A LATE SELECT CHEAP.  The eight-way block this
+// replaced measured two LUT levels slower with its selector off the rhs bus -
+// 38.4 against 49.2 MHz - because a late select on a wide mux cannot be folded
+// into the logic producing the data.  Four ways on two late bits measure the
+// same as the old block with its selector wired from the instruction register.
+//
+// WHAT THE BLOCK COSTS THE DATAPATH: removing it altogether is worth an eighth
+// of the clock behind the register file, 29.1 against 26.0 MHz.  Removing only
+// clz or only popcount is worth nothing, because the two are equally deep and
+// the other remains.
+//
+// bitrev IS WIRING and nothing else - a permutation of sixteen nets - and sxt8
+// is a fanout.  So the block's entire cost and depth is clz and popcount, plus
+// the mux.
 //
 // clz IS THE PRIORITY ENCODER, not the nibble-and-NOR version.  The nibble one
 // is smaller - 21 SB_LUT4 against 31 - but it is five LUT levels against four,
-// and depth is the budget worth defending here: measured on its own the block
-// is 8.1 ns of logic and 10.6 ns of ROUTING, and the unary ALU sits further
-// from the register file than the main ALU does.
+// and depth is the budget worth defending here.
 //
 // AND clz(0) = 16 IS A REAL COST, kept deliberately.  gcc leaves
 // __builtin_clz(0) undefined, and leaving it undefined here would drop the
 // answer from five bits to four, taking the 16-input NOR that produces bit 4
 // with it: measured, 4 LUT levels and 62.7 MHz becomes 3 levels and 84.1 MHz.
-// That is 34% of the clock for a case software can paper over in one \`br eq\`.
 // It is not taken because an instruction whose result depends on how it was
 // reached is a bad thing to have in an ISA - but if clz ever turns out to set
 // this block's depth, that is where the headroom is.
-//
-// THE SELECTOR COULD BE THE ALU'S OWN RIGHT-HAND SIDE, and that is worth
-// recording even though it is not what this file does yet.  The unary forms sit
-// in the imm3 columns, so the three selector bits are also an imm3 INDEX, and
-// rtl/immgen.sv already turns that index into a value on the rhs bus:
-//
-//     index   0    1    2    3    4    5    6    7
-//     value  -1    0    1    2    3    4    6    8
-//     low 3   7    0    1    2    3    4    6    0   <- 7 collides with 1
-//
-// Seven of the eight give distinct low three bits, so up to SEVEN operations
-// can be selected by rhs[2:0] with no selector wires at all - the unary block
-// would take exactly the two inputs every other ALU operation takes, lhs and
-// rhs, and need nothing else routed to it.
-//
-// IT COSTS TWO LUT LEVELS, WHICH IS NOT THE SAME AS COSTING ANYTHING.  Measured
-// with the whole right-hand-side chain in both harnesses, so the only
-// difference is where the selector comes from:
-//
-//     selector off the instruction register   342 cells   5 levels   49.2 MHz
-//     selector off the rhs bus                334 cells   7 levels   38.4 MHz
-//
-// WHETHER THAT MATTERS DEPENDS ON WHAT SETS THE CLOCK, and this measurement
-// does not say.  A 16-bit add is 9.8 ns on its own and worse once routed; if it
-// is the critical path then the unary block has slack, two levels of slack cost
-// nothing, and three selector wires dragged across the layout to a unit that is
-// NOT critical are a real cost in a fabric where routing is already 60% of the
-// delay.  The numbers above are the price; they are not the decision.  Decide it
-// against a placed design with the datapath in it, not against this pair.
-//
-// The reasoning that says it should be free -
-// rhs is four levels away, the unary operations are four levels from lhs, so
-// the mux lands at five either way - misses that the mux is TWO levels for a
-// five-way 16-bit select, and that with the selector arriving at level zero
-// ABC folds its first level into the logic producing the data.  clz's final
-// encoder LUT can compute "my value, already gated by whether clz is selected",
-// because the selector is a spare input at that point.  Arriving at level four
-// it cannot, and the mux becomes two levels bolted on the end.
-//
-// Which is the same rule that put cimm in the microcode word rather than
-// decoding it here: a control signal that arrives EARLY gets absorbed, one that
-// arrives LATE gets added.  Three selector wires from the instruction register
-// are not the cost; the folding they permit is worth two levels.
 //
 // popcount TAKES THE TOP BIT OUT OF THE ADDER.  A nibble count's bit 2 is set
 // only for 1111, and then its low bits are zero - so the total reaches 16 only
@@ -157,13 +152,12 @@ ${listed}
 
 module unary (
     input  logic [15:0] a,
-    input  logic [2:0]  sel,     // {byte1[7:6], opcode[0]}
+    input  logic [1:0]  sel,     // rhs[2:1]: two bits of the imm3 value
     output logic [15:0] y
 );
 
     // --- wiring -------------------------------------------------------------
     wire [15:0] sxt = {{8{a[7]}}, a[7:0]};
-    wire [15:0] zxt = {8'd0, a[7:0]};
     wire [15:0] rev = { a[0],  a[1],  a[2],  a[3],  a[4],  a[5],  a[6],  a[7],
                         a[8],  a[9],  a[10], a[11], a[12], a[13], a[14], a[15] };
 
@@ -177,7 +171,7 @@ ${clzRows}
     // --- popcount: four nibble counts, then two adds and an AND -------------
     function automatic [2:0] cnt4(input [3:0] n);
         case (n)
-${pcRows.replace(/pcn/g, 'cnt4')}
+${pcRows}
         endcase
     endfunction
     wire [2:0] p0 = cnt4(a[3:0]),   p1 = cnt4(a[7:4]);
@@ -188,8 +182,7 @@ ${pcRows.replace(/pcn/g, 'cnt4')}
 
     // --- the mux ------------------------------------------------------------
     always_comb case (sel)
-${rows}
-        default: y = 16'hxxxx;                  // the three free selectors
+${rows}${fallback}
     endcase
 
 endmodule

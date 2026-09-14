@@ -187,7 +187,6 @@ export function test(cond, x, y, w) {
 // implementations as their reference rather than a second transcription.
 export const BUILTIN = {
   sxt8:     (x) => (((x & 0xff) ^ 0x80) - 0x80),
-  zxt8:     (x) => x & 0xff,
   shl:      (x, n) => x << n,
   lsr:      (x, n) => (x & MASK) >>> n,
   asr:      (x, n) => s16(x) >> n,

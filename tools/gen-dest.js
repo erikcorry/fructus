@@ -1,0 +1,181 @@
+#!/usr/bin/env node
+// =============================================================================
+// gen-dest.js - the register an instruction writes, from isa/fructus.toml
+// =============================================================================
+//
+//   node tools/gen-dest.js > rtl/dest.sv
+//
+// Chooses the register file's WRITE address: a register the microcode names,
+// or one of the four places in rtl/insn.sv where an instruction carries a
+// register number.  Whether anything is written at all is a separate microcode
+// line and not this block's business.
+//
+// WHICH REGISTERS AN INSTRUCTION WRITES is read off each instruction's
+// `semantics` - every statement of the form `R[x] = ...` - and WHERE EACH SITS
+// by decoding every opcode and byte 1 with tools/decode.js.  A written register
+// in none of the four fields makes the generator fail.
+// =============================================================================
+
+import { loadSpec } from './isa.js';
+import { buildDecoder, decode } from './decode.js';
+
+const spec = loadSpec();
+const dec = buildDecoder(spec);
+const regs = spec.optype.reg;
+const regIndex = (name) => regs.names.indexOf(regs.aliases?.[name] ?? name);
+const regName = (n) => {
+  const alias = Object.entries(regs.aliases ?? {}).find(([, t]) => regs.names.indexOf(t) === n)?.[0];
+  return alias ? `${alias} (${regs.names[n]})` : regs.names[n];
+};
+
+// --- the four fields, as functions of the opcode and byte 1 ------------------
+// Codes 8 and 9 are the same fields under the same codes as rtl/lhs.sv, so a
+// microcode step that reads a register and writes it back names it once.
+const FIELD = {
+  8:  { name: 'rd field',     bits: 'insn[10:8]',             of: (op, b1) => b1 & 7 },
+  9:  { name: 'ra field',     bits: 'insn[13:11]',            of: (op, b1) => (b1 >> 3) & 7 },
+  10: { name: 'opcode field', bits: 'insn[2:0]',              of: (op) => op & 7 },
+  11: { name: 'port B field', bits: '{insn[15:14], insn[0]}', of: (op, b1) => ((b1 >> 6) << 1) | (op & 1) },
+};
+
+// --- what each form writes --------------------------------------------------
+// A statement beginning `R[x] =` writes operand x; one beginning `sp =` or
+// `lr =` writes a register the microcode names.  `pc =` is not the register
+// file's.
+const writesOf = (insn) => [...(insn.semantics ?? '').matchAll(/(?:^|;)\s*(R\[([a-z])\]|[a-z]+)\s*=(?!=)/g)]
+  .map((m) => m[2] ? { operand: m[2] } : { named: m[1] })
+  .filter((w) => w.operand || regs.names.includes(regs.aliases?.[w.named] ?? w.named));
+
+const probe = new Map();    // form -> operand -> { fields still consistent }
+const micro = new Map();    // register -> [who]
+const note = (reg, who) => micro.set(reg, [...new Set([...(micro.get(reg) ?? []), who])]);
+
+for (let op = 0; op < 256; op++)
+  for (let b1 = 0; b1 < 256; b1++) {
+    const e = decode(dec, [op, b1, 0], 0);
+    if (!e) continue;
+    const who = `${e.insn.mnemonic}/${e.form.name}`;
+    for (const w of writesOf(e.insn)) {
+      if (w.named) { note(regIndex(w.named), e.insn.mnemonic); continue; }
+      if (e.nbytes === 1) { note(e.ops[w.operand], who); continue; }
+      const key = `${who}:${w.operand}`;
+      if (!probe.has(key)) probe.set(key, { who, operand: w.operand, ok: Object.fromEntries(Object.keys(FIELD).map((c) => [c, true])) });
+      const p = probe.get(key);
+      for (const c of Object.keys(FIELD)) if (e.ops[w.operand] !== FIELD[c].of(op, b1)) p.ok[c] = false;
+    }
+  }
+
+const found = [];
+for (const p of probe.values()) {
+  const codes = Object.keys(p.ok).filter((c) => p.ok[c]);
+  if (codes.length !== 1)
+    throw new Error(`${p.who}: written register ${p.operand} is ${codes.length ? 'in more than one field' : 'in none of the four fields'}`);
+  found.push({ ...p, code: Number(codes[0]) });
+}
+
+// --- the header tables --------------------------------------------------------
+const wrap = (words, first, indent, width = 79) => {
+  const lines = [];
+  let cur = first, fresh = true;
+  for (const w of words) {
+    if (!fresh && cur.length + 1 + w.length > width) { lines.push(cur); cur = indent; fresh = true; }
+    cur += (fresh ? '' : ' ') + w;
+    fresh = false;
+  }
+  lines.push(cur);
+  return lines.join('\n');
+};
+const fieldText = Object.entries(FIELD).map(([c, f]) => {
+  const users = found.filter((x) => x.code === Number(c));
+  // A mnemonic whose forms write through different fields is named by form
+  // there; one written through a register other than d says which.
+  const fieldsOf = (m) => new Set(found.filter((x) => x.who.split('/')[0] === m).map((x) => x.code));
+  const names = [...new Set(users.map((u) => {
+    const [m, form] = u.who.split('/');
+    const label = fieldsOf(m).size > 1 && u.operand === 'd' ? `${m}/${form}` : m;
+    return u.operand === 'd' ? label : `${label} (${u.operand})`;
+  }))];
+  return `//   ${String(c).padStart(2)}  ${f.name.padEnd(13)} ${f.bits}\n`
+       + wrap(names.length ? names : ['(nothing)'], '//             ', '//             ');
+}).join('\n');
+const microText = [...micro.entries()].sort(([a], [b]) => a - b)
+  .map(([r, who]) => wrap(who.map((w, i) => (i < who.length - 1 ? `${w},` : w)),
+                          `//     ${regName(r).padEnd(10)}`, `//     ${' '.repeat(10)}`))
+  .join('\n');
+
+process.stdout.write(`// =============================================================================
+// dest.sv - which register the write this cycle goes to
+// =============================================================================
+//
+// GENERATED by tools/gen-dest.js from isa/fructus.toml.  Do not edit; edit the
+// spec or the generator and run \`npm run rtl\`.
+//
+// The register file's write address, from ONE four-bit microcode field:
+//
+//    0..7   the register src[2:0], named by the microcode
+//    8..11  a register number carried by the instruction, as below
+//   12..15  reserved: they decode as 8..11, by src[1:0]
+//
+// Whether the file is written at all is a separate microcode line, which goes
+// to the file and not through here.
+//
+// FOUND BY DECODING, every multi-byte form's written registers:
+//
+${fieldText}
+//
+// ONE FIELD DOES NEARLY ALL OF IT.  Every ALU operation, load, mov and unary
+// operation writes the rd field; the other three exist for two instructions.
+// \`mov rd, #imm16\` spends opcode bits on its register because its two bytes are
+// all immediate, and a three-register \`pop\` writes its second and third
+// registers from where the ra and port-B fields sit.
+//
+// CODES 8 AND 9 MEAN WHAT THEY MEAN IN rtl/lhs.sv, so a step that reads a
+// register from the instruction and writes it back names the same code twice.
+//
+// AND BIT 0 OF CODES 10 AND 11 IS THE SAME WIRE.  The opcode field is insn[2:0]
+// and the port-B field is {insn[15:14], insn[0]}, so their low bits are both
+// insn[0].  Four fields cost three inputs at bit 0, not four.
+//
+// THE REGISTERS THE MICROCODE NAMES are the one-byte forms' pinned destinations
+// and the two registers the stack and calls write:
+//
+${microText}
+//
+// MEASURED on an iCE40 UP5K, yosys 0.52 -nobram + nextpnr-ice40 0.7: an 8x16
+// register file written at this block's address, logic cells and the median of
+// five placement seeds, against the same file addressed by three microcode bits
+// alone:
+//
+//                              write -> file        add -> write -> file
+//     microcode bits only      291   76.4 MHz       307   66.1 MHz
+//     THIS FILE                319   52.1           337   45.9
+//
+// THE WRITE ADDRESS IS A REAL PATH, and this block lengthens it by a third of
+// the clock.  Both critical paths end at a global buffer on a register's clock
+// enable: the address is decoded into eight enables, each fanning out to sixteen
+// flops, and nextpnr puts those nets on globals.  The field mux adds two LUT
+// levels in front of that decode - the critical path goes from two cells to
+// four.
+//
+// IT IS NOT THE SLOWEST PATH YET.  Reading a register through rtl/lhs.sv or
+// rtl/rhs.sv and adding measured 37 to 45 MHz, below both numbers here.  But it
+// is the next one, and the cure is the one rtl/insn.sv already measured for
+// port addresses: the instruction's fields do not move, so this block's output
+// can be registered a cycle before the write, at the price of the microcode
+// naming the destination one step early.
+// =============================================================================
+
+module dest (
+    input  logic [23:0] insn,    // the instruction, byte 0 low: rtl/insn.sv
+    input  logic [3:0]  src,     // microcode: where the written register comes from
+    output logic [2:0]  regnum   // -> register file write address
+);
+
+    // src[1:0] picks the field: 8 rd, 9 ra, 10 the opcode's register, 11 port B's.
+    wire [2:0] field = src[1] ? (src[0] ? {insn[15:14], insn[0]} : insn[2:0])
+                              : (src[0] ? insn[13:11]            : insn[10:8]);
+
+    assign regnum = src[3] ? field : src[2:0];
+
+endmodule
+`);

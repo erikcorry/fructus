@@ -99,10 +99,10 @@ bzero:
 ; sp has been captured, and the head needs the doubled byte to push words.
 ;
 ; C says memset takes an int and uses `(unsigned char)c`, so a caller passing
-; 0x12ff must fill with 0xff.  The zxt8 is what makes that true, not decoration.
+; 0x12ff must fill with 0xff.  The and is what makes that true, not decoration.
 
 memset:
-        zxt8    r1, r1                  ; (unsigned char)c is the contract
+        and     r1, r1, #0x00ff         ; (unsigned char)c is the contract
         shl     r5, r1, #8              ; 8 is in shift3, so this is two bytes
         or      r1, r1, r5              ; r1 = c:c
         mov     r5, sp                  ; the real stack, out of the way
