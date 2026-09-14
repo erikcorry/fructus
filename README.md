@@ -290,6 +290,24 @@ or the branch decision, must match. Measured behind a real SPRAM, the table
 costs 83 cells, its dispatch path runs at three times the execute step's rate,
 and the step is no slower than with idealised select flops.
 
+`rtl/ucode.sv` is the microcode ROM and its sequencer: a synchronous ROM
+addressed by the opcode on the bus when a step dispatches, and by the word's
+own `next` otherwise. Because predecode has already chosen every select, the
+ALU instructions need almost nothing from it — a two-byte one is an entry word
+that fetches byte 1 and a shared step that writes the result while dispatching
+the next opcode, so every ALU opcode shares its whole routine. What it runs so
+far is every instruction whose effect is one ALU result in one register, plus
+`halt` and `nop`; every other opcode goes to a trap word.
+
+`rtl/cpu.sv` joins the blocks into something that runs programs, with the
+memory outside behind a synchronous read. It is checked by running them:
+random programs of every implemented form execute on the RTL and the simulator,
+and at every dispatch the pc and all eight registers must match and each
+instruction must take exactly as many cycles as it has bytes — the simulator's
+cost model, confirmed rather than assumed. Measured behind a real SPRAM it runs
+at 21.9 MHz, limited by the execute step rather than the ROM, with routing two
+thirds of the critical path.
+
 `rtl/unary.sv` is the four-way unary block — `sxt8`, `clz`, `bitrev` and
 `popcount`. Its selector is two bits of the right-hand side the ALU already
 reads: the unary forms sit in the imm3 columns, immgen turns their index into a

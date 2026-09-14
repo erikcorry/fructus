@@ -883,4 +883,139 @@ endmodule
   if (/FAIL/.test(o)) failed = true;
 }
 
+// =============================================================================
+// rtl/cpu.sv - programs, against the simulator
+// =============================================================================
+// Random programs of every instruction rtl/ucode.sv implements, ending in halt,
+// run from random registers on both the RTL and tools/sim.js.  At every dispatch
+// the RTL's pc and all eight registers must equal the simulator's state entering
+// that instruction, and the cycles between two dispatches must equal the
+// instruction's length - one cycle per byte, which is the simulator's cost model
+// and not an assumption made here.
+//
+// Which instructions to use is not taken from the ROM generator: it is every
+// multi-byte form whose semantics write one register with no memory, found by
+// decoding, and a program containing one the ROM does not implement traps and
+// fails.  The first program runs every such form in turn, so each is covered
+// whatever the random ones pick.
+{
+  const rnd = (() => { let s = 2654435761;
+    return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
+  const dec = buildDecoder(spec);
+  const EDGE = [0, 1, 2, 0x7fff, 0x8000, 0xffff, 0x00ff, 0x0100];
+  const val = () => (rnd() % 4 === 0 ? EDGE[rnd() % EDGE.length] : rnd() & 0xffff);
+
+  // --- the forms, and a way to draw real bytes for each ----------------------
+  const forms = new Map();   // form -> { op, b1s: [] , nbytes }
+  for (let op = 0; op < 256; op++)
+    for (let b1 = 0; b1 < 256; b1++) {
+      const d = decode(dec, [op, b1, 0], 0);
+      if (!d || d.nbytes < 2 || ['br8', 'push8', 'pop8'].includes(d.insn.mnemonic)) continue;
+      const sem = d.insn.semantics ?? '';
+      if (!/^R\[[a-z]\] = /.test(sem) || sem.includes(';') || /M(8|16)\[/.test(sem)) continue;
+      const key = `${d.insn.mnemonic}/${d.form.name}@${op}`;
+      if (!forms.has(key)) forms.set(key, { op, nbytes: d.nbytes, b1s: [] });
+      forms.get(key).b1s.push(b1);
+    }
+  const all = [...forms.values()];
+  const draw = (f) => {
+    const bytes = [f.op, f.b1s[rnd() % f.b1s.length]];
+    if (f.nbytes === 3) bytes.push(rnd() & 0xff);
+    return bytes;
+  };
+
+  const PROGRAMS = 40;
+  const programs = [];
+  for (let p = 0; p < PROGRAMS; p++) {
+    const picks = p === 0 ? all : Array.from({ length: 30 }, () => all[rnd() % all.length]);
+    const bytes = picks.flatMap(draw).concat([0x00]);              // halt
+    const reg = Array.from({ length: 8 }, val);
+    const m = new Machine(spec).load(bytes, 0);
+    reg.forEach((v, k) => { m.R[k] = v; });
+    const trace = [];
+    for (let guard = 0; !m.halted && guard < 1000; guard++) {
+      const d = decode(dec, m.mem, m.pc);
+      trace.push({ pc: m.pc, R: Array.from(m.R), len: d.nbytes });
+      m.step();
+    }
+    programs.push({ bytes, reg, trace });
+    writeFileSync(`build/cpu-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
+    writeFileSync(`build/cpu-reg-${p}.hex`, reg.map(hex4).join('\n') + '\n');
+  }
+
+  writeFileSync('build/cpu-tb.sv', `module tb;
+    logic clk = 0, rst = 1;
+    logic [7:0] mem [0:65535];
+    logic [7:0] rdata;
+    logic [15:0] regs [0:7];
+    wire [15:0] addr;
+    wire halted, trapped;
+    cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata), .halted(halted), .trapped(trapped),
+           .result());
+    always @(posedge clk) rdata <= mem[addr];
+    integer p, k, cyc, lastcyc, pcnow;
+    reg [8*64:1] name;
+    initial begin
+        for (p = 0; p < ${PROGRAMS}; p = p + 1) begin
+            for (k = 0; k < 65536; k = k + 1) mem[k] = 8'h00;
+            $sformat(name, "build/cpu-prog-%0d.hex", p); $readmemh(name, mem);
+            $sformat(name, "build/cpu-reg-%0d.hex", p);  $readmemh(name, regs);
+            rst = 1;
+            repeat (3) begin #1 clk = 1; #1 clk = 0; end
+            for (k = 0; k < 8; k = k + 1) u.R[k] = regs[k];
+            rst = 0; cyc = 0;
+            while (!halted && !trapped && cyc < 5000) begin
+                if (u.dispatch) begin
+                    pcnow = u.pc;
+                    #1 clk = 1; #1 clk = 0;
+                    $display("STEP %0d %0d %h %h %h %h %h %h %h %h %h", p, cyc, pcnow[15:0],
+                             u.R[0], u.R[1], u.R[2], u.R[3], u.R[4], u.R[5], u.R[6], u.R[7]);
+                end else begin
+                    #1 clk = 1; #1 clk = 0;
+                end
+                cyc = cyc + 1;
+            end
+            $display("END %0d %0d %0d", p, halted, trapped);
+        end
+        $finish;
+    end
+endmodule
+`);
+  execFileSync('iverilog', ['-g2012', '-o', 'build/cpu-tb.vvp',
+    'rtl/cpu.sv', 'rtl/ucode.sv', 'rtl/insn.sv', 'rtl/predecode.sv', 'rtl/lhs.sv', 'rtl/immgen.sv',
+    'rtl/rhs.sv', 'rtl/unary.sv', 'rtl/alu.sv', 'rtl/dest.sv', 'build/cpu-tb.sv'], { stdio: 'inherit' });
+  const out = execFileSync('vvp', ['build/cpu-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+
+  // --- compare ----------------------------------------------------------------
+  // A STEP line is printed at each dispatch, after the edge that ends it: the
+  // pc is the new opcode's address and the registers are the state entering
+  // that instruction.
+  const steps = Array.from({ length: PROGRAMS }, () => []);
+  const ends = [];
+  for (const line of out.split('\n')) {
+    const f = line.trim().split(/\s+/);
+    if (f[0] === 'STEP') steps[+f[1]].push({ cyc: +f[2], pc: parseInt(f[3], 16), R: f.slice(4, 12).map((h) => parseInt(h, 16)) });
+    if (f[0] === 'END') ends[+f[1]] = { halted: f[2] === '1', trapped: f[3] === '1' };
+  }
+  let bad = 0, instructions = 0;
+  const complain = (msg) => { if (bad++ < 6) console.log(`  MISMATCH ${msg}`); };
+  programs.forEach(({ trace }, p) => {
+    const got = steps[p];
+    if (!ends[p]?.halted || ends[p]?.trapped) complain(`program ${p}: ended ${ends[p]?.trapped ? 'trapped' : 'without halting'}`);
+    if (got.length !== trace.length) complain(`program ${p}: ${got.length} dispatches, the simulator ran ${trace.length} instructions`);
+    for (let i = 0; i < Math.min(got.length, trace.length); i++) {
+      const g = got[i], t = trace[i];
+      if (g.pc !== t.pc || g.R.some((v, k) => v !== t.R[k]))
+        complain(`program ${p} instruction ${i} at 0x${t.pc.toString(16)}: rtl pc ${g.pc.toString(16)} r=${g.R.map(hex4).join(' ')}, sim r=${t.R.map(hex4).join(' ')}`);
+      if (i > 0 && g.cyc - got[i - 1].cyc !== trace[i - 1].len)
+        complain(`program ${p} instruction ${i - 1}: ${g.cyc - got[i - 1].cyc} cycles for a ${trace[i - 1].len}-byte instruction`);
+      instructions++;
+    }
+  });
+  if (bad === 0) console.log(`ok    rtl/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over ${all.length} forms, pc, registers and cycles all agree with tools/sim.js`);
+  else { console.log(`FAIL  rtl/cpu.sv: ${bad} disagreements with tools/sim.js`); failed = true; }
+  for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/cpu-prog-${p}.hex`, `build/cpu-reg-${p}.hex`]) rmSync(f, { force: true });
+  for (const f of ['build/cpu-tb.vvp', 'build/cpu-tb.sv']) rmSync(f, { force: true });
+}
+
 process.exit(failed ? 1 : 0);
