@@ -13,7 +13,7 @@
 //    1  r1                       9  #1
 //    2  reserved                10  #2
 //    3  reserved                11  immgen, normal
-//    4  reserved                12  immgen, as condimm5
+//    4  imm16, from the bytes   12  immgen, as condimm5
 //    5  r5                      13  port B, from the bytes
 //    6  sp (r6)                 14  #-2
 //    7  lr (r7)                 15  #-1
@@ -30,11 +30,40 @@
 // against 136 bare, but 432 cells against 430 once placed beside a real 8x16
 // register file, at the same four LUT levels.  Two cells for a microcode bit.
 //
-// THE THREE RESERVED CODES COST NOTHING TO RESERVE.  They fall in the register
-// half, so today they decode as r2, r3 and r4 by accident of the wiring, and
-// the microcode simply never emits them.  If the future requirement turns out
-// to be r2 after all it is already there; if it is the pc or an interrupt
-// register, a small decode is owed then and not before.
+// THE RESERVED CODES COST NOTHING TO RESERVE.  They fall in the register half,
+// so 2 and 3 decode as r2 and r3 by accident of the wiring, and the microcode
+// simply never emits them.  If the future requirement turns out to be r2 after
+// all it is already there; if it is something else, a small decode is owed then
+// and not before.
+//
+// CODE 4 IS THAT SMALL DECODE, spent on the 16-bit immediate.  `mov rd, #imm16`
+// cannot use immgen: its opcode[2:0] is the destination register, not a column,
+// so immgen's mode there depends on which register is loaded.  The value is
+// bytes 1 and 2, low first, and immreg holds {byte1, byte2} once byte 2 is in -
+// so it is {ir[7:0], ir[15:8]}, wiring.  The generator checks that against the
+// decoder.  What it costs:
+//
+//   use_reg gains a term but no input - it already depended on all four bits
+//     of src, because of port B;
+//   the value joins the constants, not the register value, so the new mux sits
+//     on the side of rhs that is already early;
+//   regnum does not change - code 4 is not a register, so its number is a
+//     don't-care, and the wiring's r4 is harmless.
+//
+// It does not need an ALU operation of its own either: it rides the same
+// pass-through the short movs use.
+//
+// MEASURED against the file without it, same harness - an 8x16 register file
+// read through port B, -nobram, medians of five placement seeds:
+//
+//                         rhs -> flop                 rhs + add -> flop
+//     without code 4      475 cells  4 levels  54.9   494 cells  38.2 MHz
+//     with it             505 cells  4 levels  56.9   505 cells  37.5 MHz
+//
+// No level, and no clock beyond the two or three MHz the seeds wander by.  The
+// cells are thirty rather than the sixteen a 2:1 mux predicts - probably
+// because `lit` is no longer just the code bits fanned out, which ABC could fold
+// into the final mux for nothing; not confirmed.
 //
 // AND THE CONSTANTS ARE EXACTLY WHAT THE ONE-BYTE OPCODES NEED.  Every one-byte
 // form pins all its operands, so each has a fixed right-hand side, and all of
@@ -62,7 +91,8 @@ module rhs (
 
     wire [2:0] c = src[2:0];
 
-    wire use_reg = ~src[3] | (src[3] & c == 3'd5);
+    wire use_reg = (~src[3] & c != 3'd4)
+                 | (src[3] & c == 3'd5);
     wire use_imm = src[3] & (c == 3'd3
                            | c == 3'd4);
     wire cimm    = src[3] & (c == 3'd4);
@@ -77,6 +107,11 @@ module rhs (
     wire [2:0] k3 = {ir[7:6], sel[0]};
     assign regnum = src[3] ? k3 : c;
 
-    assign rhs = use_reg ? regval : (use_imm ? imm : konst);
+    // imm16 joins the constants rather than the register value: both are flop
+    // outputs, so this mux is on the side of rhs that arrives early.
+    wire [15:0] imm16 = {ir[7:0], ir[15:8]};    // byte 1 low, byte 2 high
+    wire [15:0] lit   = src[3] ? konst : imm16;
+
+    assign rhs = use_reg ? regval : (use_imm ? imm : lit);
 
 endmodule

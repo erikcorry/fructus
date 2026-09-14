@@ -171,15 +171,22 @@ let failed = /FAIL/.test(out);
 // register, a constant, or immgen in one of its two readings.  regval stands in
 // for the register file, so this covers the wiring rather than the file.
 //
-// ALL SIXTEEN CODES ARE SWEPT, the three reserved ones included.  They are not
-// meant to be emitted, but they decode as r2/r3/r4 today by accident of the
+// ALL SIXTEEN CODES ARE SWEPT, the two reserved ones included.  They are not
+// meant to be emitted, but they decode as r2/r3 today by accident of the
 // wiring and the check pins that: a later change that gives them a meaning has
-// to come here and say so rather than silently altering what they do.
+// to come here and say so rather than silently altering what they do - as code
+// 4 did, when it became the 16-bit immediate.
 {
   // must match tools/gen-rhs.js
   const REG = { 0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7 };   // src[3]=0
   const KON = { 0: 0, 1: 1, 2: 2, 6: -2, 7: -1 };                    // src[3]=1
   const MODE_IMM = 3, MODE_CIMM = 4, MODE_PORTB = 5;
+  const CODE_IMM16 = 4;                                              // src[3]=0
+  const movDec = buildDecoder(spec);
+  const MOV16 = [...Array(256).keys()].find((op) => {
+    const d = decode(movDec, [op, 0, 0], 0);
+    return d && d.nbytes === 3 && /^\s*R\[[a-z]\]\s*=\s*imm\s*$/.test(d.insn.semantics ?? '');
+  });
   const rows = [];
   const rnd = (() => { let s = 2463534242;
     return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
@@ -188,8 +195,18 @@ let failed = /FAIL/.test(out);
     for (let src = 0; src < 16; src++)
       for (let i = 0; i < 12; i++) {
         const hi = src >> 3, c = src & 7;
-        const isReg = !hi || c === MODE_PORTB;
+        const isReg = (!hi && c !== CODE_IMM16) || (hi && c === MODE_PORTB);
         const isImm = hi && (c === MODE_IMM || c === MODE_CIMM);
+        if (!hi && c === CODE_IMM16) {
+          // The expected value comes from DECODING `mov rd, #imm16` bytes, not
+          // from the byte swap: immreg is {byte1, byte2} once byte 2 is in.
+          const b1 = rnd() & 0xff, b2 = rnd() & 0xff, rv = rnd() & 0xffff;
+          const v = u16(decode(movDec, [MOV16, b1, b2], 0).ops.imm);
+          rows.push([(b1 << 8) | b2, sel, src, rv, c, v]
+            .map((x, j) => (j === 0 || j === 3 || j === 5)
+              ? u16(x).toString(16).padStart(4, '0') : x).join(' '));
+          continue;
+        }
         // immgen drives x at +6 and +7, so reading it there is a microcode bug
         // rather than a case with an answer.
         if (isImm && sel >= 6) continue;
