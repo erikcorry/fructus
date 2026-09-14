@@ -294,4 +294,127 @@ endmodule
   if (/FAIL/.test(o)) failed = true;
 }
 
+// =============================================================================
+// rtl/lhs.sv - port A's address, and the latch that holds it
+// =============================================================================
+// Two things are checked, and the first is about the SPEC rather than the
+// circuit: that every multi-byte form's left-hand register follows exactly one
+// of byte1[2:0] and byte1[5:3] under tools/decode.js.  The left-hand operand is
+// named here by a rule of this file's own - `a`, unless `a` is port B, in which
+// case `b`; nothing for push and pop, which read sp - and not by importing the
+// generator's reading of the semantics.
+//
+// The second is the circuit, CLOCKED, driven in instruction-shaped runs:
+//
+//   two bytes     latch open, the field code, byte 1 low          -> the operand
+//   three bytes   the same, then byte 2 shifts byte 1 up and the
+//                 latch closes, with the field code replaced by
+//                 noise, and again for a write cycle              -> still it
+//   one byte      latch open, the pinned register from microcode  -> that
+//
+// shuffled, so a held number from one instruction meeting the next one's
+// choice is exercised too.  All sixteen codes are also swept against every
+// byte 1 with the latch open, reserved codes included, pinned to what the
+// wiring makes them today.
+{
+  const rnd = (() => { let s = 88172645;
+    return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
+  const dec = buildDecoder(spec);
+  const runs = [];
+  const row = (latch, src, ir, want) => `${latch} ${src} ${u16(ir).toString(16).padStart(4, '0')} ${want}`;
+  const DONT = 8;
+
+  // --- the spec property, and the runs built from it -------------------------
+  // Keyed by opcode and form: byte 1 picks among the unary operations, which
+  // share two opcodes, so grouping by opcode alone would skip three of them.
+  const forms = new Map();
+  for (let op = 0; op < 256; op++)
+    for (let b1 = 0; b1 < 256; b1++) {
+      const e = decode(dec, [op, b1, 0], 0);
+      if (!e || e.nbytes === 1 || /\bsp\s*=\s*sp\b/.test(e.insn.semantics ?? '')) continue;
+      const portB = Object.values(e.form.fields ?? {}).find((v) => /^[a-z]:reg\[0\]$/.test(v))?.[0];
+      const name = portB === 'a' ? 'b' : 'a';
+      if (!(e.insn.operands ?? []).some((o) => o.name === name && o.type === 'reg')) continue;
+      const key = `${op}/${e.insn.mnemonic}/${e.form.name}`;
+      if (!forms.has(key)) forms.set(key, { op, key, nbytes: e.nbytes, follows: { 8: true, 9: true }, seen: [] });
+      const f = forms.get(key);
+      if (e.ops[name] !== (b1 & 7)) f.follows[8] = false;
+      if (e.ops[name] !== ((b1 >> 3) & 7)) f.follows[9] = false;
+      f.seen.push([b1, e.ops[name]]);
+    }
+  for (const f of forms.values()) {
+    const codes = Object.keys(f.follows).filter((k) => f.follows[k]).map(Number);
+    if (codes.length !== 1) {
+      console.log(`FAIL  0x${f.op.toString(16)} ${f.key}: its left-hand register follows `
+                + `${codes.length ? 'both' : 'neither'} of byte1[2:0] and byte1[5:3]`);
+      failed = true; continue;
+    }
+    for (let i = 0; i < 24; i++) {
+      const [b1, want] = f.seen[rnd() % f.seen.length];
+      const run = [row(1, codes[0], ((rnd() & 0xff) << 8) | b1, want)];
+      if (f.nbytes === 3) {
+        run.push(row(0, rnd() & 15, (b1 << 8) | (rnd() & 0xff), want));
+        run.push(row(0, rnd() & 15, rnd() & 0xffff, want));
+      }
+      runs.push(run);
+    }
+  }
+  // one-byte forms and push/pop: a register the microcode names
+  for (let i = 0; i < 200; i++) {
+    const reg = rnd() & 7;
+    runs.push([row(1, reg, rnd() & 0xffff, reg), row(0, rnd() & 15, rnd() & 0xffff, reg)]);
+  }
+  for (let i = runs.length - 1; i > 0; i--) {
+    const j = rnd() % (i + 1); [runs[i], runs[j]] = [runs[j], runs[i]];
+  }
+  const rows = runs.flat();
+  // the combinational sweep, latch open
+  for (let src = 0; src < 16; src++)
+    for (let b1 = 0; b1 < 256; b1++) {
+      const ir = ((rnd() & 0xff) << 8) | b1;
+      const want = src < 8 ? src : (src & 1) ? (b1 >> 3) & 7 : b1 & 7;
+      rows.push(row(1, src, ir, want));
+    }
+  // and a closed latch never follows its inputs, whatever they do
+  rows.push(row(1, 5, 0, 5));
+  for (let i = 0; i < 64; i++) rows.push(row(0, rnd() & 15, rnd() & 0xffff, 5));
+
+  writeFileSync('build/lhs-vectors.txt', rows.join('\n') + '\n');
+  writeFileSync('build/lhs-tb.sv', `module tb;
+    logic clk = 0, latch;
+    logic [3:0] src, want_;
+    logic [15:0] ir;
+    logic [2:0] got;
+    integer f, n = 0, bad = 0, r;
+    lhs u (.clk(clk), .ir(ir), .src(src), .latch(latch), .regnum(got));
+    initial begin
+        f = $fopen("build/lhs-vectors.txt", "r");
+        if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
+        while (!$feof(f)) begin
+            r = $fscanf(f, "%d %d %h %d\\n", latch, src, ir, want_);
+            if (r == 4) begin
+                #1; n = n + 1;
+                if (want_ != ${DONT} && got !== want_[2:0]) begin
+                    bad = bad + 1;
+                    if (bad < 6)
+                        $display("  MISMATCH row %0d latch=%0d src=%0d ir=%h: want r%0d, got %b",
+                                 n, latch, src, ir, want_, got);
+                end
+                clk = 1; #1; clk = 0;
+            end
+        end
+        if (bad == 0) $display("ok    rtl/lhs.sv: %0d clocked vectors, ${forms.size} forms from the decoder, all correct", n);
+        else $display("FAIL  rtl/lhs.sv: %0d of %0d wrong", bad, n);
+        $finish;
+    end
+endmodule
+`);
+  execFileSync('iverilog', ['-g2012', '-o', 'build/lhs-tb.vvp', 'rtl/lhs.sv', 'build/lhs-tb.sv'],
+               { stdio: 'inherit' });
+  const o = execFileSync('vvp', ['build/lhs-tb.vvp'], { encoding: 'utf8' });
+  process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
+  for (const f of ['build/lhs-tb.vvp', 'build/lhs-tb.sv', 'build/lhs-vectors.txt']) rmSync(f, { force: true });
+  if (/FAIL/.test(o)) failed = true;
+}
+
 process.exit(failed ? 1 : 0);
