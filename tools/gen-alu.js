@@ -17,49 +17,10 @@
 // =============================================================================
 
 import { loadSpec } from './isa.js';
+import { ALU_OPS as OPS, ALU_RULES as RULES, ALU_ELSEWHERE as ELSEWHERE, ALU_LATER as LATER } from './control.js';
 
 const spec = loadSpec();
 
-// --- the operations -----------------------------------------------------------
-const OPS = [
-  { code: 0,  name: 'add',   does: 'lhs + rhs' },
-  { code: 1,  name: 'rsb',   does: 'rhs - lhs' },
-  { code: 2,  name: 'iseq',  does: 'lhs == rhs, as 0 or 1' },
-  { code: 3,  name: 'isset', does: '(lhs & rhs) != 0, as 0 or 1' },
-  { code: 4,  name: 'xor',   does: 'lhs ^ rhs' },
-  { code: 5,  name: 'or',    does: 'lhs | rhs' },
-  { code: 6,  name: 'and',   does: 'lhs & rhs' },
-  { code: 7,  name: 'rhs',   does: 'rhs' },
-  { code: 8,  name: 'shl',   does: 'lhs << rhs[3:0]' },
-  { code: 9,  name: 'lsr',   does: 'lhs >> rhs[3:0]' },
-  { code: 11, name: 'asr',   does: 'lhs >>> rhs[3:0]' },
-  { code: 12, name: 'unary', does: 'rtl/unary.sv on lhs, selected by rhs[2:1]' },
-];
-
-// --- which operation each instruction needs, from its semantics ---------------
-const RULES = [
-  [/^R\[d\] = M(8|16)\[R\[a\] \+ off\]$/,                  'add',   'the address'],
-  [/^M(8|16)\[R\[a\] \+ off\] = R\[s\]$/,                  'add',   'the address'],
-  [/^R\[d\] = imm$/,                                      'rhs'],
-  [/^R\[d\] = R\[a\] \+ (R\[b\]|imm)$/,                    'add'],
-  [/^R\[d\] = (R\[b\]|imm) - R\[a\]$/,                     'rsb'],
-  [/^R\[d\] = R\[a\] \^ (R\[b\]|imm)$/,                    'xor'],
-  [/^R\[d\] = R\[a\] \| (R\[b\]|imm)$/,                    'or'],
-  [/^R\[d\] = R\[a\] & (R\[b\]|imm)$/,                     'and'],
-  [/^R\[d\] = (shl|asr|lsr)\(R\[a\], (R\[b\]|imm) & 15\)$/, (m) => m[1]],
-  [/^R\[d\] = (sxt8|clz|bitrev|popcount)\(R\[a\]\)$/,       'unary'],
-  [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
-  [/^R\[d\] = \(R\[a\] & mask\) != 0$/,                    'isset'],
-  [/^sp = sp - 2; M16\[sp\] = R\[a\]/,                      'add',   'sp and #-2, per register'],
-  [/^R\[a\] = M16\[sp\]; sp = sp \+ 2/,                     'add',   'sp and #2, per register'],
-];
-const ELSEWHERE = [
-  [/^$/,                                                'nothing'],
-  [/^halted = 1$/,                                      'no datapath'],
-  [/^(lr = pc; )?pc = (lr|R\[a\]|target|pc \+ target)$/, 'the pc and its own adder'],
-  [/^if \(/,                                            'rtl/compare.sv'],
-];
-const LATER = new Set(['br8', 'push8', 'pop8']);
 
 const uses = new Map(OPS.map((o) => [o.name, []]));
 const skipped = [];

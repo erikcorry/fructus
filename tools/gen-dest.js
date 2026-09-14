@@ -18,6 +18,7 @@
 
 import { loadSpec } from './isa.js';
 import { buildDecoder, decode } from './decode.js';
+import { DEST_FIELD as FIELD, destWritesOf as writesOf } from './control.js';
 
 const spec = loadSpec();
 const dec = buildDecoder(spec);
@@ -27,24 +28,6 @@ const regName = (n) => {
   const alias = Object.entries(regs.aliases ?? {}).find(([, t]) => regs.names.indexOf(t) === n)?.[0];
   return alias ? `${alias} (${regs.names[n]})` : regs.names[n];
 };
-
-// --- the four fields, as functions of the opcode and byte 1 ------------------
-// Codes 8 and 9 are the same fields under the same codes as rtl/lhs.sv, so a
-// microcode step that reads a register and writes it back names it once.
-const FIELD = {
-  8:  { name: 'rd field',     bits: 'insn[10:8]',             of: (op, b1) => b1 & 7 },
-  9:  { name: 'ra field',     bits: 'insn[13:11]',            of: (op, b1) => (b1 >> 3) & 7 },
-  10: { name: 'opcode field', bits: 'insn[2:0]',              of: (op) => op & 7 },
-  11: { name: 'port B field', bits: '{insn[15:14], insn[0]}', of: (op, b1) => ((b1 >> 6) << 1) | (op & 1) },
-};
-
-// --- what each form writes --------------------------------------------------
-// A statement beginning `R[x] =` writes operand x; one beginning `sp =` or
-// `lr =` writes a register the microcode names.  `pc =` is not the register
-// file's.
-const writesOf = (insn) => [...(insn.semantics ?? '').matchAll(/(?:^|;)\s*(R\[([a-z])\]|[a-z]+)\s*=(?!=)/g)]
-  .map((m) => m[2] ? { operand: m[2] } : { named: m[1] })
-  .filter((w) => w.operand || regs.names.includes(regs.aliases?.[w.named] ?? w.named));
 
 const probe = new Map();    // form -> operand -> { fields still consistent }
 const micro = new Map();    // register -> [who]

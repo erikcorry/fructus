@@ -18,66 +18,20 @@
 
 import { loadSpec } from './isa.js';
 import { buildDecoder, decode } from './decode.js';
+import { lhsOf, LHS_FIELD as FIELD } from './control.js';
 
 const spec = loadSpec();
 const dec = buildDecoder(spec);
 const regs = spec.optype.reg;
-const regIndex = (name) => {
-  const target = regs.aliases?.[name] ?? name;
-  return regs.names.indexOf(target);
-};
 const regName = (n) => {
   const alias = Object.entries(regs.aliases ?? {}).find(([, t]) => regs.names.indexOf(t) === n)?.[0];
   return alias ? `${alias} (${regs.names[n]})` : regs.names[n];
 };
 
-// --- which register the ALU reads on its left --------------------------------
-// Every `R[x]` the semantics READS, less three kinds that are not port A:
-//
-//   the destination        R[x] = ...           written, not read
-//   memory write data      M16[...] = R[x]      goes to the bus, not the ALU
-//   port B                 the operand whose low bit is opcode[0]; rhs.sv
-//                          reaches it, and br's registers are deliberately
-//                          swapped so that it is `a` there and `b` here
-//
-// What is left is at most one register.  `pc = R[x]` is kept apart: it is a
-// transfer to the pc rather than an ALU operation, but in a multi-byte form it
-// still needs port A, because port B cannot address byte1[2:0].
-//
-// push and pop read sp, which the microcode names; they are recognised by the
-// `sp = sp +/- n` step rather than listed.
-function lhsOf(insn, form) {
-  // A one-byte form has no fields at all; its pinned `b` is port B, which is
-  // how tools/gen-rhs.js reads it too.
-  const portB = Object.values(form.fields ?? {}).find((v) => /^[a-z]:reg\[0\]$/.test(v))?.[0]
-             ?? ('b' in (form.fix ?? {}) ? 'b' : undefined);
-  const reads = new Set();
-  let pc = false, sp = false;
-  for (const stmt of (insn.semantics ?? '').split(';')) {
-    const m = stmt.match(/^(.*?[^=!<>])=(?!=)(.*)$/);
-    if (!m) continue;
-    const [, left, right] = m;
-    const all = (s) => [...s.matchAll(/R\[([a-z])\]/g)].map((x) => x[1]);
-    const dest = left.trim().match(/^R\[([a-z])\]$/);
-    const memw = /M(8|16)\[/.test(left);
-    if (/\bsp\s*=\s*sp\s*[-+]/.test(stmt)) sp = true;
-    if (/\bpc\s*$/.test(left) && /^\s*R\[[a-z]\]\s*$/.test(right)) pc = true;
-    if (!dest) all(left).forEach((r) => reads.add(r));
-    if (!memw) all(right).forEach((r) => reads.add(r));
-  }
-  if (portB) reads.delete(portB);
-  if (sp) return { kind: 'microcode', reg: regIndex('sp') };
-  if (reads.size > 1)
-    throw new Error(`${insn.mnemonic}/${form.name}: port A would need ${[...reads].join(' and ')}`);
-  if (reads.size === 0) return null;
-  return { kind: pc ? 'pc' : 'alu', operand: [...reads][0] };
-}
 
 // --- where it sits, per opcode ------------------------------------------------
 // Decode every byte 1 and see which field the operand follows.  A tied form
 // (`add rd, rd, #imm5`) follows byte1[2:0] only; nothing may follow both.
-const FIELD = { rd: { code: 8, bits: 'insn[10:8]', of: (b) => b & 7 },
-                ra: { code: 9, bits: 'insn[13:11]', of: (b) => (b >> 3) & 7 } };
 const COLUMN = { 0: 'rd', 1: 'rd', 5: 'rd', 2: 'ra', 3: 'ra', 4: 'ra', 6: 'ra', 7: 'ra' };
 
 const opcodes = [];        // { op, who, field, pc } for multi-byte forms

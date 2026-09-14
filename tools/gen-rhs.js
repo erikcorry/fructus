@@ -16,23 +16,11 @@
 
 import { loadSpec } from './isa.js';
 import { buildDecoder, decode } from './decode.js';
+import { RHS_REG as REG, RHS_IMM16 as IMM16, RHS_KON as KON, RHS_MODE as MODE } from './control.js';
 
 const spec = loadSpec();
 const u16 = (v) => (v >>> 0) & 0xffff;
 
-// --- the sixteen codes -------------------------------------------------------
-// src[3] = 0 is a register and src[2:0] IS its number, so the low half is pure
-// wiring.  src[3] = 1 reads src[2:0] as a 3-bit SIGNED constant, which is why
-// -2 and -1 are codes 14 and 15 rather than in numeric order: 110 and 111 are
-// -2 and -1.  The three patterns left over - 011, 100, 101, which would have
-// been 3, -4 and -3 - are the modes.
-//
-// Code 4 is in the register half but is not a register: it is the 16-bit
-// immediate, straight off the bytes.
-const REG  = { 0: 'r0', 1: 'r1', 5: 'r5', 6: 'sp (r6)', 7: 'lr (r7)' };
-const IMM16 = 4;
-const KON  = { 0: 0, 1: 1, 2: 2, 6: -2, 7: -1 };
-const MODE = { 3: 'immgen, normal', 4: 'immgen, as condimm5', 5: 'port B, from the bytes' };
 
 // --- what a one-byte form's right-hand side must be --------------------------
 // Every one-byte form pins all its operands, so its right-hand side is a
