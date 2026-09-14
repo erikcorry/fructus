@@ -278,6 +278,18 @@ the comparison had set the combined ALU's speed; apart, the ALU is a fifth
 faster on its own, and behind the register file both paths sit level at about
 26 MHz — where the register read in front of them is what sets the clock.
 
+`rtl/predecode.sv` is the control that belongs to a whole instruction: a
+table over the first byte, loaded into flops in the dispatch cycle, giving the
+ALU operation and the lhs, rhs, dest and condition sources. The microcode ROM
+keeps what changes from step to step. Its rows come from `tools/control.js`,
+which holds the rules the lhs, dest, rhs and ALU generators were already using,
+so the table and the blocks it drives cannot disagree. It is checked by
+executing: every single-step instruction runs on the simulator and through the
+RTL with nothing but predecode's selects, and the written register and value,
+or the branch decision, must match. Measured behind a real SPRAM, the table
+costs 83 cells, its dispatch path runs at three times the execute step's rate,
+and the step is no slower than with idealised select flops.
+
 `rtl/unary.sv` is the four-way unary block — `sxt8`, `clz`, `bitrev` and
 `popcount`. Its selector is two bits of the right-hand side the ALU already
 reads: the unary forms sit in the imm3 columns, immgen turns their index into a

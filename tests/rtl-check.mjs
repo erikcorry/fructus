@@ -23,7 +23,7 @@
 // =============================================================================
 
 import { loadSpec } from '../tools/isa.js';
-import { BUILTIN, test } from '../tools/sim.js';
+import { BUILTIN, test, Machine } from '../tools/sim.js';
 import { buildDecoder, decode } from '../tools/decode.js';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -765,6 +765,122 @@ endmodule
 endmodule
 `);
   run('cond', ['rtl/compare.sv', 'rtl/cond.sv'], 'cond-tb');
+}
+
+// =============================================================================
+// rtl/predecode.sv - the whole execute step, against the simulator
+// =============================================================================
+// The table is not checked against a restatement of itself.  Instead every
+// single-step instruction is EXECUTED: tools/sim.js runs real bytes from random
+// registers, and the RTL does the same step with nothing but what predecode
+// supplies - its sources and operation driving rtl/lhs.sv, rtl/rhs.sv (with
+// immgen), rtl/alu.sv, rtl/cond.sv, rtl/compare.sv and rtl/dest.sv against a
+// register file.  For a register-writing instruction the check is the register
+// the step writes and the value it writes; for a 16-bit branch, whether it is
+// taken.  So a wrong row fails because the instruction computes the wrong thing,
+// which is the only way a row can matter.
+//
+// Single-step means one write and no memory: every ALU operation, mov, the unary
+// operations, iseq and isset, the one-byte forms that touch no memory, and br,
+// brclear and brset.  Loads, stores, push, pop and calls take microcode steps
+// that override these selects, so predecode alone does not decide them.
+{
+  const rnd = (() => { let s = 1103515245;
+    return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
+  const dec = buildDecoder(spec);
+  const EDGE = [0, 1, 2, 0x7fff, 0x8000, 0xffff, 0x00ff, 0x0100];
+  const val = () => (rnd() % 4 === 0 ? EDGE[rnd() % EDGE.length] : rnd() & 0xffff);
+  const rows = [];
+  const covered = new Set();
+
+  for (let op = 0; op < 256; op++) {
+    const forms = new Map();
+    for (let b1 = 0; b1 < 256; b1++) {
+      const d = decode(dec, [op, b1, 0], 0);
+      if (!d || d.insn.mnemonic === 'br8') continue;
+      const sem = d.insn.semantics ?? '';
+      const write = /^R\[[a-z]\] = /.test(sem) && !/M(8|16)\[/.test(sem) && !sem.includes(';');
+      const branch = /^if \(/.test(sem);
+      if (!write && !branch) continue;
+      if (!forms.has(d.form)) forms.set(d.form, { d, write, b1s: [] });
+      forms.get(d.form).b1s.push(b1);
+    }
+    for (const { d, write, b1s } of forms.values()) {
+      covered.add(`${d.insn.mnemonic}/${d.form.name}`);
+      for (let i = 0; i < 24; i++) {
+        const b1 = b1s[rnd() % b1s.length], b2 = rnd() & 0xff;
+        const bytes = d.nbytes === 1 ? [op] : d.nbytes === 2 ? [op, b1] : [op, b1, b2];
+        const m = new Machine(spec).load(bytes, 0x100);
+        m.pc = 0x100;
+        const reg = Array.from({ length: 8 }, val);
+        reg.forEach((v, k) => { m.R[k] = v; });
+        const e = m.step();
+        const insn = (d.nbytes >= 3 ? b2 << 16 : 0) | (d.nbytes >= 2 ? b1 << 8 : 0) | op;
+        let kind, wreg = 0, wval = 0;
+        if (write) {
+          const name = /^R\[([a-z])\] = /.exec(e.insn.semantics)[1];
+          kind = 0; wreg = e.ops[name]; wval = m.R[wreg];
+        } else {
+          kind = 1; wval = m.wrotePc ? 1 : 0;
+        }
+        rows.push(`${hex6(insn)} ${reg.map(hex4).join(' ')} ${kind} ${wreg} ${hex4(wval)}`);
+      }
+    }
+  }
+
+  writeFileSync('build/predecode-tb.txt', rows.join('\n') + '\n');
+  writeFileSync('build/predecode-tb.sv', `module tb;
+    logic clk = 0, dispatch = 0;
+    logic [7:0] bus;
+    logic [23:0] insn;
+    logic [15:0] r0, r1, r2, r3, r4, r5, r6, r7, wval;
+    logic [15:0] R [0:7];
+    integer kind, wreg;
+    wire [3:0] alu_op, lhs_src, rhs_src, dest_src; wire [1:0] cond_src;
+    wire [2:0] an, bn, wn, c; wire ng, mk, taken;
+    wire [15:0] bval, y;
+    predecode p (.clk(clk), .bus(bus), .dispatch(dispatch), .alu_op(alu_op), .lhs_src(lhs_src),
+                 .rhs_src(rhs_src), .dest_src(dest_src), .cond_src(cond_src));
+    lhs l (.insn(insn), .src(lhs_src), .regnum(an));
+    rhs r (.insn(insn), .src(rhs_src), .regval(R[bn]), .regnum(bn), .value(bval));
+    alu a (.lhs(R[an]), .rhs(bval), .op(alu_op), .y(y));
+    cond k (.insn(insn), .src(cond_src), .code(c), .neg(ng), .mask(mk));
+    compare x (.lhs(R[an]), .rhs(bval), .cond(c), .neg(ng), .mask(mk), .taken(taken));
+    dest w (.insn(insn), .src(dest_src), .regnum(wn));
+    integer f, n = 0, bad = 0, rr;
+    initial begin
+        f = $fopen("build/predecode-tb.txt", "r");
+        if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
+        while (!$feof(f)) begin
+            rr = $fscanf(f, "%h %h %h %h %h %h %h %h %h %d %d %h\\n",
+                         insn, r0, r1, r2, r3, r4, r5, r6, r7, kind, wreg, wval);
+            if (rr == 12) begin
+                // the dispatch cycle: the opcode is on the bus
+                bus = insn[7:0]; dispatch = 1; #1 clk = 1; #1 clk = 0; dispatch = 0;
+                R[0] = r0; R[1] = r1; R[2] = r2; R[3] = r3; R[4] = r4; R[5] = r5; R[6] = r6; R[7] = r7;
+                #1; n = n + 1;
+                if (kind == 0 ? (wn !== wreg[2:0] || y !== wval) : (taken !== wval[0])) begin
+                    bad = bad + 1;
+                    if (bad < 6)
+                        $display("  MISMATCH insn=%h: want %s, got r%0d=%h taken=%b (alu %0d lhs %0d rhs %0d dest %0d cond %0d)",
+                                 insn, kind == 0 ? "a write" : "a branch", wn, y, taken,
+                                 alu_op, lhs_src, rhs_src, dest_src, cond_src);
+                end
+            end
+        end
+        if (bad == 0) $display("ok    rtl/predecode.sv: %0d executed steps, ${covered.size} forms, all agree with tools/sim.js", n);
+        else $display("FAIL  rtl/predecode.sv: %0d of %0d steps wrong", bad, n);
+        $finish;
+    end
+endmodule
+`);
+  execFileSync('iverilog', ['-g2012', '-o', 'build/predecode-tb.vvp',
+    'rtl/predecode.sv', 'rtl/lhs.sv', 'rtl/immgen.sv', 'rtl/rhs.sv', 'rtl/unary.sv', 'rtl/alu.sv',
+    'rtl/cond.sv', 'rtl/compare.sv', 'rtl/dest.sv', 'build/predecode-tb.sv'], { stdio: 'inherit' });
+  const o = execFileSync('vvp', ['build/predecode-tb.vvp'], { encoding: 'utf8' });
+  process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
+  for (const f of ['build/predecode-tb.vvp', 'build/predecode-tb.sv', 'build/predecode-tb.txt']) rmSync(f, { force: true });
+  if (/FAIL/.test(o)) failed = true;
 }
 
 process.exit(failed ? 1 : 0);
