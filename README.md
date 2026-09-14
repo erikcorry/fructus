@@ -195,14 +195,26 @@ the case against.
 ### rtl/
 
 This part is very tentative and subject to change.  This is my first (AI-assisted)
-foray into FPGA design. So far there is decoding of the second input (the one with
-the immediate forms) and the unary section of the ALU, including popcount and
-clz.
+foray into FPGA design. So far there is the instruction register, the choice of
+both ALU inputs including the immediate forms, and the unary section of the
+ALU, including popcount and clz.
+
+`rtl/insn.sv` holds the whole instruction in 24 bits, **each byte at its place**
+— byte 0 low, as in memory — rather than shifting the newest byte in. `dispatch`
+loads an opcode into byte 0 and restarts a two-bit count; `fetch` loads the next
+byte where the count points. So every operand field is one slice at one position
+from the cycle its byte arrives until the next dispatch: imm10 is `insn[23:14]`,
+imm16 `insn[23:8]`, the register fields `insn[10:8]` and `insn[13:11]`. A `view`
+output shows the byte on the bus as if already stored, for bytes 1 and 2 only.
+Measured with a real SPRAM driving the bus, reading `view` straight into the
+datapath costs a fifth of the clock; registering the port addresses from it and
+reading the register file from those flops a cycle later is the fastest of the
+three placements tried.
 
 Generated, not written. `rtl/immgen.sv` produces the 16-bit immediate right-hand
 side for every instruction that has one — the ALU and shift groups, `mov`, the
 load and store displacements, `brclear`/`brset`, and the packed branch's
-`condimm5` constant — from `immreg`, `opcode[2:0]` and one control line. 109
+`condimm5` constant — from the instruction register and one control line. 109
 LUT4 and three LUT levels on an iCE40 UP5K.
 
 It costs that little because of properties of the *values* in the spec, not of
@@ -216,7 +228,7 @@ names the hardware cost when an edit breaks them.
 register, a constant, or immgen in one of its two readings:
 
 ```
- 0  r0         4  reserved     8  #0      12  immgen, as condimm5
+ 0  r0         4  imm16        8  #0      12  immgen, as condimm5
  1  r1         5  r5           9  #1      13  port B, from the bytes
  2  reserved   6  sp          10  #2      14  #-2
  3  reserved   7  lr          11  immgen  15  #-1
@@ -227,14 +239,23 @@ The encoding is what makes it nearly free. `src[3]=0` is a register and
 a 3-bit **signed** constant, so `konst` is one signal fanned out thirteen ways.
 That is why `#-2` and `#-1` sit at 14 and 15 rather than in numeric order. Two
 cells more than the four separate control bits it replaces, at the same depth,
-for a microcode bit back — and the three reserved codes cost nothing to reserve,
-since they decode as r2/r3/r4 today and the microcode never emits them.
+for a microcode bit back — and the reserved codes cost nothing to reserve, since
+they decode as r2/r3 today and the microcode never emits them. Code 4 was one
+of them; it is now the 16-bit immediate for `mov rd, #imm16`, whose `opcode[2:0]`
+is a register rather than a column immgen could read, at no extra LUT level.
 
 The constants are exactly what the one-byte abbreviations need, and `npm run
 rtl` fails if a new one needs something outside them.
 
+`rtl/lhs.sv` is the other input's register: one four-bit field naming a register
+or picking byte 1's rd or ra field. Its generator works out each form's
+left-hand register from the spec's semantics and finds its field by decoding
+every byte 1; the column decides it everywhere but `call ra`. It once needed a
+microcode latch to survive the shifting instruction buffer; on `insn.sv` it is
+one line, and a tenth of the clock faster.
+
 `rtl/unary.sv` is the eight-way unary block — `sxt8`, `zxt8`, `clz`, `bitrev`,
-`popcount`, and three free slots. Its selector is `{byte1[1:0], opcode[0]}`, the
+`popcount`, and three free slots. Its selector is `{byte1[7:6], opcode[0]}`, the
 same three bits that carry ALU port B, so it needs no decode of its own. Only
 the selector table is generated: adding an operation to the spec fails the build
 rather than silently producing a block that doesn't implement it. 95 LUT4, five
@@ -253,16 +274,17 @@ it there, and an `x` reaching the ALU means the microcode asked for an immediate
 from an instruction that has none.
 
 The suite regenerates the file and fails if the committed copy has drifted, then
-runs 378,320 vectors — built from the same TOML by a path sharing no code with
-the generator — against them under `iverilog`, skipping if `iverilog` is absent.
+runs 433,880 vectors and a clocked model of the instruction register — built
+from the same TOML by a path sharing no code with the generators — against them
+under `iverilog`, skipping if `iverilog` is absent.
 The unary operations are swept over their *whole* input space, all 65536 values
 each, because a sampled sweep misses exactly the interesting inputs: dropping
 popcount's carry-free top bit is wrong for one input in 65536, `0xffff`.
-All sixteen source codes are swept, the reserved three included, so a change
+All sixteen source codes are swept, the reserved ones included, so a change
 that gives them a meaning has to say so there rather than silently altering
 what they do.
 It also decodes real bytes with `tools/decode.js` to confirm that
-`{byte1[1:0], opcode[0]}` really is ALU port B for every three-operand form,
+`{byte1[7:6], opcode[0]}` really is ALU port B for every three-operand form,
 which is what the `+6`/`+7` output claims.
 
 `tools/isa.js` reads the spec; `tools/decode.js` turns bytes back into

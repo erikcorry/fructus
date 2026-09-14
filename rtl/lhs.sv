@@ -12,9 +12,6 @@
 //    9      byte1[5:3], the ra field
 //   10..15  reserved: they decode as 8 and 9 alternately, by src[0]
 //
-// and ONE microcode line, `latch`, that says whether that choice is made now or
-// the previous one kept.
-//
 // EVERY REGISTER OPERAND IN THE ISA IS IN ONE OF THREE PLACES: byte1[2:0],
 // byte1[5:3], or {byte1[7:6], opcode[0]}.  The third is port B's, and
 // rtl/rhs.sv takes it; the other two are this block's.  The only exceptions are
@@ -24,10 +21,10 @@
 // FOUND BY DECODING, every multi-byte form whose left-hand side is a register
 // from the instruction:
 //
-//   rd field  ir[2:0]
+//   rd field  insn[10:8]
 //             ld ld8 add rsb xor or and shl asr lsr iseq isset br brclear br8
 //             brset call
-//   ra field  ir[5:3]
+//   ra field  insn[13:11]
 //             st st8 ld ld8 sxt8 clz popcount zxt8 bitrev add rsb xor or and
 //             shl asr lsr iseq br br8
 //
@@ -53,50 +50,28 @@
 // rhs.sv's lr and r5 codes.  Port A could carry them just as well - nothing
 // below cares - which would put every pc-from-register transfer on one port.
 //
-// WHY THE LATCH.  immreg is a shift register, so fetching a third byte moves
-// byte 1 up into the high half, and the fields are no longer at ir[5:3] and
-// ir[2:0].  The imm10 forms need their register in the SAME cycle as the
-// immediate, which is after that shift.  So the microcode opens the latch in
-// the step where byte 1 is still low, and closes it for the step after byte 2
-// arrives; the register NUMBER is held, and the file delivers the register's
-// current value in whichever cycle reads it.  Nothing writes that register
-// between the two cycles, so the number and the value are equivalent - for
-// three flops rather than sixteen.
+// NOTHING IS HELD.  rtl/insn.sv puts byte 1 at insn[15:8] from the cycle it
+// arrives until the next dispatch, so the fields do not move when byte 2 is
+// fetched, and the imm10 forms read ra in the same cycle as their immediate.
 //
-// IT IS TRANSPARENT WHILE OPEN, which is what makes it a latch rather than a
-// register.  A two-byte instruction reads port A in the same cycle it chooses
-// the register, so a plain clock-enabled flop would deliver the choice a cycle
-// late.  On an iCE40 it is built as a flop and a bypass mux, not a latch
-// primitive: level-sensitive storage is something nextpnr cannot time.
+// This file once sat on a shifting immreg, where byte 1 moved up as byte 2 came
+// in, and it needed a microcode line and a transparent latch - a flop and a
+// bypass - to keep its choice across the shift.  MEASURED, that version against
+// this one, on an iCE40 UP5K, yosys 0.52 -nobram + nextpnr-ice40 0.7, beside a
+// real 8x16 register file whose other port is idle; logic cells and the median
+// of five placement seeds:
 //
-// `held` has no reset, deliberately.  The microcode opens the latch in the
-// first step of every instruction that reads port A, so the flops are never
-// read before they are written; an x in simulation says a step forgot to.
+//                                     file read -> flop    read + add -> flop
+//     latch on immreg                     362   58.5 MHz        341   39.8 MHz
+//     THIS FILE, on insn.sv               316   64.0            332   44.8
 //
-// MEASURED on an iCE40 UP5K, yosys 0.52 -nobram + nextpnr-ice40 0.7, beside a
-// real 8x16 register file whose other port is idle, so port A is the only
-// logic path.  Logic cells, and the median of three placement seeds:
+// So the fixed register gives back what holding the choice cost: 46 cells and
+// a tenth of the clock on the read, an eighth through the add.
 //
-//                                         file read -> flop    read + add -> flop
-//     no latch: broken for imm10              295   64.6 MHz        329   43.4 MHz
-//     flop + bypass - THIS FILE               349   57.6            348   38.7
-//     "hold" as a src code, no latch line     351   57.9            349   40.6
-//     no latch, a third field ir[13:11]       356   59.3            352   39.1
-//     flop only, no bypass                    295   76.3            335   49.1
-//
-// THE THREE THAT WORK COST THE SAME, within the few MHz the seeds wander by:
-// 55 to 60 cells on the read and about 20 through the add, and a tenth of the
-// clock either way, over the broken baseline.  Holding
-// the choice is no dearer than reaching for byte 1 where the shift left it,
-// and it does not have to be taught to each consumer of a register field.
-//
-// THE LAST ROW IS THE ONE WORTH HAVING: an address straight out of a flop, a
-// third faster than the bypass on the read and a quarter faster through the
-// add.  It is not a drop-in - it presents the choice one cycle after the latch
-// opens - so it needs the choice made in the cycle byte 1 is ON THE BUS rather
-// than in immreg: the fields read off the incoming byte, the microcode's
-// selection valid a cycle earlier.  Whether the microcode can be there in time
-// is a question about the ROM, not about this block.
+// An address straight out of a flop is faster still, and with insn.sv it needs
+// no new mechanism: register this block's output from insn.sv's `view`, which
+// shows byte 1 in the cycle it is on the bus.  rtl/insn.sv's header measures
+// that placement against the others.
 //
 // Two traps in measuring this, both of which produced plausible numbers first.
 // A parity of the outputs let yosys push the XOR through the read mux and read
@@ -107,20 +82,13 @@
 // =============================================================================
 
 module lhs (
-    input  logic        clk,
-    input  logic [15:0] ir,      // immreg: the last two instruction bytes
+    input  logic [23:0] insn,    // the instruction, byte 0 low: rtl/insn.sv
     input  logic [3:0]  src,     // microcode: where the left-hand register comes from
-    input  logic        latch,   // microcode: choose now, or keep the last choice
     output logic [2:0]  regnum   // -> register file port A address
 );
 
     // src[0] picks the field and src[2:0] is the register, so the field choice
     // costs no decode: codes 8 and 9 differ in exactly the bit that selects.
-    wire [2:0] pick = src[3] ? (src[0] ? ir[5:3] : ir[2:0]) : src[2:0];
-
-    logic [2:0] held;
-    always_ff @(posedge clk) if (latch) held <= pick;
-
-    assign regnum = latch ? pick : held;
+    assign regnum = src[3] ? (src[0] ? insn[13:11] : insn[10:8]) : src[2:0];
 
 endmodule

@@ -11,9 +11,9 @@
 // implement the tables rather than that one transcription matches another.
 //
 // WHAT IS SWEPT.  Every (5-bit field, mode) pair, every (3-bit index, opcode
-// bit) pair, and imm10 over its whole 10-bit range - with the untouched upper
-// bits of immreg varied, because a circuit that accidentally reads them would
-// otherwise pass.  Modes +6 and +7 have no immediate and immgen drives x there,
+// bit) pair, and imm10 over its whole 10-bit range - with the untouched bits of
+// the instruction register varied, because a circuit that accidentally reads
+// them would otherwise pass.  Modes +6 and +7 have no immediate and immgen drives x there,
 // so they are not checked; what IS checked is the encoding property rhs.sv
 // relies on instead - that port B's register number is {byte1[7:6], opcode[0]}
 // for every three-operand form.
@@ -42,27 +42,28 @@ const t = spec.optype;
 const u16 = (v) => (v >>> 0) & 0xffff;
 const sext = (v, n) => (v & (1 << (n - 1))) ? v - (1 << n) : v;
 
+const hex4 = (v) => u16(v).toString(16).padStart(4, '0');
+const hex6 = (v) => ((v >>> 0) & 0xffffff).toString(16).padStart(6, '0');
+
 // --- the reference, straight off the tables ---------------------------------
-// This is the whole specification of the block.  `sel` is opcode[2:0]; `ir` is
-// immreg, holding the last two bytes fetched.
-const k3 = (ir, sel) => (((ir >> 6) & 3) << 1) | (sel & 1);  // {byte1[7:6], opcode[0]}
+// This is the whole specification of the block.  `insn` is the instruction
+// register of rtl/insn.sv: byte 0 in the low eight bits, byte 1 next, byte 2 at
+// the top, each at a fixed place for the whole instruction.
+const k3 = (insn) => (((insn >> 14) & 3) << 1) | (insn & 1);  // {byte1[7:6], opcode[0]}
 const CIMM = spec.optype.condimm5.values.map((e) => e[1]);
-const want = (ir, sel, cimm) => {
+const want = (insn, cimm) => {
   // cimm reads +0's five bits as a condimm5 index instead of a signed integer,
   // and is ignored anywhere else - asserting it there is a microcode bug.
-  // A five-bit field is byte1[7:3], and byte 1 is immreg's low half while only
-  // two bytes have been fetched.  The ten-bit one is the odd case: its low two
-  // bits are byte1[7:6] and its top eight are byte 2, and by the time byte 2
-  // has arrived byte 1 has shifted into immreg's high half - so the halves sit
-  // at opposite ends of this register though they are adjacent in the
-  // instruction stream.  See rtl/immgen.sv's header.
-  const f5 = (ir >> 3) & 31;
+  // A five-bit field is byte1[7:3]; imm10 is byte1[7:6] with byte 2 above it,
+  // one slice.
+  const sel = insn & 7;
+  const f5 = (insn >> 11) & 31;
   if (cimm && sel === 0) return CIMM[f5];
   switch (sel) {
     case 0: return sext(f5, 5);                          // imm5
     case 1: return t.immbit5.values[f5];                 // immbit5
-    case 2: case 3: return t.imm3.values[k3(ir, sel)];   // imm3
-    case 4: return sext(((ir & 0xff) << 2) | ((ir >> 14) & 3), 10);   // imm10
+    case 2: case 3: return t.imm3.values[k3(insn)];      // imm3
+    case 4: return sext((insn >> 14) & 1023, 10);        // imm10
     case 5: return t.immask5.values[f5];                 // immask5
     // 6 and 7 have no immediate: rtl/rhs.sv takes port B's number from the
     // bytes directly, so immgen drives x and there is nothing to check.
@@ -107,46 +108,48 @@ const want = (ir, sel, cimm) => {
         if (got === undefined) {
           console.log(`FAIL  0x${op.toString(16)} has no operand named ${name}`); process.exit(1);
         }
-        if (got !== k3(byte1, op & 7)) {
+        if (got !== k3((byte1 << 8) | op)) {
           console.log(`FAIL  0x${op.toString(16)} byte1=${byte1}: operand ${name} decodes to `
-                    + `r${got}, but {byte1[7:6], opcode[0]} is r${k3(byte1, op & 7)}`);
+                    + `r${got}, but {byte1[7:6], opcode[0]} is r${k3((byte1 << 8) | op)}`);
           process.exit(1);
         }
       }
   }
 }
 
+// Every value of insn[23:11] - the five-bit field, the imm3 index's high bits
+// and the whole of imm10 - in every column, with byte 1's low bits and the rest
+// of the opcode varied beneath, because a circuit reading them would otherwise
+// pass.
 const vecs = [];
 for (let sel = 0; sel <= 5; sel++)
   for (const cimm of [0, 1])
-    for (let low = 0; low < 1024; low++)
-      for (const high of [0x0000, 0xfc00, 0x5400, 0xa800]) {
-        const ir = high | low;
-        vecs.push(`${u16(ir).toString(16).padStart(4, '0')} ${sel} ${cimm} `
-                + `${u16(want(ir, sel, cimm)).toString(16).padStart(4, '0')}`);
-      }
+    for (let top = 0; top < 8192; top++) {
+      const insn = (top << 11) | ((((top * 157) ^ (top >> 5)) & 0xff) << 3) | sel;
+      vecs.push(`${hex6(insn)} ${cimm} ${hex4(want(insn, cimm))}`);
+    }
 
 mkdirSync('build', { recursive: true });
 writeFileSync('build/immgen-vectors.txt', vecs.join('\n') + '\n');
 writeFileSync('build/immgen-tb.sv', `module tb;
-    logic [15:0] ir, expect_, got;
-    logic [2:0] sel;
+    logic [23:0] insn;
+    logic [15:0] expect_, got;
     logic cimm;
     integer f, n = 0, bad = 0, r;
-    immgen u (.ir(ir), .sel(sel), .cimm(cimm), .imm(got));
+    immgen u (.insn(insn), .cimm(cimm), .imm(got));
     initial begin
         f = $fopen("build/immgen-vectors.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
         while (!$feof(f)) begin
-            r = $fscanf(f, "%h %d %d %h\\n", ir, sel, cimm, expect_);
-            if (r == 4) begin
+            r = $fscanf(f, "%h %d %h\\n", insn, cimm, expect_);
+            if (r == 3) begin
                 #1;
                 n = n + 1;
                 if (got !== expect_) begin
                     bad = bad + 1;
                     if (bad < 6)
-                        $display("  MISMATCH ir=%h sel=%0d cimm=%0d want=%h got=%h",
-                                 ir, sel, cimm, expect_, got);
+                        $display("  MISMATCH insn=%h cimm=%0d want=%h got=%h",
+                                 insn, cimm, expect_, got);
                 end
             end
         end
@@ -198,49 +201,48 @@ let failed = /FAIL/.test(out);
         const isReg = (!hi && c !== CODE_IMM16) || (hi && c === MODE_PORTB);
         const isImm = hi && (c === MODE_IMM || c === MODE_CIMM);
         if (!hi && c === CODE_IMM16) {
-          // The expected value comes from DECODING `mov rd, #imm16` bytes, not
-          // from the byte swap: immreg is {byte1, byte2} once byte 2 is in.
+          // The expected value comes from DECODING `mov rd, #imm16` bytes, laid
+          // out as rtl/insn.sv holds them, not from knowing where the slice is.
+          const op = MOV16 | (rnd() & 7);
           const b1 = rnd() & 0xff, b2 = rnd() & 0xff, rv = rnd() & 0xffff;
-          const v = u16(decode(movDec, [MOV16, b1, b2], 0).ops.imm);
-          rows.push([(b1 << 8) | b2, sel, src, rv, c, v]
-            .map((x, j) => (j === 0 || j === 3 || j === 5)
-              ? u16(x).toString(16).padStart(4, '0') : x).join(' '));
+          const v = decode(movDec, [op, b1, b2], 0).ops.imm;
+          rows.push(`${hex6((b2 << 16) | (b1 << 8) | op)} ${src} ${hex4(rv)} ${c} ${hex4(v)}`);
           continue;
         }
         // immgen drives x at +6 and +7, so reading it there is a microcode bug
         // rather than a case with an answer.
         if (isImm && sel >= 6) continue;
-        const ir = rnd() & 0xffff, regval = rnd() & 0xffff;
-        const num = hi ? k3(ir, sel) : REG[c];
+        const insn = ((rnd() & 0xffff) << 8) | ((rnd() & 0x1f) << 3) | sel;
+        const regval = rnd() & 0xffff;
+        const num = hi ? k3(insn) : REG[c];
         const rhs = isReg ? regval
-                  : isImm ? u16(want(ir, sel, c === MODE_CIMM))
-                  : u16(KON[c]);
-        rows.push([ir, sel, src, regval, num, rhs]
-          .map((v, j) => (j === 0 || j === 3 || j === 5)
-            ? u16(v).toString(16).padStart(4, '0') : v).join(' '));
+                  : isImm ? want(insn, c === MODE_CIMM)
+                  : KON[c];
+        rows.push(`${hex6(insn)} ${src} ${hex4(regval)} ${num} ${hex4(rhs)}`);
       }
 
   writeFileSync('build/rhs-vectors.txt', rows.join('\n') + '\n');
   writeFileSync('build/rhs-tb.sv', `module tb;
-    logic [15:0] ir, regval, xrhs, grhs;
-    logic [2:0] sel, xnum, gnum;
+    logic [23:0] insn;
+    logic [15:0] regval, xrhs, grhs;
+    logic [2:0] xnum, gnum;
     logic [3:0] src;
     integer f, n = 0, bad = 0, r;
-    rhs u (.ir(ir), .sel(sel), .src(src), .regval(regval),
+    rhs u (.insn(insn), .src(src), .regval(regval),
            .regnum(gnum), .value(grhs));
     initial begin
         f = $fopen("build/rhs-vectors.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
         while (!$feof(f)) begin
-            r = $fscanf(f, "%h %d %d %h %d %h\\n",
-                        ir, sel, src, regval, xnum, xrhs);
-            if (r == 6) begin
+            r = $fscanf(f, "%h %d %h %d %h\\n",
+                        insn, src, regval, xnum, xrhs);
+            if (r == 5) begin
                 #1; n = n + 1;
                 if (grhs !== xrhs || gnum !== xnum) begin
                     bad = bad + 1;
                     if (bad < 6)
-                        $display("  MISMATCH ir=%h sel=%0d src=%0d: want rhs=%h num=%0d, got rhs=%h num=%0d",
-                                 ir, sel, src, xrhs, xnum, grhs, gnum);
+                        $display("  MISMATCH insn=%h src=%0d: want rhs=%h num=%0d, got rhs=%h num=%0d",
+                                 insn, src, xrhs, xnum, grhs, gnum);
                 end
             end
         end
@@ -312,7 +314,7 @@ endmodule
 }
 
 // =============================================================================
-// rtl/lhs.sv - port A's address, and the latch that holds it
+// rtl/lhs.sv - port A's address
 // =============================================================================
 // Two things are checked, and the first is about the SPEC rather than the
 // circuit: that every multi-byte form's left-hand register follows exactly one
@@ -321,27 +323,18 @@ endmodule
 // case `b`; nothing for push and pop, which read sp - and not by importing the
 // generator's reading of the semantics.
 //
-// The second is the circuit, CLOCKED, driven in instruction-shaped runs:
-//
-//   two bytes     latch open, the field code, byte 1 low          -> the operand
-//   three bytes   the same, then byte 2 shifts byte 1 up and the
-//                 latch closes, with the field code replaced by
-//                 noise, and again for a write cycle              -> still it
-//   one byte      latch open, the pinned register from microcode  -> that
-//
-// shuffled, so a held number from one instruction meeting the next one's
-// choice is exercised too.  All sixteen codes are also swept against every
-// byte 1 with the latch open, reserved codes included, pinned to what the
-// wiring makes them today.
+// The second is the circuit: every such form's decoded register against the
+// field code, with a random byte 2 above byte 1 and the opcode below it, so a
+// circuit reading the wrong byte fails; the registers the microcode names; and
+// all sixteen codes against every byte 1, reserved codes included, pinned to
+// what the wiring makes them today.
 {
   const rnd = (() => { let s = 88172645;
     return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
   const dec = buildDecoder(spec);
-  const runs = [];
-  const row = (latch, src, ir, want) => `${latch} ${src} ${u16(ir).toString(16).padStart(4, '0')} ${want}`;
-  const DONT = 8;
+  const rows = [];
+  const row = (src, insn, want) => `${src} ${hex6(insn)} ${want}`;
 
-  // --- the spec property, and the runs built from it -------------------------
   // Keyed by opcode and form: byte 1 picks among the unary operations, which
   // share two opcodes, so grouping by opcode alone would skip three of them.
   const forms = new Map();
@@ -353,7 +346,7 @@ endmodule
       const name = portB === 'a' ? 'b' : 'a';
       if (!(e.insn.operands ?? []).some((o) => o.name === name && o.type === 'reg')) continue;
       const key = `${op}/${e.insn.mnemonic}/${e.form.name}`;
-      if (!forms.has(key)) forms.set(key, { op, key, nbytes: e.nbytes, follows: { 8: true, 9: true }, seen: [] });
+      if (!forms.has(key)) forms.set(key, { op, key, follows: { 8: true, 9: true }, seen: [] });
       const f = forms.get(key);
       if (e.ops[name] !== (b1 & 7)) f.follows[8] = false;
       if (e.ops[name] !== ((b1 >> 3) & 7)) f.follows[9] = false;
@@ -368,59 +361,41 @@ endmodule
     }
     for (let i = 0; i < 24; i++) {
       const [b1, want] = f.seen[rnd() % f.seen.length];
-      const run = [row(1, codes[0], ((rnd() & 0xff) << 8) | b1, want)];
-      if (f.nbytes === 3) {
-        run.push(row(0, rnd() & 15, (b1 << 8) | (rnd() & 0xff), want));
-        run.push(row(0, rnd() & 15, rnd() & 0xffff, want));
-      }
-      runs.push(run);
+      rows.push(row(codes[0], ((rnd() & 0xff) << 16) | (b1 << 8) | f.op, want));
     }
   }
   // one-byte forms and push/pop: a register the microcode names
-  for (let i = 0; i < 200; i++) {
-    const reg = rnd() & 7;
-    runs.push([row(1, reg, rnd() & 0xffff, reg), row(0, rnd() & 15, rnd() & 0xffff, reg)]);
-  }
-  for (let i = runs.length - 1; i > 0; i--) {
-    const j = rnd() % (i + 1); [runs[i], runs[j]] = [runs[j], runs[i]];
-  }
-  const rows = runs.flat();
-  // the combinational sweep, latch open
+  for (let reg = 0; reg < 8; reg++)
+    for (let i = 0; i < 16; i++) rows.push(row(reg, rnd() & 0xffffff, reg));
+  // every code against every byte 1
   for (let src = 0; src < 16; src++)
     for (let b1 = 0; b1 < 256; b1++) {
-      const ir = ((rnd() & 0xff) << 8) | b1;
-      const want = src < 8 ? src : (src & 1) ? (b1 >> 3) & 7 : b1 & 7;
-      rows.push(row(1, src, ir, want));
+      const insn = ((rnd() & 0xff) << 16) | (b1 << 8) | (rnd() & 0xff);
+      rows.push(row(src, insn, src < 8 ? src : (src & 1) ? (b1 >> 3) & 7 : b1 & 7));
     }
-  // and a closed latch never follows its inputs, whatever they do
-  rows.push(row(1, 5, 0, 5));
-  for (let i = 0; i < 64; i++) rows.push(row(0, rnd() & 15, rnd() & 0xffff, 5));
 
   writeFileSync('build/lhs-vectors.txt', rows.join('\n') + '\n');
   writeFileSync('build/lhs-tb.sv', `module tb;
-    logic clk = 0, latch;
     logic [3:0] src, want_;
-    logic [15:0] ir;
+    logic [23:0] insn;
     logic [2:0] got;
     integer f, n = 0, bad = 0, r;
-    lhs u (.clk(clk), .ir(ir), .src(src), .latch(latch), .regnum(got));
+    lhs u (.insn(insn), .src(src), .regnum(got));
     initial begin
         f = $fopen("build/lhs-vectors.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
         while (!$feof(f)) begin
-            r = $fscanf(f, "%d %d %h %d\\n", latch, src, ir, want_);
-            if (r == 4) begin
+            r = $fscanf(f, "%d %h %d\\n", src, insn, want_);
+            if (r == 3) begin
                 #1; n = n + 1;
-                if (want_ != ${DONT} && got !== want_[2:0]) begin
+                if (got !== want_[2:0]) begin
                     bad = bad + 1;
                     if (bad < 6)
-                        $display("  MISMATCH row %0d latch=%0d src=%0d ir=%h: want r%0d, got %b",
-                                 n, latch, src, ir, want_, got);
+                        $display("  MISMATCH src=%0d insn=%h: want r%0d, got %b", src, insn, want_, got);
                 end
-                clk = 1; #1; clk = 0;
             end
         end
-        if (bad == 0) $display("ok    rtl/lhs.sv: %0d clocked vectors, ${forms.size} forms from the decoder, all correct", n);
+        if (bad == 0) $display("ok    rtl/lhs.sv: %0d vectors, ${forms.size} forms from the decoder, all correct", n);
         else $display("FAIL  rtl/lhs.sv: %0d of %0d wrong", bad, n);
         $finish;
     end
@@ -431,6 +406,80 @@ endmodule
   const o = execFileSync('vvp', ['build/lhs-tb.vvp'], { encoding: 'utf8' });
   process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
   for (const f of ['build/lhs-tb.vvp', 'build/lhs-tb.sv', 'build/lhs-vectors.txt']) rmSync(f, { force: true });
+  if (/FAIL/.test(o)) failed = true;
+}
+
+// =============================================================================
+// rtl/insn.sv - the instruction register, clocked
+// =============================================================================
+// A model of the loading discipline run in step with the circuit.  dispatch
+// puts the bus byte at byte 0 and restarts the count behind it; fetch puts it
+// where the count points; any other cycle - a data byte on the bus, the adder
+// busy - leaves the register alone.  Instructions of one, two and three bytes,
+// with idle cycles between some of them.
+//
+// Checked every cycle, before the edge: `q` against what the model has stored,
+// and `view` against `q` with the bus byte in place when it is byte 1 or 2 -
+// and NOT when it is an opcode, whose cycle still belongs to the previous
+// instruction.  Bytes never written since reset are masked rather than guessed.
+{
+  const rnd = (() => { let s = 1234567;
+    return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
+  const rows = [];
+  let q = 0, known = 0, n = 0;
+  const put = (v, k, b) => (v & ~(0xff << (8 * k)) & 0xffffff) | (b << (8 * k));
+  const cycle = (fetch, dispatch, bus) => {
+    const load = fetch || dispatch, at = dispatch ? 0 : n;
+    let view = q, vknown = known;
+    if (load && (at === 1 || at === 2)) { view = put(q, at, bus); vknown |= 0xff << (8 * at); }
+    rows.push(`${fetch} ${dispatch} ${bus.toString(16).padStart(2, '0')} `
+            + `${hex6(q)} ${hex6(known)} ${hex6(view)} ${hex6(vknown)}`);
+    if (load) {
+      if (at <= 2) { q = put(q, at, bus); known |= 0xff << (8 * at); }
+      n = (at + 1) & 3;
+    }
+  };
+  for (let i = 0; i < 3000; i++) {
+    const len = 1 + (rnd() % 3);
+    cycle(0, 1, rnd() & 0xff);
+    for (let k = 1; k < len; k++) cycle(1, 0, rnd() & 0xff);
+    for (let idle = rnd() % 4; idle >= 2; idle--) cycle(0, 0, rnd() & 0xff);
+  }
+
+  writeFileSync('build/insn-vectors.txt', rows.join('\n') + '\n');
+  writeFileSync('build/insn-tb.sv', `module tb;
+    logic clk = 0, fetch, dispatch;
+    logic [7:0] bus;
+    logic [23:0] wq, wqk, wv, wvk, q, view;
+    integer f, n = 0, bad = 0, r;
+    insn u (.clk(clk), .bus(bus), .fetch(fetch), .dispatch(dispatch), .q(q), .view(view));
+    initial begin
+        f = $fopen("build/insn-vectors.txt", "r");
+        if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
+        while (!$feof(f)) begin
+            r = $fscanf(f, "%d %d %h %h %h %h %h\\n", fetch, dispatch, bus, wq, wqk, wv, wvk);
+            if (r == 7) begin
+                #1; n = n + 1;
+                if ((q & wqk) !== (wq & wqk) || (view & wvk) !== (wv & wvk)) begin
+                    bad = bad + 1;
+                    if (bad < 6)
+                        $display("  MISMATCH cycle %0d fetch=%0d dispatch=%0d bus=%h: want q=%h view=%h, got q=%h view=%h",
+                                 n, fetch, dispatch, bus, wq & wqk, wv & wvk, q & wqk, view & wvk);
+                end
+                clk = 1; #1; clk = 0;
+            end
+        end
+        if (bad == 0) $display("ok    rtl/insn.sv: %0d clocked cycles against the loading model, all correct", n);
+        else $display("FAIL  rtl/insn.sv: %0d of %0d wrong", bad, n);
+        $finish;
+    end
+endmodule
+`);
+  execFileSync('iverilog', ['-g2012', '-o', 'build/insn-tb.vvp', 'rtl/insn.sv', 'build/insn-tb.sv'],
+               { stdio: 'inherit' });
+  const o = execFileSync('vvp', ['build/insn-tb.vvp'], { encoding: 'utf8' });
+  process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
+  for (const f of ['build/insn-tb.vvp', 'build/insn-tb.sv', 'build/insn-vectors.txt']) rmSync(f, { force: true });
   if (/FAIL/.test(o)) failed = true;
 }
 

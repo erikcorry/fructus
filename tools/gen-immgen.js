@@ -9,8 +9,8 @@
 // for every instruction that has one: the ALU and shift groups, mov, the load
 // and store displacements, and the two mask branches.  58 opcodes.
 //
-// Its inputs are `immreg` - the last two instruction bytes fetched - and
-// `opcode[2:0]`, plus ONE control line.  Every distinction but one is already
+// Its inputs are the instruction register - rtl/insn.sv, every byte at a fixed
+// position - plus ONE control line.  Every distinction but one is already
 // in those five bits; the exception is the packed branch, whose five-bit field
 // is a condimm5 index rather than a signed imm5 and sits in the same column.
 // See rtl/immgen.sv's own header for why that line is worth a microcode bit.
@@ -55,10 +55,10 @@ process.stdout.write(`// =======================================================
 // the spec and regenerate with \`npm run rtl\`.
 //
 // One combinational block serving 58 opcodes: every ALU and shift group, mov,
-// the load and store displacements, and brclear/brset.  Its inputs are the two
-// most recently fetched instruction bytes and the low three bits of the opcode
-// register.  NOTHING ELSE - no width bit, no shift bit, no microcode control
-// line.  Four properties of the encoding make that possible.
+// the load and store displacements, and brclear/brset.  Its inputs are the
+// instruction register and one microcode line, cimm.  NOTHING ELSE - no width
+// bit, no shift bit, no opcode decode.  Five properties of the encoding make
+// that possible.
 //
 // 1. THE COLUMN IS THE MODE.  Every instruction with an immediate puts it in
 //    the same column of the opcode map, so opcode[2:0] alone says which of the
@@ -82,9 +82,10 @@ process.stdout.write(`// =======================================================
 //    Driving x rather than a tidy zero is the point: an x reaching the ALU says
 //    the microcode asked for an immediate from an instruction that has none,
 //    which is a bug, and it should be loud in simulation rather than quietly
-//    plausible.  0x16 and 0x17 make that concrete - they are \`mov rd, #imm16\`,
+//    plausible.  0x88..0x8f make that concrete - they are \`mov rd, #imm16\`,
 //    where opcode[2:0] is the DESTINATION REGISTER and not a mode selector at
 //    all, so this block's output there is meaningless for a third reason again.
+//    rtl/rhs.sv gives that instruction its value directly, as code 4.
 //
 // 3. opcode[0] IS sel[0].  The imm3 index is {byte1[7:6], opcode[0]} - the spec
 //    spells this \`imm3[0]\`, so the pair of opcodes at +2 and +3 ARE the low
@@ -101,32 +102,23 @@ process.stdout.write(`// =======================================================
 //    a shift.  shift3 is an assembler vocabulary - it exists to reject
 //    \`shl rd, ra, #-1\` - and the datapath never needs to know about it.
 //
-// FIELD POSITION IS A TIMING PROPERTY, AND IT IS A CONTRACT ON THE MICROCODE.
-// immreg holds the last two bytes fetched, so byte 1 moves as the third byte
-// arrives.  This block reads a five-bit field at ir[7:3] and the ten-bit field
-// from ir[7:0] and ir[15:14], which is correct if and only if:
+// EVERY FIELD IS AT ONE POSITION FOR THE WHOLE INSTRUCTION.  rtl/insn.sv puts
+// each byte at its place - byte 0 low - so what this block reads is:
 //
-//     ANY FIVE-BIT FIELD IS CONSUMED BEFORE THE THIRD BYTE IS FETCHED.
+//     sel                                 insn[2:0]
+//     imm5, immbit5, immask5, condimm5    insn[15:11]
+//     imm3 index                          {insn[15:14], insn[0]}
+//     imm10                               insn[23:14]
 //
-// For the two-byte forms that is vacuous - there is no third byte.  For
-// brclear and brset it is a real ordering requirement, and the natural one: the
-// mask test does not need the displacement, so it overlaps the fetch of it and
-// costs nothing.  The ten-bit field is the opposite case - it cannot be read
-// until byte 2 arrives, and by then both of its pieces are in immreg.  They
-// are at opposite ends of it - the low two bits at ir[15:14] and the top eight
-// at ir[7:0] - because immreg holds byte 1 in the HIGH half, which is the
-// reverse of how those two bytes sit in memory.  In the stream itself the field
-// is contiguous, which is the property the encoding is built for; see
-// invariant 4b in tools/check.js.  Splitting it here is free either way: both
-// readings are wiring.
+// all of them slices, and none of them moving when a later byte arrives.
 //
-// Break that ordering and this block silently reads the wrong five bits.  There
-// is no signal that would catch it, which is why it is written down here.
-//
-// The register-select fields have the same alignment question and DO NOT escape
-// it the same way: \`ld rd, [ra, #imm10]\` needs ra at the moment it needs the
-// displacement, which is after byte 2 has shifted byte 1 upwards.  Read the
-// operands into the ALU input latches early, or give byte 1 its own register.
+// THAT USED TO BE A CONTRACT ON THE MICROCODE.  This block once read a shifting
+// immreg holding the newest two bytes, where byte 1 moved up as byte 2 came in.
+// Any five-bit field had to be consumed before the third byte was fetched -
+// brclear's mask test ahead of its displacement - and imm10's two halves sat at
+// opposite ends of the register, though they are adjacent in the stream.
+// Neither is true now: a mask can be read in any cycle of its instruction, and
+// imm10 is the one slice invariant 4b in tools/check.js says it is.
 //
 // NEITHER br FORM RIDES THIS BLOCK.  The two-register branches are at +6 and
 // +7, where there is no immediate; and the packed form at +0 reads five bits
@@ -134,7 +126,7 @@ process.stdout.write(`// =======================================================
 // plain immediate.  The branch unit decodes that one for itself.
 //
 // WHY cimm IS A MICROCODE BIT AND NOT DECODED HERE.  immgen could work it out
-// for itself - the packed branch is 0x90 and 0x98, so \`(op & 0xf7) == 0x90\` -
+// for itself - the packed branch is 0xa0 and 0xa8, so \`(op & 0xf7) == 0xa0\` -
 // and that was the first design.  It is a seven-input function of the opcode
 // REGISTER, so it lands two LUT levels in front of the mode mux, and measured
 // in one harness against the other it costs a level and a quarter of the clock:
@@ -145,16 +137,21 @@ process.stdout.write(`// =======================================================
 // the block alone, and 87 MHz placed in a registered harness (three seeds:
 // 86.9 / 86.7 / 73.0).
 //
+// MOVING TO THE 24-BIT REGISTER CHANGED NOTHING HERE, as a change of wiring
+// should not.  One harness, -nobram, medians of five seeds: 132 SB_LUT4 and
+// 85.1 MHz reading a shifting immreg, 130 and 83.4 reading insn.sv - the same
+// two LUT levels, and a gap well inside what the seeds wander by.
+//
 // The byte 1 re-layout cost six LUT4 here, the one place it cost anything.
 // Measured against the same tools, the old layout was 105 SB_LUT4 and
 // 87.3 / 88.4 / 80.2 MHz: the same clock within placement noise, six fewer
 // cells.
 //
-// The six have a specific cause.  Before, \`i5\` was sext(ir[4:0]) and \`i10\`
-// was sext(ir[9:0]), sharing their low five bits, so five bits of the mode mux
-// below were free.  Now \`i5[4:0]\` is ir[7:3] and \`i10[4:0]\` is
-// {ir[3:0], ir[15:14]}, which do not coincide, so those five bits need real
-// muxing - one level wide rather than deep, which is why the clock holds.
+// The six have a specific cause.  Before, \`i5\` and \`i10\` shared their low
+// five bits, so five bits of the mode mux below were free.  Now \`i5[4:0]\` is
+// insn[15:11] and \`i10[4:0]\` is insn[18:14], which do not coincide, so those
+// five bits need real muxing - one level wide rather than deep, which is why
+// the clock holds.
 //
 // What it buys is in software: a decoder extracting a signed imm10 from a
 // 16-bit load went from four instructions to one, and an imm5 from two to one,
@@ -163,23 +160,20 @@ process.stdout.write(`// =======================================================
 // =============================================================================
 
 module immgen (
-    input  logic [15:0] ir,     // immreg: the last two instruction bytes
-    input  logic [2:0]  sel,    // opcode[2:0]
+    input  logic [23:0] insn,   // the instruction, byte 0 low: rtl/insn.sv
     input  logic        cimm,   // microcode: read +0's five bits as condimm5
     output logic [15:0] imm
 );
 
+    wire [2:0] sel = insn[2:0];                     // the column
+
     // --- the two modes that are pure wiring ---------------------------------
-    wire [15:0] i5  = {{11{ir[7]}}, ir[7:3]};      // +0  imm5, and off5
-    // imm10's two low bits ride in byte 1 and its top eight in byte 2, so in
-    // immreg - which holds {byte1, byte2} - the halves are at opposite ends.
-    // That is a property of THIS buffer holding byte 1 high, not of the
-    // encoding: in the stream, and in any wider fetch buffer, the field is one
-    // contiguous slice.  Either way it is wiring and costs no logic.
-    wire [15:0] i10 = {{6{ir[7]}}, ir[7:0], ir[15:14]};   // +4  imm10
+    wire [15:0] i5  = {{11{insn[15]}}, insn[15:11]};   // +0  imm5, and off5
+    // imm10 is byte 1's top two bits and all of byte 2: one slice.
+    wire [15:0] i10 = {{6{insn[23]}}, insn[23:14]};    // +4  imm10
 
     // --- +2 / +3: imm3, which is also shift3 --------------------------------
-    wire [2:0] k3 = {ir[7:6], sel[0]};
+    wire [2:0] k3 = {insn[15:14], insn[0]};
     logic [3:0] lo3;
 ${caseTable('lo3', t.imm3.values.map((v) => v & 15), 3, 'k3').replace(/16'h([0-9a-f]{4})/g, (_, h) => `4'h${h.slice(-1)}`)}
     // Index 0 is the only entry whose top twelve bits are set: -1 for the ALU,
@@ -188,12 +182,12 @@ ${caseTable('lo3', t.imm3.values.map((v) => v & 15), 3, 'k3').replace(/16'h([0-9
     wire [15:0] i3v = {{12{neg}}, lo3};
 
     // --- +1 / +5: immbit5 and immask5, sharing one complement layer ---------
-    wire [4:0] n5 = ir[7:3];
+    wire [4:0] n5 = insn[15:11];
     wire [3:0] n4 = n5[3:0];
     logic [15:0] tbit, tmask;
 ${caseTable('tbit', t.immbit5.values.slice(0, 16), 4, 'n4')}
 ${caseTable('tmask', t.immask5.values.slice(0, 16), 4, 'n4')}
-    wire [15:0] tsel = (sel[2] ? tmask : tbit) ^ {16{ir[7]}};
+    wire [15:0] tsel = (sel[2] ? tmask : tbit) ^ {16{insn[15]}};
 
     // --- +0 again, for the packed branch ------------------------------------
     // \`br cond, ra, #imm5\` puts a condimm5 index in the same five bits that

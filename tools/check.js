@@ -409,9 +409,8 @@ for (const insn of spec.insn) {
     // split immediate its low bits: it makes the field contiguous once the
     // bytes are in memory order.  It matters to a self-hosted disassembler or
     // monitor, and to any implementation that buffers more than two bytes of
-    // the stream - an icache-line decoder sees exactly this register.  The
-    // two-byte immreg is the exception, holding {byte1, byte2} with byte 1 in
-    // the high half.
+    // the stream - an icache-line decoder sees exactly this register, and so
+    // does the datapath: rtl/insn.sv is it.
     //
     // A field may borrow its low bit from the opcode byte - the third-register
     // selector, and the imm3 index - because that is what keeps the opcode map

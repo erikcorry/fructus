@@ -59,8 +59,7 @@ const MODE = { 3: 'immgen, normal', 4: 'immgen, as condimm5', 5: 'port B, from t
 
 // --- what code 4 must be ------------------------------------------------------
 // Every instruction that writes a whole 16-bit constant into a register takes
-// it from bytes 1 and 2, low byte first.  immreg holds {byte1, byte2} once the
-// third byte is in, so the value is {ir[7:0], ir[15:8]} - byte-swapped wiring.
+// it from bytes 1 and 2, low byte first, so the value is insn[23:8] - a slice.
 // Checked against the decoder rather than assumed, and the generator refuses to
 // emit a code that nothing uses.
 {
@@ -123,9 +122,8 @@ ${table}
 // CODE 4 IS THAT SMALL DECODE, spent on the 16-bit immediate.  \`mov rd, #imm16\`
 // cannot use immgen: its opcode[2:0] is the destination register, not a column,
 // so immgen's mode there depends on which register is loaded.  The value is
-// bytes 1 and 2, low first, and immreg holds {byte1, byte2} once byte 2 is in -
-// so it is {ir[7:0], ir[15:8]}, wiring.  The generator checks that against the
-// decoder.  What it costs:
+// bytes 1 and 2, low first - insn[23:8], wiring.  The generator checks that
+// against the decoder.  What it costs:
 //
 //   use_reg gains a term but no input - it already depended on all four bits
 //     of src, because of port B;
@@ -138,7 +136,8 @@ ${table}
 // pass-through the short movs use.
 //
 // MEASURED against the file without it, same harness - an 8x16 register file
-// read through port B, -nobram, medians of five placement seeds:
+// read through port B, -nobram, medians of five placement seeds, on the
+// shifting immreg this file then read:
 //
 //                         rhs -> flop                 rhs + add -> flop
 //     without code 4      475 cells  4 levels  54.9   494 cells  38.2 MHz
@@ -148,6 +147,10 @@ ${table}
 // cells are thirty rather than the sixteen a 2:1 mux predicts - probably
 // because \`lit\` is no longer just the code bits fanned out, which ABC could fold
 // into the final mux for nothing; not confirmed.
+//
+// MOVING TO THE 24-BIT REGISTER changed only wiring, and measured as such:
+// 498 cells and 57.2 MHz on immreg against 505 and 57.7 on insn.sv, and 37.3
+// against 37.0 through the add - noise both ways.
 //
 // AND THE CONSTANTS ARE EXACTLY WHAT THE ONE-BYTE OPCODES NEED.  Every one-byte
 // form pins all its operands, so each has a fixed right-hand side, and all of
@@ -165,8 +168,7 @@ ${table}
 // =============================================================================
 
 module rhs (
-    input  logic [15:0] ir,      // immreg: the last two instruction bytes
-    input  logic [2:0]  sel,     // opcode[2:0]
+    input  logic [23:0] insn,    // the instruction, byte 0 low: rtl/insn.sv
     input  logic [3:0]  src,     // microcode: where the right-hand side comes from
     input  logic [15:0] regval,  // register file port B, addressed by regnum
     output logic [2:0]  regnum,  // -> register file port B address
@@ -185,16 +187,16 @@ module rhs (
     wire [15:0] konst = {{13{c[2]}}, c};        // the code bits, sign extended
 
     wire [15:0] imm;
-    immgen g (.ir(ir), .sel(sel), .cimm(cimm), .imm(imm));
+    immgen g (.insn(insn), .cimm(cimm), .imm(imm));
 
     // regnum only matters when a register is selected, so codes 8..15 other
     // than port B are don't-cares and one 3-bit mux serves both halves.
-    wire [2:0] k3 = {ir[7:6], sel[0]};
+    wire [2:0] k3 = {insn[15:14], insn[0]};
     assign regnum = src[3] ? k3 : c;
 
     // imm16 joins the constants rather than the register value: both are flop
     // outputs, so this mux is on the side of rhs that arrives early.
-    wire [15:0] imm16 = {ir[7:0], ir[15:8]};    // byte 1 low, byte 2 high
+    wire [15:0] imm16 = insn[23:8];             // byte 1 low, byte 2 high
     wire [15:0] lit   = src[3] ? konst : imm16;
 
     assign value = use_reg ? regval : (use_imm ? imm : lit);
