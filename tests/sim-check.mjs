@@ -242,9 +242,9 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   };
 
   const rungs = [
-    ['memcpy',                 15.0000, 1],
-    ['memcpy2',                 8.5000, 1],
-    ['memcpy3',                 7.5000, 1],
+    ['memcpy',                 16.0000, 1],
+    ['memcpy2',                 9.0000, 1],
+    ['memcpy3',                 8.0000, 1],
     ['memcpy4',                 6.0000, 1],
     ['memcpy_divisible_by_32',  4.4063, 32],
   ];
@@ -354,12 +354,12 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
                                              // the axis every routine here
                                              // actually costs time along
   const want = [
-    ['mul_16',      UNIFORM, 163], ['mul_16',      SMALL_A, 163],
-    ['mul_16_x4',   UNIFORM, 110], ['mul_16_x4',   SMALL_A, 110],
+    ['mul_16',      UNIFORM, 164], ['mul_16',      SMALL_A, 164],
+    ['mul_16_x4',   UNIFORM, 124], ['mul_16_x4',   SMALL_A, 124],
     ['mul_16_fast', UNIFORM, 101], ['mul_16_fast', SMALL_A, 101],
-    ['mul_16_fast_erik', UNIFORM, 114], ['mul_16_fast_erik', SMALL_A, 114],
-    ['mul_16_nib', UNIFORM, 89], ['mul_16_nib', SMALL_A, 89],
-    ['mul_16_min',  UNIFORM, 163], ['mul_16_min',  SMALL_A,  88],
+    ['mul_16_fast_erik', UNIFORM, 115], ['mul_16_fast_erik', SMALL_A, 115],
+    ['mul_16_nib', UNIFORM, 98], ['mul_16_nib', SMALL_A, 98],
+    ['mul_16_min',  UNIFORM, 164], ['mul_16_min',  SMALL_A,  89],
   ];
   for (const [entry, gen, target] of want) {
     const got = mean(entry, gen);
@@ -669,9 +669,9 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 
   // name, its cycle range, and whether it must be right at zero
   const CASES = [
-    ['clz',     21, 25],
-    ['clz2',    16, 35],
-    ['clz_nz',  19, 23],
+    ['clz',     22, 26],
+    ['clz2',    17, 36],
+    ['clz_nz',  20, 24],
     ['clz_big', 14, 15],
   ];
   for (const [name, lo, hi] of CASES) {
@@ -718,7 +718,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     else if (r[2] !== 0x2222 || r[3] !== 0x3333 || r[4] !== 0x4444) { bad = n; why = 'clobbered a callee saved register'; }
   }
   check('digits3 is right', bad < 0, `n = ${bad}: ${why}`);
-  check('digits3 costs 44', best === 44 && worst === 44, `measured ${best}..${worst}`);
+  check('digits3 costs 50', best === 50 && worst === 50, `measured ${best}..${worst}`);
   console.log('ok    snippets/digits3.s: 1000 inputs, and its cycle count');
 }
 

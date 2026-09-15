@@ -171,7 +171,7 @@ function verify(name, r, dest, src, n) {
 // Neither shows up as a wrong byte, so the path is measured instead.
 //
 // The two loops are far enough apart to tell by cost alone - the bulk loop runs
-// at 3.81 cycles/byte and the descending byte loop at 14 - so anything under 8
+// at 3.88 cycles/byte and the descending byte loop at 16 - so anything under 8
 // went ascending.  Only lengths of 32 and up are judged, where the byte-loop
 // head and the prologue no longer dominate.
 const ASCENDING = 8;
@@ -247,7 +247,7 @@ function dispatch(name, r, dest, src, n) {
 
   // The byte head is the expensive part, and its worst case is 15 bytes.
   const head = (cost(15) - cost(0)) / 15;
-  check('memcpy head cost', Math.abs(head - 17) < 0.0001, `${head.toFixed(2)} cycles/byte`);
+  check('memcpy head cost', Math.abs(head - 18) < 0.0001, `${head.toFixed(2)} cycles/byte`);
   console.log(`ok    bulk loop ${per.toFixed(4)} cycles/byte, ` +
               `byte head ${head.toFixed(2)} for up to 15 bytes`);
 }

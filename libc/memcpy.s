@@ -46,14 +46,14 @@
 ; BOTH TESTS ARE INCLUSIVE, and that is not cosmetic.  Regions that abut exactly
 ; - dest + n == src, or src + n == dest - do not overlap, so the fast path is
 ; correct for them and `ls` lets them take it; `lo` would send both the long way
-; round for nothing.  Measured, the descending loop is 15.2 cycles/byte against
+; round for nothing.  Measured, the descending loop is 16.0 cycles/byte against
 ; the bulk loop's 3.9, so the difference is a factor of four on a case that
 ; turns up whenever a caller copies into the slot next to its source.
 ;
 ; THE CHEAPER TEST GOES FIRST.  dest <= src needs no arithmetic and leaves in
 ; three bytes; the other has to compute src + n first.  A copy into a fresh
 ; buffer usually satisfies the first one, so the common path is also the short
-; one - 294 cycles against 299 for a 64-byte move.
+; one - 301 cycles against 306 for a 64-byte move.
 ;
 ; tests/libc-check.mjs measures which loop ran, for every placement.  Correctness
 ; alone would not pin this down: a memmove that always descends copies the right

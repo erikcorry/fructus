@@ -19,12 +19,12 @@
 ; MEASURED, by tests/sim-check.mjs, over 600 pairs from each distribution
 ; ----------------------------------------------------------------------------
 ;                        bytes   b 16-bit   b 8-bit   a 8-bit, b 16-bit
-;       mul_16              21       163        79        163
-;       mul_16_x4           32       110        57        110
+;       mul_16              21       164        80        164
+;       mul_16_x4           32       124        65        124
 ;       mul_16_fast        158       101        73        101
-;       mul_16_fast_erik   132       114        62        114
-;       mul_16_nib         274        89        63         89
-;       mul_16_min           8       163        83         88
+;       mul_16_fast_erik   132       115        63        115
+;       mul_16_nib         274        98        68         98
+;       mul_16_min           8       164        84         89
 ;
 ; THE FIRST THREE ROWS HAVE IDENTICAL FIRST AND LAST COLUMNS, and that is the
 ; whole argument for the fourth.  Their cost is a function of the MULTIPLIER
@@ -287,7 +287,7 @@ mul_16_x4:
 ;       0            16      52         24
 ;
 ; c is 0 half the time and 1 a quarter of the time on uniformly random input,
-; so the scan still wins there - 101 against 114.  On anything narrower the
+; so the scan still wins there - 101 against 115.  On anything narrower the
 ; computed goto wins, and it wins by a great deal at the bottom.  Which is the
 ; better dispatch depends entirely on what the multipliers look like, and the
 ; computed one is smaller either way.
@@ -551,8 +551,8 @@ mul_16_fast_erik:
 ; The first version of this came to 6.50 cycles a bit and was pointless beside
 ; a shift-and-add loop at 6.00.  It is 3.19 now.
 ;
-; IT IS THE FASTEST ROUTINE HERE - 89 cycles against mul_16_fast's 101 - and on
-; an 8-bit multiplier mul_16_x4 still beats it, 57 against 63, and does it in
+; IT IS THE FASTEST ROUTINE HERE - 98 cycles against mul_16_fast's 101 - and on
+; an 8-bit multiplier mul_16_x4 still beats it, 65 against 68, and does it in
 ; 32 bytes rather than 274.  Thirty-three cycles of
 ; prologue is still the whole story of its narrow-multiplier case.
 

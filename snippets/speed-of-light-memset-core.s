@@ -44,7 +44,7 @@
 ; ----------------------------------------------------------------------------
 ;   258 bytes/iteration   89 bytes   1.3488 cycles/byte
 ;
-; Against the memcpy core in the neighbouring file at 3.5000, and against a
+; Against the memcpy core in the neighbouring file at 3.6000, and against a
 ; 6502, which needs about 4 cycles a byte with unrolled self-modifying stores.
 ; Filling is where this machine is furthest ahead of a 6502, because `push` is
 ; doing three things at once that a 6502 does in three instructions.

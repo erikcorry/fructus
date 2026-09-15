@@ -34,10 +34,11 @@
 ;       2.000   bus: one read and one write per byte           IRREDUCIBLE
 ;       1.000   store fetch: 2 instruction bytes per 2 stored
 ;       0.333   pop fetch: 2 instruction bytes per 6 read
-;       0.100   pointer bump: 1 byte per 5 stores
+;       0.200   pointer bump: 1 byte per 5 stores, and a one-byte form
+;               costs two cycles - see the cost model
 ;       0.067   the branch: 3 bytes and a taken cycle, over 60
 ;       -----
-;       3.500   the floor for this instruction mix, at N = 60
+;       3.600   the floor for this instruction mix, at N = 60
 ;
 ; THE BRANCH TERM IS THE ONLY ONE THAT SHRINKS WITH N, which is what makes a
 ; longer loop worth anything at all once the rest is fixed: at N = 32 it is
@@ -58,20 +59,24 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED
 ; ----------------------------------------------------------------------------
-;   erik   32 bytes/iteration   51 bytes   3.6250 cycles/byte
-;   mine   60 bytes/iteration   89 bytes   3.5000 cycles/byte
+;   erik   32 bytes/iteration   51 bytes   3.7500 cycles/byte
+;   mine   60 bytes/iteration   89 bytes   3.6000 cycles/byte
 ;
 ; For scale: a 6502 does 13 cycles/byte, or 10 with self-modifying code.
 ;
-; 3.5000 is the best available under a 90-byte core.  Searching every loop
+; 3.6000 is the best available under a 90-byte core.  Searching every loop
 ; length and every stores-per-bump count that fits, N = 60 with five stores per
-; bump wins; N = 58, 54 and 48 come next at 3.5172, 3.5185 and 3.5208.  The next
+; bump wins; N = 58, 54 and 48 come next at 3.5172, 3.5185 and 3.5208.
+;
+; THE SEARCH AND THE TAIL FIGURES BELOW PREDATE THE TWO-CYCLE RULE for one-byte
+; forms, so the alternatives' figures are a pointer-bump term light; the winner
+; is unaffected, since every candidate bumps the same way.  The next
 ; step up, N = 66, needs 98 bytes.
 ; ============================================================================
 
 
 ; ============================================================================
-; erik - 32 bytes per iteration, 51 bytes, 3.6250 cycles/byte
+; erik - 32 bytes per iteration, 51 bytes, 3.7500 cycles/byte
 ; ============================================================================
 ; Correct, and the sp lands exactly on src + n.  What holds it back is that 32
 ; bytes is 16 words, which is not a multiple of three - so the last `pop` moves
@@ -110,7 +115,7 @@ erik_end:
 
 
 ; ============================================================================
-; 60 bytes per iteration, 89 bytes, 3.5000 cycles/byte
+; 60 bytes per iteration, 89 bytes, 3.6000 cycles/byte
 ; ============================================================================
 ; Sixty is the smallest length that makes both counts come out whole: it is a
 ; multiple of six, so every `pop` moves three registers, and a multiple of ten,
@@ -185,7 +190,7 @@ memcpy_core_end:
 ;       br lo, r0, r2, memcpy_core           ; r2 = dst + count - N + 1
 ;
 ; and the loop runs while at least N bytes remain, then falls out with the
-; remainder unhandled.  Same instruction, same three bytes, same 3.5000
+; remainder unhandled.  Same instruction, same three bytes, same 3.6000
 ; cycles/byte - measured, including at counts of 61, 119, 121 and 613, where it
 ; copies floor(count/60)*60 and never overruns.  No modulo anywhere, for either
 ; core.  This is strictly better than `ne` and the only reason not to write it

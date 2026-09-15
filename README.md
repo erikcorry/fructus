@@ -475,7 +475,7 @@ three is the whole difference between the two cores in `snippets/`:
 | | measured |
 |---|---|
 | `memset`, filling through `sp` with `push` | **1.3488** cycles/byte |
-| `memcpy`, reading through `sp` with `pop`, writing with `st` | **3.5000** cycles/byte |
+| `memcpy`, reading through `sp` with `pop`, writing with `st` | **3.6000** cycles/byte |
 
 memcpy's source side already gets the cheap rate, because `sp` can be pointed at
 it. Its *destination* side cannot, because there is only one `sp` and `memset`
