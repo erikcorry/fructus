@@ -56,7 +56,7 @@ const classify = (d) => {
   const sem = d.insn.semantics ?? '';
   if (sem === 'halted = 1') return 'halt';
   if (sem === '') return 'nop';
-  if (d.nbytes < 2 || ALU_LATER.has(d.insn.mnemonic)) return 'trap';
+  if (ALU_LATER.has(d.insn.mnemonic)) return 'trap';
   if (sem.includes(';') || /M(8|16)\[/.test(sem) || !/^R\[[a-z]\] = /.test(sem)) return 'trap';
   if (ALU_ELSEWHERE.some(([re]) => re.test(sem))) return 'trap';
   const rule = ALU_RULES.find(([re]) => re.test(sem));
@@ -69,9 +69,10 @@ const classify = (d) => {
     throw new Error(`${d.insn.mnemonic}: extra_cycles ${extra} but ALU operation ${name}`);
   if (extra > 1 || (extra && d.nbytes !== 2))
     throw new Error(`${d.insn.mnemonic}: only one extra cycle on a two-byte form is implemented`);
-  return extra ? 'alu2slow' : d.nbytes === 2 ? 'alu2' : 'alu3';
+  return extra ? 'alu2slow' : d.nbytes === 1 ? 'alu1' : d.nbytes === 2 ? 'alu2' : 'alu3';
 };
 const ENTRY = {
+  alu1: () => word({ next: STEP.EXEC }),
   alu2: () => word({ fetch: 1, next: STEP.EXEC }),
   alu2slow: () => word({ fetch: 1, next: STEP.SLOW }),
   alu3: () => word({ fetch: 1, next: STEP.FETCH2 }),
@@ -79,8 +80,8 @@ const ENTRY = {
   nop:  () => word({ dispatch: 1 }),
   trap: () => word({ trap: 1, next: STEP.TRAP }),
 };
-const byClass = { alu2: [], alu2slow: [], alu3: [], halt: [], nop: [], trap: [] };
-const opcodesIn = { alu2: 0, alu2slow: 0, alu3: 0, halt: 0, nop: 0, trap: 0 };
+const byClass = { alu1: [], alu2: [], alu2slow: [], alu3: [], halt: [], nop: [], trap: [] };
+const opcodesIn = { alu1: 0, alu2: 0, alu2slow: 0, alu3: 0, halt: 0, nop: 0, trap: 0 };
 for (let op = 0; op < 256; op++) {
   const classes = new Map();   // class -> the mnemonics this opcode carries in it
   for (let b1 = 0; b1 < 256; b1++) {
@@ -146,6 +147,15 @@ ${stepText}
 // straight to EXEC: a step that consumes nothing, so the next opcode waits on
 // the bus while the register fills.
 //
+// A ONE-BYTE FORM'S ENTRY WORD FETCHES NOTHING, and that is what makes
+// rtl/cpu.sv's early operand read possible.  Every other instruction's entry
+// word fetches byte 1, and rtl/cpu.sv reads the operands in that same cycle; a
+// one-byte form has no byte to fetch, but its operands are all pinned - a
+// register the microcode names, or one of rtl/rhs.sv's constants - so the cycle
+// is spent reading them and nothing else.  Two cycles rather than one, and in
+// exchange no instruction executes in the cycle it was dispatched in, so
+// nothing anywhere needs a forwarding path.
+//
 // So every two-byte ALU opcode has the same entry word, and so does every
 // three-byte one - the ALU operations share not only their successor but
 // their whole routine.  The write and the next dispatch share a cycle, and
@@ -154,6 +164,9 @@ ${stepText}
 //
 // ENTRY POINTS, by what the spec says each opcode does:
 //
+//     one-byte ALU - its entry word fetches nothing, and that cycle is the one
+//     the operands are read in:
+${listed('alu1')}
 //     two-byte ALU:
 ${listed('alu2')}
 //     two-byte ALU with a registered result, one extra cycle through SLOW:

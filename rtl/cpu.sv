@@ -29,6 +29,21 @@
 // asynchronous, which the part's block RAM is not.  The attribute says so,
 // because the ROM beside it is block RAM and synthesis is left free to infer.
 //
+// THE OPERANDS ARE READ A CYCLE BEFORE THEY ARE USED, which is where the clock
+// comes from.  rtl/lhs.sv, rtl/rhs.sv and rtl/immgen.sv read `view` - the
+// instruction with this cycle's byte already in place - so an instruction's
+// last fetch cycle also selects, reads and latches both ALU inputs.  The
+// execute cycle is then flops -> ALU -> result mux -> register file, with the
+// register read out of it entirely.
+//
+// NO FORWARDING IS NEEDED, and that is a property of the sequencing rather than
+// luck.  Every instruction has a cycle between its dispatch and its execute -
+// a fetch for the multi-byte forms, an entry word that fetches nothing for the
+// one-byte ones - and the previous write lands at the edge that begins it.
+// So a read never shares a cycle with the write it must see.  An instruction
+// that executed in its dispatch cycle would need a bypass from the ALU result
+// into these flops, which measured 5 MHz slower than the extra cycle costs.
+//
 // MEASURED on an iCE40 UP5K, yosys 0.52 + nextpnr-ice40 0.7, behind a real
 // SB_SPRAM256KA holding the program, logic cells and the median of eight
 // placement seeds:
@@ -37,7 +52,25 @@
 //     rtl/predecode.sv's table left to infer            858        3      20.9
 //     microcode ROM in block RAM, predecode in LUTs     922        1      21.9
 //     microcode ROM in LUTs as well                     956        0      22.0
-//     clz and popcount registered, as now               947        2      23.7
+//     clz and popcount registered                       947        2      23.7
+//     the mask columns swapped, immask5 reordered       938        2      23.3
+//     the operands read a cycle early, as now           866        2      34.3
+//
+// READING THE OPERANDS EARLY IS THE LARGEST STEP MEASURED SO FAR: 23.3 to 34.3
+// MHz, medians of eight placement seeds, and 72 cells smaller.  The critical
+// path went from ten cells to seven - instruction register, select, register
+// read, ALU, write - and is now operand flop, ALU, result mux, write, with 9.5
+// ns of logic against 20.5 of routing.  The register file's read muxes no
+// longer feed the ALU at all, which is where the cells went too.
+//
+// THE ALTERNATIVE WAS A FORWARDING PATH, and it was measured rather than
+// argued: letting a one-byte form execute in its dispatch cycle needs the ALU
+// result muxed into these flops, which came out at 27.2 MHz against 34.3, for
+// 52 more cells.  Charging those forms a second cycle instead costs 6 to 11 per
+// cent of executed instructions one cycle each - measured over every
+// gcc.c-torture binary - and buys the other 89 to 94 per cent a third more
+// clock.  Whole programs run about 1.44 times faster at every optimisation
+// level.
 //
 // PREDECODE MUST BE KEPT OUT OF BLOCK RAM, and was not at first: a table feeding
 // flops that load together is a synchronous ROM, synthesis inferred one, and
@@ -88,15 +121,27 @@ module cpu (
     predecode p (.clk(clk), .bus(mem_rdata), .dispatch(dispatch), .alu_op(alu_op),
                  .lhs_src(lhs_src), .rhs_src(rhs_src), .dest_src(dest_src), .cond_src(cond_src));
 
-    // --- the datapath ---------------------------------------------------------
+    // --- the datapath, with the operands read a cycle early ---------------------
     (* ram_style = "logic" *)
     logic [15:0] R [0:7];
 
     wire [2:0]  an, bn, wn;
     wire [15:0] bval, y;
-    lhs  l (.insn(q), .src(lhs_src), .regnum(an));
-    rhs  r (.insn(q), .src(rhs_src), .regval(R[bn]), .regnum(bn), .value(bval));
-    alu  a (.clk(clk), .lhs(R[an]), .rhs(bval), .op(alu_op), .y(y));
+    lhs  l (.insn(view), .src(lhs_src), .regnum(an));
+    rhs  r (.insn(view), .src(rhs_src), .regval(R[bn]), .regnum(bn), .value(bval));
+
+    // Both ALU inputs, as of the last edge.  The cycle that fills them is the
+    // instruction's last fetch - or, for a one-byte form with no byte to fetch,
+    // the entry cycle rtl/ucode.sv gives it instead - so what the ALU reads is
+    // a cycle old and the register file has already taken the previous
+    // instruction's write.
+    logic [15:0] aq, bq;
+    always_ff @(posedge clk) begin
+        aq <= R[an];
+        bq <= bval;
+    end
+
+    alu  a (.clk(clk), .lhs(aq), .rhs(bq), .op(alu_op), .y(y));
     dest d (.insn(q), .src(dest_src), .regnum(wn));
 
     always_ff @(posedge clk) if (wen) R[wn] <= y;

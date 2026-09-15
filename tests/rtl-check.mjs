@@ -909,9 +909,10 @@ endmodule
 // the spec declares - which is its cost model and not an assumption made here.
 //
 // Which instructions to use is not taken from the ROM generator: it is every
-// multi-byte form whose semantics write one register with no memory, found by
-// decoding, and a program containing one the ROM does not implement traps and
-// fails.  The first program runs every such form in turn, so each is covered
+// form whose semantics write one register with no memory, found by decoding -
+// the one-byte abbreviations included, which cost two cycles because their
+// operands are read in a step of their own - and a program containing one the
+// ROM does not implement traps and fails.  The first program runs every such form in turn, so each is covered
 // whatever the random ones pick.
 {
   const rnd = (() => { let s = 2654435761;
@@ -925,7 +926,7 @@ endmodule
   for (let op = 0; op < 256; op++)
     for (let b1 = 0; b1 < 256; b1++) {
       const d = decode(dec, [op, b1, 0], 0);
-      if (!d || d.nbytes < 2 || ['br8', 'push8', 'pop8'].includes(d.insn.mnemonic)) continue;
+      if (!d || ['br8', 'push8', 'pop8'].includes(d.insn.mnemonic)) continue;
       const sem = d.insn.semantics ?? '';
       if (!/^R\[[a-z]\] = /.test(sem) || sem.includes(';') || /M(8|16)\[/.test(sem)) continue;
       const key = `${d.insn.mnemonic}/${d.form.name}@${op}`;
@@ -934,6 +935,7 @@ endmodule
     }
   const all = [...forms.values()];
   const draw = (f) => {
+    if (f.nbytes === 1) return [f.op];
     const bytes = [f.op, f.b1s[rnd() % f.b1s.length]];
     if (f.nbytes === 3) bytes.push(rnd() & 0xff);
     return bytes;

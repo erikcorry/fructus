@@ -215,6 +215,19 @@ length_from_first_byte = true
 # nothing to fetch during that cycle.  The 6502 charges the same: a branch is
 # two bytes and two cycles when it falls through, three when it is taken.
 #
+# AND A ONE-BYTE INSTRUCTION THAT COMPUTES COSTS TWO CYCLES, which is the price
+# of the pipelining rather than of the encoding.  The hardware reads its
+# operands in the cycle BEFORE the ALU sees them - see rtl/cpu.sv - and every
+# multi-byte instruction has a fetch cycle to do that in.  A one-byte form has
+# no second byte, so it spends a cycle of its own.  It keeps its size, which is
+# what it was for: `add r0, r0, #1` is still one byte where the general form is
+# two, and a program of them is still half the size.
+#
+# nop and halt are not in this: they read nothing and compute nothing.  The
+# alternative was to forward the result being written into the operands, which
+# is a mux in front of the ALU and measured a fifth of the clock - so the
+# machine charges the rare instruction rather than slowing every other one.
+#
 # AND AN INSTRUCTION MAY DECLARE EXTRA CYCLES, with `extra_cycles` on its entry,
 # when the hardware takes its result a cycle after its bytes are in.  clz and
 # popcount do: their logic is registered halfway through, which is what keeps

@@ -196,6 +196,11 @@ export const BUILTIN = {
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };
 
+// Whether an instruction's whole effect is a value in a register: no memory, no
+// pc, one assignment.  Those are the forms the hardware runs on the ALU alone.
+const computes = (sem) =>
+  /^R\[[a-z]\] = /.test(sem) && !sem.includes(';') && !/M(8|16)\[/.test(sem);
+
 export class Machine {
   constructor(spec) {
     this.spec  = spec;
@@ -336,6 +341,12 @@ export class Machine {
     this.pc = u16(at + d.nbytes);
     this.fetched += d.nbytes;
     this.slow += d.insn.extra_cycles ?? 0;
+    // A ONE-BYTE FORM THAT COMPUTES COSTS TWO CYCLES.  The hardware reads its
+    // operands in the cycle before the ALU sees them, and a one-byte form has
+    // no second byte whose fetch cycle could do that - so it spends a cycle of
+    // its own instead.  nop and halt are not here: they compute nothing and
+    // read nothing.  See rtl/ucode.sv's one-byte entry words and rtl/cpu.sv.
+    if (d.nbytes === 1 && computes(d.insn.semantics ?? '')) this.slow += 1;
     this.wrotePc = false;
     if (trace) trace(at, d, this);
     for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);

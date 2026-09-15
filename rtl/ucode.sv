@@ -40,6 +40,15 @@
 // straight to EXEC: a step that consumes nothing, so the next opcode waits on
 // the bus while the register fills.
 //
+// A ONE-BYTE FORM'S ENTRY WORD FETCHES NOTHING, and that is what makes
+// rtl/cpu.sv's early operand read possible.  Every other instruction's entry
+// word fetches byte 1, and rtl/cpu.sv reads the operands in that same cycle; a
+// one-byte form has no byte to fetch, but its operands are all pinned - a
+// register the microcode names, or one of rtl/rhs.sv's constants - so the cycle
+// is spent reading them and nothing else.  Two cycles rather than one, and in
+// exchange no instruction executes in the cycle it was dispatched in, so
+// nothing anywhere needs a forwarding path.
+//
 // So every two-byte ALU opcode has the same entry word, and so does every
 // three-byte one - the ALU operations share not only their successor but
 // their whole routine.  The write and the next dispatch share a cycle, and
@@ -48,6 +57,9 @@
 //
 // ENTRY POINTS, by what the spec says each opcode does:
 //
+//     one-byte ALU - its entry word fetches nothing, and that cycle is the one
+//     the operands are read in:
+//         add or mov xor
 //     two-byte ALU:
 //         mov bitrev sxt8 add rsb xor or and shl asr lsr iseq isset
 //     two-byte ALU with a registered result, one extra cycle through SLOW:
@@ -59,7 +71,7 @@
 //     nop - its entry dispatches at once, since the next opcode is already on
 //     the bus:
 //         nop
-//     trap - 180 opcodes, every one not yet implemented and every free one.
+//     trap - 171 opcodes, every one not yet implemented and every free one.
 //
 // RESET forces the address to BOOT for as long as it is held, so the first
 // word after it dispatches the byte at address 0.  The ROM's output register
@@ -88,9 +100,9 @@ module ucode (
         rom[2] = 14'b100000011_0_0_0_0_1;
         rom[3] = 14'b100000011_0_0_0_0_1;
         rom[4] = 14'b100000011_0_0_0_0_1;
-        rom[5] = 14'b100000011_0_0_0_0_1;
-        rom[6] = 14'b100000011_0_0_0_0_1;
-        rom[7] = 14'b100000011_0_0_0_0_1;
+        rom[5] = 14'b100000000_0_0_0_0_0;
+        rom[6] = 14'b100000000_0_0_0_0_0;
+        rom[7] = 14'b100000000_0_0_0_0_0;
         rom[8] = 14'b100000011_0_0_0_0_1;
         rom[9] = 14'b100000011_0_0_0_0_1;
         rom[10] = 14'b100000011_0_0_0_0_1;
@@ -211,12 +223,12 @@ module ucode (
         rom[125] = 14'b100000000_1_0_0_0_0;
         rom[126] = 14'b100000000_1_0_0_0_0;
         rom[127] = 14'b100000000_1_0_0_0_0;
-        rom[128] = 14'b100000011_0_0_0_0_1;
-        rom[129] = 14'b100000011_0_0_0_0_1;
-        rom[130] = 14'b100000011_0_0_0_0_1;
-        rom[131] = 14'b100000011_0_0_0_0_1;
-        rom[132] = 14'b100000011_0_0_0_0_1;
-        rom[133] = 14'b100000011_0_0_0_0_1;
+        rom[128] = 14'b100000000_0_0_0_0_0;
+        rom[129] = 14'b100000000_0_0_0_0_0;
+        rom[130] = 14'b100000000_0_0_0_0_0;
+        rom[131] = 14'b100000000_0_0_0_0_0;
+        rom[132] = 14'b100000000_0_0_0_0_0;
+        rom[133] = 14'b100000000_0_0_0_0_0;
         rom[134] = 14'b100000011_0_0_0_0_1;
         rom[135] = 14'b000000000_0_1_0_0_0;
         rom[136] = 14'b100000001_1_0_0_0_0;
