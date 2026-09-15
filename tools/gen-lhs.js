@@ -32,7 +32,7 @@ const regName = (n) => {
 // --- where it sits, per opcode ------------------------------------------------
 // Decode every byte 1 and see which field the operand follows.  A tied form
 // (`add rd, rd, #imm5`) follows byte1[2:0] only; nothing may follow both.
-const COLUMN = { 0: 'rd', 1: 'rd', 5: 'rd', 2: 'ra', 3: 'ra', 4: 'ra', 6: 'ra', 7: 'ra' };
+const COLUMN = { 0: 'rd', 4: 'rd', 5: 'rd', 1: 'ra', 2: 'ra', 3: 'ra', 6: 'ra', 7: 'ra' };
 
 const opcodes = [];        // { op, who, field, pc } for multi-byte forms
 const micro = new Map();   // register -> [who]
@@ -124,7 +124,7 @@ ${byField('rd')}
 //   ra field  ${FIELD.ra.bits}
 ${byField('ra')}
 //
-// THE COLUMN NEARLY DECIDES IT - +0, +1 and +5 are rd, the rest ra - and the
+// THE COLUMN NEARLY DECIDES IT - +0, +4 and +5 are rd, the rest ra - and the
 // exceptions, computed rather than remembered, are:
 //
 ${offText}

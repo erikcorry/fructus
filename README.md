@@ -219,7 +219,8 @@ LUT4 and three LUT levels on an iCE40 UP5K.
 
 It costs that little because of properties of the *values* in the spec, not of
 the circuit: `immbit5` and `immask5` are each sixteen entries plus their exact
-complements, so the two share one complement layer; and `shift3` is `imm3`
+complements, and in the same order a nibble shifted by four times the index's
+top two bits, so the two are one shifter with one complement layer; and `shift3` is `imm3`
 masked to four bits, which is what the shifter does anyway, so there is no
 `shift3` table in hardware at all. Both are checked by `npm run check`, which
 names the hardware cost when an edit breaks them.
@@ -325,7 +326,7 @@ cost more in routing than its size suggested.
 Port B's register number comes off the instruction bytes rather than out of
 immgen, so the register file's read overlaps the immediate unit instead of
 waiting for it — four LUT levels and 38 MHz against six and 31, with a real 8×16
-file behind it. That is also why immgen drives `x` at `+6`/`+7`: nothing reads
+file behind it. That is also why nothing checks immgen at `+6`/`+7`: nothing reads
 it there, and an `x` reaching the ALU means the microcode asked for an immediate
 from an instruction that has none.
 
@@ -547,9 +548,9 @@ three-register forms already need.
 
 ### `rsb` with a `#1<<n` immediate
 
-Slot `+1` of every ALU group is the immbit5 slot, and four of the eight
-operations now use theirs — `add` (0x41), `xor` (0x51), `or` (0x59), `and`
-(0x61). `rsb` (0x49) is the one left that could plausibly want it:
+Slot `+4` of every ALU group is the immbit5 slot, and four of the eight
+operations now use theirs — `add` (0x3c), `xor` (0x4c), `or` (0x54), `and`
+(0x5c). `rsb` (0x44) is the one left that could plausibly want it:
 `rsb rd, rd, #1<<n` computes (2ⁿ − rd), plausible for mirroring an index, and
 no routine here has wanted one yet. The shifts leave theirs free because a
 shift distance is four bits.
@@ -558,7 +559,7 @@ One opcode each and no new hardware — the 4-to-16 decoder is already built for
 the other three. Cheap enough that the question is whether they earn their line
 in the documentation, not whether the map can afford them.
 
-The other three free `+1` slots — `shl`, `asr` and `lsr` at 0x69, 0x71 and 0x79
+The other three free `+4` slots — `shl`, `asr` and `lsr` at 0x64, 0x6c and 0x74
 — are free for a reason and should stay that way. A shift count is masked to
 four bits, so `1<<4` and everything above it reads as a shift of zero. immbit5
 is meaningless there.

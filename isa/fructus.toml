@@ -377,7 +377,9 @@ signed = true
 #
 # The hardware is a 4-to-16 decoder and sixteen XOR gates on the invert bit,
 # which is the cheapest 5-bit window onto the 16-bit constants that exists -
-# and it is already built, because brset needed it.
+# and it is already built, because brset needed it.  It is built as a one-hot
+# nibble shifted by four times bits 3:2, which is the shifter immask5 below
+# shares; see there.
 #
 # The complements are not padding.  `and rd, rd, #0x7fff` clears the sign bit,
 # which is the renormalisation step in every floating-point routine in
@@ -418,39 +420,55 @@ values = [
 # complements aaaa cccc f0f0 ff00 are all present, which is the whole mask
 # sequence a software popcount or bit reversal walks.
 #
-# IT COSTS 25 LUT4 ON AN iCE40, and the cheapness comes from a property of the
-# contents rather than of the table.  Yosys maps the flat 32-entry lookup to 30
-# LUT4; hand-factored it is 25, measured and verified equivalent on all 32
-# entries:
+# THE ORDER IS THE HARDWARE'S, and it is the order of immbit5.  Bits 3:2 of the
+# index are a row and bits 1:0 a column, and every entry but one column is a
+# nibble pattern shifted left by four times the row - exactly as immbit5's 1<<n
+# is 1<<column shifted by four times the row:
 #
-#     8   layer 1     p[k], a function of the low four select bits
-#     1   detector    sel[3:0] == 15, the aaaa row
-#     8   odd bits    out[2k+1] = p[k] ^ sel[4]
-#     8   even bits   out[2k]   = (p[k] & ~aaaa) ^ sel[4]
+#     column          0        1        2        3
+#     nibble          f        3        -        c
+#     row 0        000f     0003     ff00     000c
+#     row 1        00f0     0030     f0f0     00c0
+#     row 2        0f00     0300     cccc     0c00
+#     row 3        f000     3000     aaaa     c000
 #
-# Layer 1 is EIGHT lookups rather than sixteen because aaaa is the only entry in
-# the table whose bit 2k and bit 2k+1 ever differ - the fields, the nibbles, the
-# byte and the swizzles are all built from aligned pairs - so one lookup serves
-# both bits of a pair and a single detector patches the exception.  5555 costs
-# nothing extra because it is reached as a complement, through the sel[4] xor,
-# rather than stored.
+# So the two tables are ONE circuit: four LUT4s make the nibble from the column
+# and the mask-or-bit column of the opcode, one shift by 0, 4, 8 or 12 places it,
+# column 2 overrides the result with its row's byte or swizzle mask, and the
+# top index bit complements the lot.  The unused column-2 nibble is a
+# don't-care the override pays for.
 #
-# Both layers are combinational: two LUT levels is 7.4 ns on an UP5K, or 135
-# MHz, against 9.8 ns for a 16-bit add.  The flat 30-LUT version has the same
-# depth, so the factorisation is area and not speed.
+# MEASURED on an iCE40 UP5K, yosys 0.52 + nextpnr-ice40 0.7, beside rtl/rhs.sv
+# and inside the processor, with the two mask columns of the opcode map at +4
+# and +5 so that one opcode bit selects this whole block:
 #
-# NONE OF THIS CONSTRAINED THE CONTENTS, which were chosen for the compiler.
-# But it is worth knowing which way the dependency runs: adding a mask with an
-# odd-aligned run - 0x0006, say - would break the pair symmetry and take layer 1
-# back to sixteen lookups, costing 8 LUT4 rather than the 0 it looks like.
+#                                                  LUT4 (rhs)   LUT4 (cpu)   MHz
+#     two flat sixteen-entry tables, old order        176          947      23.7
+#     this order, the shared shifter                  158          911      23.9
+#       with every opcode moved to match              158          938      23.3
+#
+# The middle row changed only this block; the last is the processor as
+# generated, where rtl/predecode.sv's table came out 13 LUT4 larger for rows
+# that only moved.  The clock did not move - medians of eight seeds, all well
+# inside what the seeds wander by - because the immediate settles before the
+# register it competes with at rtl/rhs.sv's mux.  It is area.
+#
+# NONE OF THIS CONSTRAINED THE CONTENTS, which were chosen for the compiler;
+# only their order is the circuit's.  tools/check.js says what an edit that
+# breaks the pattern costs: a mask outside it needs column 2's override, and a
+# second such column needs a table again.
 [optype.immask5]
 kind   = "table"
 bits   = 5
 values = [
-  0xc000, 0x3000, 0x0c00, 0x0300, 0x00c0, 0x0030, 0x000c, 0x0003,
-  0xf000, 0x0f00, 0x00f0, 0x000f, 0xff00, 0xf0f0, 0xcccc, 0xaaaa,
-  0x3fff, 0xcfff, 0xf3ff, 0xfcff, 0xff3f, 0xffcf, 0xfff3, 0xfffc,
-  0x0fff, 0xf0ff, 0xff0f, 0xfff0, 0x00ff, 0x0f0f, 0x3333, 0x5555,
+  0x000f, 0x0003, 0xff00, 0x000c,
+  0x00f0, 0x0030, 0xf0f0, 0x00c0,
+  0x0f00, 0x0300, 0xcccc, 0x0c00,
+  0xf000, 0x3000, 0xaaaa, 0xc000,
+  0xfff0, 0xfffc, 0x00ff, 0xfff3,
+  0xff0f, 0xffcf, 0x0f0f, 0xff3f,
+  0xf0ff, 0xfcff, 0x3333, 0xf3ff,
+  0x0fff, 0xcfff, 0x5555, 0x3fff,
 ]
 
 # Branch conditions.  Three bits, eight encoded, twelve spellings accepted.
@@ -463,7 +481,7 @@ values = [
 # permits the exchange says so with `swap_operands`.
 #
 # THERE IS NO `al`.  An unconditional branch is a register compared for
-# equality with itself, which is why the two-byte form at 0xa4 pins `eq, r0,
+# equality with itself, which is why the two-byte form at 0xa1 pins `eq, r0,
 # r0` rather than spending a condition slot on "always".  `nv` is not encoded
 # either - a branch that never happens is a nop the assembler can just not
 # emit.  Both slots go to the overflow conditions instead.
@@ -717,9 +735,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   1000_1ddd                mov  rd, #imm16            3 bytes
 #   0111_1000                iseq  rd, rd, #imm5      2 bytes
-#   0111_1001                isset rd, rd, #immbit5    2 bytes
+#   0111_1001                iseq  rd, ra, #imm10     3 bytes
 #   0111_101i                iseq  rd, ra, #imm3      TWO opcodes
-#   0111_1100                iseq  rd, ra, #imm10     3 bytes
+#   0111_1100                isset rd, rd, #immbit5    2 bytes
 #   0111_1101                isset rd, rd, #immask5    2 bytes
 #   0111_111b                iseq  rd, ra, rb         TWO opcodes
 #
@@ -754,9 +772,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #     fff  addressing form - and it means the same thing on both sides:
 #
 #       000   rN, [rN, #off5]    2 bytes  one register, tied   LOADS ONLY
-#       001   -- free
+#       001   rN, [ra, #imm10]   3 bytes  two registers, wide offset
 #       01i   rN, [ra, #imm3]    2 bytes  two registers, TWO opcodes
-#       100   rN, [ra, #imm10]   3 bytes  two registers, wide offset
+#       100   -- free
 #       101   -- free
 #       110   -- free
 #       111   -- free
@@ -794,18 +812,18 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   read, and it reads better in this order.
 #
 #     0000_1000  -- free               0001_1000  ld   rd,[rd,#off5]
+#     0000_1001  st   rs,[ra,#imm10]   0001_1001  ld   rd,[ra,#imm10]
 #     0000_101i  st   rs,[ra,#imm3]    0001_101i  ld   rd,[ra,#imm3]
-#     0000_1100  st   rs,[ra,#imm10]   0001_1100  ld   rd,[ra,#imm10]
 #     0001_0000  -- free               0010_0000  ld8  rd,[rd,#off5]
+#     0001_0001  st8  rs,[ra,#imm10]   0010_0001  ld8  rd,[ra,#imm10]
 #     0001_001i  st8  rs,[ra,#imm3]    0010_001i  ld8  rd,[ra,#imm3]
-#     0001_0100  st8  rs,[ra,#imm10]   0010_0100  ld8  rd,[ra,#imm10]
 #   ------------------------------------------------------------------------
 #
 #   --- constants and the unary operations, a row each -----------------------
 #
 #   0010_1000                mov  rd, #imm5             2 bytes
-#   0010_1001                mov  rd, #immbit5          2 bytes
-#   0010_1010 .. 0010_1100   -- free
+#   0010_1001 .. 0010_1011   -- free
+#   0010_1100                mov  rd, #immbit5          2 bytes
 #   0010_1101                mov  rd, #immask5          2 bytes
 #   0010_1110 .. 0010_1111   -- free
 #
@@ -816,9 +834,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   THE mov ROW IS AN ALU GROUP WITHOUT AN ALU OPERATION, and it is numbered as
 #   one.  `mov rd, #imm` is `or rd, #imm` with the register half thrown away, so
 #   the row lines its constant forms up on the same columns the six ALU groups
-#   below use: +0 imm5, +1 immbit5, +5 immask5.
+#   below use: +0 imm5, +4 immbit5, +5 immask5.
 #
-#   That leaves 0x2c empty, which is the imm10 column and is deliberate: `mov
+#   That leaves 0x29 empty, which is the imm10 column and is deliberate: `mov
 #   rd, #imm10` would be a strictly worse `mov rd, #imm16` - three bytes either
 #   way, six fewer bits of range - so the slot has nothing to hold.  Putting
 #   immask5 there to close the gap would have cost more than it saved: a reader
@@ -843,7 +861,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #       byte 0 = 0011_0000, byte 1 = dddi_iiii
 #       -> 32 single-register unary operations
 #
-#   That is eight times the two-opcode form's four, out of ONE opcode, and +1
+#   That is eight times the two-opcode form's four, out of ONE opcode, and +4
 #   and +5 could do the same again if it ever came to it.  So the four at
 #   0011_001s are not a ceiling on unary operations; they are the ceiling on
 #   unary operations that want a separate destination.  Nothing occupies +0 yet
@@ -881,25 +899,34 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   same six opcodes.  Relative to the base of its group:
 #
 #       +0   rd, rd, #imm5     2 bytes  dest doubles as source, wide imm
-#       +1   rd, rd, #immbit5  2 bytes  same shape, single-bit constants
+#       +1   rd, ra, #imm10    3 bytes  two regs + wide imm
 #       +2   rd, ra, #imm3     2 bytes  two regs + table imm, TWO opcodes
 #       +3     "
-#       +4   rd, ra, #imm10    3 bytes  two regs + wide imm
-#       +5   rd, rd, #immask5  2 bytes  same shape, field and stripe masks
+#       +4   rd, rd, #immbit5  2 bytes  as +0, single-bit constants
+#       +5   rd, rd, #immask5  2 bytes  as +0, field and stripe masks
 #       +6   rd, ra, rb        2 bytes  THREE registers, TWO opcodes
 #       +7     "
 #
-#   Forms +0, +2 and +4 are the memory block's 000 / 01i / 100 shapes reused
+#   Forms +0, +1 and +2 are the memory block's 000 / 001 / 01i shapes reused
 #   unchanged.  Form +6 is the one the memory block has no use for: it spends
 #   the stolen opcode bit on a third register rather than an immediate bit.
 #
-#   FORMS +1 AND +5 ARE PER-OPERATION and neither is claimed by all eight.
+#   THE COLUMN BITS ARE A TREE OVER THE IMMEDIATES.  opcode[2] picks the two
+#   mask tables, which rtl/immgen.sv builds as one shifter; below it opcode[1]
+#   picks imm3; below that opcode[0] picks between the two sign-extended
+#   slices, imm5 and imm10.  Each level of the immediate mux reads one bit.  It
+#   was +1 immbit5 and +4 imm10 until measured: swapping them, with immask5
+#   reordered to share immbit5's shifter, took the immediate block and its
+#   mux 18 LUT4 smaller and the processor 9, at the same clock.  See
+#   optype.immask5.
+#
+#   FORMS +4 AND +5 ARE PER-OPERATION and neither is claimed by all eight.
 #
 #     0x38  add      0x40  rsb      0x48  xor      0x50  or      0x58  and
 #
-#   +1 is immbit5, single bits and their complements, and four operations take
-#   it: 0x39 `add rd, rd, #1<<n` - and the complement half makes that a
-#   subtract of a power of two - 0x49 bit flip, 0x51 bit set, 0x59 bit clear.
+#   +4 is immbit5, single bits and their complements, and four operations take
+#   it: 0x3c `add rd, rd, #1<<n` - and the complement half makes that a
+#   subtract of a power of two - 0x4c bit flip, 0x54 bit set, 0x5c bit clear.
 #   rsb leaves it free because a single-bit reverse subtract is nothing in
 #   particular, and the shifts because a shift distance is four bits.
 #
@@ -947,24 +974,28 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   table twice, and every form sits in the column its BYTE 1 belongs to:
 #
 #     +0   aaa0_0000   one register    with every other reg + 5-bit form
-#     +1   aaa0_0000   one register    the byte-wide pair of the same
+#     +4   aaa0_0000   one register    the byte-wide pair of the same
 #     +2   aaab_bb00   two registers   with every other reg + reg + field
 #     +6/7 aaab_bbcc   three registers with the three-register ALU forms
 #
 #   So the 16-bit form - the common one, the one a prologue uses - is at +0
-#   where the eye lands, and the byte form sits beside it at +1.  Reading down
+#   where the eye lands, and the byte form sits in the next one-register column, +4.  Reading down
 #   a column of the opcode map tells you the shape of byte 1 and nothing else
 #   has to be remembered.
 #
 #   1001_0000                push ra                  2 bytes
-#   1001_0001                push8  ra                  2 bytes
+#   1001_0001                -- free
 #   1001_0010                push ra, rb              2 bytes
-#   1001_0011 .. 1001_0101   -- free
+#   1001_0011                -- free
+#   1001_0100                push8  ra                  2 bytes
+#   1001_0101                -- free
 #   1001_011c                push ra, rb, rc          TWO opcodes
 #   1001_1000                pop  ra                  2 bytes
-#   1001_1001                pop8   ra                  2 bytes
+#   1001_1001                -- free
 #   1001_1010                pop  ra, rb              2 bytes
-#   1001_1011 .. 1001_1101   -- free
+#   1001_1011                -- free
+#   1001_1100                pop8   ra                  2 bytes
+#   1001_1101                -- free
 #   1001_111c                pop  ra, rb, rc          TWO opcodes
 #
 #   PUSH AND POP ARE NOW THE SAME SHAPE TWICE with nothing borrowed from either
@@ -981,17 +1012,17 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   nothing spilling into a neighbouring row.
 #
 #   1010_0000                br      <cond,#imm5>, ra, target
-#   1010_0001                brclear ra, #immbit5, target
+#   1010_0001                jmpr    target             2 bytes, SHORT form
 #   1010_0010                jmp     target             3 bytes, absolute
 #   1010_0011                jmpr    target             3 bytes, pc relative
-#   1010_0100                jmpr    target             2 bytes, SHORT form
+#   1010_0100                brclear ra, #immbit5, target
 #   1010_0101                brclear ra, #immask5, target
 #   1010_011z                br      <cond>, ra, rb, target    TWO opcodes
 #   1010_1000                br8     <cond,#imm5>, ra, target
-#   1010_1001                brset   ra, #immbit5, target
+#   1010_1001                call    ra                 2 bytes, INDIRECT
 #   1010_1010                call    target             3 bytes, absolute
 #   1010_1011                callr   target             3 bytes, pc relative
-#   1010_1100                call    ra                 2 bytes, INDIRECT
+#   1010_1100                brset   ra, #immbit5, target
 #   1010_1101                brset   ra, #immask5, target
 #   1010_111z                br8     <cond>, ra, rb, target    TWO opcodes
 #   1011_0000 .. 1111_1111   -- free, 80 slots
@@ -1007,22 +1038,22 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   AND THE COLUMNS SAY WHAT BYTE 1 LOOKS LIKE, exactly as they do everywhere
 #   else in the map:
 #
-#     .0 .1 .5   aaa?_????   one register and a 5-bit field
+#     .0 .4 .5   aaa?_????   one register and a 5-bit field
 #     .6 .7      cccb_bbee   two registers and a condition
 #     .2 .3      iiii_iiii   a 16-bit target and no register at all
-#     .4                     the two two-byte forms
+#     .1                     the two two-byte forms
 #
 #   AND EVERY COLUMN IS A PAIR SPLIT BY BIT 3, though what the split means
-#   depends on the column: .0, .6 and .7 are br against br8, .1 and .5 are
-#   brclear against brset, and .2, .3 and .4 are a jump against the call that
+#   depends on the column: .0, .6 and .7 are br against br8, .4 and .5 are
+#   brclear against brset, and .1, .2 and .3 are a jump against the call that
 #   reaches the same way.  Nothing in the block is unpaired.
 #
-#   .0, .1 AND .5 ARE THE ALU'S CONSTANT COLUMNS, and that is not an analogy.
+#   .0, .4 AND .5 ARE THE ALU'S CONSTANT COLUMNS, and that is not an analogy.
 #   Byte 1 of `br cond, ra, #imm5` is `aaak_kkkk` and byte 1 of `brclear ra,
 #   #mask` is `aaam_mmmm`: one register and five bits, identically placed.  The
 #   only difference is which table reads the five bits - a packed condition and
-#   signed constant at +0, immbit5 at +1, immask5 at +5 - which is precisely the
-#   +0 / +1 / +5 relationship every ALU group has.  So the branches on a mask
+#   signed constant at +0, immbit5 at +4, immask5 at +5 - which is precisely the
+#   +0 / +4 / +5 relationship every ALU group has.  So the branches on a mask
 #   sit in the mask columns, and clear-versus-set is the row rather than bit 0.
 #
 #   .6 AND .7 ARE THE THREE-REGISTER COLUMNS, and that is why the two-register
@@ -1040,7 +1071,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   exactly one bit.  All four have the same byte 1 - a 16-bit target and no
 #   register - so they are adjacent columns rather than alternating ones.
 #
-#   .4 HOLDS THE TWO FORMS THAT ARE TWO BYTES RATHER THAN THREE, and it keeps
+#   .1 HOLDS THE TWO FORMS THAT ARE TWO BYTES RATHER THAN THREE, and it keeps
 #   the jump-against-call sense of bit 3: `jmpr target` short above, `call ra`
 #   indirect below.  They share no byte-1 layout with each other, which is what
 #   makes a column of leftovers honest rather than untidy.
@@ -1124,12 +1155,12 @@ semantics = "R[d] = M8[R[a] + off]"
   # scattered: a whole opcode byte, then dest, address and a signed 10-bit
   # displacement laid out in significance order.
   #
-  #     byte 0:  0 0 1 0 0 1 0 0   full 8-bit opcode
+  #     byte 0:  0 0 1 0 0 0 0 1   full 8-bit opcode
   #     byte 1:  d d d a a a i i   dest, address, off bits 9..8
   #     byte 2:  i i i i i i i i   off bits 7..0
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0010_0100  iiaa_addd  jjjj_jjjj"
+  encoding = "0010_0001  iiaa_addd  jjjj_jjjj"
   fields   = { i = "off:imm10[1:0]", j = "off:imm10[9:2]" }
 
 
@@ -1186,7 +1217,7 @@ semantics = "R[d] = M16[R[a] + off]"
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0001_1100  iiaa_addd  jjjj_jjjj"
+  encoding = "0001_1001  iiaa_addd  jjjj_jjjj"
   fields   = { i = "off:imm10[1:0]", j = "off:imm10[9:2]" }
 
 
@@ -1216,7 +1247,7 @@ semantics = "M8[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0001_0100  iiaa_asss  jjjj_jjjj"
+  encoding = "0001_0001  iiaa_asss  jjjj_jjjj"
   fields   = { i = "off:imm10[1:0]", j = "off:imm10[9:2]" }
 
 
@@ -1238,7 +1269,7 @@ semantics = "M16[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "reg_reg10"
-  encoding = "0000_1100  iiaa_asss  jjjj_jjjj"
+  encoding = "0000_1001  iiaa_asss  jjjj_jjjj"
   fields   = { i = "off:imm10[1:0]", j = "off:imm10[9:2]" }
 
 
@@ -1298,7 +1329,7 @@ semantics = "R[d] = imm"
   # field.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0010_1001  iiii_iddd"
+  encoding = "0010_1100  iiii_iddd"
   fields   = { i = "imm:immbit5" }
 
   # And the mask table.  Loading 0x00ff or 0xf000 was three bytes before this;
@@ -1412,7 +1443,7 @@ semantics = "R[d] = R[a] + imm"
   # asked for it here.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0011_1001  iiii_iddd"
+  encoding = "0011_1100  iiii_iddd"
   fields   = { i = "imm:immbit5" }
   tie      = { a = "d" }
 
@@ -1431,7 +1462,7 @@ semantics = "R[d] = R[a] + imm"
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0011_1100  iiaa_addd  jjjj_jjjj"
+  encoding = "0011_1001  iiaa_addd  jjjj_jjjj"
   fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
@@ -1492,7 +1523,7 @@ semantics = "R[d] = imm - R[a]"
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0100_0100  iiaa_addd  jjjj_jjjj"
+  encoding = "0100_0001  iiaa_addd  jjjj_jjjj"
   fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
@@ -1544,7 +1575,7 @@ semantics = "R[d] = R[a] ^ imm"
   # BIT FLIP, completing the set.  `or #1<<n` sets a bit and `and #~(1<<n)`
   # clears one; this toggles one, in the same two bytes and through the same
   # 4-to-16 decoder.  It costs an opcode the group had already reserved: slot
-  # +1 of every eight is the immbit5 slot, and it was free here only because
+  # +4 of every eight is the immbit5 slot, and it was free here only because
   # nothing had asked for it yet.
   #
   # The inverted half of the table is not wasted on xor either.  `xor rd, rd,
@@ -1558,7 +1589,7 @@ semantics = "R[d] = R[a] ^ imm"
   # entries here.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0100_1001  iiii_iddd"
+  encoding = "0100_1100  iiii_iddd"
   fields   = { i = "imm:immbit5" }
   tie      = { a = "d" }
 
@@ -1577,7 +1608,7 @@ semantics = "R[d] = R[a] ^ imm"
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0100_1100  iiaa_addd  jjjj_jjjj"
+  encoding = "0100_1001  iiaa_addd  jjjj_jjjj"
   fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
@@ -1631,7 +1662,7 @@ semantics = "R[d] = R[a] | imm"
   # BIT SET.  `or rd, rd, #1<<n` for any n, in two bytes.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0101_0001  iiii_iddd"
+  encoding = "0101_0100  iiii_iddd"
   fields   = { i = "imm:immbit5" }
   tie      = { a = "d" }
 
@@ -1650,7 +1681,7 @@ semantics = "R[d] = R[a] | imm"
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0101_0100  iiaa_addd  jjjj_jjjj"
+  encoding = "0101_0001  iiaa_addd  jjjj_jjjj"
   fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
@@ -1693,7 +1724,7 @@ semantics = "R[d] = R[a] & imm"
   # off a value is one instruction now instead of a shl/lsr pair.
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0101_1001  iiii_iddd"
+  encoding = "0101_1100  iiii_iddd"
   fields   = { i = "imm:immbit5" }
   tie      = { a = "d" }
 
@@ -1712,7 +1743,7 @@ semantics = "R[d] = R[a] & imm"
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0101_1100  iiaa_addd  jjjj_jjjj"
+  encoding = "0101_1001  iiaa_addd  jjjj_jjjj"
   fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
@@ -2007,7 +2038,7 @@ extra_cycles = 1
 # BYTE 1 IS THE MASK BRANCHES' BYTE 1.  `aaak_kkkk` here and `aaam_mmmm` in
 # brclear and brset are one register and five bits in the same places; only the
 # table reading those five bits differs.  So these three share a row the way an
-# ALU group's +0, +1 and +5 forms do, and for the same reason - see the opcode
+# ALU group's +0, +4 and +5 forms do, and for the same reason - see the opcode
 # map at the top of this file.
 [[insn]]
 mnemonic      = "br8"
@@ -2116,12 +2147,12 @@ semantics = "if ((R[a] & mask) == 0) pc = pc + off"
 
   [[insn.form]]
   name     = "reg_mask"
-  encoding = "1010_0001  mmmm_maaa  tttt_tttt"
+  encoding = "1010_0100  mmmm_maaa  tttt_tttt"
   fields   = { m = "mask:immbit5", t = "off:off8" }
 
   # The same test against the mask table instead of a single bit - branch on
   # whether a whole FIELD is empty.  Same byte 1, same 5 bits, different table:
-  # +1 of the row reads them as immbit5 and +5 reads them as immask5, which is
+  # +4 of the row reads them as immbit5 and +5 reads them as immask5, which is
   # the relationship every ALU group has between its two mask forms.  Clear and
   # set are separated by BIT 3 rather than bit 0 - brclear is the br row, brset
   # is the br8 row one below - so both spellings of each land in one column.
@@ -2143,12 +2174,12 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 
   [[insn.form]]
   name     = "reg_mask"
-  encoding = "1010_1001  mmmm_maaa  tttt_tttt"
+  encoding = "1010_1100  mmmm_maaa  tttt_tttt"
   fields   = { m = "mask:immbit5", t = "off:off8" }
 
   # The same test against the mask table instead of a single bit - branch on
   # whether a whole FIELD is empty.  Same byte 1, same 5 bits, different table:
-  # +1 of the row reads them as immbit5 and +5 reads them as immask5, which is
+  # +4 of the row reads them as immbit5 and +5 reads them as immask5, which is
   # the relationship every ALU group has between its two mask forms.  Clear and
   # set are separated by BIT 3 rather than bit 0 - brclear is the br row, brset
   # is the br8 row one below - so both spellings of each land in one column.
@@ -2167,21 +2198,21 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 #
 # That looks irregular and is the same shape br already has: brclear and brset
 # read the same five bits through immbit5 and immask5 and mean different things
-# by column, and the ALU's +1 and +5 are per-operation rather than universal.
+# by column, and the ALU's +4 and +5 are per-operation rather than universal.
 # The rule here is simply that the mask columns take `isset` and everything else
 # takes `iseq`:
 #
 #     +0   iseq  rd, rd, #imm5        is this register some small constant
-#     +1   isset rd, rd, #immbit5     EXTRACT ONE BIT, as a 0 or 1
+#     +1   iseq  rd, ra, #imm10       is this register some wide constant
 #     +2   iseq  rd, ra, #imm3        TWO opcodes
 #     +3     "
-#     +4   iseq  rd, ra, #imm10       is this register some wide constant
+#     +4   isset rd, rd, #immbit5     EXTRACT ONE BIT, as a 0 or 1
 #     +5   isset rd, rd, #immask5     is any bit of this field set
 #     +6   iseq  rd, ra, rb           TWO opcodes
 #     +7     "
 #
 # THE ONLY NEW DECODE IS WHICH COMPARATOR, and it is hard-wired to the low three
-# bits: +1 and +5 are `set`, the other six are `eq`.  No operand chooses it, no
+# bits: +4 and +5 are `set`, the other six are `eq`.  No operand chooses it, no
 # microcode line carries it, and the immediate reaches the comparator down the
 # same path it reaches the ALU - rtl/immgen.sv already produces imm5, immbit5,
 # imm3, imm10 and immask5 from those columns for every other row in the map.
@@ -2248,7 +2279,7 @@ semantics = "R[d] = R[a] == (imm & 0xffff)"
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0111_1100  iiaa_addd  jjjj_jjjj"
+  encoding = "0111_1001  iiaa_addd  jjjj_jjjj"
   fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 [[insn]]
@@ -2264,7 +2295,7 @@ semantics = "R[d] = (R[a] & mask) != 0"
 
   [[insn.form]]
   name     = "reg_immbit5"
-  encoding = "0111_1001  iiii_iddd"
+  encoding = "0111_1100  iiii_iddd"
   fields   = { i = "mask:immbit5" }
   tie      = { a = "d" }
 
@@ -2317,10 +2348,10 @@ semantics = "R[d] = (R[a] & mask) != 0"
 # exactly as the three-register ALU forms do - same trick, same reason.
 #
 #     0x90  push ra              0x98  pop  ra
-#     0x81  push8  ra              0x89  pop8   ra
-#     0x82  push ra, rb          0x8a  pop  ra, rb
-#     0x86  push ra, rb, rc      0x8e  pop  ra, rb, rc
-#     0x87    "                    0x8f    "
+#     0x92  push ra, rb          0x9a  pop  ra, rb
+#     0x94  push8  ra            0x9c  pop8   ra
+#     0x96  push ra, rb, rc      0x9e  pop  ra, rb, rc
+#     0x97    "                  0x9f    "
 #
 # ORDER.  A push writes its registers left to right, and the stack grows down,
 # so the FIRST register named lands at the HIGHEST address.  A pop reads left to
@@ -2347,7 +2378,7 @@ semantics = "sp = sp - 1; M8[sp] = R[a]"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1001_0001  0000_0aaa"
+  encoding = "1001_0100  0000_0aaa"
 
 [[insn]]
 mnemonic = "push"
@@ -2414,7 +2445,7 @@ semantics = "R[a] = M8[sp]; sp = sp + 1"
 
   [[insn.form]]
   name     = "single"
-  encoding = "1001_1001  0000_0aaa"
+  encoding = "1001_1100  0000_0aaa"
 
 [[insn]]
 mnemonic = "pop"
@@ -2460,11 +2491,11 @@ semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2; R[c] = M1
 # Relative and absolute both take a full 16 bits and both reach the whole
 # address space, so the choice between them is not about range - it is whether
 # the code is position independent.  Short relative jumps are already covered
-# by the two-byte `jmpr` form at 0x94, +/-127.
+# by the two-byte `jmpr` form at 0xa1, +/-127.
 #
 # THE FOUR OF THEM ARE A 2x2 AND THE OPCODES SAY SO.  They occupy the adjacent
-# columns .2 and .3 of both rows - jmp / jmpr / call / callr at 0x92 / 0x93 /
-# 0x9a / 0x9b - because all four have the same byte 1, a 16-bit target and no
+# columns .2 and .3 of both rows - jmp / jmpr / call / callr at 0xa2 / 0xa3 /
+# 0xaa / 0xab - because all four have the same byte 1, a 16-bit target and no
 # register field.  Bit 0 is absolute against pc-relative and bit 3 is jump
 # against call, so every pair a linker relaxes between differs in exactly one
 # bit: jmp -> jmpr is bit 0, jmp -> call is bit 3.
@@ -2482,7 +2513,7 @@ syntax   = "{target}"
 semantics = "pc = pc + target"
 
   # THE SHORT FORM IS A BRANCH WEARING A JUMP'S NAME, and the encoding says so:
-  # 0x94 is the compare-and-branch datapath with its condition pinned to
+  # 0xa1 is the compare-and-branch datapath with its condition pinned to
   # `eq, r0, r0`.  A register compared for equality with itself is always true,
   # so the condition field costs nothing and the whole instruction is an opcode
   # and a displacement byte.
@@ -2494,7 +2525,7 @@ semantics = "pc = pc + target"
   # every other operand that has more than one width.
   [[insn.form]]
   name     = "rel8"
-  encoding = "1010_0100  tttt_tttt"
+  encoding = "1010_0001  tttt_tttt"
   fields   = { t = "target:off8" }
 
   [[insn.form]]
@@ -2563,7 +2594,7 @@ semantics = "lr = pc; pc = R[a]"
 
   [[insn.form]]
   name     = "reg"
-  encoding = "1010_1100  0000_0aaa"
+  encoding = "1010_1001  0000_0aaa"
 
 
 # Return is just pc = lr, so it needs no operands and fits in one byte - and

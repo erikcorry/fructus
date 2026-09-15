@@ -120,7 +120,7 @@ function preferred(d) {
 // because "which addressing mode" is really the question "what do I write".
 // The width comes from the ENCODED type, which is a property of the form and
 // not of the instruction: `ld rd, [ra, #off]` carries a 3-bit displacement at
-// 0x2a and a 10-bit one at 0x2c, and those are the same instruction.  So an
+// 0x1a and a 10-bit one at 0x19, and those are the same instruction.  So an
 // immediate prints as its operand name plus how many bits this form gives it -
 // #off3, #off10, #imm5, #imm16 - which is the number a programmer actually
 // needs and the one thing the mnemonic never says.

@@ -145,6 +145,27 @@ for (const [name, t] of Object.entries(types)) {
           + `so the two mask tables can no longer share a complement layer`);
   }
 
+  // In the lower sixteen, both tables are ONE SHIFTER: index bits 3:2 are a row
+  // and bits 1:0 a column, and an entry is its column's nibble shifted left
+  // four places per row - 1 << column for immbit5, row 0's entry for immask5.
+  // One immask5 column may break the pattern, because rtl/immgen.sv overrides
+  // it with four constants of its own; a second one needs a 16-entry table
+  // beside the shifter again, about 25 LUT4.
+  {
+    const bit = types.immbit5?.values, mask = types.immask5?.values;
+    if (bit?.length === 32)
+      for (let n = 0; n < 16; n++)
+        if (u16(bit[n]) !== 1 << n)
+          err(`optype immbit5: entry ${n} is not 1 << ${n}, so it is no longer the mask shifter's`);
+    if (mask?.length === 32) {
+      const off = [0, 1, 2, 3].filter((c) => u16(mask[c]) > 15
+        || [1, 2, 3].some((row) => u16(mask[4 * row + c]) !== u16(mask[c]) << (4 * row)));
+      if (off.length > 1)
+        err(`optype immask5: columns ${off.join(', ')} are not a nibble shifted four places per row; `
+          + `rtl/immgen.sv overrides one column, and a second needs a table beside the shifter`);
+    }
+  }
+
   // imm3 and shift3 differ at index 0 alone - -1 against 15 - and every shift
   // masks its right-hand side to four bits, so -1 IS 15 to a shift.  That is
   // why the immediate unit has no shift3 table and no `is_shift` input: shift3

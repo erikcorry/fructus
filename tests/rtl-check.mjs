@@ -13,7 +13,7 @@
 // WHAT IS SWEPT.  Every (5-bit field, mode) pair, every (3-bit index, opcode
 // bit) pair, and imm10 over its whole 10-bit range - with the untouched bits of
 // the instruction register varied, because a circuit that accidentally reads
-// them would otherwise pass.  Modes +6 and +7 have no immediate and immgen drives x there,
+// them would otherwise pass.  Modes +6 and +7 have no immediate and what immgen drives there is meaningless,
 // so they are not checked; what IS checked is the encoding property rhs.sv
 // relies on instead - that port B's register number is {byte1[7:6], opcode[0]}
 // for every three-operand form.
@@ -61,12 +61,12 @@ const want = (insn, cimm) => {
   if (cimm && sel === 0) return CIMM[f5];
   switch (sel) {
     case 0: return sext(f5, 5);                          // imm5
-    case 1: return t.immbit5.values[f5];                 // immbit5
+    case 1: return sext((insn >> 14) & 1023, 10);        // imm10
     case 2: case 3: return t.imm3.values[k3(insn)];      // imm3
-    case 4: return sext((insn >> 14) & 1023, 10);        // imm10
+    case 4: return t.immbit5.values[f5];                 // immbit5
     case 5: return t.immask5.values[f5];                 // immask5
     // 6 and 7 have no immediate: rtl/rhs.sv takes port B's number from the
-    // bytes directly, so immgen drives x and there is nothing to check.
+    // bytes directly, so what immgen drives there is meaningless.
   }
 };
 

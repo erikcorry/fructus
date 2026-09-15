@@ -39,6 +39,46 @@ for (let n = 0; n < 8; n++)
   if ((t.imm3.values[n] & 15) !== (t.shift3.values[n] & 15))
     throw new Error(`shift3[${n}] is not imm3[${n}] & 15`);
 
+// The two mask tables are one shifter, which is a property of their ORDER:
+// index bits 3:2 are a row, bits 1:0 a column, and an entry is its column's
+// nibble shifted left four places per row.  immbit5's nibble is 1 << column;
+// immask5's is whatever row 0 holds, except in OVERRIDE, whose four entries
+// replace the shifter's output outright.
+const OVERRIDE = 2;
+const low16 = (name) => t[name].values.slice(0, 16).map((v) => (v >>> 0) & 0xffff);
+low16('immbit5').forEach((v, n) => {
+  if (v !== 1 << n) throw new Error(`immbit5: entry ${n} is not 1 << ${n}, so it is not the shifter's`);
+});
+const maskLow = low16('immask5');
+const nibble = [0, 1, 2, 3].map((c) => (c === OVERRIDE ? null : maskLow[c]));
+const special = [0, 1, 2, 3].map((row) => maskLow[4 * row + OVERRIDE]);
+for (let row = 0; row < 4; row++)
+  for (let c = 0; c < 4; c++) {
+    if (c === OVERRIDE) continue;
+    if (nibble[c] > 15 || maskLow[4 * row + c] !== (nibble[c] << (4 * row)))
+      throw new Error(`immask5: entry ${4 * row + c} is not column ${c}'s nibble shifted ${4 * row} places`);
+  }
+
+// And the columns are the mode mux's tree: every form reading one of these
+// tables must sit in its column, or the circuit below reads the wrong one.
+const COLUMN = { imm5: [0], condimm5: [0], imm10: [1], imm3: [2, 3], shift3: [2, 3], immbit5: [4], immask5: [5] };
+for (const insn of spec.insn)
+  for (const form of insn.form ?? []) {
+    const op = form.encoding.replace(/_/g, '').split(/\s+/)[0];
+    const types = Object.values(form.fields ?? {}).map((f) => f.split(':')[1].replace(/\[.*$/, ''));
+    for (const ty of types.filter((x) => x in COLUMN)) {
+      const cols = [...Array(8).keys()].filter((v) =>
+        [0, 1, 2].every((k) => !/[01]/.test(op[5 + k]) || Number(op[5 + k]) === ((v >> (2 - k)) & 1)));
+      if (cols.some((c) => !COLUMN[ty].includes(c)))
+        throw new Error(`${insn.mnemonic}/${form.name}: ${ty} at column +${cols.join('/+')}, but rtl/immgen.sv reads it at +${COLUMN[ty].join('/+')}`);
+    }
+  }
+const nibRows = [0, 1, 2, 3].map((c) =>
+  `        3'b0_${c.toString(2).padStart(2, '0')}: nib = 4'b${(1 << c).toString(2).padStart(4, '0')};`).concat(
+  [0, 1, 2, 3].map((c) =>
+  `        3'b1_${c.toString(2).padStart(2, '0')}: nib = 4'b${c === OVERRIDE ? 'xxxx' : nibble[c].toString(2).padStart(4, '0')};`)).join('\n');
+const specialRows = special.map((v, row) => `        2'd${row}: special = ${hex16(v)};`).join('\n');
+
 const caseBody = (name, vals, w) =>
   vals.map((v, n) => `        ${w}'d${n}: ${name} = ${hex16(v)};`).join('\n');
 
@@ -65,13 +105,19 @@ process.stdout.write(`// =======================================================
 //    five immediate modes to produce:
 //
 //      +0  imm5      signed -16..15, and the tied load displacement
-//      +1  immbit5   32 single-bit masks
+//      +1  imm10     signed, spanning two bytes
 //      +2  imm3      the small-constant table  (+3 is its second opcode)
-//      +4  imm10     signed, spanning two bytes
+//      +4  immbit5   32 single-bit masks
 //      +5  immask5   32 field and stripe masks
-//      +6, +7              the three-operand forms: NO IMMEDIATE, x
+//      +6, +7              the three-operand forms: NO IMMEDIATE
 //
 //    and \`cimm\` selects a sixth mode at +0, for the packed branch alone.
+//
+//    THE ORDER IS A TREE.  opcode[2] takes the two mask tables, which are one
+//    circuit; below it opcode[1] takes imm3; below that opcode[0] chooses
+//    between the two sign-extended slices.  Every level of the mux reads one
+//    bit.  The generator checks that every form in the spec sits in the column
+//    this reads it from.
 //
 // 2. +6 AND +7 ARE DELIBERATELY UNDEFINED.  Everything there takes its
 //    right-hand side from a register, and rtl/rhs.sv gets that register's
@@ -79,10 +125,11 @@ process.stdout.write(`// =======================================================
 //    block computing it too would be a second copy of the same three wires,
 //    free to drift from the first.
 //
-//    Driving x rather than a tidy zero is the point: an x reaching the ALU says
-//    the microcode asked for an immediate from an instruction that has none,
-//    which is a bug, and it should be loud in simulation rather than quietly
-//    plausible.  0x88..0x8f make that concrete - they are \`mov rd, #imm16\`,
+//    What this block drives there is whatever the tree gives - the mask
+//    shifter's output - rather than an x, because the measured circuit has no
+//    mux input to spend on one.  It is meaningless all the same: reading it
+//    means the microcode asked for an immediate from an instruction that has
+//    none.  0x88..0x8f make that concrete - they are \`mov rd, #imm16\`,
 //    where opcode[2:0] is the DESTINATION REGISTER and not a mode selector at
 //    all, so this block's output there is meaningless for a third reason again.
 //    rtl/rhs.sv gives that instruction its value directly, as code 4.
@@ -91,11 +138,15 @@ process.stdout.write(`// =======================================================
 //    spells this \`imm3[0]\`, so the pair of opcodes at +2 and +3 ARE the low
 //    index bit.  It is already an input; the index costs no logic.
 //
-// 4. THE TWO 5-BIT TABLES SHARE THEIR COMPLEMENT HALF.  For both immbit5 and
-//    immask5 the upper sixteen entries are exact bitwise complements of the
-//    lower sixteen - asserted by the generator, not assumed - and sel[2] is
-//    what distinguishes the two (+1 against +5).  So the sixteen-entry halves
-//    are chosen first and the complement XOR is applied once, not twice.
+// 4. THE TWO 5-BIT TABLES ARE ONE SHIFTER.  For both immbit5 and immask5 the
+//    upper sixteen entries are exact bitwise complements of the lower sixteen,
+//    and in the lower sixteen, bits 3:2 of the index are a row and bits 1:0 a
+//    column: an entry is its column's nibble shifted left four places per
+//    row.  immbit5's nibble is 1 << column; immask5's are row 0's entries,
+//    except column ${OVERRIDE}, whose byte and swizzle masks replace the shifter's
+//    output.  So four LUT4s make the nibble from the column and sel[0] (+4
+//    against +5), one shift places it, the override patches one column, and
+//    the complement XOR is applied once.  All asserted by the generator.
 //
 // 5. imm3 AND shift3 ARE ONE TABLE.  They differ at index 0 alone, -1 against
 //    15, and the shifter masks its right-hand side to four bits, so -1 IS 15 to
@@ -133,7 +184,26 @@ process.stdout.write(`// =======================================================
 // 115 SB_LUT4 at four levels and 71 MHz, against 109 at three levels and 91.
 // A registered microcode line arrives at level zero and the mux absorbs it.
 //
-// MEASURED on an iCE40 UP5K, yosys 0.52 + nextpnr-ice40 0.7: 111 SB_LUT4 for
+// THE SHARED SHIFTER AND THE COLUMN TREE, measured on an iCE40 UP5K, yosys 0.52
+// + nextpnr-ice40 0.7, the median of eight placement seeds in the processor:
+//
+//                                         alone   with rhs   cpu   cpu MHz
+//     two tables, masks at +1 and +5        112       176    947     23.7
+//     one shifter, masks at +1 and +5        89       152    934     23.4
+//     one shifter, masks at +4 and +5        95       158    911     23.9
+//       and the opcodes moved to match       95       158    938     23.3
+//
+// The first three rows read the old opcode map everywhere but here; the last
+// is the processor as generated, whose rtl/predecode.sv table came out 13
+// LUT4 larger once its rows moved, with nothing in it changed but their order.
+//
+// The clock is the same in all four, inside what the seeds wander by: the
+// immediate settles before the register value it meets in rtl/rhs.sv.  What
+// moved is area, and the processor only kept the shifter's saving once the
+// columns made its select a single bit.  Forcing the shifter's output to stay a
+// net, with (* keep *), cost 29 LUT4 and no speed.
+//
+// EARLIER, as two tables: 111 SB_LUT4 for
 // the block alone, and 87 MHz placed in a registered harness (three seeds:
 // 86.9 / 86.7 / 73.0).
 //
@@ -167,10 +237,10 @@ module immgen (
 
     wire [2:0] sel = insn[2:0];                     // the column
 
-    // --- the two modes that are pure wiring ---------------------------------
+    // --- +0 / +1: the two modes that are pure wiring ------------------------
     wire [15:0] i5  = {{11{insn[15]}}, insn[15:11]};   // +0  imm5, and off5
     // imm10 is byte 1's top two bits and all of byte 2: one slice.
-    wire [15:0] i10 = {{6{insn[23]}}, insn[23:14]};    // +4  imm10
+    wire [15:0] i10 = {{6{insn[23]}}, insn[23:14]};    // +1  imm10
 
     // --- +2 / +3: imm3, which is also shift3 --------------------------------
     wire [2:0] k3 = {insn[15:14], insn[0]};
@@ -181,13 +251,21 @@ ${caseTable('lo3', t.imm3.values.map((v) => v & 15), 3, 'k3').replace(/16'h([0-9
     wire neg = (k3 == 3'd0);
     wire [15:0] i3v = {{12{neg}}, lo3};
 
-    // --- +1 / +5: immbit5 and immask5, sharing one complement layer ---------
-    wire [4:0] n5 = insn[15:11];
-    wire [3:0] n4 = n5[3:0];
-    logic [15:0] tbit, tmask;
-${caseTable('tbit', t.immbit5.values.slice(0, 16), 4, 'n4')}
-${caseTable('tmask', t.immask5.values.slice(0, 16), 4, 'n4')}
-    wire [15:0] tsel = (sel[2] ? tmask : tbit) ^ {16{insn[15]}};
+    // --- +4 / +5: immbit5 and immask5, one nibble shifter --------------------
+    wire [4:0] n5  = insn[15:11];
+    wire [1:0] col = n5[1:0], row = n5[3:2];
+    wire       msk = sel[0];                        // +4 immbit5, +5 immask5
+    logic [3:0] nib;                                // four LUT4s
+    always_comb case ({msk, col})
+${nibRows}
+    endcase
+    wire [15:0] shv = {12'd0, nib} << {row, 2'b00};
+    logic [15:0] special;                           // immask5's column ${OVERRIDE}
+    always_comb case (row)
+${specialRows}
+    endcase
+    wire        ovr  = msk & (col == 2'd${OVERRIDE});
+    wire [15:0] tsel = (ovr ? special : shv) ^ {16{n5[4]}};
 
     // --- +0 again, for the packed branch ------------------------------------
     // \`br cond, ra, #imm5\` puts a condimm5 index in the same five bits that
@@ -200,23 +278,13 @@ ${caseTable('tmask', t.immask5.values.slice(0, 16), 4, 'n4')}
 ${caseBody('ccon', spec.optype.condimm5.values.map((e) => e[1]), 5)}
     endcase
 
-    // --- the mode mux -------------------------------------------------------
-    // +6 and +7 have no immediate; x rather than 0 both lets the mapper treat
-    // them as don't-cares and makes a microcode misuse visible in simulation.
-    //
+    // --- the mode mux, a tree on the column bits ------------------------------
     // cimm is ignored anywhere but +0.  Asserting it elsewhere is a microcode
-    // bug, and folding it away rather than driving x there keeps the mux at one
-    // level: the selector is four bits but only one of them ever splits a case.
-    always_comb case ({cimm, sel})
-        4'b1_000:             imm = ccon;
-        4'b0_000:             imm = i5;
-        4'b0_001, 4'b0_101,
-        4'b1_001, 4'b1_101:   imm = tsel;
-        4'b0_010, 4'b0_011,
-        4'b1_010, 4'b1_011:   imm = i3v;
-        4'b0_100, 4'b1_100:   imm = i10;
-        default:              imm = 16'hxxxx;
-    endcase
+    // bug, and folding it into +0's leg rather than driving x keeps every level
+    // of the tree a single select bit.
+    wire [15:0] sext = sel[0] ? i10 : (cimm ? ccon : i5);   // +0, +1
+    wire [15:0] low  = sel[1] ? i3v : sext;                 // +0 .. +3
+    assign imm = sel[2] ? tsel : low;                       // +4, +5; +6, +7 too
 
 endmodule
 `);

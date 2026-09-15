@@ -16,13 +16,19 @@
 //    five immediate modes to produce:
 //
 //      +0  imm5      signed -16..15, and the tied load displacement
-//      +1  immbit5   32 single-bit masks
+//      +1  imm10     signed, spanning two bytes
 //      +2  imm3      the small-constant table  (+3 is its second opcode)
-//      +4  imm10     signed, spanning two bytes
+//      +4  immbit5   32 single-bit masks
 //      +5  immask5   32 field and stripe masks
-//      +6, +7              the three-operand forms: NO IMMEDIATE, x
+//      +6, +7              the three-operand forms: NO IMMEDIATE
 //
 //    and `cimm` selects a sixth mode at +0, for the packed branch alone.
+//
+//    THE ORDER IS A TREE.  opcode[2] takes the two mask tables, which are one
+//    circuit; below it opcode[1] takes imm3; below that opcode[0] chooses
+//    between the two sign-extended slices.  Every level of the mux reads one
+//    bit.  The generator checks that every form in the spec sits in the column
+//    this reads it from.
 //
 // 2. +6 AND +7 ARE DELIBERATELY UNDEFINED.  Everything there takes its
 //    right-hand side from a register, and rtl/rhs.sv gets that register's
@@ -30,10 +36,11 @@
 //    block computing it too would be a second copy of the same three wires,
 //    free to drift from the first.
 //
-//    Driving x rather than a tidy zero is the point: an x reaching the ALU says
-//    the microcode asked for an immediate from an instruction that has none,
-//    which is a bug, and it should be loud in simulation rather than quietly
-//    plausible.  0x88..0x8f make that concrete - they are `mov rd, #imm16`,
+//    What this block drives there is whatever the tree gives - the mask
+//    shifter's output - rather than an x, because the measured circuit has no
+//    mux input to spend on one.  It is meaningless all the same: reading it
+//    means the microcode asked for an immediate from an instruction that has
+//    none.  0x88..0x8f make that concrete - they are `mov rd, #imm16`,
 //    where opcode[2:0] is the DESTINATION REGISTER and not a mode selector at
 //    all, so this block's output there is meaningless for a third reason again.
 //    rtl/rhs.sv gives that instruction its value directly, as code 4.
@@ -42,11 +49,15 @@
 //    spells this `imm3[0]`, so the pair of opcodes at +2 and +3 ARE the low
 //    index bit.  It is already an input; the index costs no logic.
 //
-// 4. THE TWO 5-BIT TABLES SHARE THEIR COMPLEMENT HALF.  For both immbit5 and
-//    immask5 the upper sixteen entries are exact bitwise complements of the
-//    lower sixteen - asserted by the generator, not assumed - and sel[2] is
-//    what distinguishes the two (+1 against +5).  So the sixteen-entry halves
-//    are chosen first and the complement XOR is applied once, not twice.
+// 4. THE TWO 5-BIT TABLES ARE ONE SHIFTER.  For both immbit5 and immask5 the
+//    upper sixteen entries are exact bitwise complements of the lower sixteen,
+//    and in the lower sixteen, bits 3:2 of the index are a row and bits 1:0 a
+//    column: an entry is its column's nibble shifted left four places per
+//    row.  immbit5's nibble is 1 << column; immask5's are row 0's entries,
+//    except column 2, whose byte and swizzle masks replace the shifter's
+//    output.  So four LUT4s make the nibble from the column and sel[0] (+4
+//    against +5), one shift places it, the override patches one column, and
+//    the complement XOR is applied once.  All asserted by the generator.
 //
 // 5. imm3 AND shift3 ARE ONE TABLE.  They differ at index 0 alone, -1 against
 //    15, and the shifter masks its right-hand side to four bits, so -1 IS 15 to
@@ -84,7 +95,26 @@
 // 115 SB_LUT4 at four levels and 71 MHz, against 109 at three levels and 91.
 // A registered microcode line arrives at level zero and the mux absorbs it.
 //
-// MEASURED on an iCE40 UP5K, yosys 0.52 + nextpnr-ice40 0.7: 111 SB_LUT4 for
+// THE SHARED SHIFTER AND THE COLUMN TREE, measured on an iCE40 UP5K, yosys 0.52
+// + nextpnr-ice40 0.7, the median of eight placement seeds in the processor:
+//
+//                                         alone   with rhs   cpu   cpu MHz
+//     two tables, masks at +1 and +5        112       176    947     23.7
+//     one shifter, masks at +1 and +5        89       152    934     23.4
+//     one shifter, masks at +4 and +5        95       158    911     23.9
+//       and the opcodes moved to match       95       158    938     23.3
+//
+// The first three rows read the old opcode map everywhere but here; the last
+// is the processor as generated, whose rtl/predecode.sv table came out 13
+// LUT4 larger once its rows moved, with nothing in it changed but their order.
+//
+// The clock is the same in all four, inside what the seeds wander by: the
+// immediate settles before the register value it meets in rtl/rhs.sv.  What
+// moved is area, and the processor only kept the shifter's saving once the
+// columns made its select a single bit.  Forcing the shifter's output to stay a
+// net, with (* keep *), cost 29 LUT4 and no speed.
+//
+// EARLIER, as two tables: 111 SB_LUT4 for
 // the block alone, and 87 MHz placed in a registered harness (three seeds:
 // 86.9 / 86.7 / 73.0).
 //
@@ -118,10 +148,10 @@ module immgen (
 
     wire [2:0] sel = insn[2:0];                     // the column
 
-    // --- the two modes that are pure wiring ---------------------------------
+    // --- +0 / +1: the two modes that are pure wiring ------------------------
     wire [15:0] i5  = {{11{insn[15]}}, insn[15:11]};   // +0  imm5, and off5
     // imm10 is byte 1's top two bits and all of byte 2: one slice.
-    wire [15:0] i10 = {{6{insn[23]}}, insn[23:14]};    // +4  imm10
+    wire [15:0] i10 = {{6{insn[23]}}, insn[23:14]};    // +1  imm10
 
     // --- +2 / +3: imm3, which is also shift3 --------------------------------
     wire [2:0] k3 = {insn[15:14], insn[0]};
@@ -141,47 +171,31 @@ module immgen (
     wire neg = (k3 == 3'd0);
     wire [15:0] i3v = {{12{neg}}, lo3};
 
-    // --- +1 / +5: immbit5 and immask5, sharing one complement layer ---------
-    wire [4:0] n5 = insn[15:11];
-    wire [3:0] n4 = n5[3:0];
-    logic [15:0] tbit, tmask;
-    always_comb case (n4)
-        4'd0: tbit = 16'h0001;
-        4'd1: tbit = 16'h0002;
-        4'd2: tbit = 16'h0004;
-        4'd3: tbit = 16'h0008;
-        4'd4: tbit = 16'h0010;
-        4'd5: tbit = 16'h0020;
-        4'd6: tbit = 16'h0040;
-        4'd7: tbit = 16'h0080;
-        4'd8: tbit = 16'h0100;
-        4'd9: tbit = 16'h0200;
-        4'd10: tbit = 16'h0400;
-        4'd11: tbit = 16'h0800;
-        4'd12: tbit = 16'h1000;
-        4'd13: tbit = 16'h2000;
-        4'd14: tbit = 16'h4000;
-        4'd15: tbit = 16'h8000;
+    // --- +4 / +5: immbit5 and immask5, one nibble shifter --------------------
+    wire [4:0] n5  = insn[15:11];
+    wire [1:0] col = n5[1:0], row = n5[3:2];
+    wire       msk = sel[0];                        // +4 immbit5, +5 immask5
+    logic [3:0] nib;                                // four LUT4s
+    always_comb case ({msk, col})
+        3'b0_00: nib = 4'b0001;
+        3'b0_01: nib = 4'b0010;
+        3'b0_10: nib = 4'b0100;
+        3'b0_11: nib = 4'b1000;
+        3'b1_00: nib = 4'b1111;
+        3'b1_01: nib = 4'b0011;
+        3'b1_10: nib = 4'bxxxx;
+        3'b1_11: nib = 4'b1100;
     endcase
-    always_comb case (n4)
-        4'd0: tmask = 16'hc000;
-        4'd1: tmask = 16'h3000;
-        4'd2: tmask = 16'h0c00;
-        4'd3: tmask = 16'h0300;
-        4'd4: tmask = 16'h00c0;
-        4'd5: tmask = 16'h0030;
-        4'd6: tmask = 16'h000c;
-        4'd7: tmask = 16'h0003;
-        4'd8: tmask = 16'hf000;
-        4'd9: tmask = 16'h0f00;
-        4'd10: tmask = 16'h00f0;
-        4'd11: tmask = 16'h000f;
-        4'd12: tmask = 16'hff00;
-        4'd13: tmask = 16'hf0f0;
-        4'd14: tmask = 16'hcccc;
-        4'd15: tmask = 16'haaaa;
+    wire [15:0] shv = {12'd0, nib} << {row, 2'b00};
+    logic [15:0] special;                           // immask5's column 2
+    always_comb case (row)
+        2'd0: special = 16'hff00;
+        2'd1: special = 16'hf0f0;
+        2'd2: special = 16'hcccc;
+        2'd3: special = 16'haaaa;
     endcase
-    wire [15:0] tsel = (sel[2] ? tmask : tbit) ^ {16{insn[15]}};
+    wire        ovr  = msk & (col == 2'd2);
+    wire [15:0] tsel = (ovr ? special : shv) ^ {16{n5[4]}};
 
     // --- +0 again, for the packed branch ------------------------------------
     // `br cond, ra, #imm5` puts a condimm5 index in the same five bits that
@@ -225,22 +239,12 @@ module immgen (
         5'd31: ccon = 16'h0100;
     endcase
 
-    // --- the mode mux -------------------------------------------------------
-    // +6 and +7 have no immediate; x rather than 0 both lets the mapper treat
-    // them as don't-cares and makes a microcode misuse visible in simulation.
-    //
+    // --- the mode mux, a tree on the column bits ------------------------------
     // cimm is ignored anywhere but +0.  Asserting it elsewhere is a microcode
-    // bug, and folding it away rather than driving x there keeps the mux at one
-    // level: the selector is four bits but only one of them ever splits a case.
-    always_comb case ({cimm, sel})
-        4'b1_000:             imm = ccon;
-        4'b0_000:             imm = i5;
-        4'b0_001, 4'b0_101,
-        4'b1_001, 4'b1_101:   imm = tsel;
-        4'b0_010, 4'b0_011,
-        4'b1_010, 4'b1_011:   imm = i3v;
-        4'b0_100, 4'b1_100:   imm = i10;
-        default:              imm = 16'hxxxx;
-    endcase
+    // bug, and folding it into +0's leg rather than driving x keeps every level
+    // of the tree a single select bit.
+    wire [15:0] sext = sel[0] ? i10 : (cimm ? ccon : i5);   // +0, +1
+    wire [15:0] low  = sel[1] ? i3v : sext;                 // +0 .. +3
+    assign imm = sel[2] ? tsel : low;                       // +4, +5; +6, +7 too
 
 endmodule
