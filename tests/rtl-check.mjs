@@ -70,23 +70,29 @@ const want = (insn, cimm) => {
   }
 };
 
-// --- which code each unary operation answers to ------------------------------
+// --- where each unary operation sits ------------------------------------------
 // Worked out from real bytes, not the generator: decode every unary instruction,
-// look its imm3 index up in the spec's table, and take bits 2:1 of the value -
-// which is what reaches rtl/unary.sv on the rhs bus.
-const unaryCodes = () => {
-  const dec = buildDecoder(spec), codes = {};
+// look its imm3 index up in the spec's table, take bits 2:1 of the value - what
+// reaches rtl/unary.sv - and note whether the spec gives it an extra cycle.  The
+// bit that tells a pair apart is whichever bit of the code differs within that
+// opcode's pair.
+const unaryOps = () => {
+  const dec = buildDecoder(spec), ops = [];
   for (let op = 0; op < 256; op++)
     for (const b1 of [0x00, 0x40, 0x80, 0xc0]) {
       const d = decode(dec, [op, b1, 0], 0);
       const m = /^R\[d\] = (\w+)\(R\[a\]\)$/.exec(d?.insn.semantics ?? '');
       if (!m || d.nbytes !== 2 || !(m[1] in BUILTIN)) continue;
       const index = ((b1 >> 6) << 1) | (op & 1);
-      const code = (u16(t.imm3.values[index]) >> 1) & 3;
-      if (codes[code] && codes[code] !== m[1]) throw new Error(`${m[1]} and ${codes[code]} share unary code ${code}`);
-      codes[code] = m[1];
+      ops.push({ name: m[1], op, code: (u16(t.imm3.values[index]) >> 1) & 3, slow: (d.insn.extra_cycles ?? 0) > 0 });
     }
-  return codes;
+  for (const o of ops) {
+    const mate = ops.find((x) => x.op === o.op && x !== o);
+    const diff = mate ? o.code ^ mate.code : 2;
+    o.bit = diff === 1 ? 1 : 2;
+    o.level = (o.code >> (o.bit - 1)) & 1;
+  }
+  return ops;
 };
 
 // --- what +6 and +7 carry, checked against the DECODER --------------------
@@ -292,25 +298,29 @@ endmodule
 // sweep would miss precisely the interesting inputs: clz at 0 and 1, popcount
 // at 0xffff, bitrev's fixed points.
 {
-  const OPS = unaryCodes();
+  // a sel slow want - the slow pair is checked a clock after its input, since
+  // its output is registered; the fast pair is checked at the same time
   const rows = [];
-  for (const [sel, name] of Object.entries(OPS))
+  for (const o of unaryOps())
     for (let a = 0; a < 65536; a++)
-      rows.push(`${a.toString(16).padStart(4, '0')} ${sel} `
-              + `${u16(BUILTIN[name](a)).toString(16).padStart(4, '0')}`);
+      rows.push(`${a.toString(16).padStart(4, '0')} ${o.level} ${o.slow ? 1 : 0} `
+              + `${u16(BUILTIN[o.name](a)).toString(16).padStart(4, '0')}`);
   writeFileSync('build/unary-vectors.txt', rows.join('\n') + '\n');
   writeFileSync('build/unary-tb.sv', `module tb;
-    logic [15:0] a, y, want_;
-    logic [1:0] sel;
+    logic clk = 0;
+    logic [15:0] a, want_;
+    wire  [15:0] fast, slow, y;
+    logic sel, isslow;
     integer f, n = 0, bad = 0, r;
-    unary u (.a(a), .sel(sel), .y(y));
+    unary u (.clk(clk), .a(a), .sel(sel), .fast(fast), .slow(slow));
+    assign y = isslow ? slow : fast;
     initial begin
         f = $fopen("build/unary-vectors.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
         while (!$feof(f)) begin
-            r = $fscanf(f, "%h %d %h\\n", a, sel, want_);
-            if (r == 3) begin
-                #1; n = n + 1;
+            r = $fscanf(f, "%h %d %d %h\\n", a, sel, isslow, want_);
+            if (r == 4) begin
+                #1 clk = 1; #1 clk = 0; #1; n = n + 1;
                 if (y !== want_) begin
                     bad = bad + 1;
                     if (bad < 6)
@@ -610,8 +620,8 @@ endmodule
   const rnd = (() => { let s = 521288629;
     return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
   const NAMES = spec.optype.cond3.names;
-  const UN = unaryCodes();
-  const OP = { add: 0, rsb: 1, iseq: 2, isset: 3, xor: 4, or: 5, and: 6, rhs: 7, shl: 8, lsr: 9, asr: 11, unary: 12 };
+  const UN = unaryOps();
+  const OP = { add: 0, rsb: 1, iseq: 2, isset: 3, xor: 4, or: 5, and: 6, rhs: 7, shl: 8, lsr: 9, asr: 11, unary: 12, slow: 13 };
   const E = [0, 1, 2, 0x7ffe, 0x7fff, 0x8000, 0x8001, 0xfffe, 0xffff, 0x00ff, 0x0100, 0x5555];
   const pairs = [];
   for (const a of E) for (const b of E) pairs.push([a, b]);
@@ -637,23 +647,26 @@ endmodule
     rows.push(row(OP.and, l, r, l & r));
     rows.push(row(OP.rhs, l, r, r));
     for (const nm of ['shl', 'lsr', 'asr']) rows.push(row(OP[nm], l, r, BUILTIN[nm](l, r & 15)));
-    // the operation rides rhs[2:1]; every other bit of rhs is left random
-    for (const [code, nm] of Object.entries(UN))
-      rows.push(row(OP.unary, l, (r & ~6) | (Number(code) << 1), BUILTIN[nm](l)));
+    // the operation rides rhs[2:1]; every other bit of rhs is left random, and
+    // the slow pair is read through its own operation code
+    for (const o of UN)
+      rows.push(row(o.slow ? OP.slow : OP.unary, l, (r & ~6) | (o.code << 1), BUILTIN[o.name](l)));
   }
   writeFileSync('build/alu-tb.txt', rows.join('\n') + '\n');
   writeFileSync('build/alu-tb.sv', `module tb;
+    logic clk = 0;
     logic [3:0] op;
     logic [15:0] l, r, want_, got;
     integer f, n = 0, bad = 0, rr;
-    alu u (.lhs(l), .rhs(r), .op(op), .y(got));
+    alu u (.clk(clk), .lhs(l), .rhs(r), .op(op), .y(got));
     initial begin
         f = $fopen("build/alu-tb.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
         while (!$feof(f)) begin
             rr = $fscanf(f, "%d %h %h %h\\n", op, l, r, want_);
             if (rr == 4) begin
-                #1; n = n + 1;
+                // one clock, so the registered slow pair has its answer too
+                #1 clk = 1; #1 clk = 0; #1; n = n + 1;
                 if (got !== want_) begin
                     bad = bad + 1;
                     if (bad < 6) $display("  MISMATCH op=%0d lhs=%h rhs=%h: want %h got %h", op, l, r, want_, got);
@@ -843,7 +856,7 @@ endmodule
                  .rhs_src(rhs_src), .dest_src(dest_src), .cond_src(cond_src));
     lhs l (.insn(insn), .src(lhs_src), .regnum(an));
     rhs r (.insn(insn), .src(rhs_src), .regval(R[bn]), .regnum(bn), .value(bval));
-    alu a (.lhs(R[an]), .rhs(bval), .op(alu_op), .y(y));
+    alu a (.clk(clk), .lhs(R[an]), .rhs(bval), .op(alu_op), .y(y));
     cond k (.insn(insn), .src(cond_src), .code(c), .neg(ng), .mask(mk));
     compare x (.lhs(R[an]), .rhs(bval), .cond(c), .neg(ng), .mask(mk), .taken(taken));
     dest w (.insn(insn), .src(dest_src), .regnum(wn));
@@ -858,7 +871,9 @@ endmodule
                 // the dispatch cycle: the opcode is on the bus
                 bus = insn[7:0]; dispatch = 1; #1 clk = 1; #1 clk = 0; dispatch = 0;
                 R[0] = r0; R[1] = r1; R[2] = r2; R[3] = r3; R[4] = r4; R[5] = r5; R[6] = r6; R[7] = r7;
-                #1; n = n + 1;
+                // one clock with nothing dispatched: predecode holds, and a
+                // registered slow result fills, as the SLOW step lets it
+                #1 clk = 1; #1 clk = 0; #1; n = n + 1;
                 if (kind == 0 ? (wn !== wreg[2:0] || y !== wval) : (taken !== wval[0])) begin
                     bad = bad + 1;
                     if (bad < 6)
@@ -890,8 +905,8 @@ endmodule
 // run from random registers on both the RTL and tools/sim.js.  At every dispatch
 // the RTL's pc and all eight registers must equal the simulator's state entering
 // that instruction, and the cycles between two dispatches must equal the
-// instruction's length - one cycle per byte, which is the simulator's cost model
-// and not an assumption made here.
+// simulator's count for that instruction - one cycle per byte, plus any cycles
+// the spec declares - which is its cost model and not an assumption made here.
 //
 // Which instructions to use is not taken from the ROM generator: it is every
 // multi-byte form whose semantics write one register with no memory, found by
@@ -934,9 +949,10 @@ endmodule
     reg.forEach((v, k) => { m.R[k] = v; });
     const trace = [];
     for (let guard = 0; !m.halted && guard < 1000; guard++) {
-      const d = decode(dec, m.mem, m.pc);
-      trace.push({ pc: m.pc, R: Array.from(m.R), len: d.nbytes });
+      const entry = { pc: m.pc, R: Array.from(m.R) }, before = m.cycles();
       m.step();
+      entry.len = m.cycles() - before;       // the simulator's cost model, extra cycles included
+      trace.push(entry);
     }
     programs.push({ bytes, reg, trace });
     writeFileSync(`build/cpu-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
@@ -1008,7 +1024,7 @@ endmodule
       if (g.pc !== t.pc || g.R.some((v, k) => v !== t.R[k]))
         complain(`program ${p} instruction ${i} at 0x${t.pc.toString(16)}: rtl pc ${g.pc.toString(16)} r=${g.R.map(hex4).join(' ')}, sim r=${t.R.map(hex4).join(' ')}`);
       if (i > 0 && g.cyc - got[i - 1].cyc !== trace[i - 1].len)
-        complain(`program ${p} instruction ${i - 1}: ${g.cyc - got[i - 1].cyc} cycles for a ${trace[i - 1].len}-byte instruction`);
+        complain(`program ${p} instruction ${i - 1}: ${g.cyc - got[i - 1].cyc} cycles where the simulator counts ${trace[i - 1].len}`);
       instructions++;
     }
   });

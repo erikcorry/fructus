@@ -124,7 +124,8 @@ export const ALU_OPS = [
   { code: 8,  name: 'shl',   does: 'lhs << rhs[3:0]' },
   { code: 9,  name: 'lsr',   does: 'lhs >> rhs[3:0]' },
   { code: 11, name: 'asr',   does: 'lhs >>> rhs[3:0]' },
-  { code: 12, name: 'unary', does: 'rtl/unary.sv on lhs, selected by rhs[2:1]' },
+  { code: 12, name: 'unary', does: "rtl/unary.sv's fast pair on lhs: sxt8 or bitrev" },
+  { code: 13, name: 'slow',  does: "rtl/unary.sv's slow pair, registered a cycle earlier: clz or popcount" },
 ];
 
 // --- which operation each instruction needs, from its semantics ---------------
@@ -138,7 +139,8 @@ export const ALU_RULES = [
   [/^R\[d\] = R\[a\] \| (R\[b\]|imm)$/,                    'or'],
   [/^R\[d\] = R\[a\] & (R\[b\]|imm)$/,                     'and'],
   [/^R\[d\] = (shl|asr|lsr)\(R\[a\], (R\[b\]|imm) & 15\)$/, (m) => m[1]],
-  [/^R\[d\] = (sxt8|clz|bitrev|popcount)\(R\[a\]\)$/,       'unary'],
+  // an operation that declares extra cycles is one whose result is registered
+  [/^R\[d\] = (sxt8|clz|bitrev|popcount)\(R\[a\]\)$/,       (m, insn) => (insn.extra_cycles ? 'slow' : 'unary')],
   [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
   [/^R\[d\] = \(R\[a\] & mask\) != 0$/,                    'isset'],
   [/^sp = sp - 2; M16\[sp\] = R\[a\]/,                      'add',   'sp and #-2, per register'],
@@ -164,3 +166,52 @@ export const COND_SRC = [
   [/^if \(\(R\[a\] & mask\) == 0\) /,              2, 'eq'],
   [/^if \(\(R\[a\] & mask\) != 0\) /,              3, 'ne'],
 ];
+
+// =============================================================================
+// rtl/unary.sv - which unary operation sits where
+// =============================================================================
+// A unary form is a two-byte encoding whose byte 1 is two literal bits followed
+// by \`aaaddd\`.  {byte1[7:6], opcode[0]} is an imm3 index; rtl/unary.sv sees the
+// imm3 VALUE on the rhs bus, and an operation that declares extra cycles has its
+// result registered.  So the fast operations must share an opcode, the slow
+// ones must share the other, and one bit of the value has to tell each pair's
+// two operations apart - the same bit for both, since it is one wire.
+export function unaryLayout() {
+  const imm3 = spec.optype.imm3.values;
+  const ops = [];
+  for (const insn of spec.insn)
+    for (const form of insn.form ?? []) {
+      const bits = (form.encoding ?? '').replace(/[\s_]/g, '');
+      const m = /^([01]{8})([01]{2})a{3}d{3}$/.exec(bits);
+      if (!m) continue;
+      const op = parseInt(m[1], 2), index = (parseInt(m[2], 2) << 1) | (op & 1);
+      const value = imm3[index];
+      ops.push({ mnemonic: insn.mnemonic, op, index, value,
+                 code: ((value & 0xffff) >> 1) & 3, slow: (insn.extra_cycles ?? 0) > 0 });
+    }
+  if (!ops.length) throw new Error('no unary forms found in the spec');
+  if (new Set(ops.map((o) => o.code)).size !== ops.length) throw new Error('two unary operations read the same rhs[2:1]');
+  const groups = {};
+  for (const [name, slow] of [['fast', false], ['slow', true]]) {
+    const g = ops.filter((o) => o.slow === slow);
+    if (!g.length) continue;
+    if (new Set(g.map((o) => o.op)).size !== 1) throw new Error(`the ${name} unary operations are not on one opcode`);
+    if (g.length > 2) throw new Error(`more than two ${name} unary operations`);
+    groups[name] = g;
+  }
+  if (groups.fast && groups.slow && groups.fast[0].op === groups.slow[0].op)
+    throw new Error('the fast and slow unary operations share an opcode');
+  const bitOf = (g) => {
+    if (g.length < 2) return null;
+    const d = g[0].code ^ g[1].code;
+    if (d !== 1 && d !== 2) throw new Error(`${g[0].mnemonic} and ${g[1].mnemonic} differ in both bits of rhs[2:1]`);
+    return d === 1 ? 1 : 2;
+  };
+  const bits = [...new Set(Object.values(groups).map(bitOf).filter((b) => b !== null))];
+  if (bits.length > 1) throw new Error('the two unary pairs are told apart by different bits of rhs');
+  const selBit = bits[0] ?? 1;
+  const level = (o) => ((o.code >> (selBit - 1)) & 1);
+  const pair = (g) => [0, 1].map((l) => g?.find((o) => level(o) === l)?.mnemonic ?? null);
+  return { ops, selBit, level, fast: pair(groups.fast), slow: pair(groups.slow),
+           fastOp: groups.fast?.[0].op, slowOp: groups.slow?.[0].op };
+}

@@ -217,6 +217,7 @@ export class Machine {
     this.bus     = 0;      // data bytes read or written
     this.taken   = 0;      // relative branches taken, one cycle each
     this.penalty = spec.cpu.taken_branch_penalty ?? 0;
+    this.slow    = 0;      // extra cycles an instruction declares: `extra_cycles`
 
     // WHICH INSTRUCTIONS PAY IT COMES FROM THE SEMANTICS, not from a list here
     // that would have to be kept in step.  An instruction is a relative branch
@@ -334,6 +335,7 @@ export class Machine {
     if (!d) throw new Error(`no instruction at 0x${at.toString(16)} (first byte 0x${this.mem[at].toString(16)})`);
     this.pc = u16(at + d.nbytes);
     this.fetched += d.nbytes;
+    this.slow += d.insn.extra_cycles ?? 0;
     this.wrotePc = false;
     if (trace) trace(at, d, this);
     for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);
@@ -360,8 +362,8 @@ export class Machine {
   // Zero the cost counters.  Tests used to open-code this, and open-coded the
   // SUM as well - which is how the taken-branch penalty went unnoticed by every
   // cycle assertion in the suite the moment it was added.  One definition.
-  reset() { this.fetched = this.bus = this.taken = 0; return this; }
-  cycles() { return this.fetched + this.bus + this.taken; }
+  reset() { this.fetched = this.bus = this.taken = this.slow = 0; return this; }
+  cycles() { return this.fetched + this.bus + this.taken + this.slow; }
 }
 
 // =============================================================================

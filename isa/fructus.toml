@@ -215,6 +215,12 @@ length_from_first_byte = true
 # nothing to fetch during that cycle.  The 6502 charges the same: a branch is
 # two bytes and two cycles when it falls through, three when it is taken.
 #
+# AND AN INSTRUCTION MAY DECLARE EXTRA CYCLES, with `extra_cycles` on its entry,
+# when the hardware takes its result a cycle after its bytes are in.  clz and
+# popcount do: their logic is registered halfway through, which is what keeps
+# them from setting the clock every other instruction runs at.  tools/sim.js
+# adds the extra cycles to its count.
+#
 # AN ABSOLUTE JUMP PAYS NOTHING, for the same reason in reverse.  `jmp target`
 # and `call target` carry the new pc as immediate bytes, so they are latched as
 # they are fetched and no addition happens; `ret` and `call ra` read the pc from
@@ -1863,14 +1869,23 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
 #       1      0       00     clz         0x33   00     TENTATIVE
 #       2      1       00     -- free     0x32   01
 #       3      2       01     -- free     0x33   01
-#       4      3       01     popcount    0x32   10     TENTATIVE
-#       5      4       10     bitrev      0x33   10     TENTATIVE
+#       4      3       01     bitrev      0x32   10     TENTATIVE
+#       5      4       10     popcount    0x33   10     TENTATIVE
 #       6      6       11     sxt8        0x32   11
 #       7      8       00     -- free     0x33   11
 #
 # FOUR OPERATIONS, NOT EIGHT.  A free index reads as whichever operation shares
 # its rhs[2:1], so a fifth unary operation needs a wider select - one more line
 # into the unary block - and not merely a free slot.
+#
+# THE SLOW PAIR HAS AN OPCODE OF ITS OWN.  clz and popcount are the two deep
+# operations: measured, taking both out of the single-cycle ALU was worth a
+# tenth of the processor's clock, and taking either alone was not, because they
+# are equally deep.  So both sit at 0x33 and take one cycle more than their
+# length, with their result registered between the two - see `extra_cycles` -
+# while sxt8 and bitrev, which are wiring, share 0x32 at one cycle per byte.
+# The microcode's entry points are per opcode, which is why the split has to
+# fall on the opcode and not on byte 1.
 #
 # THERE IS NO zxt8.  Zero extension in place is `and rd, rd, #0x00ff`, two bytes
 # through immask5, and between registers `and rd, ra, #255`, three through
@@ -1905,6 +1920,9 @@ operands = [
 ]
 syntax   = "{d}, {a}"
 semantics = "R[d] = clz(R[a])"
+# One cycle more than its two bytes: its result is registered halfway.  See
+# `extra_cycles` in the cost model, and the slow pair above.
+extra_cycles = 1
 
   [[insn.form]]
   name     = "reg_reg"
@@ -1922,7 +1940,7 @@ semantics = "R[d] = bitrev(R[a])"
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_0011  10aa_addd"
+  encoding = "0011_0010  10aa_addd"
 
 [[insn]]
 mnemonic = "popcount"
@@ -1933,10 +1951,12 @@ operands = [
 ]
 syntax   = "{d}, {a}"
 semantics = "R[d] = popcount(R[a])"
+# One cycle more than its two bytes, like clz.
+extra_cycles = 1
 
   [[insn.form]]
   name     = "reg_reg"
-  encoding = "0011_0010  10aa_addd"
+  encoding = "0011_0011  10aa_addd"
 
 
 # --- br8 / br -------------------------------------------------------------

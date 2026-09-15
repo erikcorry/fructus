@@ -52,6 +52,7 @@ process.stdout.write(`// =======================================================
 //     rtl/predecode.sv's table left to infer            858        3      20.9
 //     microcode ROM in block RAM, predecode in LUTs     922        1      21.9
 //     microcode ROM in LUTs as well                     956        0      22.0
+//     clz and popcount registered, as now               947        2      23.7
 //
 // PREDECODE MUST BE KEPT OUT OF BLOCK RAM, and was not at first: a table feeding
 // flops that load together is a synchronous ROM, synthesis inferred one, and
@@ -59,13 +60,18 @@ process.stdout.write(`// =======================================================
 // on the die - a twentieth of the clock.  rtl/predecode.sv now says so with an
 // attribute.
 //
-// THE MICROCODE ROM IS NOT ON THE CRITICAL PATH YET.  In LUTs it is 34 more
-// cells and the same clock, because the ALU instructions share so few distinct
-// words that the ROM collapses to almost nothing as logic.  Block RAM will
-// matter when the routines stop sharing.  The critical path starts at
-// predecode's rhs source or rtl/insn.sv's fields and runs through the operand
-// selects and the ALU to the result, and routing is two thirds of it: 30 to 33
-// ns of wire against 14 of logic.
+// THE SLOW UNARY PAIR HAD BEEN SETTING THE CLOCK.  Registering clz and
+// popcount's result, and giving those two instructions an extra cycle through
+// rtl/ucode.sv's SLOW step, took the processor from 21.9 to 23.7 MHz - against
+// 23.8 with the unary block removed altogether, so nearly all of that gain,
+// keeping every operation, for 25 LUTs.  The ROM now spans two block RAMs, since
+// SLOW is a new word and the contents stopped collapsing into one.
+//
+// THE MICROCODE ROM IS STILL NOT ON THE CRITICAL PATH.  In LUTs it was 34 more
+// cells and the same clock.  The critical path starts at rtl/insn.sv's fields or
+// predecode's rhs source and runs through the operand selects and the ALU to
+// the result, and routing is two thirds of it: 29 ns of wire against 13 of
+// logic.
 // =============================================================================
 
 module cpu (
@@ -105,7 +111,7 @@ module cpu (
     wire [15:0] bval, y;
     lhs  l (.insn(q), .src(lhs_src), .regnum(an));
     rhs  r (.insn(q), .src(rhs_src), .regval(R[bn]), .regnum(bn), .value(bval));
-    alu  a (.lhs(R[an]), .rhs(bval), .op(alu_op), .y(y));
+    alu  a (.clk(clk), .lhs(R[an]), .rhs(bval), .op(alu_op), .y(y));
     dest d (.insn(q), .src(dest_src), .regnum(wn));
 
     always_ff @(posedge clk) if (wen) R[wn] <= y;

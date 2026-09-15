@@ -24,6 +24,7 @@
 //     258  HALT    100000010_0_0_0_1_0  stay here
 //     259  TRAP    100000011_0_0_0_0_1  stay here, flagged
 //     260  BOOT    000000000_0_1_0_0_0  after reset: the first opcode is on the bus
+//     261  SLOW    100000000_0_0_0_0_0  wait: rtl/unary.sv registers the slow pair
 //
 // THE ALU INSTRUCTIONS NEED ALMOST NOTHING HERE, because rtl/predecode.sv has
 // already decided their operation and every source.  One cycle per byte:
@@ -34,6 +35,11 @@
 //      (3     byte 2          FETCH2: fetch         three-byte forms only)
 //       3     next opcode     EXEC: wen, dispatch   write the result, dispatch
 //
+// An instruction that declares `extra_cycles` in the spec - clz and popcount,
+// whose result rtl/unary.sv registers - enters through SLOW instead of going
+// straight to EXEC: a step that consumes nothing, so the next opcode waits on
+// the bus while the register fills.
+//
 // So every two-byte ALU opcode has the same entry word, and so does every
 // three-byte one - the ALU operations share not only their successor but
 // their whole routine.  The write and the next dispatch share a cycle, and
@@ -43,8 +49,9 @@
 // ENTRY POINTS, by what the spec says each opcode does:
 //
 //     two-byte ALU:
-//         mov popcount sxt8 clz bitrev add rsb xor or and shl asr lsr iseq
-//         isset
+//         mov bitrev sxt8 add rsb xor or and shl asr lsr iseq isset
+//     two-byte ALU with a registered result, one extra cycle through SLOW:
+//         clz popcount
 //     three-byte ALU:
 //         add rsb xor or and iseq mov
 //     halt:
@@ -127,7 +134,7 @@ module ucode (
         rom[48] = 14'b100000011_0_0_0_0_1;
         rom[49] = 14'b100000011_0_0_0_0_1;
         rom[50] = 14'b100000000_1_0_0_0_0;
-        rom[51] = 14'b100000000_1_0_0_0_0;
+        rom[51] = 14'b100000101_1_0_0_0_0;
         rom[52] = 14'b100000011_0_0_0_0_1;
         rom[53] = 14'b100000011_0_0_0_0_1;
         rom[54] = 14'b100000011_0_0_0_0_1;
@@ -337,6 +344,7 @@ module ucode (
         rom[258] = 14'b100000010_0_0_0_1_0;
         rom[259] = 14'b100000011_0_0_0_0_1;
         rom[260] = 14'b000000000_0_1_0_0_0;
+        rom[261] = 14'b100000000_0_0_0_0_0;
     end
 
     logic [13:0] word;

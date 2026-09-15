@@ -35,7 +35,7 @@ const aluCode = (insn) => {
   if (ALU_ELSEWHERE.some(([re]) => re.test(sem))) return X;
   const rule = ALU_RULES.find(([re]) => re.test(sem));
   if (!rule) throw new Error(`${insn.mnemonic}: no ALU operation matches "${sem}"`);
-  const name = typeof rule[1] === 'function' ? rule[1](sem.match(rule[0])) : rule[1];
+  const name = typeof rule[1] === 'function' ? rule[1](sem.match(rule[0]), insn) : rule[1];
   return ALU_OPS.find((o) => o.name === name).code;
 };
 

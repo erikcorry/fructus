@@ -25,7 +25,7 @@
 //             ld ld8 add rsb xor or and shl asr lsr iseq isset br brclear br8
 //             brset call
 //   ra field  insn[13:11]
-//             st st8 ld ld8 popcount sxt8 clz bitrev add rsb xor or and shl
+//             st st8 ld ld8 bitrev sxt8 clz popcount add rsb xor or and shl
 //             asr lsr iseq br br8
 //
 // THE COLUMN NEARLY DECIDES IT - +0, +1 and +5 are rd, the rest ra - and the

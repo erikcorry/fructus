@@ -40,7 +40,7 @@ const FIELDS = [
 const W = FIELDS.reduce((n, [, w]) => n + w, 0);
 
 // --- the shared steps, above the 256 entry points ------------------------------
-const STEP = { EXEC: 256, FETCH2: 257, HALT: 258, TRAP: 259, BOOT: 260 };
+const STEP = { EXEC: 256, FETCH2: 257, HALT: 258, TRAP: 259, BOOT: 260, SLOW: 261 };
 const word = (w) => ({ next: 0, fetch: 0, dispatch: 0, wen: 0, halt: 0, trap: 0, ...w });
 const rom = new Array(1 << ADDR).fill(null);
 const why = new Map();
@@ -49,6 +49,7 @@ rom[STEP.FETCH2] = word({ fetch: 1, next: STEP.EXEC });  why.set(STEP.FETCH2, 'f
 rom[STEP.HALT]   = word({ halt: 1, next: STEP.HALT });   why.set(STEP.HALT, 'stay here');
 rom[STEP.TRAP]   = word({ trap: 1, next: STEP.TRAP });   why.set(STEP.TRAP, 'stay here, flagged');
 rom[STEP.BOOT]   = word({ dispatch: 1 });                why.set(STEP.BOOT, 'after reset: the first opcode is on the bus');
+rom[STEP.SLOW]   = word({ next: STEP.EXEC });               why.set(STEP.SLOW, 'wait: rtl/unary.sv registers the slow pair');
 
 // --- the entry points ------------------------------------------------------------
 const classify = (d) => {
@@ -57,18 +58,29 @@ const classify = (d) => {
   if (sem === '') return 'nop';
   if (d.nbytes < 2 || ALU_LATER.has(d.insn.mnemonic)) return 'trap';
   if (sem.includes(';') || /M(8|16)\[/.test(sem) || !/^R\[[a-z]\] = /.test(sem)) return 'trap';
-  if (ALU_ELSEWHERE.some(([re]) => re.test(sem)) || !ALU_RULES.some(([re]) => re.test(sem))) return 'trap';
-  return d.nbytes === 2 ? 'alu2' : 'alu3';
+  if (ALU_ELSEWHERE.some(([re]) => re.test(sem))) return 'trap';
+  const rule = ALU_RULES.find(([re]) => re.test(sem));
+  if (!rule) return 'trap';
+  // An instruction that declares an extra cycle must be one whose ALU result is
+  // registered, and the other way round - or the wait and the register disagree.
+  const name = typeof rule[1] === 'function' ? rule[1](sem.match(rule[0]), d.insn) : rule[1];
+  const extra = d.insn.extra_cycles ?? 0;
+  if ((name === 'slow') !== (extra > 0))
+    throw new Error(`${d.insn.mnemonic}: extra_cycles ${extra} but ALU operation ${name}`);
+  if (extra > 1 || (extra && d.nbytes !== 2))
+    throw new Error(`${d.insn.mnemonic}: only one extra cycle on a two-byte form is implemented`);
+  return extra ? 'alu2slow' : d.nbytes === 2 ? 'alu2' : 'alu3';
 };
 const ENTRY = {
   alu2: () => word({ fetch: 1, next: STEP.EXEC }),
+  alu2slow: () => word({ fetch: 1, next: STEP.SLOW }),
   alu3: () => word({ fetch: 1, next: STEP.FETCH2 }),
   halt: () => word({ halt: 1, next: STEP.HALT }),
   nop:  () => word({ dispatch: 1 }),
   trap: () => word({ trap: 1, next: STEP.TRAP }),
 };
-const byClass = { alu2: [], alu3: [], halt: [], nop: [], trap: [] };
-const opcodesIn = { alu2: 0, alu3: 0, halt: 0, nop: 0, trap: 0 };
+const byClass = { alu2: [], alu2slow: [], alu3: [], halt: [], nop: [], trap: [] };
+const opcodesIn = { alu2: 0, alu2slow: 0, alu3: 0, halt: 0, nop: 0, trap: 0 };
 for (let op = 0; op < 256; op++) {
   const classes = new Map();   // class -> the mnemonics this opcode carries in it
   for (let b1 = 0; b1 < 256; b1++) {
@@ -129,6 +141,11 @@ ${stepText}
 //      (3     byte 2          FETCH2: fetch         three-byte forms only)
 //       3     next opcode     EXEC: wen, dispatch   write the result, dispatch
 //
+// An instruction that declares \`extra_cycles\` in the spec - clz and popcount,
+// whose result rtl/unary.sv registers - enters through SLOW instead of going
+// straight to EXEC: a step that consumes nothing, so the next opcode waits on
+// the bus while the register fills.
+//
 // So every two-byte ALU opcode has the same entry word, and so does every
 // three-byte one - the ALU operations share not only their successor but
 // their whole routine.  The write and the next dispatch share a cycle, and
@@ -139,6 +156,8 @@ ${stepText}
 //
 //     two-byte ALU:
 ${listed('alu2')}
+//     two-byte ALU with a registered result, one extra cycle through SLOW:
+${listed('alu2slow')}
 //     three-byte ALU:
 ${listed('alu3')}
 //     halt:

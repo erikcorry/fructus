@@ -33,16 +33,26 @@
 //            lsr
 //   11  asr    lhs >>> rhs[3:0]
 //            asr
-//   12  unary  rtl/unary.sv on lhs, selected by rhs[2:1]
-//            sxt8, clz, bitrev, popcount
+//   12  unary  rtl/unary.sv's fast pair on lhs: sxt8 or bitrev
+//            sxt8, bitrev
+//   13  slow   rtl/unary.sv's slow pair, registered a cycle earlier: clz or popcount
+//            clz, popcount
 //
-//   10, 13, 14, 15 are free.  Not yet: br8, push8, pop8.
+//   10, 14, 15 are free.  Not yet: br8, push8, pop8.
 //
 // BRANCHES ARE DECIDED BESIDE THE ALU, NOT IN IT.  rtl/compare.sv takes the
 // same two operands and answers one bit that never enters this block's result,
 // so nothing here waits for flags.  What stays is what writes a register: iseq
 // is the NOR of lhs ^ rhs and isset the OR of lhs & rhs, neither of which needs
 // the carry chain, so the only carry left in the ALU is add and rsb's own.
+//
+// THE SLOW PAIR IS REGISTERED.  clz and popcount are the two deep operations,
+// so rtl/unary.sv puts a register behind them: operation 13 reads the result
+// computed from the previous cycle's lhs, and the microcode gives those
+// instructions the cycle to compute it in - rtl/ucode.sv's SLOW step.  lhs and
+// rhs do not change between the two cycles, because the instruction and its
+// selects are already in flops.  So no path through them is longer than one
+// operand select, a unary pair, and a register.  This is the one clocked input.
 //
 // THE CODES FOLLOW THE CIRCUIT.  Code bit 0 is the adder's subtract, so add and
 // rsb differ in one wire.  The shifts put their direction in bit 0 and
@@ -81,6 +91,7 @@
 // =============================================================================
 
 module alu (
+    input  logic        clk,     // for rtl/unary.sv's slow pair only
     input  logic [15:0] lhs,     // register file port A: rtl/lhs.sv
     input  logic [15:0] rhs,     // rtl/rhs.sv
     input  logic [3:0]  op,      // microcode: which operation
@@ -92,8 +103,8 @@ module alu (
     wire [15:0] xorv = lhs ^ rhs;
     wire [15:0] andv = lhs & rhs;
     wire [3:0]  amt  = rhs[3:0];
-    wire [15:0] un;
-    unary u (.a(lhs), .sel(rhs[2:1]), .y(un));      // two bits of the imm3 value
+    wire [15:0] unf, uns;
+    unary u (.clk(clk), .a(lhs), .sel(rhs[2]), .fast(unf), .slow(uns));   // a bit of the imm3 value
 
     always_comb case (op)
         4'd0, 4'd1: y = sum;
@@ -106,7 +117,8 @@ module alu (
         4'd8:       y = lhs << amt;
         4'd9:       y = lhs >> amt;
         4'd11:      y = $signed(lhs) >>> amt;
-        4'd12:      y = un;
+        4'd12:      y = unf;
+        4'd13:      y = uns;
         default:    y = 16'hxxxx;
     endcase
 

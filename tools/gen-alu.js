@@ -17,7 +17,9 @@
 // =============================================================================
 
 import { loadSpec } from './isa.js';
-import { ALU_OPS as OPS, ALU_RULES as RULES, ALU_ELSEWHERE as ELSEWHERE, ALU_LATER as LATER } from './control.js';
+import { ALU_OPS as OPS, ALU_RULES as RULES, ALU_ELSEWHERE as ELSEWHERE, ALU_LATER as LATER, unaryLayout } from './control.js';
+
+const UNARY = unaryLayout();
 
 const spec = loadSpec();
 
@@ -31,7 +33,7 @@ for (const insn of spec.insn) {
   const rule = RULES.find(([re]) => re.test(sem));
   if (!rule) throw new Error(`${insn.mnemonic}: no ALU operation matches "${sem}"`);
   const [re, op, note] = rule;
-  const name = typeof op === 'function' ? op(sem.match(re)) : op;
+  const name = typeof op === 'function' ? op(sem.match(re), insn) : op;
   const label = note ? `${insn.mnemonic} (${note})` : insn.mnemonic;
   if (!uses.get(name).includes(label)) uses.get(name).push(label);
 }
@@ -74,6 +76,14 @@ ${table}
 // is the NOR of lhs ^ rhs and isset the OR of lhs & rhs, neither of which needs
 // the carry chain, so the only carry left in the ALU is add and rsb's own.
 //
+// THE SLOW PAIR IS REGISTERED.  clz and popcount are the two deep operations,
+// so rtl/unary.sv puts a register behind them: operation 13 reads the result
+// computed from the previous cycle's lhs, and the microcode gives those
+// instructions the cycle to compute it in - rtl/ucode.sv's SLOW step.  lhs and
+// rhs do not change between the two cycles, because the instruction and its
+// selects are already in flops.  So no path through them is longer than one
+// operand select, a unary pair, and a register.  This is the one clocked input.
+//
 // THE CODES FOLLOW THE CIRCUIT.  Code bit 0 is the adder's subtract, so add and
 // rsb differ in one wire.  The shifts put their direction in bit 0 and
 // arithmetic in bit 1, so asr is 11 and 10 is free.
@@ -111,6 +121,7 @@ ${table}
 // =============================================================================
 
 module alu (
+    input  logic        clk,     // for rtl/unary.sv's slow pair only
     input  logic [15:0] lhs,     // register file port A: rtl/lhs.sv
     input  logic [15:0] rhs,     // rtl/rhs.sv
     input  logic [3:0]  op,      // microcode: which operation
@@ -122,8 +133,8 @@ module alu (
     wire [15:0] xorv = lhs ^ rhs;
     wire [15:0] andv = lhs & rhs;
     wire [3:0]  amt  = rhs[3:0];
-    wire [15:0] un;
-    unary u (.a(lhs), .sel(rhs[2:1]), .y(un));      // two bits of the imm3 value
+    wire [15:0] unf, uns;
+    unary u (.clk(clk), .a(lhs), .sel(rhs[${UNARY.selBit}]), .fast(unf), .slow(uns));   // a bit of the imm3 value
 
     always_comb case (op)
         4'd0, 4'd1: y = sum;
@@ -136,7 +147,8 @@ module alu (
         4'd8:       y = lhs << amt;
         4'd9:       y = lhs >> amt;
         4'd11:      y = $signed(lhs) >>> amt;
-        4'd12:      y = un;
+        4'd12:      y = unf;
+        4'd13:      y = uns;
         default:    y = 16'hxxxx;
     endcase
 
