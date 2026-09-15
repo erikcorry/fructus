@@ -11,6 +11,8 @@ struct pair { int a, b; };
 struct mixed { int a; long b; };
 struct fat { char *p; unsigned tag; };
 struct five { char a, b, c, d, e; };
+struct three { int a, b, c; };
+struct four_chars { char a, b, c, d; };
 
 /* Two fields, so two registers - one byte each, but a register apiece.  */
 int
@@ -65,4 +67,29 @@ int
 takefive (struct five s)
 {
   return s.a + s.b + s.c + s.d + s.e;
+}
+
+/* Three fields come back in r0, r1 and r2, and four chars in r0-r3, so the
+   return reaches r2 and r3 and neither function may preserve them for its
+   caller.  They take no arguments, which is the case that went wrong: the
+   return was counted by its mode - none for a six-byte struct, two for four
+   chars - so the functions believed r2 and r3 callee saved, used them as
+   scratch at -O0, and restored the caller's values over the fields.  The
+   copy through a second local is what gets them used as scratch.  */
+struct three
+make_three (void)
+{
+  struct three s = { 176, 52, 31 };
+  struct three t;
+  t = s;
+  return t;
+}
+
+struct four_chars
+make_four (void)
+{
+  struct four_chars s = { 1, 2, 3, 4 };
+  struct four_chars t;
+  t = s;
+  return t;
 }

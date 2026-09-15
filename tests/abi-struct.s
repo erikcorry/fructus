@@ -14,6 +14,18 @@
 ;                                    splitting rule, so r3 goes unused
 ;   takefive  {char a, b, c, d, e}   five fields is five registers, so all of
 ;                                    it goes on the stack, one byte a field
+;   make_three  () -> {int a, b, c}  returned in r0, r1 and r2
+;   make_four   () -> {char a, b, c, d}
+;                                    returned in r0-r3, a register a field
+;
+; THE LAST TWO PUT SENTINELS IN r2 AND r3 before the call.  A callee that
+; takes no arguments but returns into r2 or r3 must not preserve them, and
+; one that wrongly believes it must hands the sentinel back in place of a
+; field.
+;
+; make_four's fields are chars, and a byte in a register has an unspecified
+; high byte - isa/abi.s, on arguments and return values - so each is checked
+; in its low byte only.  -O0 returns them straight out of 16-bit loads.
 ;
 ; THE CHECK NUMBER LIVES IN r4, which is callee saved whatever the arity, so
 ; it survives every call below without being pushed.  r5 holds what each
@@ -130,6 +142,55 @@ main:
         br      eq, r0, r5, .ok10
         jmpr    fail
 .ok10:
+
+        ; make_three () = {176, 52, 31}, with sentinels in r2 and r3
+        mov     r4, #11
+        mov     r2, #0x5a5a
+        mov     r3, #0xa5a5
+        call    make_three
+        mov     r5, #176
+        br      eq, r0, r5, .ok11
+        jmpr    fail
+.ok11:
+        mov     r4, #12
+        mov     r5, #52
+        br      eq, r1, r5, .ok12
+        jmpr    fail
+.ok12:
+        mov     r4, #13
+        mov     r5, #31
+        br      eq, r2, r5, .ok13
+        jmpr    fail
+.ok13:
+
+        ; make_four () = {1, 2, 3, 4}, with sentinels in r2 and r3
+        mov     r4, #14
+        mov     r2, #0x5a5a
+        mov     r3, #0xa5a5
+        call    make_four
+        and     r0, r0, #0x00ff
+        mov     r5, #1
+        br      eq, r0, r5, .ok14
+        jmpr    fail
+.ok14:
+        mov     r4, #15
+        and     r1, r1, #0x00ff
+        mov     r5, #2
+        br      eq, r1, r5, .ok15
+        jmpr    fail
+.ok15:
+        mov     r4, #16
+        and     r2, r2, #0x00ff
+        mov     r5, #3
+        br      eq, r2, r5, .ok16
+        jmpr    fail
+.ok16:
+        mov     r4, #17
+        and     r3, r3, #0x00ff
+        mov     r5, #4
+        br      eq, r3, r5, .ok17
+        jmpr    fail
+.ok17:
 
         mov     r0, #0
         pop     lr
