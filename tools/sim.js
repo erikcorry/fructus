@@ -347,6 +347,12 @@ export class Machine {
     // its own instead.  nop and halt are not here: they compute nothing and
     // read nothing.  See rtl/ucode.sv's one-byte entry words and rtl/cpu.sv.
     if (d.nbytes === 1 && computes(d.insn.semantics ?? '')) this.slow += 1;
+    // A TRANSFER WHOSE TARGET IS A REGISTER COSTS THREE CYCLES, whatever its
+    // length: one to read the register, one to present it as an address, and
+    // one for the target's opcode to arrive.  `ret' is one byte and pays two
+    // of them, `jmp ra' and `call ra' are two bytes and pay one.  A target in
+    // the instruction's own bytes needs none of this - it is already there.
+    if (/\bpc = (lr|R\[[a-z]\])/.test(d.insn.semantics ?? '')) this.slow += 3 - d.nbytes;
     this.wrotePc = false;
     if (trace) trace(at, d, this);
     for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);

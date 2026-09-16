@@ -19,12 +19,12 @@
 ; MEASURED, by tests/sim-check.mjs, over 600 pairs from each distribution
 ; ----------------------------------------------------------------------------
 ;                        bytes   b 16-bit   b 8-bit   a 8-bit, b 16-bit
-;       mul_16              21       164        80        164
-;       mul_16_x4           32       124        65        124
-;       mul_16_fast        158       101        73        101
-;       mul_16_fast_erik   132       115        63        115
-;       mul_16_nib         274        98        68         98
-;       mul_16_min           8       164        84         89
+;       mul_16              21       166        82        166
+;       mul_16_x4           32       126        67        126
+;       mul_16_fast        158       103        75        103
+;       mul_16_fast_erik   132       119        67        119
+;       mul_16_nib         274       110        76        110
+;       mul_16_min           8       166        86         91
 ;
 ; THE FIRST THREE ROWS HAVE IDENTICAL FIRST AND LAST COLUMNS, and that is the
 ; whole argument for the fourth.  Their cost is a function of the MULTIPLIER
@@ -61,8 +61,9 @@
 ; AND THE BIGGEST SINGLE WIN IS NOT UNROLLING AT ALL.  All of these cost time
 ; per bit of the MULTIPLIER and nothing for its leading zeros, so which operand
 ; sits in r1 matters more than any of the above: 8 bytes of compare and swap
-; take the last column from 163 to 88 on the plain loop, and 129 to 76 on the
-; four-bit one.  It costs ~3 cycles when it does not help.
+; take the last column from 166 to 91 on the plain loop, and would take the
+; four-bit one from 126 to about 71 - its 8-bit column plus the swap.  It costs
+; 4 cycles when it does not help.
 ;
 ; AND IT PAYS FOR ITSELF TWICE, because it also removes the zero test.  Both
 ; loops used to open with `br eq, r0, #0` - three bytes and three cycles on
@@ -73,8 +74,8 @@
 ; without any help.  Removing it took three cycles off every column above.
 ;
 ; The only caller that loses is one that jumps straight to `mul_16` with a zero
-; in r0 and something wide in r1 - 163 cycles rather than 4.  Through
-; mul_16_min the same call is 26.
+; in r0 and something wide in r1 - 170 cycles rather than 21.  Through
+; mul_16_min the same call is 30.
 ;
 ; WHICH TO USE.  mul_16_x4, with mul_16_min in front of it - 40 bytes together,
 ; never worst in any column, and it ties the best unrolled chain outright in
@@ -84,10 +85,14 @@
 ; they cost 132 or 158 bytes to beat 45 by at most 16%, and only on multipliers
 ; that use most of their sixteen bits; on eight-bit multipliers mul_16_x4 ties
 ; the better of them exactly.  They are here because the dispatch question is
-; interesting, not because the answer is to use one.  mul_16_nib has the best
-; steady state of any of them - 3.19 cycles a bit - and the worst prologue, so
-; it wins outright on wide multipliers and only draws level on narrow ones,
-; where mul_16_x4 does the same work in 32 bytes.  It is the one to look at if
+; interesting, not because the answer is to use one.  mul_16_nib still has the
+; best steady state of any of them - 3.75 cycles a bit - and the worst
+; prologue, but it no longer wins outright: its dispatch is a computed `ret',
+; a register transfer costs three cycles, and two cycles a nibble is more than
+; its margin over the unrolled chain.  On uniformly random 16-bit multipliers
+; the chain is now ahead, 103 against 110; the table wins only when the
+; multiplier really uses all sixteen bits, 103 against 114.  On narrow ones
+; mul_16_x4 does the same work in 32 bytes.  It is the one to look at if
 ; 274 bytes is affordable, and the one to widen to radix 256 if six kilobytes
 ; is.
 ; ============================================================================
@@ -256,7 +261,7 @@ mul_16_x4:
 ; FINDING THE ENTRY POINT
 ; ----------------------------------------------------------------------------
 ; A computed goto is the obvious way in - clz gives the leading zero count and
-; entry is base + clz*7 - and mul_16_fast_erik below does exactly that, in 23
+; entry is base + clz*7 - and mul_16_fast_erik below does exactly that, in 29
 ; cycles flat.  THIS SECTION ORIGINALLY SAID 28 AND USED THAT TO DISMISS IT.
 ; The 28 was my arithmetic on a worse implementation than the one I was
 ; comparing against, and the two mistakes are both worth naming:
@@ -272,23 +277,25 @@ mul_16_x4:
 ;   to hold exactly a, and r0 still does.  That is the trick immediately below
 ;   this paragraph - I had found it for the scan and not carried it across.
 ;
-; So: 23, not 28, in 132 bytes rather than 158.
+; So: 23, not 28, in 132 bytes rather than 158 - and 29 rather than 23 today,
+; because the jump into the chain is a register transfer and those now cost
+; three cycles.
 ;
 ; A LINEAR SCAN OF brset IS STILL CHEAPER WHERE IT MATTERS, but by much less
 ; than that comparison claimed.  Sixteen tests, falling through until one hits:
 ; 3 cycles for each bit that is clear and 4 for the one that is set, so 3c + 4
-; for c leading zeros, against a flat 23.  They cross at c = 5, not c = 8:
+; for c leading zeros, against a flat 29.  They cross at c = 7, not c = 8:
 ;
 ;       b        clz    scan   computed
-;       0xffff     0     112        128
-;       0x0fff     4      96        100
-;       0x03ff     6      88         86
-;       0x00ff     8      80         72
-;       0x000f    12      64         44
-;       0            16      52         24
+;       0xffff     0     114        133
+;       0x0fff     4      98        105
+;       0x03ff     6      90         91
+;       0x00ff     8      82         77
+;       0x000f    12      66         49
+;       0            16      55         30
 ;
 ; c is 0 half the time and 1 a quarter of the time on uniformly random input,
-; so the scan still wins there - 101 against 115.  On anything narrower the
+; so the scan still wins there - 103 against 119.  On anything narrower the
 ; computed goto wins, and it wins by a great deal at the bottom.  Which is the
 ; better dispatch depends entirely on what the multipliers look like, and the
 ; computed one is smaller either way.
@@ -546,15 +553,29 @@ mul_16_fast_erik:
 ; ----------------------------------------------------------------------------
 ;       radix   work a round   + the rest   cycles a bit   table
 ;           2   a branch a bit                      6.00   none
-;          16       5.75          12.75             3.19   256 B
-;         256      10.19          17.19             2.15   ~6 KB
+;          16       5.75          15.00             3.75   256 B
+;         256      10.19          19.19             2.40   ~6 KB
+;
+; THE `+ THE REST' COLUMN IS TWO CYCLES WIDER THAN IT WAS, and that is the
+; dispatch: the table entry is reached by a computed `ret', a transfer whose
+; target is a register, and those cost three cycles rather than one.  The
+; radix-256 projection carries the same tax - one dispatch a round either way.
 ;
 ; The first version of this came to 6.50 cycles a bit and was pointless beside
-; a shift-and-add loop at 6.00.  It is 3.19 now.
+; a shift-and-add loop at 6.00.  It is 3.75 now.
 ;
-; IT IS THE FASTEST ROUTINE HERE - 98 cycles against mul_16_fast's 101 - and on
-; an 8-bit multiplier mul_16_x4 still beats it, 65 against 68, and does it in
-; 32 bytes rather than 274.  Thirty-three cycles of
+; IT WAS THE FASTEST ROUTINE HERE AND IS NOT ANY MORE, and the reason is one
+; line of the cost model rather than anything in the code.  Each nibble is
+; dispatched by a computed `ret' - the address is built in lr and returned to -
+; and a transfer whose target is a register now costs three cycles rather than
+; one.  That is two cycles a nibble, eight over a full multiplier, and it is
+; the whole of the difference: 110 cycles against mul_16_fast's 103 on a
+; uniformly random 16-bit multiplier, where it used to lead 98 to 101.
+;
+; IT STILL WINS WHEN THE MULTIPLIER IS FULL WIDTH - 103 against 114 on 0xffff -
+; because there its four nibbles all do work and the chain has sixteen blocks
+; to walk.  And on an 8-bit multiplier mul_16_x4 still beats it, 67 against 76,
+; and does it in 32 bytes rather than 274.  Thirty-three cycles of
 ; prologue is still the whole story of its narrow-multiplier case.
 
 mul_16_nib:

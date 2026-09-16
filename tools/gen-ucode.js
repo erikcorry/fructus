@@ -43,7 +43,8 @@ const W = FIELDS.reduce((n, [, w]) => n + w, 0);
 
 // --- the shared steps, above the 256 entry points ------------------------------
 const STEP = { EXEC: 256, FETCH2: 257, HALT: 258, TRAP: 259, BOOT: 260, SLOW: 261,
-               BRF2: 262, BRDO: 263, JF2: 264, JCF2: 265, JRDO: 266, PCDISP: 267 };
+               BRF2: 262, BRDO: 263, JF2: 264, JCF2: 265, JRDO: 266, PCDISP: 267,
+               PCREG: 268, CALLREG: 269 };
 const word = (w) => ({ next: 0, fetch: 0, dispatch: 0, wen: 0, halt: 0, trap: 0, pcload: 0, lrwrite: 0, ...w });
 const rom = new Array(1 << ADDR).fill(null);
 const why = new Map();
@@ -63,6 +64,10 @@ rom[STEP.JCF2]   = word({ fetch: 1, pcload: 1, wen: 1, lrwrite: 1, next: STEP.PC
 rom[STEP.JRDO]   = word({ pcload: 1, dispatch: 1, next: STEP.PCDISP });
                                                             why.set(STEP.JRDO, 'load a relative target; it is always taken');
 rom[STEP.PCDISP] = word({ dispatch: 1 });                   why.set(STEP.PCDISP, 'the target is on the bus now');
+rom[STEP.PCREG]  = word({ pcload: 1, dispatch: 1, next: STEP.PCDISP });
+                                                            why.set(STEP.PCREG, 'the register was read last cycle: present it');
+rom[STEP.CALLREG] = word({ pcload: 1, dispatch: 1, wen: 1, lrwrite: 1, next: STEP.PCDISP });
+                                                            why.set(STEP.CALLREG, 'the same, and lr takes the return address');
 
 // --- the entry points ------------------------------------------------------------
 const classify = (d) => {
@@ -77,6 +82,11 @@ const classify = (d) => {
   if (sem === 'pc = pc + target')   return d.nbytes === 2 ? 'jmprel8' : 'trap';
   if (sem === 'pc = target')        return d.nbytes === 3 ? 'jmpabs'  : 'trap';
   if (sem === 'lr = pc; pc = target')      return d.nbytes === 3 ? 'callabs' : 'trap';
+  // A target read from a register: one cycle to read it, one to present it,
+  // and the target's own dispatch.  ret spends the first on its entry word,
+  // since a one-byte form has no byte to fetch.
+  if (/^pc = (lr|R\[[a-z]\])$/.test(sem))  return d.nbytes === 1 ? 'pcreg1' : d.nbytes === 2 ? 'pcreg2' : 'trap';
+  if (/^lr = pc; pc = R\[[a-z]\]$/.test(sem)) return d.nbytes === 2 ? 'callreg' : 'trap';
   if (sem.includes(';') || /M(8|16)\[/.test(sem) || !/^R\[[a-z]\] = /.test(sem)) return 'trap';
   if (ALU_ELSEWHERE.some(([re]) => re.test(sem))) return 'trap';
   const rule = ALU_RULES.find(([re]) => re.test(sem));
@@ -96,6 +106,9 @@ const ENTRY = {
   jmprel8:  () => word({ fetch: 1, next: STEP.JRDO }),
   jmpabs:   () => word({ fetch: 1, next: STEP.JF2 }),
   callabs:  () => word({ fetch: 1, next: STEP.JCF2 }),
+  pcreg1:   () => word({ next: STEP.PCREG }),
+  pcreg2:   () => word({ fetch: 1, next: STEP.PCREG }),
+  callreg:  () => word({ fetch: 1, next: STEP.CALLREG }),
   alu1: () => word({ next: STEP.EXEC }),
   alu2: () => word({ fetch: 1, next: STEP.EXEC }),
   alu2slow: () => word({ fetch: 1, next: STEP.SLOW }),
@@ -104,8 +117,8 @@ const ENTRY = {
   nop:  () => word({ dispatch: 1 }),
   trap: () => word({ trap: 1, next: STEP.TRAP }),
 };
-const byClass = { alu1: [], alu2: [], alu2slow: [], alu3: [], brcond: [], jmprel8: [], jmpabs: [], callabs: [], halt: [], nop: [], trap: [] };
-const opcodesIn = { alu1: 0, alu2: 0, alu2slow: 0, alu3: 0, brcond: 0, jmprel8: 0, jmpabs: 0, callabs: 0, halt: 0, nop: 0, trap: 0 };
+const byClass = { alu1: [], alu2: [], alu2slow: [], alu3: [], brcond: [], jmprel8: [], jmpabs: [], callabs: [], pcreg1: [], pcreg2: [], callreg: [], halt: [], nop: [], trap: [] };
+const opcodesIn = { alu1: 0, alu2: 0, alu2slow: 0, alu3: 0, brcond: 0, jmprel8: 0, jmpabs: 0, callabs: 0, pcreg1: 0, pcreg2: 0, callreg: 0, halt: 0, nop: 0, trap: 0 };
 for (let op = 0; op < 256; op++) {
   const classes = new Map();   // class -> the mnemonics this opcode carries in it
   for (let b1 = 0; b1 < 256; b1++) {
@@ -204,6 +217,11 @@ ${listed('jmprel8')}
 //     wide targets, absolute, with and without a link:
 ${listed('jmpabs')}
 ${listed('callabs')}
+//     a target out of a register - three cycles whatever the length, because
+//     the register has to be read before it can be an address:
+${listed('pcreg1')}
+${listed('pcreg2')}
+${listed('callreg')}
 //     halt:
 ${listed('halt')}
 //     nop - its entry dispatches at once, since the next opcode is already on

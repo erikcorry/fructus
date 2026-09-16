@@ -196,7 +196,7 @@ module cpu (
         else if (!taking) mem_addr = seq;
         else case (pc_src)
             2'd2:         mem_addr = wide;         // the wide target, as it arrives
-            2'd3:         mem_addr = bq;           // a register: ret and call ra
+            2'd3:         mem_addr = aq;           // a register: ret, jmp ra, call ra
             default:      mem_addr = tgt;          // the relative target
         endcase
     end

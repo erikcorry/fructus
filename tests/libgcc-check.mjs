@@ -301,7 +301,7 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   const tenMean = cycTen / 65536, powMean = cycPow / nPow;
   let cycEleven = 0;
   for (let i = 0; i < 400; i++) cycEleven += divmod(r16(), 11).cycles;
-  check('the power-of-two path', powMean < 20, `${powMean.toFixed(1)} cycles, expected a mask and a shift`);
+  check('the power-of-two path', powMean < 22, `${powMean.toFixed(1)} cycles, expected a mask and a shift`);
   check('the divide-by-ten path', tenMean < 60 && tenMean < cycEleven / 400 / 2,
         `ten costs ${tenMean.toFixed(1)} cycles against ${(cycEleven / 400).toFixed(1)} for eleven, ` +
         `so the shift-and-add path is not being taken`);

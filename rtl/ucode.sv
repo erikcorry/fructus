@@ -33,6 +33,8 @@
 //     265  JCF2    100001011_1_0_1_0_0_01_1  the same, and lr takes the return address
 //     266  JRDO    100001011_0_1_0_0_0_01_0  load a relative target; it is always taken
 //     267  PCDISP  000000000_0_1_0_0_0_00_0  the target is on the bus now
+//     268  PCREG   100001011_0_1_0_0_0_01_0  the register was read last cycle: present it
+//     269  CALLREG 100001011_0_1_1_0_0_01_1  the same, and lr takes the return address
 //
 // THE ALU INSTRUCTIONS NEED ALMOST NOTHING HERE, because rtl/predecode.sv has
 // already decided their operation and every source.  One cycle per byte:
@@ -81,12 +83,17 @@
 //     wide targets, absolute, with and without a link:
 //         jmp
 //         call
+//     a target out of a register - three cycles whatever the length, because
+//     the register has to be read before it can be an address:
+//         ret
+//         jmp
+//         call
 //     halt:
 //         halt
 //     nop - its entry dispatches at once, since the next opcode is already on
 //     the bus:
 //         nop
-//     trap - 161 opcodes, every one not yet implemented and every free one.
+//     trap - 158 opcodes, every one not yet implemented and every free one.
 //
 // RESET forces the address to BOOT for as long as it is held, so the first
 // word after it dispatches the byte at address 0.  The ROM's output register
@@ -275,17 +282,17 @@ module ucode (
         rom[158] = 17'b100000011_0_0_0_0_1_00_0;
         rom[159] = 17'b100000011_0_0_0_0_1_00_0;
         rom[160] = 17'b100000110_1_0_0_0_0_00_0;
-        rom[161] = 17'b100001010_1_0_0_0_0_00_0;
+        rom[161] = 17'b100001100_1_0_0_0_0_00_0;
         rom[162] = 17'b100001000_1_0_0_0_0_00_0;
-        rom[163] = 17'b100000011_0_0_0_0_1_00_0;
+        rom[163] = 17'b100001010_1_0_0_0_0_00_0;
         rom[164] = 17'b100000110_1_0_0_0_0_00_0;
         rom[165] = 17'b100000110_1_0_0_0_0_00_0;
         rom[166] = 17'b100000110_1_0_0_0_0_00_0;
         rom[167] = 17'b100000110_1_0_0_0_0_00_0;
         rom[168] = 17'b100000011_0_0_0_0_1_00_0;
-        rom[169] = 17'b100000011_0_0_0_0_1_00_0;
+        rom[169] = 17'b100001101_1_0_0_0_0_00_0;
         rom[170] = 17'b100001001_1_0_0_0_0_00_0;
-        rom[171] = 17'b100000011_0_0_0_0_1_00_0;
+        rom[171] = 17'b100001100_0_0_0_0_0_00_0;
         rom[172] = 17'b100000110_1_0_0_0_0_00_0;
         rom[173] = 17'b100000110_1_0_0_0_0_00_0;
         rom[174] = 17'b100000011_0_0_0_0_1_00_0;
@@ -382,6 +389,8 @@ module ucode (
         rom[265] = 17'b100001011_1_0_1_0_0_01_1;
         rom[266] = 17'b100001011_0_1_0_0_0_01_0;
         rom[267] = 17'b000000000_0_1_0_0_0_00_0;
+        rom[268] = 17'b100001011_0_1_0_0_0_01_0;
+        rom[269] = 17'b100001011_0_1_1_0_0_01_1;
     end
 
     logic [16:0] word;

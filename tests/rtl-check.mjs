@@ -975,6 +975,15 @@ endmodule
             halt
     tail:   mov  r5, #3
             halt`,
+    `       mov  r0, #0
+            mov  r1, #target
+            jmp  r1
+            mov  r2, #0xbad
+    target: call sub
+            mov  r3, #7
+            halt
+    sub:    mov  r4, #9
+            ret`,
   ];
   const assembled = SOURCES.map((src, i) => {
     const f = `build/cpu-src-${i}.s`;

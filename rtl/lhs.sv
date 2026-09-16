@@ -22,8 +22,8 @@
 // from the instruction:
 //
 //   rd field  insn[10:8]
-//             ld ld8 add rsb xor or and shl asr lsr iseq isset br brclear br8
-//             call brset
+//             ld ld8 add rsb xor or and shl asr lsr iseq isset br jmp brclear
+//             br8 call brset
 //   ra field  insn[13:11]
 //             st st8 ld ld8 bitrev sxt8 clz popcount add rsb xor or and shl
 //             asr lsr iseq br br8
@@ -31,6 +31,7 @@
 // THE COLUMN NEARLY DECIDES IT - +0, +4 and +5 are rd, the rest ra - and the
 // exceptions, computed rather than remembered, are:
 //
+//     0xa1  jmp/reg, column +1, rd field - a pc transfer, not an ALU operation
 //     0xa9  call/reg, column +1, rd field - a pc transfer, not an ALU operation
 //
 // So the choice is a microcode bit rather than a decode of opcode[2:0].  That
@@ -45,6 +46,7 @@
 //               add/inc2_r0, or/mov_r1_r0, xor/r0_not, add/r0_r0_r1
 //     r1        add/r1_r1_r0, or/mov_r0_r1
 //     sp (r6)   push, push8, pop, pop8
+//     lr (r7)   ret
 //
 // `ret` and `jmp r5` are not here: they take their target on port B, through
 // rhs.sv's lr and r5 codes.  Port A could carry them just as well - nothing

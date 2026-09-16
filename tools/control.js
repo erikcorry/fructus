@@ -42,7 +42,7 @@ export function lhsOf(insn, form) {
   const portB = Object.values(form.fields ?? {}).find((v) => /^[a-z]:reg\[0\]$/.test(v))?.[0]
              ?? ('b' in (form.fix ?? {}) ? 'b' : undefined);
   const reads = new Set();
-  let pc = false, sp = false;
+  let pc = false, sp = false, pcNamed = null;
   for (const stmt of (insn.semantics ?? '').split(';')) {
     const m = stmt.match(/^(.*?[^=!<>])=(?!=)(.*)$/);
     if (!m) continue;
@@ -52,11 +52,17 @@ export function lhsOf(insn, form) {
     const memw = /M(8|16)\[/.test(left);
     if (/\bsp\s*=\s*sp\s*[-+]/.test(stmt)) sp = true;
     if (/\bpc\s*$/.test(left) && /^\s*R\[[a-z]\]\s*$/.test(right)) pc = true;
+    // `pc = lr' names its register rather than taking it from a field, and it
+    // is still a register the ADDRESS PATH reads - so it belongs on port A
+    // with `jmp ra' and `call ra' rather than arriving as a right-hand side.
+    // rtl/cpu.sv's address mux then has one source for all three.
+    if (/\bpc\s*$/.test(left) && regIndex(right.trim()) >= 0) pcNamed = right.trim();
     if (!dest) all(left).forEach((r) => reads.add(r));
     if (!memw) all(right).forEach((r) => reads.add(r));
   }
   if (portB) reads.delete(portB);
   if (sp) return { kind: 'microcode', reg: regIndex('sp') };
+  if (pcNamed) return { kind: 'microcode', reg: regIndex(pcNamed) };
   if (reads.size > 1)
     throw new Error(`${insn.mnemonic}/${form.name}: port A would need ${[...reads].join(' and ')}`);
   if (reads.size === 0) return null;

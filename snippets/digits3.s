@@ -32,7 +32,7 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED
 ; ----------------------------------------------------------------------------
-;       digits3         41 bytes, 50 cycles for every n, no branches
+;       digits3         41 bytes, 52 cycles for every n, no branches
 ;
 ; For comparison, a divmod10 by 51/512 with one correction - also exact below
 ; 1000, and needing the fixup because 51/512 undershoots - inlined twice with

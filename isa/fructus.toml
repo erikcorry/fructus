@@ -228,6 +228,19 @@ length_from_first_byte = true
 # is a mux in front of the ALU and measured a fifth of the clock - so the
 # machine charges the rare instruction rather than slowing every other one.
 #
+# AND A TRANSFER WHOSE TARGET IS A REGISTER COSTS THREE CYCLES, whatever its
+# length.  The register has to be READ before it can be an address, and the
+# read takes a cycle of its own: one to read it, one to present it, and one for
+# the target's own opcode to arrive on the bus.  So `ret` is one byte and three
+# cycles, and `jmp ra` and `call ra` are two bytes and three cycles - the only
+# instructions in the machine that cost more than a cycle a byte for a reason
+# that is not a branch being taken.
+#
+# THAT IS WHY `jmp ra` IS NOT ONE BYTE.  It was, pinned to r5, and the byte it
+# saved bought nothing the pin did not take back: an indirect jump through the
+# one register the assembler may clobber is a jump you have to arrange for.
+# Two bytes and any register is the same three cycles.
+#
 # AND AN INSTRUCTION MAY DECLARE EXTRA CYCLES, with `extra_cycles` on its entry,
 # when the hardware takes its result a cycle after its bytes are in.  clz and
 # popcount do: their logic is registered halfway through, which is what keeps
@@ -704,8 +717,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   decoded from a fixed position.
 #
 #   0000_0000                halt                       1 byte
-#   0000_0001                ret                        1 byte
-#   0000_0010                jmp  r5                    1 byte
+#   0000_0001                -- free, 1 one-byte slot
+#   0000_0010                -- free, 1 one-byte slot
 #   0000_0011                ld   r0, [r0, #0]          1 byte
 #   0000_0100                ld8  r0, [r0, #0]          1 byte
 #   0000_0101                add  r0, r0, #1            1 byte
@@ -1019,22 +1032,24 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   ------------------------------------------------------------------------
 #
 #   --- control flow, all of it, in exactly two rows -------------------------
-#   EVERY OPCODE THAT WRITES THE PC IS 1010_xxxx AND NOTHING ELSE IS - with one
-#   deliberate exception, `ret`, which is one byte and lives with the other
-#   one-byte instructions at 0000_0001.  Sixteen slots, sixteen instructions,
+#   EVERY OPCODE THAT WRITES THE PC IS 1010_xxxx AND NOTHING ELSE IS, with no
+#   exception at all now that `ret` has joined them at 1010_1011.  It is still
+#   one byte - it has no operand to encode - it simply spends one of this
+#   block's opcodes rather than one of the sixteen in the one-byte region,
+#   which is the scarcer of the two.  Sixteen slots, sixteen instructions,
 #   nothing spilling into a neighbouring row.
 #
 #   1010_0000                br      <cond,#imm5>, ra, target
-#   1010_0001                jmpr    target             2 bytes, SHORT form
+#   1010_0001                jmp     ra                 2 bytes, INDIRECT
 #   1010_0010                jmp     target             3 bytes, absolute
-#   1010_0011                -- free
+#   1010_0011                jmpr    target             2 bytes, SHORT form
 #   1010_0100                brclear ra, #immbit5, target
 #   1010_0101                brclear ra, #immask5, target
 #   1010_011z                br      <cond>, ra, rb, target    TWO opcodes
 #   1010_1000                br8     <cond,#imm5>, ra, target
 #   1010_1001                call    ra                 2 bytes, INDIRECT
 #   1010_1010                call    target             3 bytes, absolute
-#   1010_1011                -- free
+#   1010_1011                ret                        1 byte, pc = lr
 #   1010_1100                brset   ra, #immbit5, target
 #   1010_1101                brset   ra, #immask5, target
 #   1010_111z                br8     <cond>, ra, rb, target    TWO opcodes
@@ -1053,8 +1068,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #     .0 .4 .5   aaa?_????   one register and a 5-bit field
 #     .6 .7      cccb_bbee   two registers and a condition
-#     .2 .3      iiii_iiii   a 16-bit target and no register at all
-#     .1                     the two two-byte forms
+#     .1         0000_0aaa   one register: the indirect transfers
+#     .2         iiii_iiii   a 16-bit target and no register at all
+#     .3         tttt_tttt   a displacement byte
 #
 #   AND EVERY COLUMN IS A PAIR SPLIT BY BIT 3, though what the split means
 #   depends on the column: .0, .6 and .7 are br against br8, .4 and .5 are
@@ -1084,10 +1100,13 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   The relative half of that 2x2 is gone - see below - so .3 and .b are free
 #   and keep the shape for whatever wants a wide operand next.
 #
-#   .1 HOLDS THE TWO FORMS THAT ARE TWO BYTES RATHER THAN THREE, and it keeps
-#   the jump-against-call sense of bit 3: `jmpr target` short above, `call ra`
-#   indirect below.  They share no byte-1 layout with each other, which is what
-#   makes a column of leftovers honest rather than untidy.
+#   .1 IS THE REGISTER COLUMN, and it keeps the jump-against-call sense of bit
+#   3 exactly: `jmp ra` above, `call ra` below, the same `0000_0aaa` byte 1 and
+#   the same three cycles - one to read the register, one to present it, one
+#   for the target's opcode.  It used to hold the leftovers, a short `jmpr`
+#   against an indirect `call`, which shared no byte-1 layout at all; giving
+#   the register forms the column and the displacement its own at .3 costs
+#   nothing and makes every column mean one thing again.
 #   ------------------------------------------------------------------------
 #
 #   0111_1xxx                iseq / isset               see above
@@ -2547,7 +2566,7 @@ semantics = "pc = pc + target"
   # every other operand that has more than one width.
   [[insn.form]]
   name     = "rel8"
-  encoding = "1010_0001  tttt_tttt"
+  encoding = "1010_0011  tttt_tttt"
   fields   = { t = "target:off8" }
 
 [[insn]]
@@ -2629,7 +2648,7 @@ syntax   = ""
 semantics = "pc = lr"
 
   [[insn.form]]
-  encoding = "0000_0001"
+  encoding = "1010_1011"
 
 
 # A JUMP THROUGH A REGISTER, WHICH THE MACHINE OTHERWISE HAS NO WAY TO SPELL.
@@ -2639,21 +2658,30 @@ semantics = "pc = lr"
 # pointer was impossible outright, since lr is holding the return address the
 # tail call exists to pass on.
 #
-# IT IS PINNED TO r5 BECAUSE ONE OPCODE IS WHAT IT IS WORTH.  A general
-# `jmp rd` would want eight opcodes out of a block that has two slots left,
-# and every use a compiler has for it - a switch table, a tail call through a
-# pointer, a dispatch - is free to choose which register holds the address.
-# r5 is the one to choose: never an argument, never a return value, caller
-# saved in every one of the three ABIs, and already the assembler's scratch,
-# so it is the register that is expendable at exactly the moments this
-# instruction is used.
+# IT TAKES ANY REGISTER, IN TWO BYTES.  It was one byte with r5 pinned, on the
+# argument that a general form would want eight opcodes and that every use -
+# a switch table, a tail call through a pointer, a dispatch - can choose which
+# register holds the address.  The second half of that is true and the first
+# half was the wrong shape: one opcode and a byte of register field is two
+# bytes, not eight opcodes, and it costs the SAME THREE CYCLES either way,
+# because what this instruction pays for is reading a register, not fetching a
+# byte.  So the pin bought one byte of code and charged for it in register
+# allocation - every indirect jump had to get its address into the one
+# register the assembler is also free to clobber.
 #
-# It sits with halt and ret because the three of them are what the one-byte
-# block has of control flow, and because it is the same kind of thing they
-# are: `ret` is `jmp r7` with its operand implied, and this is `jmp r5` with
-# its operand implied.  ret keeps 0x01 - a wild jump into erased memory
-# should still find the instructions that stop and unwind, not one that
-# jumps again through whatever r5 happens to hold.
+# ret IS THE COMPACT FORM THAT SURVIVES, and it is the one worth keeping: `pc
+# = lr` needs no operand at all, so it is one byte with nothing implied that a
+# caller has to arrange.
+#
+# IT SITS AT 1010_1011 RATHER THAN 0x01, which trades one argument for two.
+# What it gives up: at 0x01 a wild jump into erased memory found halt and then
+# an unwind, which was a deliberate bit of damage control.  What it buys: the
+# one-byte region is sixteen opcodes and the control block had a free slot, so
+# the scarcer space keeps its slot; and `every opcode that writes the pc is
+# 1010_xxxx` stops having an exception, which is worth more than it sounds -
+# it is the kind of claim a decoder, a disassembler and a reader all lean on.
+# 0x01 is free now, so that wild jump traps instead of returning, which is
+# louder than an accidental unwind and easier to find.
 [[insn]]
 mnemonic = "jmp"
 summary  = "pc = ra"
@@ -2664,9 +2692,8 @@ syntax   = "{a}"
 semantics = "pc = R[a]"
 
   [[insn.form]]
-  name     = "r5"
-  encoding = "0000_0010"
-  fix      = { a = 5 }
+  name     = "reg"
+  encoding = "1010_0001  0000_0aaa"
 
 
 # --- halt / nop -------------------------------------------------------------

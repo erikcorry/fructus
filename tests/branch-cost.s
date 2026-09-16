@@ -17,6 +17,10 @@
 ; same three bytes, same operands - and one cycle apart, which isolates the
 ; taking as the thing being paid for rather than the length or the decode.
 ;
+; AND THE REGISTER FORMS COST THREE WHATEVER THEIR LENGTH - `jmp ra` in two
+; bytes and `ret` in one - because what they pay for is reading a register
+; before it can be an address, not fetching a byte.
+;
 ; `callr` used to make the same point from the other side: three bytes either
 ; way, always taken, one cycle apart from `call`.  It has been removed from the
 ; ISA - a relative transfer that reaches the whole address space cost a cycle
@@ -35,4 +39,6 @@ j_abs:          jmp     j_abs_x                 ; 3 bytes, absolute  -> 3
 j_abs_x:
 c_abs:          call    c_abs_x                 ; 3 bytes, absolute  -> 3
 c_abs_x:
-i_ret:          ret                             ; 1 byte,  absolute  -> 1
+j_reg:          jmp     r0                      ; 2 bytes, register  -> 3
+j_reg_x:
+i_ret:          ret                             ; 1 byte,  register  -> 3

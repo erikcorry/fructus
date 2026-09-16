@@ -354,12 +354,12 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
                                              // the axis every routine here
                                              // actually costs time along
   const want = [
-    ['mul_16',      UNIFORM, 164], ['mul_16',      SMALL_A, 164],
-    ['mul_16_x4',   UNIFORM, 124], ['mul_16_x4',   SMALL_A, 124],
-    ['mul_16_fast', UNIFORM, 101], ['mul_16_fast', SMALL_A, 101],
-    ['mul_16_fast_erik', UNIFORM, 115], ['mul_16_fast_erik', SMALL_A, 115],
-    ['mul_16_nib', UNIFORM, 98], ['mul_16_nib', SMALL_A, 98],
-    ['mul_16_min',  UNIFORM, 164], ['mul_16_min',  SMALL_A,  89],
+    ['mul_16',      UNIFORM, 166], ['mul_16',      SMALL_A, 166],
+    ['mul_16_x4',   UNIFORM, 126], ['mul_16_x4',   SMALL_A, 126],
+    ['mul_16_fast', UNIFORM, 103], ['mul_16_fast', SMALL_A, 103],
+    ['mul_16_fast_erik', UNIFORM, 119], ['mul_16_fast_erik', SMALL_A, 119],
+    ['mul_16_nib', UNIFORM, 110], ['mul_16_nib', SMALL_A, 110],
+    ['mul_16_min',  UNIFORM, 166], ['mul_16_min',  SMALL_A,  91],
   ];
   for (const [entry, gen, target] of want) {
     const got = mean(entry, gen);
@@ -398,18 +398,23 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   check('mul: the nibble table pays now',
         mean('mul_16_nib', UNIFORM) < mean('mul_16_x4', UNIFORM),
         'the nibble table no longer beats the four-bit loop');
-  // Its steady state is the cheapest here - 4 cycles a bit against the
-  // unrolled chain's 6.5 - but it pays 33 cycles of prologue against that
-  // chain's 7, so it wins where there are fewer bits to amortise over and
-  // loses by a whisker on a full sixteen.  Both directions are pinned.
-  // THE TABLE HAS THE BEST STEADY STATE AND THE WORST ENTRY, and both halves
-  // are pinned because the routine only exists to show the trade.  It beats
-  // every unrolled chain on a 16-bit multiplier, and a 37-byte loop still
-  // beats IT on an 8-bit one, because 33 cycles of prologue want four nibbles
-  // to amortise and two do not give it enough.
-  check('mul: the table is fastest on a wide multiplier',
-        mean('mul_16_nib', UNIFORM) < mean('mul_16_fast', UNIFORM),
-        'the nibble table no longer beats the unrolled chain on 16 bits');
+  // AND ITS DISPATCH IS NOW WHAT HOLDS IT BACK.  The table entry is reached by
+  // a computed `ret', which is a register-sourced transfer, and those cost
+  // three cycles whatever their length - so the table pays two cycles a nibble
+  // that a straight-line chain does not.  Its steady state is still the best
+  // here, 15 cycles a nibble against the unrolled chain's 16, but the margin no
+  // longer covers the prologue on a RANDOM 16-bit multiplier.
+  //
+  // So the ordering now depends on the distribution, and both halves are
+  // pinned: the chain wins on the uniform mean, and the table still wins when
+  // the multiplier really uses all sixteen bits.  If the first of these ever
+  // fails, the register transfer has got cheaper and the trade has moved back.
+  check('mul: the chain beats the table on a random 16-bit multiplier',
+        mean('mul_16_fast', UNIFORM) < mean('mul_16_nib', UNIFORM),
+        'the nibble table is ahead on the uniform mean again');
+  check('mul: but the table still wins when every bit is set',
+        call('mul_16_nib', 0xbeef, 0xffff).cycles < call('mul_16_fast', 0xbeef, 0xffff).cycles,
+        'the nibble table no longer beats the unrolled chain on an all-ones multiplier');
   check('mul: and its prologue costs it the narrow one',
         mean('mul_16_nib', SMALL_B) > mean('mul_16_x4', SMALL_B),
         'the nibble table now beats the four-bit loop on 8-bit multipliers too');
@@ -496,7 +501,8 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     ['j_rel',   3, 'a 2-byte relative jump'],
     ['j_abs',   3, 'a 3-byte absolute jump'],
     ['c_abs',   3, 'a 3-byte absolute call'],
-    ['i_ret',   1, 'ret, straight out of the register file'],
+    ['j_reg',   3, 'a 2-byte jump through a register'],
+    ['i_ret',   3, 'ret: one byte, and three cycles to read lr and use it'],
   ];
   for (const [label, cycles, what] of want)
     check('branch cost', cost(label) === cycles,
@@ -547,8 +553,10 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
         `pc=${n.pc} halted=${n.halted}`);
 
   // And the layout the argument above depends on: the two instructions a wild
-  // jump is likeliest to hit are the two that stop or unwind, and nop is as far
-  // from them as the one-byte row reaches.
+  // jump is likeliest to hit are the two that stop or unwind, so they sit at
+  // the two ENDS of the one-byte row and nop sits at neither.  halt is at the
+  // bottom because zeroed memory has to stop; ret was moved to the top when it
+  // stopped being a one-byte special case and became a compact `jmp lr'.
   // Stated as PROPERTIES, not addresses.  These were pinned to 0x00/0x01/0x0f
   // and the whole block moved, so the assertions failed for the right reason
   // and had to be rewritten anyway - which is the argument for writing the
@@ -560,12 +568,12 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
       if (bits.length === 8 && /^[01]{8}$/.test(bits)) oneByte.push(parseInt(bits, 2));
     }
   oneByte.sort((a, b) => a - b);
-  check('halt and ret are the two lowest one-byte opcodes',
-        oneByte[0] === opcodeOf('halt') && oneByte[1] === opcodeOf('ret'),
-        `lowest are 0x${oneByte[0].toString(16)}, 0x${oneByte[1].toString(16)}`);
-  check('nop is the highest one-byte opcode, furthest from halt',
-        NOP === oneByte[oneByte.length - 1],
-        `nop=0x${NOP.toString(16)}, highest is 0x${oneByte[oneByte.length - 1].toString(16)}`);
+  const top = oneByte[oneByte.length - 1];
+  check('halt and ret are the two ends of the one-byte row',
+        oneByte[0] === opcodeOf('halt') && top === opcodeOf('ret'),
+        `the ends are 0x${oneByte[0].toString(16)}, 0x${top.toString(16)}`);
+  check('nop is at neither end', NOP !== oneByte[0] && NOP !== top,
+        `nop=0x${NOP.toString(16)}, ends are 0x${oneByte[0].toString(16)}, 0x${top.toString(16)}`);
   console.log('ok    halt is opcode zero: zeroed memory stops the machine');
 }
 
@@ -666,10 +674,10 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 
   // name, its cycle range, and whether it must be right at zero
   const CASES = [
-    ['clz',     22, 26],
-    ['clz2',    17, 36],
-    ['clz_nz',  20, 24],
-    ['clz_big', 14, 15],
+    ['clz',     24, 28],
+    ['clz2',    19, 38],
+    ['clz_nz',  22, 26],
+    ['clz_big', 16, 17],
   ];
   for (const [name, lo, hi] of CASES) {
     let bad = -1, best = Infinity, worst = 0;
@@ -715,7 +723,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     else if (r[2] !== 0x2222 || r[3] !== 0x3333 || r[4] !== 0x4444) { bad = n; why = 'clobbered a callee saved register'; }
   }
   check('digits3 is right', bad < 0, `n = ${bad}: ${why}`);
-  check('digits3 costs 50', best === 50 && worst === 50, `measured ${best}..${worst}`);
+  check('digits3 costs 52', best === 52 && worst === 52, `measured ${best}..${worst}`);
   console.log('ok    snippets/digits3.s: 1000 inputs, and its cycle count');
 }
 

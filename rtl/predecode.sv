@@ -19,7 +19,7 @@
 //
 // 127 opcodes, one row each.  An x is a value no step of that instruction reads -
 // a branch has no ALU operation, a store no destination - left to the mapper as
-// a don't-care.  Rows with an x, per field: alu 20, lhs 19, rhs 11, dest 22, cond 120, pc 0.
+// a don't-care.  Rows with an x, per field: alu 20, lhs 17, rhs 12, dest 22, cond 120, pc 0.
 //
 // THE MICROCODE ROM KEEPS WHAT CHANGES FROM STEP TO STEP: write enables,
 // fetch and dispatch, the pc, memory reads and writes, the next address.  What
@@ -88,8 +88,6 @@ module predecode (
         (* rom_style = "logic" *)
         case (bus)
         8'h00: t = 20'bxxxx_xxxx_xxxx_xxxx_xx_00;    // halt
-        8'h01: t = 20'bxxxx_xxxx_0111_xxxx_xx_11;    // ret
-        8'h02: t = 20'bxxxx_xxxx_0101_xxxx_xx_11;    // jmp
         8'h03: t = 20'b0000_0000_1000_0000_xx_00;    // ld
         8'h04: t = 20'b0000_0000_1000_0000_xx_00;    // ld8
         8'h05: t = 20'b0000_0000_1001_0000_xx_00;    // add
@@ -201,8 +199,9 @@ module predecode (
         8'h9e: t = 20'b0000_0110_1010_1000_xx_00;    // pop
         8'h9f: t = 20'b0000_0110_1010_1000_xx_00;    // pop
         8'ha0: t = 20'bxxxx_1000_1100_xxxx_01_01;    // br
-        8'ha1: t = 20'bxxxx_xxxx_xxxx_xxxx_xx_01;    // jmpr
+        8'ha1: t = 20'bxxxx_1000_xxxx_xxxx_xx_11;    // jmp
         8'ha2: t = 20'bxxxx_xxxx_xxxx_xxxx_xx_10;    // jmp
+        8'ha3: t = 20'bxxxx_xxxx_xxxx_xxxx_xx_01;    // jmpr
         8'ha4: t = 20'bxxxx_1000_1011_xxxx_10_01;    // brclear
         8'ha5: t = 20'bxxxx_1000_1011_xxxx_10_01;    // brclear
         8'ha6: t = 20'bxxxx_1001_1101_xxxx_00_01;    // br
@@ -210,6 +209,7 @@ module predecode (
         8'ha8: t = 20'bxxxx_1000_xxxx_xxxx_xx_01;    // br8
         8'ha9: t = 20'bxxxx_1000_xxxx_0111_xx_11;    // call
         8'haa: t = 20'bxxxx_xxxx_xxxx_0111_xx_10;    // call
+        8'hab: t = 20'bxxxx_0111_0111_xxxx_xx_11;    // ret
         8'hac: t = 20'bxxxx_1000_1011_xxxx_11_01;    // brset
         8'had: t = 20'bxxxx_1000_1011_xxxx_11_01;    // brset
         8'hae: t = 20'bxxxx_1001_xxxx_xxxx_xx_01;    // br8
