@@ -106,10 +106,13 @@ export const destWritesOf = (insn) => [...(insn.semantics ?? '').matchAll(/(?:^|
 // -2 and -1.  The three patterns left over - 011, 100, 101, which would have
 // been 3, -4 and -3 - are the modes.
 //
-// Code 4 is in the register half but is not a register: it is the 16-bit
-// immediate, straight off the bytes.
+// Codes 4 and 2 are in the register half but are not registers.  4 is the
+// 16-bit immediate, straight off the bytes.  2 is a call's return address:
+// rtl/cpu.sv's pc adder, read before its flop, with its addend forced to 1 so
+// that the sum is pc + 2.  See tools/gen-cpu.js for why the adder is free.
 export const RHS_REG   = { 0: 'r0', 1: 'r1', 5: 'r5', 6: 'sp (r6)', 7: 'lr (r7)' };
 export const RHS_IMM16 = 4;
+export const RHS_PCSUM = 2;
 export const RHS_KON   = { 0: 0, 1: 1, 2: 2, 6: -2, 7: -1 };
 export const RHS_MODE  = { 3: 'immgen, normal', 4: 'immgen, as condimm5', 5: 'port B, from the bytes' };
 
@@ -149,13 +152,17 @@ export const ALU_RULES = [
   [/^R\[d\] = (sxt8|clz|bitrev|popcount)\(R\[a\]\)$/,       (m, insn) => (insn.extra_cycles ? 'slow' : 'unary')],
   [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
   [/^R\[d\] = \(R\[a\] & mask\) != 0$/,                    'isset'],
+  // A call's return address is not computed by the ALU: rtl/rhs.sv hands it the
+  // pc adder's sum and the pass-through carries it to the register file, which
+  // is what lets the write port be wired straight from the ALU.
+  [/^lr = pc; pc = /,                                      'rhs',   'the return address'],
   [/^sp = sp - 2; M16\[sp\] = R\[a\]/,                      'add',   'sp and #-2, per register'],
   [/^R\[a\] = M16\[sp\]; sp = sp \+ 2/,                     'add',   'sp and #2, per register'],
 ];
 export const ALU_ELSEWHERE = [
   [/^$/,                                                'nothing'],
   [/^halted = 1$/,                                      'no datapath'],
-  [/^(lr = pc; )?pc = (lr|R\[a\]|target|pc \+ target)$/, 'the pc and its own adder'],
+  [/^pc = (lr|R\[a\]|target|pc \+ target)$/,             'the pc and its own adder'],
   [/^if \(/,                                            'rtl/compare.sv'],
 ];
 export const ALU_LATER = new Set(['br8', 'push8', 'pop8']);
@@ -191,8 +198,10 @@ export const PC_RULES = [
   [/\bpc = (lr|R\[a\])/,      3],
 ];
 
-// An instruction whose semantics writes lr before the pc is a call: the
-// register file takes the return address rather than the ALU's result.
+// An instruction whose semantics writes lr before the pc is a call: its
+// right-hand side is the pc adder's sum, and the ALU's pass-through carries
+// that to the register file like any other result.  tools/gen-predecode.js
+// selects RHS_PCSUM from this.
 export const WRITES_LR = /^lr = pc;/;
 
 export const COND_SRC = [

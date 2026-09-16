@@ -200,17 +200,20 @@ let failed = /FAIL/.test(out);
 // register, a constant, or immgen in one of its two readings.  regval stands in
 // for the register file, so this covers the wiring rather than the file.
 //
-// ALL SIXTEEN CODES ARE SWEPT, the two reserved ones included.  They are not
-// meant to be emitted, but they decode as r2/r3 today by accident of the
-// wiring and the check pins that: a later change that gives them a meaning has
-// to come here and say so rather than silently altering what they do - as code
-// 4 did, when it became the 16-bit immediate.
+// ALL SIXTEEN CODES ARE SWEPT, the one still-reserved code included.  Code 3 is
+// not meant to be emitted but decodes as r3 by accident of the wiring, and the
+// check pins that: a later change that gives it a meaning has to come here and
+// say so rather than silently altering what it does - as code 4 did when it
+// became the 16-bit immediate, and as CODE 2 HAS NOW DONE.  It is a call's
+// return address: rtl/cpu.sv's pc adder, read before its flop, which this
+// bench drives as an input of its own.
 {
   // must match tools/gen-rhs.js
   const REG = { 0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7 };   // src[3]=0
   const KON = { 0: 0, 1: 1, 2: 2, 6: -2, 7: -1 };                    // src[3]=1
   const MODE_IMM = 3, MODE_CIMM = 4, MODE_PORTB = 5;
   const CODE_IMM16 = 4;                                              // src[3]=0
+  const CODE_PCSUM = 2;                                              // src[3]=0
   const movDec = buildDecoder(spec);
   const MOV16 = [...Array(256).keys()].find((op) => {
     const d = decode(movDec, [op, 0, 0], 0);
@@ -224,15 +227,16 @@ let failed = /FAIL/.test(out);
     for (let src = 0; src < 16; src++)
       for (let i = 0; i < 12; i++) {
         const hi = src >> 3, c = src & 7;
-        const isReg = (!hi && c !== CODE_IMM16) || (hi && c === MODE_PORTB);
+        const isReg = (!hi && c !== CODE_IMM16 && c !== CODE_PCSUM) || (hi && c === MODE_PORTB);
         const isImm = hi && (c === MODE_IMM || c === MODE_CIMM);
         if (!hi && c === CODE_IMM16) {
           // The expected value comes from DECODING `mov rd, #imm16` bytes, laid
           // out as rtl/insn.sv holds them, not from knowing where the slice is.
           const op = MOV16 | (rnd() & 7);
           const b1 = rnd() & 0xff, b2 = rnd() & 0xff, rv = rnd() & 0xffff;
+          const ps = rnd() & 0xffff;
           const v = decode(movDec, [op, b1, b2], 0).ops.imm;
-          rows.push(`${hex6((b2 << 16) | (b1 << 8) | op)} ${src} ${hex4(rv)} ${c} ${hex4(v)}`);
+          rows.push(`${hex6((b2 << 16) | (b1 << 8) | op)} ${src} ${hex4(rv)} ${hex4(ps)} ${c} ${hex4(v)}`);
           continue;
         }
         // immgen drives x at +6 and +7, so reading it there is a microcode bug
@@ -240,29 +244,34 @@ let failed = /FAIL/.test(out);
         if (isImm && sel >= 6) continue;
         const insn = ((rnd() & 0xffff) << 8) | ((rnd() & 0x1f) << 3) | sel;
         const regval = rnd() & 0xffff;
+        const pcsum = rnd() & 0xffff;
         const num = hi ? k3(insn) : REG[c];
+        // Code 2 is the pc adder's sum, and it comes in on its own port rather
+        // than through the register file or immgen - so it is neither isReg nor
+        // isImm, and the bench drives it with a value of its own.
         const rhs = isReg ? regval
                   : isImm ? want(insn, c === MODE_CIMM)
+                  : (!hi && c === CODE_PCSUM) ? pcsum
                   : KON[c];
-        rows.push(`${hex6(insn)} ${src} ${hex4(regval)} ${num} ${hex4(rhs)}`);
+        rows.push(`${hex6(insn)} ${src} ${hex4(regval)} ${hex4(pcsum)} ${num} ${hex4(rhs)}`);
       }
 
   writeFileSync('build/rhs-vectors.txt', rows.join('\n') + '\n');
   writeFileSync('build/rhs-tb.sv', `module tb;
     logic [23:0] insn;
-    logic [15:0] regval, xrhs, grhs;
+    logic [15:0] regval, pcsum, xrhs, grhs;
     logic [2:0] xnum, gnum;
     logic [3:0] src;
     integer f, n = 0, bad = 0, r;
-    rhs u (.insn(insn), .src(src), .regval(regval),
+    rhs u (.insn(insn), .src(src), .regval(regval), .pcsum(pcsum),
            .regnum(gnum), .value(grhs));
     initial begin
         f = $fopen("build/rhs-vectors.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
         while (!$feof(f)) begin
-            r = $fscanf(f, "%h %d %h %d %h\\n",
-                        insn, src, regval, xnum, xrhs);
-            if (r == 5) begin
+            r = $fscanf(f, "%h %d %h %h %d %h\\n",
+                        insn, src, regval, pcsum, xnum, xrhs);
+            if (r == 6) begin
                 #1; n = n + 1;
                 if (grhs !== xrhs || gnum !== xnum) begin
                     bad = bad + 1;

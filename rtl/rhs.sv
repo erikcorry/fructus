@@ -11,7 +11,7 @@
 //
 //    0  r0                       8  #0
 //    1  r1                       9  #1
-//    2  reserved                10  #2
+//    2  pc + 2, a call's lr     10  #2
 //    3  reserved                11  immgen, normal
 //    4  imm16, from the bytes   12  immgen, as condimm5
 //    5  r5                      13  port B, from the bytes
@@ -30,11 +30,25 @@
 // against 136 bare, but 432 cells against 430 once placed beside a real 8x16
 // register file, at the same four LUT levels.  Two cells for a microcode bit.
 //
-// THE RESERVED CODES COST NOTHING TO RESERVE.  They fall in the register half,
-// so 2 and 3 decode as r2 and r3 by accident of the wiring, and the microcode
-// simply never emits them.  If the future requirement turns out to be r2 after
-// all it is already there; if it is something else, a small decode is owed then
-// and not before.
+// ONE OF THE RESERVED CODES HAS NOW BEEN SPENT, on the terms this paragraph
+// used to set out: 2 and 3 fall in the register half and decode as r2 and r3 by
+// accident of the wiring, so a use for either owes a small decode, and not
+// before.  Code 2 is that use - a call's return address - and code 3 is still
+// r3 by accident and still costs nothing to leave there.
+//
+// WHY THE PC'S ADDER AND NOT AN INCREMENTER OF ITS OWN.  The adder that
+// prepares a relative branch's target is IDLE DURING EVERY CALL: an absolute
+// call's target is the instruction's own bytes and a register call's is the
+// operand flop.  So a call borrows it with the addend forced to 1 and gets
+// pc + 2, which is the address after the call, for no adder at all.
+//
+// The point is not the cells, it is where the mux ends up.  The return address
+// used to reach the register file through a mux ON THE WRITE PORT, which sits
+// at the end of the ALU's path and lengthened it for every instruction, not
+// just calls.  Here it is one arm of a mux that was already there, on the side
+// of rhs that settles a cycle early.  MEASURED on the whole processor, medians
+// of eight placement seeds: 1013 cells and 29.67 MHz with the write-port mux,
+// 1004 and 32.95 with the return address arriving as an operand instead.
 //
 // CODE 4 IS THAT SMALL DECODE, spent on the 16-bit immediate.  `mov rd, #imm16`
 // cannot use immgen: its opcode[2:0] is the destination register, not a column,
@@ -88,6 +102,7 @@ module rhs (
     input  logic [23:0] insn,    // the instruction, byte 0 low: rtl/insn.sv
     input  logic [3:0]  src,     // microcode: where the right-hand side comes from
     input  logic [15:0] regval,  // register file port B, addressed by regnum
+    input  logic [15:0] pcsum,   // rtl/cpu.sv's pc adder, before its flop
     output logic [2:0]  regnum,  // -> register file port B address
     output logic [15:0] value    // not `rhs`: a port named after its module
                                  // is an error to verilator
@@ -95,7 +110,7 @@ module rhs (
 
     wire [2:0] c = src[2:0];
 
-    wire use_reg = (~src[3] & c != 3'd4)
+    wire use_reg = (~src[3] & c != 3'd4 & c != 3'd2)
                  | (src[3] & c == 3'd5);
     wire use_imm = src[3] & (c == 3'd3
                            | c == 3'd4);
@@ -114,7 +129,8 @@ module rhs (
     // imm16 joins the constants rather than the register value: both are flop
     // outputs, so this mux is on the side of rhs that arrives early.
     wire [15:0] imm16 = insn[23:8];             // byte 1 low, byte 2 high
-    wire [15:0] lit   = src[3] ? konst : imm16;
+    wire [15:0] low   = (c == 3'd2) ? pcsum : imm16;
+    wire [15:0] lit   = src[3] ? konst : low;
 
     assign value = use_reg ? regval : (use_imm ? imm : lit);
 

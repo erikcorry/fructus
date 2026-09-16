@@ -26,7 +26,7 @@
 //    6  and    lhs & rhs
 //            and
 //    7  rhs    rhs
-//            mov
+//            mov, call (the return address)
 //    8  shl    lhs << rhs[3:0]
 //            shl
 //    9  lsr    lhs >> rhs[3:0]

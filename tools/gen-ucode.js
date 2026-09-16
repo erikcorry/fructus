@@ -37,7 +37,6 @@ const FIELDS = [
   ['halt',     1,    'stopped: the step repeats and consumes nothing'],
   ['trap',     1,    'an opcode this ROM does not implement yet'],
   ['pcload',   2,    'load the pc: 1 always, 2 if the branch is taken'],
-  ['lrwrite',  1,    'the register file takes the return address, not the ALU'],
 ];
 const W = FIELDS.reduce((n, [, w]) => n + w, 0);
 
@@ -45,7 +44,7 @@ const W = FIELDS.reduce((n, [, w]) => n + w, 0);
 const STEP = { EXEC: 256, FETCH2: 257, HALT: 258, TRAP: 259, BOOT: 260, SLOW: 261,
                BRF2: 262, BRDO: 263, JF2: 264, JCF2: 265, JRDO: 266, PCDISP: 267,
                PCREG: 268, CALLREG: 269 };
-const word = (w) => ({ next: 0, fetch: 0, dispatch: 0, wen: 0, halt: 0, trap: 0, pcload: 0, lrwrite: 0, ...w });
+const word = (w) => ({ next: 0, fetch: 0, dispatch: 0, wen: 0, halt: 0, trap: 0, pcload: 0, ...w });
 const rom = new Array(1 << ADDR).fill(null);
 const why = new Map();
 rom[STEP.EXEC]   = word({ wen: 1, dispatch: 1 });        why.set(STEP.EXEC, 'write the result; the next opcode is on the bus');
@@ -59,15 +58,15 @@ rom[STEP.BRDO]   = word({ pcload: 2, dispatch: 1, next: STEP.PCDISP });
                                                             why.set(STEP.BRDO, 'take it, or dispatch what is already on the bus');
 rom[STEP.JF2]    = word({ fetch: 1, pcload: 1, next: STEP.PCDISP });
                                                             why.set(STEP.JF2, "a wide target's second byte, and load it at once");
-rom[STEP.JCF2]   = word({ fetch: 1, pcload: 1, wen: 1, lrwrite: 1, next: STEP.PCDISP });
-                                                            why.set(STEP.JCF2, 'the same, and lr takes the return address');
+rom[STEP.JCF2]   = word({ fetch: 1, pcload: 1, wen: 1, next: STEP.PCDISP });
+                                                            why.set(STEP.JCF2, 'the same, and the write lands in lr: the ALU is carrying pc + 2');
 rom[STEP.JRDO]   = word({ pcload: 1, dispatch: 1, next: STEP.PCDISP });
                                                             why.set(STEP.JRDO, 'load a relative target; it is always taken');
 rom[STEP.PCDISP] = word({ dispatch: 1 });                   why.set(STEP.PCDISP, 'the target is on the bus now');
 rom[STEP.PCREG]  = word({ pcload: 1, dispatch: 1, next: STEP.PCDISP });
                                                             why.set(STEP.PCREG, 'the register was read last cycle: present it');
-rom[STEP.CALLREG] = word({ pcload: 1, dispatch: 1, wen: 1, lrwrite: 1, next: STEP.PCDISP });
-                                                            why.set(STEP.CALLREG, 'the same, and lr takes the return address');
+rom[STEP.CALLREG] = word({ pcload: 1, dispatch: 1, wen: 1, next: STEP.PCDISP });
+                                                            why.set(STEP.CALLREG, 'the same, and the write lands in lr: the ALU is carrying pc + 2');
 
 // --- the entry points ------------------------------------------------------------
 const classify = (d) => {
@@ -247,7 +246,6 @@ module ucode (
     output logic        halt,
     output logic        trap,
     output logic [1:0]  pcload,    // -> rtl/cpu.sv: load the pc, and on what terms
-    output logic        lrwrite,   // -> rtl/cpu.sv: the write is a return address
     input  logic        defer      // rtl/cpu.sv: the pc is being loaded, so the
                                    // byte on the bus is not the next opcode
 );

@@ -20,7 +20,8 @@ import { loadSpec } from './isa.js';
 import { buildDecoder, decode } from './decode.js';
 import { lhsOf, LHS_FIELD, DEST_FIELD, destWritesOf,
          ALU_OPS, ALU_RULES, ALU_ELSEWHERE, ALU_LATER,
-         RHS_IMM16, RHS_KON, RHS_MODE, COND_SRC, PC_RULES } from './control.js';
+         RHS_IMM16, RHS_PCSUM, RHS_KON, RHS_MODE, COND_SRC, PC_RULES,
+         WRITES_LR } from './control.js';
 
 const spec = loadSpec();
 const dec = buildDecoder(spec);
@@ -56,6 +57,10 @@ const rhsCode = (d) => {
     if (/^pc = R\[a\]$/.test(sem) && 'a' in fix) return fix.a;
     return X;
   }
+  // A call's right-hand side is the pc adder's sum, which rtl/cpu.sv forces to
+  // pc + 2 while this code is selected.  It is checked first because a call
+  // names a register on the left of the pc as well, and that is port A's.
+  if (WRITES_LR.test(sem)) return RHS_PCSUM;
   // push and pop move sp first; their later steps name other selects themselves
   if (/\bsp = sp - 2\b/.test(sem)) return konCode(-2);
   if (/\bsp = sp \+ 2\b/.test(sem)) return konCode(2);
@@ -127,11 +132,22 @@ for (let op = 0; op < 256; op++) {
   for (let b1 = 0; b1 < 256; b1++) {
     const d = decode(dec, [op, b1, 0], 0);
     if (!d || seen.has(d.form)) continue;
-    seen.set(d.form, {
-      who: `${d.insn.mnemonic}/${d.form.name}`,
-      v: { alu: aluCode(d.insn), lhs: lhsCode(d, op), rhs: rhsCode(d), dest: destCode(d, op),
-           cond: condCode(d.insn), pc: pcCode(d) },
-    });
+    const v = { alu: aluCode(d.insn), lhs: lhsCode(d, op), rhs: rhsCode(d), dest: destCode(d, op),
+                cond: condCode(d.insn), pc: pcCode(d) };
+    // THE PC ADDER READS THIS FIELD, so a row with a relative target may not
+    // leave it to the mapper.  rtl/cpu.sv forces the adder's addend to 1 when
+    // the rhs code is RHS_PCSUM - that is how a call gets pc + 2 - so an x on a
+    // row whose target is pc + the displacement would let the mapper pick that
+    // code and make the jump one byte short.  It is a don't-care to the ALU and
+    // NOT to the pc, which is the whole hazard: the field acquired a second
+    // reader.  Such a row takes a definite code instead, and the one it takes
+    // is what its neighbours already use, so the table pays nothing for it.
+    if (v.pc === 1) {
+      if (v.rhs === RHS_PCSUM)
+        throw new Error(`0x${op.toString(16)} ${d.insn.mnemonic}: a relative target cannot also take the pc adder's sum as its right-hand side`);
+      if (v.rhs === X) v.rhs = modeCode('immgen, normal');
+    }
+    seen.set(d.form, { who: `${d.insn.mnemonic}/${d.form.name}`, v });
   }
   if (!seen.size) continue;
   const all = [...seen.values()];

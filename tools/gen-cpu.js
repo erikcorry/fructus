@@ -13,6 +13,8 @@
 // writes the wiring, and exists so that rtl/ stays generated throughout.
 // =============================================================================
 
+import { RHS_PCSUM as PCSUM } from './control.js';
+
 process.stdout.write(`// =============================================================================
 // cpu.sv - the processor, as far as it goes
 // =============================================================================
@@ -122,11 +124,11 @@ module cpu (
     // \`defer\` is the one thing the microcode cannot know for itself: a taken
     // branch's target is not on the bus yet, so the step that loads the pc must
     // not dispatch, and the ROM follows its \`next\` into a waiting step instead.
-    wire fetch, dispatch, wen, lrwrite;
+    wire fetch, dispatch, wen;
     wire [1:0] pcload;
     wire defer;
     ucode u (.clk(clk), .rst(rst), .bus(mem_rdata), .defer(defer), .fetch(fetch),
-             .dispatch(dispatch), .wen(wen), .pcload(pcload), .lrwrite(lrwrite),
+             .dispatch(dispatch), .wen(wen), .pcload(pcload),
              .halt(halted), .trap(trapped));
 
     logic [15:0] pc;
@@ -143,6 +145,33 @@ module cpu (
                  .lhs_src(lhs_src), .rhs_src(rhs_src), .dest_src(dest_src),
                  .cond_src(cond_src), .pc_src(pc_src));
 
+    // --- the pc's adder, and what it is adding this cycle -----------------------
+    // One adder prepares the relative branch target: pc + the displacement byte
+    // + 1, with the carry in standing for that + 1 rather than a second adder
+    // chained behind the first.
+    //
+    // IT IS IDLE DURING EVERY CALL - an absolute call's target is the
+    // instruction's own bytes and a register call's is the operand flop - so a
+    // call borrows it, with the addend forced to 1.
+    //
+    // THAT IS TRUE ONLY BECAUSE THERE IS NO RELATIVE CALL.  A callr would want
+    // this adder for its target and the same adder for its return address in
+    // the same cycle, and one of the two would need an adder of its own.  The
+    // wide relative transfers were taken out because a linker and no ASLR made
+    // them pointless; this is the second thing that bought.  tools/gen-predecode.js
+    // refuses a row that asks for both, so a relative call cannot come back
+    // without that refusal being dealt with first.
+    //
+    // The sum is then pc + 2,
+    // which is the address after a two- or three-byte call and so is what lr
+    // must hold.  rtl/rhs.sv takes it as a right-hand side under code ${PCSUM},
+    // and the pass-through carries it to the register file, so the write port
+    // needs no mux of its own.  The mux it used to need was worth 3.3 MHz.
+    wire [15:0] off    = {{8{mem_rdata[7]}}, mem_rdata};
+    wire        retadr = (rhs_src == 4'd${PCSUM});
+    wire [15:0] addend = retadr ? 16'd1 : off;
+    wire [15:0] pcsum  = pc + addend + 16'd1;
+
     // --- the datapath, with the operands read a cycle early ---------------------
     (* ram_style = "logic" *)
     logic [15:0] R [0:7];
@@ -150,7 +179,8 @@ module cpu (
     wire [2:0]  an, bn, wn;
     wire [15:0] bval, y;
     lhs  l (.insn(view), .src(lhs_src), .regnum(an));
-    rhs  r (.insn(view), .src(rhs_src), .regval(R[bn]), .regnum(bn), .value(bval));
+    rhs  r (.insn(view), .src(rhs_src), .regval(R[bn]), .pcsum(pcsum),
+            .regnum(bn), .value(bval));
 
     // Both ALU inputs, as of the last edge.  The cycle that fills them is the
     // instruction's last fetch - or, for a one-byte form with no byte to fetch,
@@ -174,13 +204,13 @@ module cpu (
     always_ff @(posedge clk) taken_q <= taken;
 
     // --- the branch target, in the cycle its last byte arrives -----------------
-    // A displacement is always the instruction's LAST byte, so the target is
-    // relatched at every fetch and the one that matters is the last.  It is
-    // relative to the NEXT instruction, which is the adder's carry in rather
-    // than a second adder chained behind the first.
-    wire [15:0] off = {{8{mem_rdata[7]}}, mem_rdata};
+    // The adder above prepared it: a displacement is always the instruction's
+    // LAST byte, so the sum is relatched at every fetch and the one that
+    // matters is the last.  A call's cycles latch pc + 2 here instead, and no
+    // call ever reads it - its target is the instruction's bytes or the
+    // operand flop.
     logic [15:0] tgt;
-    always_ff @(posedge clk) tgt <= pc + off + 16'd1;
+    always_ff @(posedge clk) tgt <= pcsum;
 
     // --- which address the next cycle reads ------------------------------------
     // Every candidate settled at an earlier edge or is wiring, so this is a mux
@@ -203,10 +233,13 @@ module cpu (
     always_ff @(posedge clk) pc <= mem_addr;
 
     // --- the register file's write ---------------------------------------------
-    // A call writes the return address rather than an ALU result, and takes it
-    // from the incrementer in the cycle that loads the target.
-    wire [15:0] wdata = lrwrite ? pc_next : y;
-    always_ff @(posedge clk) if (wen) R[wn] <= wdata;
+    // Straight out of the ALU, with nothing in front of it.  A call's return
+    // address is an ALU result like any other: rtl/rhs.sv hands it the pc
+    // adder's sum and rtl/alu.sv's pass-through carries it here.  The mux that
+    // used to sit here was worth 3.3 MHz - 29.67 against 32.95, medians of
+    // eight seeds - because it was at the end of the path every instruction
+    // takes, not just the calls that needed it.
+    always_ff @(posedge clk) if (wen) R[wn] <= y;
     assign result = y;
 
 endmodule
