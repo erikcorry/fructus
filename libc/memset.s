@@ -69,7 +69,7 @@ bzero:
         push    r2, lr                  ; r2 is callee saved HERE and not in memset
         mov     r2, r1                  ; the length moves up one place
         mov     r1, #0                  ; ... and the fill byte takes its slot
-        callr   memset
+        call    memset
         pop     lr, r2
         ret
 

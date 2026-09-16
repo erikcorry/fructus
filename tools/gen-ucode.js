@@ -36,12 +36,15 @@ const FIELDS = [
   ['wen',      1,    'write the ALU result to the register rtl/dest.sv names'],
   ['halt',     1,    'stopped: the step repeats and consumes nothing'],
   ['trap',     1,    'an opcode this ROM does not implement yet'],
+  ['pcload',   2,    'load the pc: 1 always, 2 if the branch is taken'],
+  ['lrwrite',  1,    'the register file takes the return address, not the ALU'],
 ];
 const W = FIELDS.reduce((n, [, w]) => n + w, 0);
 
 // --- the shared steps, above the 256 entry points ------------------------------
-const STEP = { EXEC: 256, FETCH2: 257, HALT: 258, TRAP: 259, BOOT: 260, SLOW: 261 };
-const word = (w) => ({ next: 0, fetch: 0, dispatch: 0, wen: 0, halt: 0, trap: 0, ...w });
+const STEP = { EXEC: 256, FETCH2: 257, HALT: 258, TRAP: 259, BOOT: 260, SLOW: 261,
+               BRF2: 262, BRDO: 263, JF2: 264, JCF2: 265, JRDO: 266, PCDISP: 267 };
+const word = (w) => ({ next: 0, fetch: 0, dispatch: 0, wen: 0, halt: 0, trap: 0, pcload: 0, lrwrite: 0, ...w });
 const rom = new Array(1 << ADDR).fill(null);
 const why = new Map();
 rom[STEP.EXEC]   = word({ wen: 1, dispatch: 1 });        why.set(STEP.EXEC, 'write the result; the next opcode is on the bus');
@@ -50,6 +53,16 @@ rom[STEP.HALT]   = word({ halt: 1, next: STEP.HALT });   why.set(STEP.HALT, 'sta
 rom[STEP.TRAP]   = word({ trap: 1, next: STEP.TRAP });   why.set(STEP.TRAP, 'stay here, flagged');
 rom[STEP.BOOT]   = word({ dispatch: 1 });                why.set(STEP.BOOT, 'after reset: the first opcode is on the bus');
 rom[STEP.SLOW]   = word({ next: STEP.EXEC });               why.set(STEP.SLOW, 'wait: rtl/unary.sv registers the slow pair');
+rom[STEP.BRF2]   = word({ fetch: 1, next: STEP.BRDO });     why.set(STEP.BRF2, "a branch's displacement");
+rom[STEP.BRDO]   = word({ pcload: 2, dispatch: 1, next: STEP.PCDISP });
+                                                            why.set(STEP.BRDO, 'take it, or dispatch what is already on the bus');
+rom[STEP.JF2]    = word({ fetch: 1, pcload: 1, next: STEP.PCDISP });
+                                                            why.set(STEP.JF2, "a wide target's second byte, and load it at once");
+rom[STEP.JCF2]   = word({ fetch: 1, pcload: 1, wen: 1, lrwrite: 1, next: STEP.PCDISP });
+                                                            why.set(STEP.JCF2, 'the same, and lr takes the return address');
+rom[STEP.JRDO]   = word({ pcload: 1, dispatch: 1, next: STEP.PCDISP });
+                                                            why.set(STEP.JRDO, 'load a relative target; it is always taken');
+rom[STEP.PCDISP] = word({ dispatch: 1 });                   why.set(STEP.PCDISP, 'the target is on the bus now');
 
 // --- the entry points ------------------------------------------------------------
 const classify = (d) => {
@@ -57,6 +70,13 @@ const classify = (d) => {
   if (sem === 'halted = 1') return 'halt';
   if (sem === '') return 'nop';
   if (ALU_LATER.has(d.insn.mnemonic)) return 'trap';
+  // The pc families.  A target from a REGISTER is not here: reading it costs a
+  // cycle this machine's cost model does not charge, so ret, `jmp r5' and
+  // `call ra' still trap - see rtl/cpu.sv.
+  if (/^if \(.*\) pc = pc \+ off$/.test(sem)) return d.nbytes === 3 ? 'brcond' : 'trap';
+  if (sem === 'pc = pc + target')   return d.nbytes === 2 ? 'jmprel8' : 'trap';
+  if (sem === 'pc = target')        return d.nbytes === 3 ? 'jmpabs'  : 'trap';
+  if (sem === 'lr = pc; pc = target')      return d.nbytes === 3 ? 'callabs' : 'trap';
   if (sem.includes(';') || /M(8|16)\[/.test(sem) || !/^R\[[a-z]\] = /.test(sem)) return 'trap';
   if (ALU_ELSEWHERE.some(([re]) => re.test(sem))) return 'trap';
   const rule = ALU_RULES.find(([re]) => re.test(sem));
@@ -72,6 +92,10 @@ const classify = (d) => {
   return extra ? 'alu2slow' : d.nbytes === 1 ? 'alu1' : d.nbytes === 2 ? 'alu2' : 'alu3';
 };
 const ENTRY = {
+  brcond:   () => word({ fetch: 1, next: STEP.BRF2 }),
+  jmprel8:  () => word({ fetch: 1, next: STEP.JRDO }),
+  jmpabs:   () => word({ fetch: 1, next: STEP.JF2 }),
+  callabs:  () => word({ fetch: 1, next: STEP.JCF2 }),
   alu1: () => word({ next: STEP.EXEC }),
   alu2: () => word({ fetch: 1, next: STEP.EXEC }),
   alu2slow: () => word({ fetch: 1, next: STEP.SLOW }),
@@ -80,8 +104,8 @@ const ENTRY = {
   nop:  () => word({ dispatch: 1 }),
   trap: () => word({ trap: 1, next: STEP.TRAP }),
 };
-const byClass = { alu1: [], alu2: [], alu2slow: [], alu3: [], halt: [], nop: [], trap: [] };
-const opcodesIn = { alu1: 0, alu2: 0, alu2slow: 0, alu3: 0, halt: 0, nop: 0, trap: 0 };
+const byClass = { alu1: [], alu2: [], alu2slow: [], alu3: [], brcond: [], jmprel8: [], jmpabs: [], callabs: [], halt: [], nop: [], trap: [] };
+const opcodesIn = { alu1: 0, alu2: 0, alu2slow: 0, alu3: 0, brcond: 0, jmprel8: 0, jmpabs: 0, callabs: 0, halt: 0, nop: 0, trap: 0 };
 for (let op = 0; op < 256; op++) {
   const classes = new Map();   // class -> the mnemonics this opcode carries in it
   for (let b1 = 0; b1 < 256; b1++) {
@@ -173,6 +197,13 @@ ${listed('alu2')}
 ${listed('alu2slow')}
 //     three-byte ALU:
 ${listed('alu3')}
+//     conditional branches - fetch both bytes, then take or dispatch:
+${listed('brcond')}
+//     the short relative jump, a byte of displacement:
+${listed('jmprel8')}
+//     wide targets, absolute, with and without a link:
+${listed('jmpabs')}
+${listed('callabs')}
 //     halt:
 ${listed('halt')}
 //     nop - its entry dispatches at once, since the next opcode is already on
@@ -196,7 +227,11 @@ module ucode (
     output logic        dispatch,
     output logic        wen,
     output logic        halt,
-    output logic        trap
+    output logic        trap,
+    output logic [1:0]  pcload,    // -> rtl/cpu.sv: load the pc, and on what terms
+    output logic        lrwrite,   // -> rtl/cpu.sv: the write is a return address
+    input  logic        defer      // rtl/cpu.sv: the pc is being loaded, so the
+                                   // byte on the bus is not the next opcode
 );
 
     (* ram_style = "block" *)
@@ -207,7 +242,14 @@ ${inits}
 
     logic [${W - 1}:0] word;
     wire  [${ADDR - 1}:0] next;
-    assign {${unpack}} = word;
+    wire  taking;                  // this step's dispatch, before the deferral
+    assign {${unpack.replace('dispatch', 'taking')}} = word;
+
+    // A step that loads the pc says \`dispatch\` because the NEXT cycle's byte
+    // is an opcode; it is this cycle's that is not, when the load actually
+    // happens.  So the deferral suppresses both the line and the ROM's use of
+    // the bus, and the word's own \`next\` carries the wait.
+    assign dispatch = taking & ~defer;
 
     wire [${ADDR - 1}:0] addr = rst ? ${ADDR}'d${STEP.BOOT} : (dispatch ? {1'b0, bus} : next);
     always_ff @(posedge clk) word <= rom[addr];

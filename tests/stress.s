@@ -137,7 +137,7 @@ btarget:
 
         jmp     0x1234
         jmp     r5                        ; 1  through a register, not lr
-        jmpr    start
+        jmp     start
         call    0x1234
-        callr   start
+        call    start
         ret

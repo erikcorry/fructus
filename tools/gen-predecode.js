@@ -20,7 +20,7 @@ import { loadSpec } from './isa.js';
 import { buildDecoder, decode } from './decode.js';
 import { lhsOf, LHS_FIELD, DEST_FIELD, destWritesOf,
          ALU_OPS, ALU_RULES, ALU_ELSEWHERE, ALU_LATER,
-         RHS_IMM16, RHS_KON, RHS_MODE, COND_SRC } from './control.js';
+         RHS_IMM16, RHS_KON, RHS_MODE, COND_SRC, PC_RULES } from './control.js';
 
 const spec = loadSpec();
 const dec = buildDecoder(spec);
@@ -103,6 +103,16 @@ const destCode = (d, op) => {
   return Number(follows(op, d.form, w.operand, DEST_FIELD));
 };
 
+// Where this instruction's next address comes from; 0 - the sequential one -
+// for everything that does not write the pc.  Every relative target is one
+// byte of displacement now, so there is nothing to tell apart.
+const pcCode = (d) => {
+  const sem = d.insn.semantics ?? '';
+  const hit = PC_RULES.find(([re]) => re.test(sem));
+  if (!hit) return 0;
+  return hit[1];
+};
+
 const condCode = (insn) => {
   if (insn.mnemonic === 'br8') return X;
   const hit = COND_SRC.find(([re]) => re.test(insn.semantics ?? ''));
@@ -110,7 +120,7 @@ const condCode = (insn) => {
 };
 
 // --- every opcode --------------------------------------------------------------
-const FIELDS = [['alu', 4], ['lhs', 4], ['rhs', 4], ['dest', 4], ['cond', 2]];
+const FIELDS = [['alu', 4], ['lhs', 4], ['rhs', 4], ['dest', 4], ['cond', 2], ['pc', 2]];
 const rows = [];
 for (let op = 0; op < 256; op++) {
   const seen = new Map();
@@ -119,7 +129,8 @@ for (let op = 0; op < 256; op++) {
     if (!d || seen.has(d.form)) continue;
     seen.set(d.form, {
       who: `${d.insn.mnemonic}/${d.form.name}`,
-      v: { alu: aluCode(d.insn), lhs: lhsCode(d, op), rhs: rhsCode(d), dest: destCode(d, op), cond: condCode(d.insn) },
+      v: { alu: aluCode(d.insn), lhs: lhsCode(d, op), rhs: rhsCode(d), dest: destCode(d, op),
+           cond: condCode(d.insn), pc: pcCode(d) },
     });
   }
   if (!seen.size) continue;
@@ -154,6 +165,7 @@ process.stdout.write(`// =======================================================
 //     rhs_src    rtl/rhs.sv's source
 //     dest_src   rtl/dest.sv's source: the FIRST register the instruction writes
 //     cond_src   rtl/cond.sv's source
+//     pc_src     where rtl/cpu.sv's next address comes from
 //
 // ${rows.length} opcodes, one row each.  An x is a value no step of that instruction reads -
 // a branch has no ALU operation, a store no destination - left to the mapper as
@@ -211,7 +223,8 @@ module predecode (
     output logic [3:0]  lhs_src,   // -> rtl/lhs.sv
     output logic [3:0]  rhs_src,   // -> rtl/rhs.sv
     output logic [3:0]  dest_src,  // -> rtl/dest.sv
-    output logic [1:0]  cond_src   // -> rtl/cond.sv
+    output logic [1:0]  cond_src,  // -> rtl/cond.sv
+    output logic [1:0]  pc_src     // -> rtl/cpu.sv's address mux
 );
 
     // A table feeding flops that load together is exactly a synchronous ROM,
@@ -230,7 +243,7 @@ ${cases}
     end
 
     always_ff @(posedge clk)
-        if (dispatch) {alu_op, lhs_src, rhs_src, dest_src, cond_src} <= t;
+        if (dispatch) {alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src} <= t;
 
 endmodule
 `);

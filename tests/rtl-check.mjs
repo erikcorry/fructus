@@ -26,6 +26,7 @@ import { loadSpec } from '../tools/isa.js';
 import { BUILTIN, test, Machine } from '../tools/sim.js';
 import { buildDecoder, decode } from '../tools/decode.js';
 import { execFileSync } from 'node:child_process';
+import { assemble } from './harness.mjs';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 
 const have = (cmd) => {
@@ -941,11 +942,54 @@ endmodule
     return bytes;
   };
 
-  const PROGRAMS = 40;
+  // --- and the control flow, assembled rather than drawn ----------------------
+  // The random programs above are straight-line by construction: every form in
+  // them writes one register.  A branch needs a target that lands on an
+  // instruction, so these are written as source and assembled, and they cover
+  // what the microcode's pc families do - a loop whose branch is taken four
+  // times and falls through once, a short relative jump, a wide absolute one,
+  // and a call, whose return address the register comparison checks.
+  const SOURCES = [
+    `       mov  r0, #5
+            mov  r1, #0
+    loop:   add  r1, r1, r0
+            add  r0, r0, #-1
+            br   ne, r0, #0, loop
+            jmpr skip
+            mov  r2, #0x1234
+    skip:   jmp  wide
+            mov  r3, #0x5678
+    wide:   call sub
+            halt
+    sub:    mov  r4, #7
+            halt`,
+    `       mov  r0, #0
+            brset r0, #1, odd
+            mov  r1, #0x0f0f
+            brclear r1, #0xf0f0, clear
+            halt
+    clear:  add  r1, r1, #1
+            jmpr done
+    odd:    mov  r1, #0xdead
+    done:   call tail
+            halt
+    tail:   mov  r5, #3
+            halt`,
+  ];
+  const assembled = SOURCES.map((src, i) => {
+    const f = `build/cpu-src-${i}.s`;
+    writeFileSync(f, src.split('\n').map((l) => l.trim()).join('\n') + '\n');
+    const { code } = assemble(f);
+    rmSync(f, { force: true });
+    return [...code];
+  });
+
+  const PROGRAMS = 40 + assembled.length;
   const programs = [];
   for (let p = 0; p < PROGRAMS; p++) {
     const picks = p === 0 ? all : Array.from({ length: 30 }, () => all[rnd() % all.length]);
-    const bytes = picks.flatMap(draw).concat([0x00]);              // halt
+    const bytes = p >= 40 ? assembled[p - 40]
+                          : picks.flatMap(draw).concat([0x00]);    // halt
     const reg = Array.from({ length: 8 }, val);
     const m = new Machine(spec).load(bytes, 0);
     reg.forEach((v, k) => { m.R[k] = v; });
@@ -1001,7 +1045,8 @@ endmodule
 `);
   execFileSync('iverilog', ['-g2012', '-o', 'build/cpu-tb.vvp',
     'rtl/cpu.sv', 'rtl/ucode.sv', 'rtl/insn.sv', 'rtl/predecode.sv', 'rtl/lhs.sv', 'rtl/immgen.sv',
-    'rtl/rhs.sv', 'rtl/unary.sv', 'rtl/alu.sv', 'rtl/dest.sv', 'build/cpu-tb.sv'], { stdio: 'inherit' });
+    'rtl/rhs.sv', 'rtl/unary.sv', 'rtl/alu.sv', 'rtl/dest.sv', 'rtl/cond.sv', 'rtl/compare.sv',
+    'build/cpu-tb.sv'], { stdio: 'inherit' });
   const out = execFileSync('vvp', ['build/cpu-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
 
   // --- compare ----------------------------------------------------------------

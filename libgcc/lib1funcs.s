@@ -183,7 +183,7 @@ __umulhisi3:
         ret                             ; 1
 .narrow:
         push    lr                      ; 4
-        callr   __mulhi3.sorted         ; 4   past the comparison already made
+        call    __mulhi3.sorted         ; 3   past the comparison already made
         pop     lr                      ; 4
         mov     r1, r0                  ; 1   the product is the LOW half
         mov     r0, #0                  ; 1   ... and the high half is zero
@@ -210,7 +210,7 @@ __mulhisi3:
         push    r2, r3, lr              ; 8
         mov     r2, r0                  ; 2   keep a
         mov     r3, r1                  ; 2   keep b
-        callr   __umulhisi3             ; 4   r0:r1 = high:low, unsigned
+        call    __umulhisi3             ; 3   r0:r1 = high:low, unsigned
         brclear r2, #0x8000, .a_pos     ; 3   a negative?
         rsb     r0, r3, r0              ; 2   high -= b
 .a_pos:
@@ -259,7 +259,7 @@ __mulhisi3:
 ;
 ;       or      r5, r0, r2              ; both high words at once
 ;
-; Five cycles to ask, and it turns 591 into about 330 - or about 95 when the
+; Five cycles to ask, and it turns 625 into about 330 - or about 105 when the
 ; low halves are small enough for __umulhisi3's own shortcut.  A `long` holding
 ; a value that fits in sixteen bits is the common case in real code by a wide
 ; margin, which is what makes this worth its eleven bytes.
@@ -274,22 +274,22 @@ __mulsi3:
         push    r4, lr, r1              ; 8   three for the price of two:
                                         ;     al ends up lowest, so [sp] finds it
         mov     r1, r3                  ; 2   ah * bl
-        callr   __mulhi3                ; 4
+        call    __mulhi3                ; 3
         mov     r4, r0                  ; 2
         ld      r0, [sp]                ; 4   al back, but leave it there
         mov     r1, r2                  ; 2   al * bh
-        callr   __mulhi3                ; 4
+        call    __mulhi3                ; 3
         add     r4, r4, r0              ; 2   the two cross terms
         pop     r0                      ; 4   al, for the last time
         mov     r1, r3                  ; 2   al * bl, widened
-        callr   __umulhisi3             ; 4
+        call    __umulhisi3             ; 3
         add     r0, r0, r4              ; 2   fold the cross terms into the high
         pop     lr, r4                  ; 6
         ret                             ; 1
 .narrow:
         mov     r0, r1                  ; 1   al, pinned
         mov     r1, r3                  ; 2   bl
-        jmpr    __umulhisi3             ; 3   its high:low result is ours
+        jmp     __umulhisi3             ; 3   its high:low result is ours
 
 
 ; ============================================================================
@@ -346,14 +346,14 @@ __umulsidi3:
         ; --- P1 = al * bh ---------------------------------------------------
         ld      r0, [sp, #6]            ; 4
         ld      r1, [sp, #4]            ; 4
-        callr   __umulhisi3             ; 4
+        call    __umulhisi3             ; 3
         mov     r2, r0                  ; 2   X.hi
         mov     r3, r1                  ; 2   X.lo
 
         ; --- P2 = ah * bl, and X = P1 + P2 ----------------------------------
         ld      r0, [sp, #8]            ; 4
         ld      r1, [sp, #2]            ; 4
-        callr   __umulhisi3             ; 4
+        call    __umulhisi3             ; 3
         mov     r4, #0                  ; 2   cx
         add     r3, r3, r1              ; 2   X.lo
         br      hs, r3, r1, .nc1        ; 3
@@ -367,7 +367,7 @@ __umulsidi3:
         ; --- P0 = al * bl ---------------------------------------------------
         ld      r0, [sp, #6]            ; 4
         ld      r1, [sp, #2]            ; 4
-        callr   __umulhisi3             ; 4
+        call    __umulhisi3             ; 3
         st      r1, [sp, #0]            ; 4   w0 is finished
         add     r3, r3, r0              ; 2   w1 = X.lo + P0.hi
         br      hs, r3, r0, .nc3        ; 3
@@ -379,7 +379,7 @@ __umulsidi3:
         ; --- P3 = ah * bh ---------------------------------------------------
         ld      r0, [sp, #8]            ; 4
         ld      r1, [sp, #4]            ; 4
-        callr   __umulhisi3             ; 4
+        call    __umulhisi3             ; 3
         add     r2, r2, r1              ; 2   w2 = X.hi + k1 + P3.lo
         br      hs, r2, r1, .nc4        ; 3
         add     r4, r4, #1              ; 2
@@ -401,7 +401,7 @@ __umulsidi3:
         push    lr                      ; 4
         mov     r0, r1                  ; 1   al, pinned
         mov     r1, r3                  ; 2   bl
-        callr   __umulhisi3             ; 4
+        call    __umulhisi3             ; 3
         mov     r2, r0                  ; 2   w1
         mov     r3, r1                  ; 2   w0
         mov     r0, #0                  ; 1   w3
@@ -559,11 +559,11 @@ __udivmodhi4:
 ; remainder in r1 is allowed, since a 16-bit return says nothing about r1.
 
 __udivhi3:
-        jmpr    __udivmodhi4            ; 3+1
+        jmp     __udivmodhi4            ; 3
 
 __umodhi3:
         push    lr                      ; 4
-        callr   __udivmodhi4            ; 4
+        call    __udivmodhi4            ; 3
         mov     r0, r1                  ; 1   the remainder, pinned
         pop     lr                      ; 4
         ret                             ; 1
@@ -580,7 +580,7 @@ __divhi3:
         br      ge, r1, #0, .b_pos      ; 3+1
         rsb     r1, r1, #0              ; 2   |b|
 .b_pos:
-        callr   __udivmodhi4            ; 4
+        call    __udivmodhi4            ; 3
         br      ge, r2, #0, .pos        ; 3+1
         rsb     r0, r0, #0              ; 2
 .pos:
@@ -597,7 +597,7 @@ __modhi3:
         br      ge, r1, #0, .b_pos      ; 3+1
         rsb     r1, r1, #0              ; 2   |b|
 .b_pos:
-        callr   __udivmodhi4            ; 4
+        call    __udivmodhi4            ; 3
         mov     r0, r1                  ; 1   the remainder, pinned
         br      ge, r2, #0, .pos        ; 3+1
         rsb     r0, r0, #0              ; 2

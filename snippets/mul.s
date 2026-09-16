@@ -264,7 +264,8 @@ mul_16_x4:
 ;   I reached for `callr` to get a PC-relative base - 3 bytes and 4 cycles -
 ;   plus an `add` to fold in the distance to the table, where a plain
 ;   `mov r5, #table` does the whole job in 3 bytes and 3 cycles.  I bought
-;   position independence nobody had asked for.
+;   position independence nobody had asked for.  Nobody ever did: `callr` has
+;   since been removed from the ISA for exactly that reason.
 ;
 ;   And I zeroed the accumulator, 2 more cycles.  It does not need zeroing:
 ;   entering the chain at the block below the top set bit wants the accumulator

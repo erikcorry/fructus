@@ -31,8 +31,10 @@
 ; it survives every call below without being pushed.  r5 holds what each
 ; result should be.
 ;
-; EVERY CHECK JUMPS OVER A `jmpr' rather than branching to the end, because a
-; conditional branch reaches 127 bytes and this file is longer than that.
+; EVERY CHECK JUMPS OVER A `jmp' rather than branching to the end, because a
+; conditional branch reaches 127 bytes and this file is longer than that - and
+; so is the distance to `fail', which is why the jump is the absolute one: the
+; relative form reaches a byte's displacement and nothing further.
 
         .text
         .globl  main
@@ -46,7 +48,7 @@ main:
         call    take2c
         mov     r5, #305
         br      eq, r0, r5, .ok1
-        jmpr    fail
+        jmp     fail
 .ok1:
 
         ; takepair ({7, 9}) = 709
@@ -56,7 +58,7 @@ main:
         call    takepair
         mov     r5, #709
         br      eq, r0, r5, .ok2
-        jmpr    fail
+        jmp     fail
 .ok2:
 
         ; takemixed ({1000, 0x20003}) = 0x000203eb, returned high:low
@@ -67,12 +69,12 @@ main:
         call    takemixed
         mov     r5, #2
         br      eq, r0, r5, .ok3
-        jmpr    fail
+        jmp     fail
 .ok3:
         mov     r4, #4
         mov     r5, #0x03eb
         br      eq, r1, r5, .ok4
-        jmpr    fail
+        jmp     fail
 .ok4:
 
         ; fat_bump ({0x1234, 0xbeef}) = {0x1236, 0xbeef}
@@ -82,12 +84,12 @@ main:
         call    fat_bump
         mov     r5, #0x1236
         br      eq, r0, r5, .ok5
-        jmpr    fail
+        jmp     fail
 .ok5:
         mov     r4, #6
         mov     r5, #0xbeef
         br      eq, r1, r5, .ok6
-        jmpr    fail
+        jmp     fail
 .ok6:
 
         ; make_pair (0x1111, 0x2222) comes back in r0 and r1
@@ -97,12 +99,12 @@ main:
         call    make_pair
         mov     r5, #0x1111
         br      eq, r0, r5, .ok7
-        jmpr    fail
+        jmp     fail
 .ok7:
         mov     r4, #8
         mov     r5, #0x2222
         br      eq, r1, r5, .ok8
-        jmpr    fail
+        jmp     fail
 .ok8:
 
         ; no_room (1, 2, 3, {4, 5}) = 546.  Three arguments leave one
@@ -121,7 +123,7 @@ main:
         add     sp, sp, #4
         mov     r5, #546
         br      eq, r0, r5, .ok9
-        jmpr    fail
+        jmp     fail
 .ok9:
 
         ; takefive ({1, 2, 3, 4, 5}) = 15, all of it on the stack
@@ -140,7 +142,7 @@ main:
         add     sp, sp, #5
         mov     r5, #15
         br      eq, r0, r5, .ok10
-        jmpr    fail
+        jmp     fail
 .ok10:
 
         ; make_three () = {176, 52, 31}, with sentinels in r2 and r3
@@ -150,17 +152,17 @@ main:
         call    make_three
         mov     r5, #176
         br      eq, r0, r5, .ok11
-        jmpr    fail
+        jmp     fail
 .ok11:
         mov     r4, #12
         mov     r5, #52
         br      eq, r1, r5, .ok12
-        jmpr    fail
+        jmp     fail
 .ok12:
         mov     r4, #13
         mov     r5, #31
         br      eq, r2, r5, .ok13
-        jmpr    fail
+        jmp     fail
 .ok13:
 
         ; make_four () = {1, 2, 3, 4}, with sentinels in r2 and r3
@@ -171,25 +173,25 @@ main:
         and     r0, r0, #0x00ff
         mov     r5, #1
         br      eq, r0, r5, .ok14
-        jmpr    fail
+        jmp     fail
 .ok14:
         mov     r4, #15
         and     r1, r1, #0x00ff
         mov     r5, #2
         br      eq, r1, r5, .ok15
-        jmpr    fail
+        jmp     fail
 .ok15:
         mov     r4, #16
         and     r2, r2, #0x00ff
         mov     r5, #3
         br      eq, r2, r5, .ok16
-        jmpr    fail
+        jmp     fail
 .ok16:
         mov     r4, #17
         and     r3, r3, #0x00ff
         mov     r5, #4
         br      eq, r3, r5, .ok17
-        jmpr    fail
+        jmp     fail
 .ok17:
 
         mov     r0, #0

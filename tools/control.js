@@ -160,6 +160,35 @@ export const ALU_LATER = new Set(['br8', 'push8', 'pop8']);
 // The source field's codes, by the semantics of the branch that uses them.  The
 // fixed eq and ne serve exactly the mask branches, which is what lets
 // rtl/compare.sv take its mode from the field's bit 1.
+// =============================================================================
+// rtl/cpu.sv's program counter
+// =============================================================================
+
+// Where the next address comes from.  Every one of these is prepared in the
+// cycle BEFORE it is needed - the sequential address by the incrementer, the
+// relative target by the second adder, the wide target by the instruction
+// bytes, and a register by the operand flop - so the cycle that presents an
+// address only chooses between them.
+export const PC_SRC = {
+  0: 'the next byte: pc + 1',
+  1: 'a relative target: pc + the displacement byte',
+  2: 'a wide target: the instruction bytes',
+  3: 'a register, through the right-hand operand',
+};
+
+// Which source an instruction wants, from its semantics.  An instruction that
+// never writes the pc takes 0 and the microcode never loads it.
+export const PC_RULES = [
+  [/\bpc = pc \+ off\b/,      1],
+  [/\bpc = pc \+ target\b/,   1],
+  [/\bpc = target\b/,         2],
+  [/\bpc = (lr|R\[a\])/,      3],
+];
+
+// An instruction whose semantics writes lr before the pc is a call: the
+// register file takes the return address rather than the ALU's result.
+export const WRITES_LR = /^lr = pc;/;
+
 export const COND_SRC = [
   [/^if \(test\(cond, R\[a\], R\[b\], 16\)\) /,    0, 'the cond3 field'],
   [/^if \(test\(k\.cond, R\[a\], k\.imm, 16\)\) /, 1, 'the condimm5 table'],

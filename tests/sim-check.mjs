@@ -495,7 +495,6 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     ['b_fall',  3, 'a 3-byte branch, not taken'],
     ['j_rel',   3, 'a 2-byte relative jump'],
     ['j_abs',   3, 'a 3-byte absolute jump'],
-    ['c_rel',   4, 'a 3-byte relative call'],
     ['c_abs',   3, 'a 3-byte absolute call'],
     ['i_ret',   1, 'ret, straight out of the register file'],
   ];
@@ -503,11 +502,9 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     check('branch cost', cost(label) === cycles,
           `${what} cost ${cost(label)} cycles, want ${cycles}`);
 
-  // The pair that isolates the cause.  callr and call are both three bytes and
-  // both always transfer control; the only difference is that one has to add.
-  check('branch cost', cost('c_rel') - cost('c_abs') === 1,
-        `callr and call differ by ${cost('c_rel') - cost('c_abs')}, want 1`);
-  // And the same instruction taken against not taken.
+  // The pair that isolates the cause: the same branch, the same three bytes,
+  // taken and not.  `callr` used to make the point from the other side and has
+  // been removed from the ISA - see tests/branch-cost.s.
   check('branch cost', cost('b_taken') - cost('b_fall') === 1,
         `taken and not-taken differ by ${cost('b_taken') - cost('b_fall')}, want 1`);
 

@@ -299,7 +299,7 @@ name   = "BFD_RELOC_16_PCREL"
 bits   = 16
 pcrel  = true
 signed = true
-used_by = "jmpr rel16, callr rel16"
+used_by = "jmp and call, whose targets are absolute"
 
 [[reloc]]
 name   = "BFD_RELOC_16"
@@ -1027,14 +1027,14 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1010_0000                br      <cond,#imm5>, ra, target
 #   1010_0001                jmpr    target             2 bytes, SHORT form
 #   1010_0010                jmp     target             3 bytes, absolute
-#   1010_0011                jmpr    target             3 bytes, pc relative
+#   1010_0011                -- free
 #   1010_0100                brclear ra, #immbit5, target
 #   1010_0101                brclear ra, #immask5, target
 #   1010_011z                br      <cond>, ra, rb, target    TWO opcodes
 #   1010_1000                br8     <cond,#imm5>, ra, target
 #   1010_1001                call    ra                 2 bytes, INDIRECT
 #   1010_1010                call    target             3 bytes, absolute
-#   1010_1011                callr   target             3 bytes, pc relative
+#   1010_1011                -- free
 #   1010_1100                brset   ra, #immbit5, target
 #   1010_1101                brset   ra, #immask5, target
 #   1010_111z                br8     <cond>, ra, rb, target    TWO opcodes
@@ -1079,10 +1079,10 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   for exactly that reason; see the br section below.
 #
 #   .2 AND .3 ARE THE FOUR WIDE TARGETS, AS A 2x2.  Bit 0 is absolute against
-#   pc-relative and bit 3 is jump against call, so jmp / jmpr / call / callr are
-#   0xa2 / 0xa3 / 0xaa / 0xab and every pair a linker relaxes between differs in
-#   exactly one bit.  All four have the same byte 1 - a 16-bit target and no
-#   register - so they are adjacent columns rather than alternating ones.
+#   pc-relative and bit 3 is jump against call, so jmp and call are 0xa2 and
+#   0xaa, one bit apart, with the same byte 1: a 16-bit target and no register.
+#   The relative half of that 2x2 is gone - see below - so .3 and .b are free
+#   and keep the shape for whatever wants a wide operand next.
 #
 #   .1 HOLDS THE TWO FORMS THAT ARE TWO BYTES RATHER THAN THREE, and it keeps
 #   the jump-against-call sense of bit 3: `jmpr target` short above, `call ra`
@@ -2506,18 +2506,27 @@ semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2; R[c] = M1
 # the code is position independent.  Short relative jumps are already covered
 # by the two-byte `jmpr` form at 0xa1, +/-127.
 #
-# THE FOUR OF THEM ARE A 2x2 AND THE OPCODES SAY SO.  They occupy the adjacent
-# columns .2 and .3 of both rows - jmp / jmpr / call / callr at 0xa2 / 0xa3 /
-# 0xaa / 0xab - because all four have the same byte 1, a 16-bit target and no
-# register field.  Bit 0 is absolute against pc-relative and bit 3 is jump
-# against call, so every pair a linker relaxes between differs in exactly one
-# bit: jmp -> jmpr is bit 0, jmp -> call is bit 3.
+# THE WIDE RELATIVE FORMS ARE GONE, and what they cost is why.  `jmpr target'
+# and `callr target' were three bytes reaching the whole address space
+# relatively; `jmp' and `call' are three bytes reaching it absolutely, and a
+# relative target costs a CYCLE MORE because the adder and the verdict land in
+# flops an edge later than the instruction's own bytes do - see the timings in
+# rtl/cpu.sv.  Three bytes and four cycles against three and three, for
+# position independence that a machine with a linker and no address-space
+# randomisation never asked for.
 #
-# MNEMONICS ARE A GUESS.  I have taken `jmp`/`call` as absolute and `jmpr`/
-# `callr` as relative.  If you would rather have one mnemonic each with the
-# assembler choosing, that needs a directive or a target-expression syntax,
-# because both forms are the same size and form selection has no size
-# criterion to pick on.
+# So .2 and .a hold jmp and call, one bit apart with the same byte 1, and .3
+# and .b are free.  What is lost with them is real and worth writing down:
+# code that must run at an address it was not linked for can no longer jump
+# further than a byte's displacement without a register.  The short `jmpr' at
+# .1 stays, because two bytes for a local jump is worth having and its reach
+# is exactly a loop's.
+#
+# MNEMONICS.  `jmp` and `call` are absolute; `jmpr` is the two-byte relative
+# form and the only relative transfer left.  An assembler that wanted one
+# mnemonic could relax `jmpr` into `jmp` when the displacement does not fit -
+# same three bytes, one cycle cheaper - which is what gcc's jump pattern does
+# for itself.
 [[insn]]
 mnemonic = "jmpr"
 summary  = "pc += displacement"
@@ -2541,11 +2550,6 @@ semantics = "pc = pc + target"
   encoding = "1010_0001  tttt_tttt"
   fields   = { t = "target:off8" }
 
-  [[insn.form]]
-  name     = "rel16"
-  encoding = "1010_0011  iiii_iiii  jjjj_jjjj"
-  fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
-
 [[insn]]
 mnemonic = "jmp"
 summary  = "pc = imm16"
@@ -2558,18 +2562,26 @@ semantics = "pc = target"
   encoding = "1010_0010  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
-[[insn]]
-mnemonic = "callr"
-summary  = "lr = pc of next instruction; pc += imm16"
-operands = [{ name = "target", type = "int16", pcrel = true }]
-syntax   = "{target}"
-semantics = "lr = pc; pc = pc + target"
-
-  [[insn.form]]
-  name     = "rel16"
-  encoding = "1010_1011  iiii_iiii  jjjj_jjjj"
-  fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
-
+# Return is just pc = lr, so it needs no operands and fits in one byte - and
+# being one byte is what decides where it lives.
+#
+# IT IS A PC WRITER OUTSIDE 1001_xxxx, deliberately - one of two now that
+# `jmp r5` has joined it at 0x02.  The control-flow block is exactly two rows
+# and holds exactly sixteen instructions once the two mask branches come home
+# to their columns; ret is the seventeenth, and it was the only one-byte
+# instruction living out there until jmp arrived.  Every other one-byte opcode
+# is in x000_0xxx, so that is where both of them go.
+#
+# It fits that region on its own terms rather than as an exile.  The one-byte
+# block is instructions with nothing left to say - `add r0, r0, #1`, `mov r0,
+# #0`, `ld` with its register implied - and `ret` is `jmp lr` with its operand
+# implied, which is the same kind of thing.  It is also, after the ALU, the
+# most executed instruction in any program, which is what a one-byte opcode is
+# for.
+#
+# Nothing decodes worse for it: decode is a flat 256-entry table and always was,
+# so "the pc writers are 1001_xxxx" is a claim about how the map READS, not a
+# mask any hardware applies.
 [[insn]]
 mnemonic = "call"
 summary  = "lr = pc of next instruction; pc = imm16"
@@ -2609,27 +2621,6 @@ semantics = "lr = pc; pc = R[a]"
   name     = "reg"
   encoding = "1010_1001  0000_0aaa"
 
-
-# Return is just pc = lr, so it needs no operands and fits in one byte - and
-# being one byte is what decides where it lives.
-#
-# IT IS A PC WRITER OUTSIDE 1001_xxxx, deliberately - one of two now that
-# `jmp r5` has joined it at 0x02.  The control-flow block is exactly two rows
-# and holds exactly sixteen instructions once the two mask branches come home
-# to their columns; ret is the seventeenth, and it was the only one-byte
-# instruction living out there until jmp arrived.  Every other one-byte opcode
-# is in x000_0xxx, so that is where both of them go.
-#
-# It fits that region on its own terms rather than as an exile.  The one-byte
-# block is instructions with nothing left to say - `add r0, r0, #1`, `mov r0,
-# #0`, `ld` with its register implied - and `ret` is `jmp lr` with its operand
-# implied, which is the same kind of thing.  It is also, after the ALU, the
-# most executed instruction in any program, which is what a one-byte opcode is
-# for.
-#
-# Nothing decodes worse for it: decode is a flat 256-entry table and always was,
-# so "the pc writers are 1001_xxxx" is a claim about how the map READS, not a
-# mask any hardware applies.
 [[insn]]
 mnemonic = "ret"
 summary  = "pc = lr"

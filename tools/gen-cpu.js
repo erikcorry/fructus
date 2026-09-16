@@ -119,13 +119,18 @@ module cpu (
 );
 
     // --- sequencing -----------------------------------------------------------
-    wire fetch, dispatch, wen;
-    ucode u (.clk(clk), .rst(rst), .bus(mem_rdata), .fetch(fetch), .dispatch(dispatch),
-             .wen(wen), .halt(halted), .trap(trapped));
+    // \`defer\` is the one thing the microcode cannot know for itself: a taken
+    // branch's target is not on the bus yet, so the step that loads the pc must
+    // not dispatch, and the ROM follows its \`next\` into a waiting step instead.
+    wire fetch, dispatch, wen, lrwrite;
+    wire [1:0] pcload;
+    wire defer;
+    ucode u (.clk(clk), .rst(rst), .bus(mem_rdata), .defer(defer), .fetch(fetch),
+             .dispatch(dispatch), .wen(wen), .pcload(pcload), .lrwrite(lrwrite),
+             .halt(halted), .trap(trapped));
 
     logic [15:0] pc;
-    assign mem_addr = rst ? 16'd0 : ((fetch | dispatch) ? pc + 16'd1 : pc);
-    always_ff @(posedge clk) pc <= mem_addr;
+    wire [15:0] pc_next = pc + 16'd1;
 
     // --- the instruction ------------------------------------------------------
     wire [23:0] q, view;
@@ -133,8 +138,10 @@ module cpu (
 
     wire [3:0] alu_op, lhs_src, rhs_src, dest_src;
     wire [1:0] cond_src;
+    wire [1:0] pc_src;
     predecode p (.clk(clk), .bus(mem_rdata), .dispatch(dispatch), .alu_op(alu_op),
-                 .lhs_src(lhs_src), .rhs_src(rhs_src), .dest_src(dest_src), .cond_src(cond_src));
+                 .lhs_src(lhs_src), .rhs_src(rhs_src), .dest_src(dest_src),
+                 .cond_src(cond_src), .pc_src(pc_src));
 
     // --- the datapath, with the operands read a cycle early ---------------------
     (* ram_style = "logic" *)
@@ -159,7 +166,47 @@ module cpu (
     alu  a (.clk(clk), .lhs(aq), .rhs(bq), .op(alu_op), .y(y));
     dest d (.insn(q), .src(dest_src), .regnum(wn));
 
-    always_ff @(posedge clk) if (wen) R[wn] <= y;
+    // --- the condition, decided a cycle before it is used ----------------------
+    wire [2:0] ccode; wire cneg, cmask, taken;
+    cond    cu (.insn(q), .src(cond_src), .code(ccode), .neg(cneg), .mask(cmask));
+    compare cp (.lhs(aq), .rhs(bq), .cond(ccode), .neg(cneg), .mask(cmask), .taken(taken));
+    logic taken_q;
+    always_ff @(posedge clk) taken_q <= taken;
+
+    // --- the branch target, in the cycle its last byte arrives -----------------
+    // A displacement is always the instruction's LAST byte, so the target is
+    // relatched at every fetch and the one that matters is the last.  It is
+    // relative to the NEXT instruction, which is the adder's carry in rather
+    // than a second adder chained behind the first.
+    wire [15:0] off = {{8{mem_rdata[7]}}, mem_rdata};
+    logic [15:0] tgt;
+    always_ff @(posedge clk) tgt <= pc + off + 16'd1;
+
+    // --- which address the next cycle reads ------------------------------------
+    // Every candidate settled at an earlier edge or is wiring, so this is a mux
+    // and nothing else: the incrementer, the target adder's flop, the
+    // instruction's own bytes, and the right-hand operand.  \`pcload\` says
+    // whether this step loads the pc and whether the verdict decides it.
+    wire [15:0] wide = view[23:8];          // a wide target, as its last byte lands
+    wire taking = pcload[0] | (pcload[1] & taken_q);
+    assign defer = taking;
+    wire [15:0] seq = (fetch | dispatch) ? pc_next : pc;
+    always_comb begin
+        if (rst)          mem_addr = 16'd0;
+        else if (!taking) mem_addr = seq;
+        else case (pc_src)
+            2'd2:         mem_addr = wide;         // the wide target, as it arrives
+            2'd3:         mem_addr = bq;           // a register: ret and call ra
+            default:      mem_addr = tgt;          // the relative target
+        endcase
+    end
+    always_ff @(posedge clk) pc <= mem_addr;
+
+    // --- the register file's write ---------------------------------------------
+    // A call writes the return address rather than an ALU result, and takes it
+    // from the incrementer in the cycle that loads the target.
+    wire [15:0] wdata = lrwrite ? pc_next : y;
+    always_ff @(posedge clk) if (wen) R[wn] <= wdata;
     assign result = y;
 
 endmodule
