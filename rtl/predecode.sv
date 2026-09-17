@@ -19,7 +19,7 @@
 //
 // 135 opcodes, one row each.  An x is a value no step of that instruction reads -
 // a branch has no ALU operation, a store no destination - left to the mapper as
-// a don't-care.  Rows with an x, per field: alu 18, lhs 17, rhs 6, dest 26, cond 128, pc 0.
+// a don't-care.  Rows with an x, per field: alu 28, lhs 17, rhs 6, dest 26, cond 128, pc 0.
 //
 // THE MICROCODE ROM KEEPS WHAT CHANGES FROM STEP TO STEP: write enables,
 // fetch and dispatch, the pc, memory reads and writes, the next address.  What
@@ -88,33 +88,33 @@ module predecode (
         (* rom_style = "logic" *)
         case (bus)
         8'h00: t = 20'bxxxx_xxxx_xxxx_xxxx_xx_00;    // halt
-        8'h03: t = 20'b0000_0000_1000_0000_xx_00;    // ld
-        8'h04: t = 20'b0000_0000_1000_0000_xx_00;    // ld8
+        8'h03: t = 20'b0111_0000_1000_0000_xx_00;    // ld
+        8'h04: t = 20'b0111_0000_1000_0000_xx_00;    // ld8
         8'h05: t = 20'b0000_0000_1001_0000_xx_00;    // add
         8'h06: t = 20'b0000_0000_1111_0000_xx_00;    // add
         8'h07: t = 20'b0000_0000_1010_0000_xx_00;    // add
-        8'h09: t = 20'b0000_1001_1011_xxxx_xx_00;    // st
-        8'h0a: t = 20'b0000_1001_1011_xxxx_xx_00;    // st
-        8'h0b: t = 20'b0000_1001_1011_xxxx_xx_00;    // st
-        8'h0e: t = 20'b0000_1001_1101_xxxx_xx_00;    // st
-        8'h0f: t = 20'b0000_1001_1101_xxxx_xx_00;    // st
-        8'h11: t = 20'b0000_1001_1011_xxxx_xx_00;    // st8
-        8'h12: t = 20'b0000_1001_1011_xxxx_xx_00;    // st8
-        8'h13: t = 20'b0000_1001_1011_xxxx_xx_00;    // st8
-        8'h16: t = 20'b0000_1001_1101_xxxx_xx_00;    // st8
-        8'h17: t = 20'b0000_1001_1101_xxxx_xx_00;    // st8
-        8'h18: t = 20'b0000_1000_1011_1000_xx_00;    // ld
-        8'h19: t = 20'b0000_1001_1011_1000_xx_00;    // ld
-        8'h1a: t = 20'b0000_1001_1011_1000_xx_00;    // ld
-        8'h1b: t = 20'b0000_1001_1011_1000_xx_00;    // ld
-        8'h1e: t = 20'b0000_1001_1101_1000_xx_00;    // ld
-        8'h1f: t = 20'b0000_1001_1101_1000_xx_00;    // ld
-        8'h20: t = 20'b0000_1000_1011_1000_xx_00;    // ld8
-        8'h21: t = 20'b0000_1001_1011_1000_xx_00;    // ld8
-        8'h22: t = 20'b0000_1001_1011_1000_xx_00;    // ld8
-        8'h23: t = 20'b0000_1001_1011_1000_xx_00;    // ld8
-        8'h26: t = 20'b0000_1001_1101_1000_xx_00;    // ld8
-        8'h27: t = 20'b0000_1001_1101_1000_xx_00;    // ld8
+        8'h09: t = 20'bxxxx_1001_1011_xxxx_xx_00;    // st
+        8'h0a: t = 20'bxxxx_1001_1011_xxxx_xx_00;    // st
+        8'h0b: t = 20'bxxxx_1001_1011_xxxx_xx_00;    // st
+        8'h0e: t = 20'bxxxx_1001_1101_xxxx_xx_00;    // st
+        8'h0f: t = 20'bxxxx_1001_1101_xxxx_xx_00;    // st
+        8'h11: t = 20'bxxxx_1001_1011_xxxx_xx_00;    // st8
+        8'h12: t = 20'bxxxx_1001_1011_xxxx_xx_00;    // st8
+        8'h13: t = 20'bxxxx_1001_1011_xxxx_xx_00;    // st8
+        8'h16: t = 20'bxxxx_1001_1101_xxxx_xx_00;    // st8
+        8'h17: t = 20'bxxxx_1001_1101_xxxx_xx_00;    // st8
+        8'h18: t = 20'b0111_1000_1011_1000_xx_00;    // ld
+        8'h19: t = 20'b0111_1001_1011_1000_xx_00;    // ld
+        8'h1a: t = 20'b0111_1001_1011_1000_xx_00;    // ld
+        8'h1b: t = 20'b0111_1001_1011_1000_xx_00;    // ld
+        8'h1e: t = 20'b0111_1001_1101_1000_xx_00;    // ld
+        8'h1f: t = 20'b0111_1001_1101_1000_xx_00;    // ld
+        8'h20: t = 20'b0111_1000_1011_1000_xx_00;    // ld8
+        8'h21: t = 20'b0111_1001_1011_1000_xx_00;    // ld8
+        8'h22: t = 20'b0111_1001_1011_1000_xx_00;    // ld8
+        8'h23: t = 20'b0111_1001_1011_1000_xx_00;    // ld8
+        8'h26: t = 20'b0111_1001_1101_1000_xx_00;    // ld8
+        8'h27: t = 20'b0111_1001_1101_1000_xx_00;    // ld8
         8'h28: t = 20'b0111_xxxx_1011_1000_xx_00;    // mov
         8'h2c: t = 20'b0111_xxxx_1011_1000_xx_00;    // mov
         8'h2d: t = 20'b0111_xxxx_1011_1000_xx_00;    // mov

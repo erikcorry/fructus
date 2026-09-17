@@ -242,11 +242,11 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   };
 
   const rungs = [
-    ['memcpy',                 16.0000, 1],
-    ['memcpy2',                 9.0000, 1],
-    ['memcpy3',                 8.0000, 1],
-    ['memcpy4',                 6.0000, 1],
-    ['memcpy_divisible_by_32',  4.4063, 32],
+    ['memcpy',                 18.0000, 1],
+    ['memcpy2',                10.0000, 1],
+    ['memcpy3',                 9.0000, 1],
+    ['memcpy4',                 7.0000, 1],
+    ['memcpy_divisible_by_32',  5.2188, 32],
   ];
 
   for (const [name, want, unit] of rungs) {
@@ -357,8 +357,8 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     ['mul_16',      UNIFORM, 166], ['mul_16',      SMALL_A, 166],
     ['mul_16_x4',   UNIFORM, 126], ['mul_16_x4',   SMALL_A, 126],
     ['mul_16_fast', UNIFORM, 103], ['mul_16_fast', SMALL_A, 103],
-    ['mul_16_fast_erik', UNIFORM, 119], ['mul_16_fast_erik', SMALL_A, 119],
-    ['mul_16_nib', UNIFORM, 110], ['mul_16_nib', SMALL_A, 110],
+    ['mul_16_fast_erik', UNIFORM, 122], ['mul_16_fast_erik', SMALL_A, 122],
+    ['mul_16_nib', UNIFORM, 113], ['mul_16_nib', SMALL_A, 113],
     ['mul_16_min',  UNIFORM, 166], ['mul_16_min',  SMALL_A,  91],
   ];
   for (const [entry, gen, target] of want) {
@@ -460,10 +460,10 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
       return tot / 400;
     };
     const wide16 = w((r) => [r(16), r(16)]), wide8 = w((r) => [r(16), r(8)]);
-    check('mul_16_16_32 cost', Math.abs(wide16 - 311) < 2,
-          `16x16 costs ${wide16.toFixed(1)} cycles, the file says 311`);
-    check('mul_16_16_32 narrow', Math.abs(wide8 - 164) < 2,
-          `16x8 costs ${wide8.toFixed(1)} cycles, the file says 164`);
+    check('mul_16_16_32 cost', Math.abs(wide16 - 316) < 2,
+          `16x16 costs ${wide16.toFixed(1)} cycles, the file says 316`);
+    check('mul_16_16_32 narrow', Math.abs(wide8 - 168) < 2,
+          `16x8 costs ${wide8.toFixed(1)} cycles, the file says 168`);
     // The swap is load-bearing here too: a narrow multiplicand must be moved
     // into the multiplier, or the loop runs over all sixteen bits.
     check('mul_16_16_32 swaps', w((r) => [r(8), r(16)]) < wide16 * 0.75,
@@ -674,10 +674,10 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 
   // name, its cycle range, and whether it must be right at zero
   const CASES = [
-    ['clz',     24, 28],
+    ['clz',     25, 29],
     ['clz2',    19, 38],
-    ['clz_nz',  22, 26],
-    ['clz_big', 16, 17],
+    ['clz_nz',  23, 27],
+    ['clz_big', 17, 18],
   ];
   for (const [name, lo, hi] of CASES) {
     let bad = -1, best = Infinity, worst = 0;
@@ -723,7 +723,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     else if (r[2] !== 0x2222 || r[3] !== 0x3333 || r[4] !== 0x4444) { bad = n; why = 'clobbered a callee saved register'; }
   }
   check('digits3 is right', bad < 0, `n = ${bad}: ${why}`);
-  check('digits3 costs 52', best === 52 && worst === 52, `measured ${best}..${worst}`);
+  check('digits3 costs 55', best === 55 && worst === 55, `measured ${best}..${worst}`);
   console.log('ok    snippets/digits3.s: 1000 inputs, and its cycle count');
 }
 

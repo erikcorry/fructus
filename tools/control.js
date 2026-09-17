@@ -139,10 +139,13 @@ export const ALU_OPS = [
 
 // --- which operation each instruction needs, from its semantics ---------------
 export const ALU_RULES = [
-  // The second term is a displacement or an index register; either way the
-  // address is one add, with rtl/rhs.sv choosing what the right-hand side is.
-  [/^R\[d\] = M(8|16)\[R\[a\] \+ (off|R\[b\])\]$/,          'add',   'the address'],
-  [/^M(8|16)\[R\[a\] \+ (off|R\[b\])\] = R\[s\]$/,          'add',   'the address'],
+  // A LOAD ASKS THE ALU FOR NOTHING BUT THE PASS-THROUGH.  Its address is the
+  // address unit's add, not this one's; and the bytes that come back are
+  // assembled where they land, because each SHIFTS INTO the right-hand operand
+  // flop - two of them make a little-endian word in place, one zero extends.
+  // So what reaches the register file is the operand itself, which is the same
+  // pass-through the short movs and a call's return address already use.
+  [/^R\[d\] = M(8|16)\[R\[a\] \+ (off|R\[b\])\]$/,          'rhs',   'the bytes, assembled by the capture'],
   [/^R\[d\] = imm$/,                                      'rhs'],
   [/^R\[d\] = R\[a\] \+ (R\[b\]|imm)$/,                    'add'],
   [/^R\[d\] = (R\[b\]|imm) - R\[a\]$/,                     'rsb'],
@@ -164,6 +167,9 @@ export const ALU_RULES = [
 export const ALU_ELSEWHERE = [
   [/^$/,                                                'nothing'],
   [/^halted = 1$/,                                      'no datapath'],
+  // A store writes no register, so nothing it does passes through the ALU: the
+  // address unit adds the address and the register file drives the bus direct.
+  [/^M(8|16)\[R\[a\] \+ (off|R\[b\])\] = R\[s\]$/,       'the address unit and the bus'],
   [/^pc = (lr|R\[a\]|target|pc \+ target)$/,             'the pc and its own adder'],
   [/^if \(/,                                            'rtl/compare.sv'],
 ];

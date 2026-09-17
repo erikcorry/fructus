@@ -238,8 +238,9 @@ __mulhisi3:
 ; needs all thirty-two, which is __umulhisi3 - and its high:low result is
 ; already in the right registers, so folding the cross terms in is one `add`.
 ;
-; ONE PUSH, NOT TWO.  A three-register push costs the same eight cycles as
-; pushing two separately and two bytes fewer, and the order works out: `push
+; ONE PUSH, NOT TWO.  A three-register push is nine cycles and two bytes where
+; pushing two and then one is twelve cycles and four - a push pays for its
+; address once however many registers it carries - and the order works out: `push
 ; r4, lr, r1` writes r4 highest and al lowest, so `ld r0, [sp]` finds al, and
 ; the later `pop r0` then `pop lr, r4` unwind it in the right order.
 ;

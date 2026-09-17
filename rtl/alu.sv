@@ -10,9 +10,8 @@
 // instructions whose semantics call for it:
 //
 //    0  add    lhs + rhs
-//            ld8 (the address), ld (the address), st8 (the address), st (the
-//            address), add, push (sp and #-2, per register), pop (sp and #2,
-//            per register)
+//            add, push (sp and #-2, per register), pop (sp and #2, per
+//            register)
 //    1  rsb    rhs - lhs
 //            rsb
 //    2  iseq   lhs == rhs, as 0 or 1
@@ -26,7 +25,8 @@
 //    6  and    lhs & rhs
 //            and
 //    7  rhs    rhs
-//            mov, call (the return address)
+//            ld8 (the bytes, assembled by the capture), ld (the bytes,
+//            assembled by the capture), mov, call (the return address)
 //    8  shl    lhs << rhs[3:0]
 //            shl
 //    9  lsr    lhs >> rhs[3:0]

@@ -20,27 +20,34 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED, by tests/libc-check.mjs
 ; ----------------------------------------------------------------------------
-;       fill loop       1.5000 cycles/byte      32 bytes an iteration
-;       head            3.8571 cycles/byte      up to 15 bytes, in words
+;       fill loop       1.6875 cycles/byte      32 bytes an iteration
+;       head            4.3571 cycles/byte      up to 15 bytes, in words
 ;       sizes           bzero 12 bytes, memset 52, 64 together
 ;
 ; The floor is 1.00 - one bus cycle to write each byte - and 15 bytes of loop
-; get to 1.50.  snippets/speed-of-light-memset-core.s reaches 1.3488 and spends
+; get to 1.69.  A push pays one address cycle however many registers it carries,
+; which is 0.1875 of that and the whole of the difference from the 1.50 this
+; loop cost before the address cycle was charged.
+; snippets/speed-of-light-memset-core.s reaches 1.5194 and spends
 ; 89 bytes doing it, so this gives up 11% for a quarter of the code.  The whole
 ; difference is the branch: 4 cycles over 32 bytes here, over 258 there.
 ;
 ; THE HEAD ONLY HAS TO REACH 15 BYTES, because the fill loop can be entered at
 ; its midpoint - see the loop itself.  Everything from 16 bytes up runs at the
 ; loop's rate, and the head pushes words rather than bytes, so what began as a
-; 7-cycles-a-byte tail is now 3.86 over at most fifteen bytes.
+; 7-cycles-a-byte tail is now 4.36 over at most fifteen bytes.
 ;
-; The two steps together, measured, against the original byte head:
+; The two steps together, measured, against the original byte head.  Only the
+; last column is code that still exists and is measured as it stands; the first
+; two are the earlier heads as they were measured BEFORE an access was charged
+; for its address, so they understate themselves by about a cycle per push and
+; the gap they show is if anything the conservative one:
 ;
 ;       n        byte head    word head    + midpoint entry
-;       16         138           94              56
-;       24         194          126              86
-;       31         243          152             112
-;       32          76           80              84
+;       16         138           94              61
+;       24         194          126              95
+;       31         243          152             125
+;       32          76           80              92
 ;
 ; and the cost of each is exact and small: word pushes were 5 bytes and 4 cycles
 ; on multiples of 32, the midpoint 4 more bytes and 4 more cycles on lengths
@@ -118,14 +125,14 @@ memset:
 ; block boundary, and n & ~31 is the same either way.
 
         brclear r2, #1, .even           ; even length: no byte to peel
-        push8   r1                      ; the odd byte, at the very top    3
+        push8   r1                      ; the odd byte, at the very top    4
 .even:
         and     r2, r2, #-16            ; the length, rounded down to a half block
         add     r2, r0, r2              ; ... as an address: where the head stops
 
         br      eq, sp, r2, .headdone   ; nothing between the block and the end
 .head:
-        push    r1                      ;                               4
+        push    r1                      ;                               5
         br      ne, sp, r2, .head       ;                               4
 .headdone:
 
@@ -152,13 +159,13 @@ memset:
         brset   r2, #16, .mid           ; an odd multiple starts halfway in
         jmpr    .bottom
 .top:
-        push    r1, r1, r1              ;                               8
-        push    r1, r1, r1              ;                               8
-        push    r1, r1                  ;                               6
+        push    r1, r1, r1              ;                               9
+        push    r1, r1, r1              ;                               9
+        push    r1, r1                  ;                               7
 .mid:
-        push    r1, r1, r1              ;                               8
-        push    r1, r1, r1              ;                               8
-        push    r1, r1                  ;                               6
+        push    r1, r1, r1              ;                               9
+        push    r1, r1, r1              ;                               9
+        push    r1, r1                  ;                               7
 .bottom:
         br      ne, sp, r0, .top        ;                               4
 
@@ -177,16 +184,20 @@ memset:
 ; An entry point is only useful if it leaves a POWER OF TWO to be pushed, since
 ; that is what one `brset` can select; and the arrangement of a 16-byte half
 ; decides which remainders exist.  Eight words - sixteen bytes - in six bytes of
-; code cost 22 cycles, and every 22-cycle spelling is two triples and a double:
+; code cost 25 cycles, and every 25-cycle spelling is two triples and a double:
 ;
-;       3-3-2   leaves 16, 10, 4        22 cycles       <- what we use
-;       3-2-3   leaves 16, 10, 6        22
-;       2-3-3   leaves 16, 12, 6        22
-;       3-1-3-1 leaves 16, 10, 8, 2     24              <- an 8, at a price
-;       2-2-2-2 leaves 16, 12, 8, 4     24
+;       3-3-2   leaves 16, 10, 4        25 cycles       <- what we use
+;       3-2-3   leaves 16, 10, 6        25
+;       2-3-3   leaves 16, 12, 6        25
+;       3-1-3-1 leaves 16, 10, 8, 2     28              <- an 8, at a price
+;       2-2-2-2 leaves 16, 12, 8, 4     28
 ;
-; So 8-byte granularity exists, but only in a spelling that costs two more
-; cycles per half - four per 32-byte block, thirty-two on a 256-byte fill - to
+; A push costs one address cycle whatever it carries, so a spelling is dearer
+; exactly in proportion to how many pushes it uses - which is what widens the
+; gap below from two cycles to three.
+;
+; So 8-byte granularity exists, but only in a spelling that costs three more
+; cycles per half - six per 32-byte block, forty-eight on a 256-byte fill - to
 ; save at most a few cycles on a quarter of the short calls.  The trade goes
 ; the wrong way, and it goes the wrong way by a wide enough margin that it is
 ; not worth re-measuring on a whim.

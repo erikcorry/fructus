@@ -241,6 +241,31 @@ length_from_first_byte = true
 # one register the assembler may clobber is a jump you have to arrange for.
 # Two bytes and any register is the same three cycles.
 #
+# AND A MEMORY ACCESS COSTS ONE CYCLE MORE THAN ITS BYTES AND THE BYTES IT
+# MOVES, for the add that produces the address.  This is the taken branch's
+# cycle over again and it is the same argument: the operands are read a cycle
+# BEFORE they are used, so `R[a] + off` cannot reach the address bus until the
+# cycle after the instruction's last byte arrived, and there is nothing to
+# fetch while the adder runs.  So `ld r1, [r2, #4]` is two bytes, two data
+# bytes and five cycles.
+#
+# THE ALTERNATIVE WAS MEASURED AND IS WORSE.  Adding the address in the same
+# cycle its last byte arrives - out of the register file, through immgen and an
+# adder, into the memory's address pins - costs no cycles at all, and costs a
+# third of the clock, because that is the exact path the early operand read was
+# introduced to remove.  MEASURED on an iCE40 UP5K with a real SB_SPRAM256KA on
+# the bus, medians of eight placement seeds: 28.95 MHz with the address a cycle
+# later, as here, against 20.54 with it added in the fetch cycle - the same
+# 1141 cells in both, so what is bought is the path and not the hardware.  One cycle on
+# the accesses against a third off every instruction in the machine is not a
+# close call; rtl/cpu.sv carries the rest of the numbers.
+#
+# AND `pop` PAYS ONE CYCLE MORE STILL, because its last act is to write sp and
+# the register file has ONE write port, so that write cannot share the cycle
+# that writes the last popped register.  `push` has no such conflict: its sp
+# write lands in the cycle the next opcode is dispatched in, which is where
+# every other instruction's result lands too.
+#
 # AND AN INSTRUCTION MAY DECLARE EXTRA CYCLES, with `extra_cycles` on its entry,
 # when the hardware takes its result a cycle after its bytes are in.  clz and
 # popcount do: their logic is registered halfway through, which is what keeps

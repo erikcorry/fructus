@@ -32,11 +32,14 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED
 ; ----------------------------------------------------------------------------
-;       digits3         41 bytes, 52 cycles for every n, no branches
+;       digits3         41 bytes, 55 cycles for every n, no branches
+;
+; Three of those 55 are the addresses of its three stores: an access costs a
+; cycle beyond its bytes and its data, for the add that produces the address.
 ;
 ; For comparison, a divmod10 by 51/512 with one correction - also exact below
 ; 1000, and needing the fixup because 51/512 undershoots - inlined twice with
-; the same stores came to 75 bytes and 74..78 cycles.
+; the same three stores came to 75 bytes and 77..81 cycles.
 ;
 ; The encodings it leans on, none of which expands through r5:
 ;   0x0fff and 0x30     both in immask5, so the mask and the `+ '0'` (an `or`,

@@ -22,8 +22,8 @@
 ;       mul_16              21       166        82        166
 ;       mul_16_x4           32       126        67        126
 ;       mul_16_fast        158       103        75        103
-;       mul_16_fast_erik   132       119        67        119
-;       mul_16_nib         274       110        76        110
+;       mul_16_fast_erik   132       122        70        122
+;       mul_16_nib         274       113        79        113
 ;       mul_16_min           8       166        86         91
 ;
 ; THE FIRST THREE ROWS HAVE IDENTICAL FIRST AND LAST COLUMNS, and that is the
@@ -90,8 +90,8 @@
 ; prologue, but it no longer wins outright: its dispatch is a computed `ret',
 ; a register transfer costs three cycles, and two cycles a nibble is more than
 ; its margin over the unrolled chain.  On uniformly random 16-bit multipliers
-; the chain is now ahead, 103 against 110; the table wins only when the
-; multiplier really uses all sixteen bits, 103 against 114.  On narrow ones
+; the chain is now ahead, 103 against 113; the table wins only when the
+; multiplier really uses all sixteen bits, 106 against 114.  On narrow ones
 ; mul_16_x4 does the same work in 32 bytes.  It is the one to look at if
 ; 274 bytes is affordable, and the one to widen to radix 256 if six kilobytes
 ; is.
@@ -194,7 +194,7 @@ mul_16:
 ; one-byte encoding at 0x07.  That costs the multiplier its register - it moves
 ; to r5, which a two-argument function owns anyway - and one extra `mov` in the
 ; setup, which the pinned `mov r1, r0` gives back.  Six adds in the loop go from
-; two bytes to one: 37 bytes to 32, and 121 cycles to 110.
+; two bytes to one: 37 bytes to 32, and 124 cycles to 113.
 ;
 ; TWO IS STILL THE OPTIMUM, but by less than it was.  Bit j of a group needs
 ; 2^j adds when it is set, at one cycle each now rather than two, so with a
@@ -295,7 +295,7 @@ mul_16_x4:
 ;       0            16      55         30
 ;
 ; c is 0 half the time and 1 a quarter of the time on uniformly random input,
-; so the scan still wins there - 103 against 119.  On anything narrower the
+; so the scan still wins there - 103 against 122.  On anything narrower the
 ; computed goto wins, and it wins by a great deal at the bottom.  Which is the
 ; better dispatch depends entirely on what the multipliers look like, and the
 ; computed one is smaller either way.
@@ -463,7 +463,7 @@ mul_16_fast_erik:
         brclear r1, #0x0001, .done  ; 3
         add     r0, r0, r5              ; 2
 .done:                                  ; table + 7*15, reached when b == 1
-        pop     lr                      ; 4
+        pop     lr                      ; 6
         ret                             ; 1
 
 ; b == 0 IS THE ONE CASE THE ARITHMETIC DOES NOT COVER.  clz(0) is 16, so the
@@ -480,7 +480,7 @@ mul_16_fast_erik:
         #res    4
 .zero:                                  ; table + 7*16, reached when b == 0
         mov     r0, #0                  ; 1
-        pop     lr                      ; 4
+        pop     lr                      ; 6
         ret                             ; 1
 
 #assert mul_16_fast_erik.done - mul_16_fast_erik.branch_table == 7 * 15
@@ -569,12 +569,14 @@ mul_16_fast_erik:
 ; dispatched by a computed `ret' - the address is built in lr and returned to -
 ; and a transfer whose target is a register now costs three cycles rather than
 ; one.  That is two cycles a nibble, eight over a full multiplier, and it is
-; the whole of the difference: 110 cycles against mul_16_fast's 103 on a
-; uniformly random 16-bit multiplier, where it used to lead 98 to 101.
+; the whole of the difference: 113 cycles against mul_16_fast's 103 on a
+; uniformly random 16-bit multiplier, where it used to lead 98 to 101.  Its
+; table lookups now pay an address cycle each on top of that, which is the
+; three cycles between 110 and 113.
 ;
-; IT STILL WINS WHEN THE MULTIPLIER IS FULL WIDTH - 103 against 114 on 0xffff -
+; IT STILL WINS WHEN THE MULTIPLIER IS FULL WIDTH - 106 against 114 on 0xffff -
 ; because there its four nibbles all do work and the chain has sixteen blocks
-; to walk.  And on an 8-bit multiplier mul_16_x4 still beats it, 67 against 76,
+; to walk.  And on an 8-bit multiplier mul_16_x4 still beats it, 67 against 79,
 ; and does it in 32 bytes rather than 274.  Thirty-three cycles of
 ; prologue is still the whole story of its narrow-multiplier case.
 
@@ -590,7 +592,7 @@ mul_16_nib:
         add     lr, lr, r2              ; 2
         ret                             ; 1
 .done:
-        pop     r3, r2, lr              ; 8
+        pop     r3, r2, lr              ; 10
         ret                             ; 1
 
 ; --- the table: sixteen blocks on a sixteen-byte stride ---------------------
@@ -795,8 +797,8 @@ mul_16_nib:
 ; ----------------------------------------------------------------------------
 ; TWO THINGS THE FIRST DRAFT PAID FOR AND DID NOT NEED
 ; ----------------------------------------------------------------------------
-;       first draft   53 bytes   350 cycles
-;       this          52 bytes   311 cycles
+;       first draft   53 bytes   355 cycles
+;       this          52 bytes   316 cycles
 ;
 ; THE LOOP IS ROTATED, as in mul_16: the two conditional branches at the bottom
 ; ARE the loop control, so there is no `jmpr` back to the top and no separate
@@ -814,7 +816,7 @@ mul_16_16_32:
         mov     r0, r1                  ; 1   pinned
         mov     r1, r5                  ; 2   ... and fall through
 .smallest:
-        push    r2, r3, lr              ; 8
+        push    r2, r3, lr              ; 9
         lsr     r2, r0, #15             ; 2   multiplicand high = a >> 15
         shl     lr, r0, #1              ; 2   multiplicand low  = a << 1
         mov     r3, #0                  ; 2   accumulator high

@@ -6,8 +6,8 @@
 // `npm run rtl`.
 //
 // What runs: whatever rtl/ucode.sv implements - today every instruction whose
-// effect is one ALU result written to one register, and halt and nop.  No
-// memory writes, no branches, no pc loads yet, so the pc only counts.
+// effect is one ALU result written to one register, the transfers of control,
+// the loads and the stores, and halt and nop.  push and pop are not here yet.
 //
 // MEMORY IS OUTSIDE, as a synchronous read: `mem_addr` is sampled at the clock
 // edge and the byte at that address is on `mem_rdata` for the following cycle.
@@ -44,6 +44,58 @@
 // that executed in its dispatch cycle would need a bypass from the ALU result
 // into these flops, which measured 5 MHz slower than the extra cycle costs.
 //
+// MEMORY HAS AN ADDER OF ITS OWN, and it is not a luxury: a load's bytes come
+// back through the ALU, so the ALU cannot also be adding `R[a] + off` while
+// they do.  The address unit is that adder - the two operand flops, or its own
+// last address and one of three constants - and it walks an access upwards a
+// byte at a time from wherever it started, so one adder serves any width.  THE
+// pc STANDS STILL while it drives the bus, because what is on the bus then is
+// data and not an instruction byte.
+//
+// SO AN ACCESS COSTS ONE CYCLE MORE THAN ITS BYTES AND ITS DATA, for that add.
+// The alternative is to add the address in the cycle its last byte arrives -
+// out of the register file, through rtl/immgen.sv and an adder, into the
+// memory's address pins - which costs no cycles and puts the exact path the
+// early operand read was introduced to remove in front of the memory instead.
+// MEASURED, medians of eight placement seeds, real SB_SPRAM256KA:
+//
+//                                          RAM   LUT4   levels     MHz
+//     no memory unit at all                   2   1008    7 -  8   32.34
+//     THE ADDRESS A CYCLE LATER, as here      3   1141    8 -  9   28.95
+//     the address in the fetch cycle          3   1141   21 - 24   20.54
+//
+// A third of the clock against one cycle on the accesses alone, and the cycle
+// is much the cheaper of the two.  THE LAST TWO ROWS ARE THE SAME CELLS - 1141
+// LUT4 and 1367 logic cells either way - so this is not a question of how much
+// hardware an address costs but of WHERE THE ADDER SITS.  In the third row it
+// sits in front of the memory's address pins, and the path ends where it was
+// always going to end: at the address bus, three times as deep for it.
+//
+// The third block RAM is the microcode word, which the memory control took from
+// 16 bits to 25.
+//
+// THE BYTES COMING BACK SHIFT INTO THE RIGHT-HAND OPERAND FLOP, low byte first,
+// so a 16-bit value assembles itself in place and rtl/alu.sv's pass-through is
+// the whole of a load's arithmetic - no operation was added to the ALU for it.
+//
+// CAPTURING INTO THE LEFT FLOP INSTEAD COSTS FIVE MHZ, and measured one thing
+// at a time it is the CAPTURE that costs them and not the arithmetic.  From the
+// shift capture alone, with the address unit absent from every row:
+//
+//                                          LUT4    MHz
+//     the shift capture alone              1048   32.69
+//     and an ALU operation to combine      1049   32.08
+//     and a wider choice of port A's NUMBER 1052   31.98
+//     and a mux on the LEFT flop's input   1083   27.54
+//
+// An operation that mixes two halves is one cell, because it is one more arm on
+// a result mux that was already there; widening where port A's register number
+// comes from is four.  The mux on the left flop is thirty-five cells and the
+// clock, because THAT flop feeds rtl/unary.sv: the critical path of that row
+// runs from the memory's byte select into rtl/unary.sv's register, so anything
+// in front of the left flop lands in front of clz and popcount, the deepest
+// logic in the machine.  The right flop feeds nothing deep.
+//
 // MEASURED on an iCE40 UP5K, yosys 0.52 + nextpnr-ice40 0.7, behind a real
 // SB_SPRAM256KA holding the program, logic cells and the median of eight
 // placement seeds:
@@ -54,7 +106,13 @@
 //     microcode ROM in LUTs as well                     956        0      22.0
 //     clz and popcount registered                       947        2      23.7
 //     the mask columns swapped, immask5 reordered       938        2      23.3
-//     the operands read a cycle early, as now           866        2      34.3
+//     the operands read a cycle early                   866        2      34.3
+//     loads and stores, with an address unit           1141        3      28.95
+//
+// The early rows were measured on a machine that had no transfers of control
+// yet, so they are a history of this file rather than a series anything can be
+// subtracted from; the table above compares the memory unit against the
+// machine as it stood immediately before it.
 //
 // READING THE OPERANDS EARLY IS THE LARGEST STEP MEASURED SO FAR: 23.3 to 34.3
 // MHz, medians of eight placement seeds, and 72 cells smaller.  The critical
@@ -97,10 +155,12 @@ module cpu (
     input  logic        rst,
     output logic [15:0] mem_addr,    // -> memory: sampled at the clock edge
     input  logic [7:0]  mem_rdata,   // <- the byte at the address sampled last edge
+    output logic [7:0]  mem_wdata,   // -> memory: the byte to write there
+    output logic        mem_we,      // -> memory: write it at that same edge
     output logic        halted,
     output logic        trapped,
-    output logic [15:0] result       // the ALU's output, observable until stores give the
-                                     // datapath an output of its own
+    output logic [15:0] result       // the ALU's output; the stores below give the datapath
+                                     // an output of its own, so this is for the test bench
 );
 
     // --- sequencing -----------------------------------------------------------
@@ -109,10 +169,13 @@ module cpu (
     // not dispatch, and the ROM follows its `next` into a waiting step instead.
     wire fetch, dispatch, wen;
     wire [1:0] pcload;
+    wire amem, abase, we, wsel, alt;
+    wire [1:0] akon, dcap;
     wire defer;
     ucode u (.clk(clk), .rst(rst), .bus(mem_rdata), .defer(defer), .fetch(fetch),
              .dispatch(dispatch), .wen(wen), .pcload(pcload),
-             .halt(halted), .trap(trapped));
+             .amem(amem), .abase(abase), .akon(akon), .we(we), .wsel(wsel),
+             .dcap(dcap), .alt(alt), .halt(halted), .trap(trapped));
 
     logic [15:0] pc;
     wire [15:0] pc_next = pc + 16'd1;
@@ -161,7 +224,12 @@ module cpu (
 
     wire [2:0]  an, bn, wn;
     wire [15:0] bval, y;
-    lhs  l (.insn(view), .src(lhs_src), .regnum(an));
+    // A STEP MAY OVERRIDE PORT A, and a store is why.  Its data register is not
+    // the one its address was computed from, and no predecoded select can be
+    // both - the address register is the one the instruction names, and the
+    // source register is the rd field.  So the store's address cycle says so.
+    wire [3:0] lhs_eff = alt ? 4'd8 : lhs_src;
+    lhs  l (.insn(view), .src(lhs_eff), .regnum(an));
     rhs  r (.insn(view), .src(rhs_src), .regval(R[bn]), .pcsum(pcsum),
             .regnum(bn), .value(bval));
 
@@ -170,11 +238,42 @@ module cpu (
     // the entry cycle rtl/ucode.sv gives it instead - so what the ALU reads is
     // a cycle old and the register file has already taken the previous
     // instruction's write.
+    // A LOADED BYTE LANDS IN THE RIGHT-HAND FLOP, never the left.  Shifted in,
+    // it assembles a 16-bit value out of two cycles with no operation of its
+    // own; zero extended, it is an 8-bit load complete.  The left flop is left
+    // alone on purpose - it feeds rtl/unary.sv, and a mux in front of it costs
+    // clz and popcount five MHz.  See the table above.
     logic [15:0] aq, bq;
     always_ff @(posedge clk) begin
         aq <= R[an];
-        bq <= bval;
+        bq <= (dcap == 2'd1) ? {mem_rdata, bq[15:8]}
+            : (dcap == 2'd2) ? {8'h00, mem_rdata} : bval;
     end
+
+    // --- the address unit -------------------------------------------------------
+    // The second adder.  Its left input is the left-hand operand flop or its own
+    // last address, its right the right-hand operand flop or one of three
+    // constants - so `R[a] + off` and `R[a] + R[b]` are the same add to it,
+    // rtl/rhs.sv having already chosen which of the two the flop holds, and an
+    // access of any width is that add and then steps of one.
+    //
+    // `mar` LOADS ONLY ON THE CYCLES THAT DRIVE THE BUS, so an access leaves its
+    // last address behind it - which is what push and pop will want when they
+    // come to write sp back from it.
+    logic [15:0] mar;
+    wire [15:0] aleft  = abase ? mar : aq;
+    wire [15:0] aright = (akon == 2'd0) ? bq
+                       : (akon == 2'd1) ? 16'd0
+                       : (akon == 2'd2) ? 16'd1 : 16'hffff;
+    wire [15:0] adr    = aleft + aright;
+    always_ff @(posedge clk) if (amem) mar <= adr;
+
+    // --- and what a store puts on it --------------------------------------------
+    // The low byte comes straight off port A in the same cycle the address does,
+    // and that cycle latches the register too, so the high byte follows out of a
+    // flop.  That is what keeps a store the same length as the load beside it.
+    assign mem_wdata = wsel ? aq[15:8] : R[an][7:0];
+    assign mem_we    = we;
 
     alu  a (.clk(clk), .lhs(aq), .rhs(bq), .op(alu_op), .y(y));
     dest d (.insn(q), .src(dest_src), .regnum(wn));
@@ -206,6 +305,7 @@ module cpu (
     wire [15:0] seq = (fetch | dispatch) ? pc_next : pc;
     always_comb begin
         if (rst)          mem_addr = 16'd0;
+        else if (amem)    mem_addr = adr;      // a data cycle: the address unit has it
         else if (!taking) mem_addr = seq;
         else case (pc_src)
             2'd2:         mem_addr = wide;         // the wide target, as it arrives
@@ -213,7 +313,10 @@ module cpu (
             default:      mem_addr = tgt;          // the relative target
         endcase
     end
-    always_ff @(posedge clk) pc <= mem_addr;
+    // THE pc STANDS STILL THROUGH A DATA CYCLE: the address on the bus then is
+    // not where the next instruction byte lives, so it must not be remembered as
+    // one.  Every other cycle presents either pc or pc + 1, and this records it.
+    always_ff @(posedge clk) if (!amem) pc <= mem_addr;
 
     // --- the register file's write ---------------------------------------------
     // Straight out of the ALU, with nothing in front of it.  A call's return

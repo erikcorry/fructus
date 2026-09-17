@@ -10,7 +10,7 @@
 ;       r2  n                                   r6 = sp, r7 = lr
 ;
 ; COMPACT, NOT MAXIMAL.  The bulk loop moves 16 bytes an iteration where
-; snippets/speed-of-light-memcpy-core.s moves 60.  That gives up about 11% of
+; snippets/speed-of-light-memcpy-core.s moves 60.  That gives up about 7% of
 ; the throughput for a quarter of the code, which is the right trade for a
 ; libc: the routine is linked into everything, and most calls are short.
 ;
@@ -46,14 +46,14 @@
 ; BOTH TESTS ARE INCLUSIVE, and that is not cosmetic.  Regions that abut exactly
 ; - dest + n == src, or src + n == dest - do not overlap, so the fast path is
 ; correct for them and `ls` lets them take it; `lo` would send both the long way
-; round for nothing.  Measured, the descending loop is 16.0 cycles/byte against
-; the bulk loop's 3.9, so the difference is a factor of four on a case that
+; round for nothing.  Measured, the descending loop is 18.0 cycles/byte against
+; the bulk loop's 4.75, so the difference is nearly a factor of four on a case that
 ; turns up whenever a caller copies into the slot next to its source.
 ;
 ; THE CHEAPER TEST GOES FIRST.  dest <= src needs no arithmetic and leaves in
 ; three bytes; the other has to compute src + n first.  A copy into a fresh
 ; buffer usually satisfies the first one, so the common path is also the short
-; one - 301 cycles against 306 for a 64-byte move.
+; one - 365 cycles against 370 for a 64-byte move.
 ;
 ; tests/libc-check.mjs measures which loop ran, for every placement.  Correctness
 ; alone would not pin this down: a memmove that always descends copies the right
@@ -121,18 +121,18 @@ memcpy:
         add     r2, r2, r1              ; r2 = end of the source
         jmpr    .bottom
 .top:
-        pop     r3, r4, r5              ; src +0 .. +5                  8
-        st      r3, [r0]                ;                               4
-        st      r4, [r0, #2]            ;                               4
-        st      r5, [r0, #4]            ;                               4
-        pop     r3, r4, r5              ; src +6 .. +11                 8
-        st      r3, [r0, #6]            ;                               4
+        pop     r3, r4, r5              ; src +0 .. +5                 10
+        st      r3, [r0]                ;                               5
+        st      r4, [r0, #2]            ;                               5
+        st      r5, [r0, #4]            ;                               5
+        pop     r3, r4, r5              ; src +6 .. +11                10
+        st      r3, [r0, #6]            ;                               5
         add     r0, r0, #8              ;                               2
-        st      r4, [r0]                ; dest +8                       4
-        st      r5, [r0, #2]            ; dest +10                      4
-        pop     r3, r4                  ; src +12 .. +15                6
-        st      r3, [r0, #4]            ; dest +12                      4
-        st      r4, [r0, #6]            ; dest +14                      4
+        st      r4, [r0]                ; dest +8                       5
+        st      r5, [r0, #2]            ; dest +10                      5
+        pop     r3, r4                  ; src +12 .. +15                8
+        st      r3, [r0, #4]            ; dest +12                      5
+        st      r4, [r0, #6]            ; dest +14                      5
         add     r0, r0, #8              ;                               2
 .bottom:
         br      ne, sp, r2, .top        ;                               4

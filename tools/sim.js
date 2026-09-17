@@ -196,10 +196,12 @@ export const BUILTIN = {
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };
 
-// Whether an instruction's whole effect is a value in a register: no memory, no
-// pc, one assignment.  Those are the forms the hardware runs on the ALU alone.
-const computes = (sem) =>
-  /^R\[[a-z]\] = /.test(sem) && !sem.includes(';') && !/M(8|16)\[/.test(sem);
+// Whether an instruction reads operands at all: one assignment, into a
+// register, and not the pc's business.  A ONE-BYTE form of one of these has no
+// fetch cycle to read them in, so it spends a cycle of its own - see step().
+// The implicit loads are here too, and for the same reason: their address
+// register is read in exactly that cycle.
+const computes = (sem) => /^R\[[a-z]\] = /.test(sem) && !sem.includes(';');
 
 export class Machine {
   constructor(spec) {
@@ -353,6 +355,19 @@ export class Machine {
     // of them, `jmp ra' and `call ra' are two bytes and pay one.  A target in
     // the instruction's own bytes needs none of this - it is already there.
     if (/\bpc = (lr|R\[[a-z]\])/.test(d.insn.semantics ?? '')) this.slow += 3 - d.nbytes;
+    // A MEMORY ACCESS COSTS ONE CYCLE MORE THAN ITS BYTES AND THE BYTES IT
+    // MOVES, for the add that produces the address.  It is the taken branch's
+    // cycle over again, for the same reason: the operands are read a cycle
+    // BEFORE they are used, so the address cannot be on the bus until the cycle
+    // after the instruction's last byte arrived, and there is nothing to fetch
+    // while the adder runs.  See rtl/cpu.sv's address unit.
+    if (/M(8|16)\[/.test(d.insn.semantics ?? '')) this.slow += 1;
+    // AND pop PAYS ONE MORE, because its last act is to write sp and the
+    // register file has ONE write port: that write cannot share the cycle that
+    // writes the last popped register.  push has no such conflict - its sp
+    // write lands in the cycle the next opcode is dispatched in, which is where
+    // every other instruction's result lands too.
+    if (/^R\[[a-z]\] = M16\[sp\]/.test(d.insn.semantics ?? '')) this.slow += 1;
     this.wrotePc = false;
     if (trace) trace(at, d, this);
     for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);

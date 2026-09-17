@@ -37,14 +37,25 @@ const FIELDS = [
   ['halt',     1,    'stopped: the step repeats and consumes nothing'],
   ['trap',     1,    'an opcode this ROM does not implement yet'],
   ['pcload',   2,    'load the pc: 1 always, 2 if the branch is taken'],
+  ['amem',     1,    'the address unit drives the address bus: a data cycle, not a fetch'],
+  ['abase',    1,    "the address unit's left input: 0 the left operand flop, 1 its own last address"],
+  ['akon',     2,    'and its right: 0 the right operand flop, 1 #0, 2 #1, 3 #-1'],
+  ['we',       1,    'write the byte on mem_wdata at that address'],
+  ['wsel',     1,    "which byte: 0 port A's low, 1 the left operand flop's high"],
+  ['dcap',     2,    'capture the bus byte: 1 shift it into the right operand flop, 2 zero extend it there'],
+  ['alt',      1,    "port A reads the rd field rather than rtl/predecode.sv's choice"],
 ];
 const W = FIELDS.reduce((n, [, w]) => n + w, 0);
 
 // --- the shared steps, above the 256 entry points ------------------------------
 const STEP = { EXEC: 256, FETCH2: 257, HALT: 258, TRAP: 259, BOOT: 260, SLOW: 261,
                BRF2: 262, BRDO: 263, JF2: 264, JCF2: 265, JRDO: 266, PCDISP: 267,
-               PCREG: 268, CALLREG: 269 };
-const word = (w) => ({ next: 0, fetch: 0, dispatch: 0, wen: 0, halt: 0, trap: 0, pcload: 0, ...w });
+               PCREG: 268, CALLREG: 269,
+               LDA: 270, LDLO: 271, LDHI: 272, LDA8: 273, LD8: 274,
+               STA: 275, STHI: 276, STA8: 277, STEND: 278,
+               LDF2: 279, LD8F2: 280, STF2: 281, ST8F2: 282 };
+const word = (w) => ({ next: 0, fetch: 0, dispatch: 0, wen: 0, halt: 0, trap: 0, pcload: 0,
+                       amem: 0, abase: 0, akon: 0, we: 0, wsel: 0, dcap: 0, alt: 0, ...w });
 const rom = new Array(1 << ADDR).fill(null);
 const why = new Map();
 rom[STEP.EXEC]   = word({ wen: 1, dispatch: 1 });        why.set(STEP.EXEC, 'write the result; the next opcode is on the bus');
@@ -67,6 +78,48 @@ rom[STEP.PCREG]  = word({ pcload: 1, dispatch: 1, next: STEP.PCDISP });
                                                             why.set(STEP.PCREG, 'the register was read last cycle: present it');
 rom[STEP.CALLREG] = word({ pcload: 1, dispatch: 1, wen: 1, next: STEP.PCDISP });
                                                             why.set(STEP.CALLREG, 'the same, and the write lands in lr: the ALU is carrying pc + 2');
+// --- the memory routines -------------------------------------------------------
+// An access is an ADDRESS CYCLE and then one cycle per byte.  The address unit
+// adds the two operand flops in the first, and walks upwards by one for as long
+// as the access lasts, so one adder serves an access of any width.
+//
+// A LOAD ASKS THE ALU FOR NOTHING: each byte SHIFTS INTO the right-hand operand
+// flop as it arrives, low byte first, so a 16-bit value assembles itself in
+// place and an 8-bit one is zero extended as it lands.  Both routines therefore
+// end in the ordinary EXEC, where the pass-through writes the flop to the
+// register file - the same step every ALU instruction ends in.
+//
+// A STORE'S ADDRESS CYCLE CARRIES ITS FIRST BYTE OUT WITH IT, straight off port
+// A, which is what keeps a store the same length as the load beside it; the
+// same cycle latches the source register so that its high byte can follow from
+// a flop.  A store writes no register, so it ends by pointing the bus back at
+// the pc and dispatching.
+rom[STEP.LDA]   = word({ amem: 1, next: STEP.LDLO });
+why.set(STEP.LDA, 'the address: the two operand flops added, onto the bus');
+rom[STEP.LDLO]  = word({ amem: 1, abase: 1, akon: 2, dcap: 1, next: STEP.LDHI });
+why.set(STEP.LDLO, 'the low byte is on the bus: shift it in and ask for the next');
+rom[STEP.LDHI]  = word({ dcap: 1, next: STEP.EXEC });
+why.set(STEP.LDHI, 'the high byte: shift it in, and point the bus back at the pc');
+rom[STEP.LDA8]  = word({ amem: 1, next: STEP.LD8 });
+why.set(STEP.LDA8, 'the address, for a single byte');
+rom[STEP.LD8]   = word({ dcap: 2, next: STEP.EXEC });
+why.set(STEP.LD8, 'the byte: zero extend it into the flop, and back to the pc');
+rom[STEP.STA]   = word({ amem: 1, we: 1, alt: 1, next: STEP.STHI });
+why.set(STEP.STA, "the address, and the source register's low byte out with it");
+rom[STEP.STHI]  = word({ amem: 1, abase: 1, akon: 2, we: 1, wsel: 1, next: STEP.STEND });
+why.set(STEP.STHI, 'the next byte up, and the high half out of the flop');
+rom[STEP.STA8]  = word({ amem: 1, we: 1, alt: 1, next: STEP.STEND });
+why.set(STEP.STA8, 'the address and the only byte');
+rom[STEP.STEND] = word({ next: STEP.PCDISP });
+why.set(STEP.STEND, 'back to the pc; a store has no register write to wait for');
+rom[STEP.LDF2]  = word({ fetch: 1, next: STEP.LDA });
+why.set(STEP.LDF2, "a wide displacement's second byte, then the address");
+rom[STEP.LD8F2] = word({ fetch: 1, next: STEP.LDA8 });
+why.set(STEP.LD8F2, 'the same, for a byte load');
+rom[STEP.STF2]  = word({ fetch: 1, next: STEP.STA });
+why.set(STEP.STF2, 'the same, for a store');
+rom[STEP.ST8F2] = word({ fetch: 1, next: STEP.STA8 });
+why.set(STEP.ST8F2, 'the same, for a byte store');
 
 // --- the entry points ------------------------------------------------------------
 const classify = (d) => {
@@ -86,6 +139,17 @@ const classify = (d) => {
   // since a one-byte form has no byte to fetch.
   if (/^pc = (lr|R\[[a-z]\])$/.test(sem))  return d.nbytes === 1 ? 'pcreg1' : d.nbytes === 2 ? 'pcreg2' : 'trap';
   if (/^lr = pc; pc = R\[[a-z]\]$/.test(sem)) return d.nbytes === 2 ? 'callreg' : 'trap';
+  // The memory families.  Width and direction pick the routine; the entry word
+  // differs only in how many bytes it fetches before joining it, and a form
+  // whose length has no routine is refused rather than quietly trapped.
+  const mem = /^R\[d\] = M16\[/.test(sem) ? 'ld'  : /^R\[d\] = M8\[/.test(sem) ? 'ld8'
+            : /^M16\[/.test(sem)          ? 'st'  : /^M8\[/.test(sem)          ? 'st8' : null;
+  if (mem && !sem.includes(';')) {
+    const cls = `${mem}${d.nbytes}`;
+    if (!(cls in ENTRY))
+      throw new Error(`${d.insn.mnemonic}/${d.form.name}: ${d.nbytes} bytes, and there is no ${mem} routine that length`);
+    return cls;
+  }
   if (sem.includes(';') || /M(8|16)\[/.test(sem) || !/^R\[[a-z]\] = /.test(sem)) return 'trap';
   if (ALU_ELSEWHERE.some(([re]) => re.test(sem))) return 'trap';
   const rule = ALU_RULES.find(([re]) => re.test(sem));
@@ -108,6 +172,16 @@ const ENTRY = {
   pcreg1:   () => word({ next: STEP.PCREG }),
   pcreg2:   () => word({ fetch: 1, next: STEP.PCREG }),
   callreg:  () => word({ fetch: 1, next: STEP.CALLREG }),
+  ld1:  () => word({ next: STEP.LDA }),
+  ld2:  () => word({ fetch: 1, next: STEP.LDA }),
+  ld3:  () => word({ fetch: 1, next: STEP.LDF2 }),
+  ld81: () => word({ next: STEP.LDA8 }),
+  ld82: () => word({ fetch: 1, next: STEP.LDA8 }),
+  ld83: () => word({ fetch: 1, next: STEP.LD8F2 }),
+  st2:  () => word({ fetch: 1, next: STEP.STA }),
+  st3:  () => word({ fetch: 1, next: STEP.STF2 }),
+  st82: () => word({ fetch: 1, next: STEP.STA8 }),
+  st83: () => word({ fetch: 1, next: STEP.ST8F2 }),
   alu1: () => word({ next: STEP.EXEC }),
   alu2: () => word({ fetch: 1, next: STEP.EXEC }),
   alu2slow: () => word({ fetch: 1, next: STEP.SLOW }),
@@ -116,8 +190,8 @@ const ENTRY = {
   nop:  () => word({ dispatch: 1 }),
   trap: () => word({ trap: 1, next: STEP.TRAP }),
 };
-const byClass = { alu1: [], alu2: [], alu2slow: [], alu3: [], brcond: [], jmprel8: [], jmpabs: [], callabs: [], pcreg1: [], pcreg2: [], callreg: [], halt: [], nop: [], trap: [] };
-const opcodesIn = { alu1: 0, alu2: 0, alu2slow: 0, alu3: 0, brcond: 0, jmprel8: 0, jmpabs: 0, callabs: 0, pcreg1: 0, pcreg2: 0, callreg: 0, halt: 0, nop: 0, trap: 0 };
+const byClass   = Object.fromEntries(Object.keys(ENTRY).map((c) => [c, []]));
+const opcodesIn = Object.fromEntries(Object.keys(ENTRY).map((c) => [c, 0]));
 for (let op = 0; op < 256; op++) {
   const classes = new Map();   // class -> the mnemonics this opcode carries in it
   for (let b1 = 0; b1 < 256; b1++) {
@@ -221,6 +295,21 @@ ${listed('callabs')}
 ${listed('pcreg1')}
 ${listed('pcreg2')}
 ${listed('callreg')}
+//     loads - an address cycle, then a cycle a byte, then the ordinary EXEC:
+//     the bytes shifted themselves into the operand flop, so the pass-through
+//     writes them and no step of this needs an ALU operation of its own:
+${listed('ld1')}
+${listed('ld2')}
+${listed('ld3')}
+${listed('ld81')}
+${listed('ld82')}
+${listed('ld83')}
+//     stores - the address cycle carries the first byte out with it, and a
+//     cycle at the end points the bus back at the pc:
+${listed('st2')}
+${listed('st3')}
+${listed('st82')}
+${listed('st83')}
 //     halt:
 ${listed('halt')}
 //     nop - its entry dispatches at once, since the next opcode is already on
@@ -246,6 +335,15 @@ module ucode (
     output logic        halt,
     output logic        trap,
     output logic [1:0]  pcload,    // -> rtl/cpu.sv: load the pc, and on what terms
+    output logic        amem,      // -> rtl/cpu.sv's address unit: a data cycle, so it
+                                   //    drives the address bus and the pc stands still
+    output logic        abase,     //    its left input: the operand flop, or its own last
+    output logic [1:0]  akon,      //    its right: the operand flop, or #0, #1, #-1
+    output logic        we,        // -> memory: write the byte on mem_wdata
+    output logic        wsel,      //    which byte of the source register that is
+    output logic [1:0]  dcap,      // -> rtl/cpu.sv: take the bus byte into the right
+                                   //    operand flop, shifted in or zero extended
+    output logic        alt,       // -> rtl/lhs.sv: port A reads the rd field instead
     input  logic        defer      // rtl/cpu.sv: the pc is being loaded, so the
                                    // byte on the bus is not the next opcode
 );

@@ -37,8 +37,10 @@
 ;       0.200   pointer bump: 1 byte per 5 stores, and a one-byte form
 ;               costs two cycles - see the cost model
 ;       0.067   the branch: 3 bytes and a taken cycle, over 60
+;       0.500   store addresses: one cycle per store, over the 2 it writes
+;       0.333   pop addresses and sp write-backs: two cycles per pop, over 6
 ;       -----
-;       3.600   the floor for this instruction mix, at N = 60
+;       4.433   the floor for this instruction mix, at N = 60
 ;
 ; THE BRANCH TERM IS THE ONLY ONE THAT SHRINKS WITH N, which is what makes a
 ; longer loop worth anything at all once the rest is fixed: at N = 32 it is
@@ -59,14 +61,16 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED
 ; ----------------------------------------------------------------------------
-;   erik   32 bytes/iteration   51 bytes   3.7500 cycles/byte
-;   mine   60 bytes/iteration   89 bytes   3.6000 cycles/byte
+;   erik   32 bytes/iteration   51 bytes   4.6250 cycles/byte
+;   mine   60 bytes/iteration   89 bytes   4.4333 cycles/byte
 ;
 ; For scale: a 6502 does 13 cycles/byte, or 10 with self-modifying code.
 ;
-; 3.6000 is the best available under a 90-byte core.  Searching every loop
+; 4.4333 is the best available under a 90-byte core.  Searching every loop
 ; length and every stores-per-bump count that fits, N = 60 with five stores per
-; bump wins; N = 58, 54 and 48 come next at 3.5172, 3.5185 and 3.5208.
+; bump wins; N = 58, 54 and 48 come next at 4.3505, 4.3518 and 4.3541.  The
+; ordering is untouched by the address cycle, because every candidate has the
+; same stores and pops per byte and so pays exactly 0.8333 more than it did.
 ;
 ; THE SEARCH AND THE TAIL FIGURES BELOW PREDATE THE TWO-CYCLE RULE for one-byte
 ; forms, so the alternatives' figures are a pointer-bump term light; the winner

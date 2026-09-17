@@ -932,18 +932,41 @@ endmodule
   const val = () => (rnd() % 4 === 0 ? EDGE[rnd() % EDGE.length] : rnd() & 0xffff);
 
   // --- the forms, and a way to draw real bytes for each ----------------------
-  const forms = new Map();   // form -> { op, b1s: [] , nbytes }
+  // Three pools, because what is safe to put in a random program differs.  An
+  // ALU form and a LOAD are safe with any registers at all: neither writes
+  // memory, so wild addresses only read bytes the simulator reads too.  A STORE
+  // is not - it would scribble on the program, and although both machines would
+  // scribble identically, the RTL would then trap on an opcode the ROM does not
+  // implement where the simulator executed it, and the disagreement would be
+  // about the corruption rather than about memory.  So stores go in programs of
+  // their own, with registers drawn from a window well clear of the program;
+  // nothing in such a program writes a register, so every address stays there.
+  const pool = { alu: new Map(), ld: new Map(), st: new Map() };
   for (let op = 0; op < 256; op++)
     for (let b1 = 0; b1 < 256; b1++) {
       const d = decode(dec, [op, b1, 0], 0);
       if (!d || ['br8', 'push8', 'pop8'].includes(d.insn.mnemonic)) continue;
       const sem = d.insn.semantics ?? '';
-      if (!/^R\[[a-z]\] = /.test(sem) || sem.includes(';') || /M(8|16)\[/.test(sem)) continue;
+      // The `;` test comes FIRST and applies to every kind.  pop's semantics is
+      // `R[a] = M16[sp]; sp = sp + 2`, which matches the load pattern on its
+      // first statement - so a test that excluded multi-statement semantics on
+      // the ALU branch alone drew pops into the load programs, and the RTL
+      // rightly trapped on an instruction the ROM does not implement.
+      const kind = sem.includes(';')                     ? null
+                 : /^R\[[a-z]\] = M(8|16)\[/.test(sem)   ? 'ld'
+                 : /^M(8|16)\[/.test(sem)                ? 'st'
+                 : /^R\[[a-z]\] = /.test(sem)            ? 'alu' : null;
+      if (!kind) continue;
       const key = `${d.insn.mnemonic}/${d.form.name}@${op}`;
-      if (!forms.has(key)) forms.set(key, { op, nbytes: d.nbytes, b1s: [] });
-      forms.get(key).b1s.push(b1);
+      if (!pool[kind].has(key)) pool[kind].set(key, { op, nbytes: d.nbytes, b1s: [] });
+      pool[kind].get(key).b1s.push(b1);
     }
-  const all = [...forms.values()];
+  const all    = [...pool.alu.values()];
+  const loads  = [...pool.ld.values()];
+  const stores = [...pool.st.values()];
+  // Even, and far above any program these make: the widest displacement is ten
+  // signed bits and an index is another register from the same window.
+  const safe = () => 0x2000 + ((rnd() % 0x1000) & ~1);
   const draw = (f) => {
     if (f.nbytes === 1) return [f.op];
     const bytes = [f.op, f.b1s[rnd() % f.b1s.length]];
@@ -1002,13 +1025,20 @@ endmodule
     return [...code];
   });
 
-  const PROGRAMS = 40 + assembled.length;
+  const N_ALU = 40, N_LD = 10, N_ST = 10;
+  const PROGRAMS = N_ALU + N_LD + N_ST + assembled.length;
   const programs = [];
+  const some = (xs) => Array.from({ length: 30 }, () => xs[rnd() % xs.length]);
   for (let p = 0; p < PROGRAMS; p++) {
-    const picks = p === 0 ? all : Array.from({ length: 30 }, () => all[rnd() % all.length]);
-    const bytes = p >= 40 ? assembled[p - 40]
-                          : picks.flatMap(draw).concat([0x00]);    // halt
-    const reg = Array.from({ length: 8 }, val);
+    // The first program of each batch runs every form in it, so each is covered
+    // whatever the random ones pick.
+    let picks = null, draws = val;
+    if (p < N_ALU)                       picks = p === 0 ? all : some(all);
+    else if (p < N_ALU + N_LD)           picks = p === N_ALU ? loads : some([...all, ...loads]);
+    else if (p < N_ALU + N_LD + N_ST) { picks = p === N_ALU + N_LD ? stores : some(stores); draws = safe; }
+    const bytes = picks ? picks.flatMap(draw).concat([0x00])    // halt
+                        : assembled[p - N_ALU - N_LD - N_ST];
+    const reg = Array.from({ length: 8 }, draws);
     const m = new Machine(spec).load(bytes, 0);
     reg.forEach((v, k) => { m.R[k] = v; });
     const trace = [];
@@ -1018,7 +1048,13 @@ endmodule
       entry.len = m.cycles() - before;       // the simulator's cost model, extra cycles included
       trace.push(entry);
     }
-    programs.push({ bytes, reg, trace });
+    // WHAT A STORE DID IS NOT IN ANY REGISTER, so the registers and the pc
+    // cannot see it.  Both machines fold their whole memory into one number
+    // instead: a store to the wrong address, of the wrong byte, or in the wrong
+    // order changes it, and a load that wrote memory would change it too.
+    let hash = 0;
+    for (let k = 0; k < 65536; k++) hash = (Math.imul(hash, 31) + m.mem[k]) & 0x7fffffff;
+    programs.push({ bytes, reg, trace, hash });
     writeFileSync(`build/cpu-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
     writeFileSync(`build/cpu-reg-${p}.hex`, reg.map(hex4).join('\n') + '\n');
   }
@@ -1029,11 +1065,21 @@ endmodule
     logic [7:0] rdata;
     logic [15:0] regs [0:7];
     wire [15:0] addr;
+    wire [7:0] wdata;
+    wire we;
     wire halted, trapped;
-    cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata), .halted(halted), .trapped(trapped),
+    cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
+           .mem_wdata(wdata), .mem_we(we), .halted(halted), .trapped(trapped),
            .result());
-    always @(posedge clk) rdata <= mem[addr];
-    integer p, k, cyc, lastcyc, pcnow;
+    // ONE PORT, as the part has: the address is sampled at the edge, the byte
+    // read appears after it, and a write lands at that same edge.  A read in a
+    // writing cycle sees what was there before - which is what the microcode
+    // expects, since the byte on the bus during a store is ignored.
+    always @(posedge clk) begin
+        rdata <= mem[addr];
+        if (we) mem[addr] <= wdata;
+    end
+    integer p, k, cyc, lastcyc, pcnow, h;
     reg [8*64:1] name;
     initial begin
         for (p = 0; p < ${PROGRAMS}; p = p + 1) begin
@@ -1055,7 +1101,9 @@ endmodule
                 end
                 cyc = cyc + 1;
             end
-            $display("END %0d %0d %0d", p, halted, trapped);
+            h = 0;
+            for (k = 0; k < 65536; k = k + 1) h = (h * 31 + mem[k]) & 32'h7fffffff;
+            $display("END %0d %0d %0d %0d", p, halted, trapped, h);
         end
         $finish;
     end
@@ -1076,13 +1124,15 @@ endmodule
   for (const line of out.split('\n')) {
     const f = line.trim().split(/\s+/);
     if (f[0] === 'STEP') steps[+f[1]].push({ cyc: +f[2], pc: parseInt(f[3], 16), R: f.slice(4, 12).map((h) => parseInt(h, 16)) });
-    if (f[0] === 'END') ends[+f[1]] = { halted: f[2] === '1', trapped: f[3] === '1' };
+    if (f[0] === 'END') ends[+f[1]] = { halted: f[2] === '1', trapped: f[3] === '1', hash: +f[4] };
   }
   let bad = 0, instructions = 0;
   const complain = (msg) => { if (bad++ < 6) console.log(`  MISMATCH ${msg}`); };
-  programs.forEach(({ trace }, p) => {
+  programs.forEach(({ trace, hash }, p) => {
     const got = steps[p];
     if (!ends[p]?.halted || ends[p]?.trapped) complain(`program ${p}: ended ${ends[p]?.trapped ? 'trapped' : 'without halting'}`);
+    if (ends[p] && ends[p].hash !== hash)
+      complain(`program ${p}: memory folds to ${ends[p].hash} on the RTL and ${hash} on the simulator`);
     if (got.length !== trace.length) complain(`program ${p}: ${got.length} dispatches, the simulator ran ${trace.length} instructions`);
     for (let i = 0; i < Math.min(got.length, trace.length); i++) {
       const g = got[i], t = trace[i];
@@ -1093,7 +1143,7 @@ endmodule
       instructions++;
     }
   });
-  if (bad === 0) console.log(`ok    rtl/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over ${all.length} forms, pc, registers and cycles all agree with tools/sim.js`);
+  if (bad === 0) console.log(`ok    rtl/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over ${all.length + loads.length + stores.length} forms, pc, registers, memory and cycles all agree with tools/sim.js`);
   else { console.log(`FAIL  rtl/cpu.sv: ${bad} disagreements with tools/sim.js`); failed = true; }
   for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/cpu-prog-${p}.hex`, `build/cpu-reg-${p}.hex`]) rmSync(f, { force: true });
   for (const f of ['build/cpu-tb.vvp', 'build/cpu-tb.sv']) rmSync(f, { force: true });
