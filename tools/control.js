@@ -139,8 +139,10 @@ export const ALU_OPS = [
 
 // --- which operation each instruction needs, from its semantics ---------------
 export const ALU_RULES = [
-  [/^R\[d\] = M(8|16)\[R\[a\] \+ off\]$/,                  'add',   'the address'],
-  [/^M(8|16)\[R\[a\] \+ off\] = R\[s\]$/,                  'add',   'the address'],
+  // The second term is a displacement or an index register; either way the
+  // address is one add, with rtl/rhs.sv choosing what the right-hand side is.
+  [/^R\[d\] = M(8|16)\[R\[a\] \+ (off|R\[b\])\]$/,          'add',   'the address'],
+  [/^M(8|16)\[R\[a\] \+ (off|R\[b\])\] = R\[s\]$/,          'add',   'the address'],
   [/^R\[d\] = imm$/,                                      'rhs'],
   [/^R\[d\] = R\[a\] \+ (R\[b\]|imm)$/,                    'add'],
   [/^R\[d\] = (R\[b\]|imm) - R\[a\]$/,                     'rsb'],

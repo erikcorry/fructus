@@ -17,9 +17,9 @@
 //     cond_src   rtl/cond.sv's source
 //     pc_src     where rtl/cpu.sv's next address comes from
 //
-// 127 opcodes, one row each.  An x is a value no step of that instruction reads -
+// 135 opcodes, one row each.  An x is a value no step of that instruction reads -
 // a branch has no ALU operation, a store no destination - left to the mapper as
-// a don't-care.  Rows with an x, per field: alu 18, lhs 17, rhs 6, dest 22, cond 120, pc 0.
+// a don't-care.  Rows with an x, per field: alu 18, lhs 17, rhs 6, dest 26, cond 128, pc 0.
 //
 // THE MICROCODE ROM KEEPS WHAT CHANGES FROM STEP TO STEP: write enables,
 // fetch and dispatch, the pc, memory reads and writes, the next address.  What
@@ -96,17 +96,25 @@ module predecode (
         8'h09: t = 20'b0000_1001_1011_xxxx_xx_00;    // st
         8'h0a: t = 20'b0000_1001_1011_xxxx_xx_00;    // st
         8'h0b: t = 20'b0000_1001_1011_xxxx_xx_00;    // st
+        8'h0e: t = 20'b0000_1001_1101_xxxx_xx_00;    // st
+        8'h0f: t = 20'b0000_1001_1101_xxxx_xx_00;    // st
         8'h11: t = 20'b0000_1001_1011_xxxx_xx_00;    // st8
         8'h12: t = 20'b0000_1001_1011_xxxx_xx_00;    // st8
         8'h13: t = 20'b0000_1001_1011_xxxx_xx_00;    // st8
+        8'h16: t = 20'b0000_1001_1101_xxxx_xx_00;    // st8
+        8'h17: t = 20'b0000_1001_1101_xxxx_xx_00;    // st8
         8'h18: t = 20'b0000_1000_1011_1000_xx_00;    // ld
         8'h19: t = 20'b0000_1001_1011_1000_xx_00;    // ld
         8'h1a: t = 20'b0000_1001_1011_1000_xx_00;    // ld
         8'h1b: t = 20'b0000_1001_1011_1000_xx_00;    // ld
+        8'h1e: t = 20'b0000_1001_1101_1000_xx_00;    // ld
+        8'h1f: t = 20'b0000_1001_1101_1000_xx_00;    // ld
         8'h20: t = 20'b0000_1000_1011_1000_xx_00;    // ld8
         8'h21: t = 20'b0000_1001_1011_1000_xx_00;    // ld8
         8'h22: t = 20'b0000_1001_1011_1000_xx_00;    // ld8
         8'h23: t = 20'b0000_1001_1011_1000_xx_00;    // ld8
+        8'h26: t = 20'b0000_1001_1101_1000_xx_00;    // ld8
+        8'h27: t = 20'b0000_1001_1101_1000_xx_00;    // ld8
         8'h28: t = 20'b0111_xxxx_1011_1000_xx_00;    // mov
         8'h2c: t = 20'b0111_xxxx_1011_1000_xx_00;    // mov
         8'h2d: t = 20'b0111_xxxx_1011_1000_xx_00;    // mov

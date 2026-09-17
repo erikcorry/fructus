@@ -802,8 +802,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #       01i   rN, [ra, #imm3]    2 bytes  two registers, TWO opcodes
 #       100   -- free
 #       101   -- free
-#       110   -- free
-#       111   -- free
+#       11i   rN, [ra, rb]       2 bytes  three registers, TWO opcodes
 #
 #   Because fff means the same thing for loads and stores, byte 1 has an
 #   identical layout across all eight memory instructions - register, address
@@ -840,9 +839,11 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #     0000_1000  -- free               0001_1000  ld   rd,[rd,#off5]
 #     0000_1001  st   rs,[ra,#imm10]   0001_1001  ld   rd,[ra,#imm10]
 #     0000_101i  st   rs,[ra,#imm3]    0001_101i  ld   rd,[ra,#imm3]
+#     0000_111i  st   rs,[ra,rb]       0001_111i  ld   rd,[ra,rb]
 #     0001_0000  -- free               0010_0000  ld8  rd,[rd,#off5]
 #     0001_0001  st8  rs,[ra,#imm10]   0010_0001  ld8  rd,[ra,#imm10]
 #     0001_001i  st8  rs,[ra,#imm3]    0010_001i  ld8  rd,[ra,#imm3]
+#     0001_011i  st8  rs,[ra,rb]       0010_011i  ld8  rd,[ra,rb]
 #   ------------------------------------------------------------------------
 #
 #   --- constants and the unary operations, a row each -----------------------
@@ -1303,6 +1304,96 @@ semantics = "M16[R[a] + off] = R[s]"
   name     = "reg_reg10"
   encoding = "0000_1001  iiaa_asss  jjjj_jjjj"
   fields   = { i = "off:imm10[1:0]", j = "off:imm10[9:2]" }
+
+
+# --- the index forms ------------------------------------------------------
+# fff = 11i, the last of the memory block's addressing forms and the only one
+# whose displacement is a REGISTER.  Two opcodes each, for the reason the imm3
+# forms take two: a third register needs three bits and byte 1 has two to
+# spare, so the low bit rides the opcode.  The index is
+# {byte1[7:6], opcode[0]} - the same three bits, in the same places, that the
+# three-register ALU forms use, which is why nothing in the datapath is new:
+# the address register arrives on port A, the index on port B, and the adder
+# that was already computing `R[a] + off` computes `R[a] + R[b]` instead.
+#
+# THE INDEX IS UNSCALED, at both widths and for loads and stores alike.  That
+# is the same decision the displacements took and it is the same argument:
+# pointers are tagged, so the arithmetic that lands on a field is odd as often
+# as not, and a scaled index cannot express an odd address at all.  Scaling
+# would also put a shift in front of the adder for every indexed access,
+# including the untagged ones that would never use it.
+#
+# THESE ARE SEPARATE ENTRIES RATHER THAN FORMS, because a form shares its
+# instruction's operand list: `off` is an int16 and `b` is a register, and no
+# one entry can say both.  The mnemonic is the same and the assembler chooses
+# on the syntax, which is unambiguous - `#3` is a displacement and `r3` is an
+# index.  add, jmp and call are split the same way for the same reason.
+[[insn]]
+mnemonic = "ld8"
+summary  = "load 8-bit through a register index, zero extended"
+operands = [
+  { name = "d", type = "reg" },   # destination register
+  { name = "a", type = "reg" },   # address register
+  { name = "b", type = "reg" },   # index register, split across both bytes
+]
+syntax   = "{d}, [{a}, {b}]"
+semantics = "R[d] = M8[R[a] + R[b]]"
+
+  [[insn.form]]
+  name     = "reg_reg_reg"
+  encoding = "0010_011b  ccaa_addd"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+
+[[insn]]
+mnemonic = "ld"
+summary  = "load 16-bit through a register index"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, [{a}, {b}]"
+semantics = "R[d] = M16[R[a] + R[b]]"
+
+  [[insn.form]]
+  name     = "reg_reg_reg"
+  encoding = "0001_111b  ccaa_addd"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+
+[[insn]]
+mnemonic = "st8"
+summary  = "store low 8 bits through a register index"
+operands = [
+  { name = "s", type = "reg" },   # source register
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{s}, [{a}, {b}]"
+semantics = "M8[R[a] + R[b]] = R[s]"
+
+  [[insn.form]]
+  name     = "reg_reg_reg"
+  encoding = "0001_011b  ccaa_asss"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+
+[[insn]]
+mnemonic = "st"
+summary  = "store 16 bits through a register index"
+operands = [
+  { name = "s", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{s}, [{a}, {b}]"
+semantics = "M16[R[a] + R[b]] = R[s]"
+
+  [[insn.form]]
+  name     = "reg_reg_reg"
+  encoding = "0000_111b  ccaa_asss"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 
 # --- mov --------------------------------------------------------------------
