@@ -19,13 +19,13 @@
 //    8  rd field      insn[10:8]
 //             ld ld8 mov/reg_imm5 mov/reg_immbit5 mov/reg_immask5 bitrev sxt8
 //             clz popcount add rsb xor or and shl asr lsr iseq isset pop (a)
-//             pop8 (a)
+//             ldm (a)
 //    9  ra field      insn[13:11]
-//             pop (b)
+//             pop (b) ldm (b)
 //   10  opcode field  insn[2:0]
 //             mov/reg_imm16
 //   11  port B field  {insn[15:14], insn[0]}
-//             pop (c)
+//             ldm (c) pop (c)
 //
 // ONE FIELD DOES NEARLY ALL OF IT.  Every ALU operation, load, mov and unary
 // operation writes the rd field; the other three exist for two instructions.
@@ -46,8 +46,9 @@
 //     r0        ld/implicit, ld8/implicit, add/inc_r0, add/dec_r0,
 //               add/inc2_r0, or/mov_r0_r1, mov/r0_zero, xor/r0_not,
 //               add/r0_r0_r1
-//     r1        add/r1_r1_r0, or/mov_r1_r0
-//     sp (r6)   push, push8, pop, pop8
+//     r1        add/r1_r1_r0, or/mov_r1_r0, stm
+//     r2        ldm
+//     sp (r6)   push, pop
 //     lr (r7)   call
 //
 // MEASURED on an iCE40 UP5K, yosys 0.52 -nobram + nextpnr-ice40 0.7: an 8x16

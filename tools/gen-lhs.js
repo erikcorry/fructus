@@ -108,7 +108,14 @@ process.stdout.write(`// =======================================================
 //    0..7   the register src[2:0], named by the microcode
 //    8      byte1[2:0], the rd field
 //    9      byte1[5:3], the ra field
-//   10..15  reserved: they decode as 8 and 9 alternately, by src[0]
+//   10..11  {byte1[7:6], opcode[0]}, port B's field
+//   12..15  reserved: they decode as 10 and 11 do, by src[1:0]
+//
+// PORT B'S FIELD IS HERE TOO, and push is why: it reads three registers in
+// turn, and the third of them lives where the three-register forms always put
+// it.  Reading it on port A costs one mux level on an address that comes out
+// of a flop - measured at no clock at all - where reaching it any other way
+// would need a second read port.
 //
 // EVERY REGISTER OPERAND IN THE ISA IS IN ONE OF THREE PLACES: byte1[2:0],
 // byte1[5:3], or {byte1[7:6], opcode[0]}.  The third is port B's, and
@@ -180,9 +187,12 @@ module lhs (
     output logic [2:0]  regnum   // -> register file port A address
 );
 
-    // src[0] picks the field and src[2:0] is the register, so the field choice
-    // costs no decode: codes 8 and 9 differ in exactly the bit that selects.
-    assign regnum = src[3] ? (src[0] ? insn[13:11] : insn[10:8]) : src[2:0];
+    // src[1:0] picks the field and src[2:0] is the register, so the field
+    // choice costs no decode beyond the mux itself: codes 8, 9 and 10 differ
+    // in exactly the bits that select.
+    assign regnum = src[3] ? (src[1] ? {insn[15:14], insn[0]}
+                                     : (src[0] ? insn[13:11] : insn[10:8]))
+                           : src[2:0];
 
 endmodule
 `);

@@ -125,7 +125,8 @@ memset:
 ; block boundary, and n & ~31 is the same either way.
 
         brclear r2, #1, .even           ; even length: no byte to peel
-        push8   r1                      ; the odd byte, at the very top    4
+        add     sp, sp, #-1             ; the odd byte, at the very top    2
+        st8     r1, [sp, #0]            ;                                  4
 .even:
         and     r2, r2, #-16            ; the length, rounded down to a half block
         add     r2, r0, r2              ; ... as an address: where the head stops

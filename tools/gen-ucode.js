@@ -10,12 +10,17 @@
 // what changes from step to step; everything an instruction wants throughout
 // comes from rtl/predecode.sv.
 //
-// WHAT IT RUNS SO FAR: every instruction whose whole effect is one register
-// written with an ALU result - the ALU groups, mov, the unary operations, iseq
-// and isset, in their two- and three-byte forms - plus halt and nop.  The
-// one-byte abbreviations are not here yet, and every other opcode goes to a
-// trap word, so a program cannot run an unimplemented instruction silently.
-// Which opcodes are which is worked out from the spec, through tools/control.js.
+// WHAT IT RUNS: every instruction in the ISA but one.  The ALU groups, mov, the
+// unary operations, iseq and isset, in their one-, two- and three-byte forms;
+// the transfers of control; the loads and stores, at both widths and in every
+// addressing form; the block moves - push, pop, and the post-updating stm and
+// ldm; and halt and nop.
+//
+// br8 IS THE EXCEPTION, by decision rather than oversight - it is the list of
+// one that tools/control.js's ALU_LATER now holds.  It and every free opcode go
+// to a trap word, so a program cannot run an unimplemented instruction
+// silently.  Which opcodes are which is worked out from the spec, through
+// tools/control.js.
 // =============================================================================
 
 import { loadSpec } from './isa.js';
@@ -41,9 +46,10 @@ const FIELDS = [
   ['abase',    1,    "the address unit's left input: 0 the left operand flop, 1 its own last address"],
   ['akon',     2,    'and its right: 0 the right operand flop, 1 #0, 2 #1, 3 #-1'],
   ['we',       1,    'write the byte on mem_wdata at that address'],
-  ['wsel',     1,    "which byte: 0 port A's low, 1 the left operand flop's high"],
+  ['wsel',     2,    "which byte: 0/1 port A's low/high, 2 the left operand flop's high"],
   ['dcap',     2,    'capture the bus byte: 1 shift it into the right operand flop, 2 zero extend it there'],
-  ['alt',      1,    "port A reads the rd field rather than rtl/predecode.sv's choice"],
+  ['lalt',     2,    "lhs alternate - which field port A reads: 0 rtl/predecode.sv's choice, 1 rd, 2 ra, 3 port B's"],
+  ['dalt',     2,    'dest alternate - the same four for the write port, 0 being the pointer predecode names'],
 ];
 const W = FIELDS.reduce((n, [, w]) => n + w, 0);
 
@@ -55,7 +61,7 @@ const STEP = { EXEC: 256, FETCH2: 257, HALT: 258, TRAP: 259, BOOT: 260, SLOW: 26
                STA: 275, STHI: 276, STA8: 277, STEND: 278,
                LDF2: 279, LD8F2: 280, STF2: 281, ST8F2: 282 };
 const word = (w) => ({ next: 0, fetch: 0, dispatch: 0, wen: 0, halt: 0, trap: 0, pcload: 0,
-                       amem: 0, abase: 0, akon: 0, we: 0, wsel: 0, dcap: 0, alt: 0, ...w });
+                       amem: 0, abase: 0, akon: 0, we: 0, wsel: 0, dcap: 0, lalt: 0, dalt: 0, ...w });
 const rom = new Array(1 << ADDR).fill(null);
 const why = new Map();
 rom[STEP.EXEC]   = word({ wen: 1, dispatch: 1 });        why.set(STEP.EXEC, 'write the result; the next opcode is on the bus');
@@ -104,11 +110,11 @@ rom[STEP.LDA8]  = word({ amem: 1, next: STEP.LD8 });
 why.set(STEP.LDA8, 'the address, for a single byte');
 rom[STEP.LD8]   = word({ dcap: 2, next: STEP.EXEC });
 why.set(STEP.LD8, 'the byte: zero extend it into the flop, and back to the pc');
-rom[STEP.STA]   = word({ amem: 1, we: 1, alt: 1, next: STEP.STHI });
+rom[STEP.STA]   = word({ amem: 1, we: 1, lalt: 1, next: STEP.STHI });
 why.set(STEP.STA, "the address, and the source register's low byte out with it");
-rom[STEP.STHI]  = word({ amem: 1, abase: 1, akon: 2, we: 1, wsel: 1, next: STEP.STEND });
+rom[STEP.STHI]  = word({ amem: 1, abase: 1, akon: 2, we: 1, wsel: 2, next: STEP.STEND });
 why.set(STEP.STHI, 'the next byte up, and the high half out of the flop');
-rom[STEP.STA8]  = word({ amem: 1, we: 1, alt: 1, next: STEP.STEND });
+rom[STEP.STA8]  = word({ amem: 1, we: 1, lalt: 1, next: STEP.STEND });
 why.set(STEP.STA8, 'the address and the only byte');
 rom[STEP.STEND] = word({ next: STEP.PCDISP });
 why.set(STEP.STEND, 'back to the pc; a store has no register write to wait for');
@@ -120,6 +126,62 @@ rom[STEP.STF2]  = word({ fetch: 1, next: STEP.STA });
 why.set(STEP.STF2, 'the same, for a store');
 rom[STEP.ST8F2] = word({ fetch: 1, next: STEP.STA8 });
 why.set(STEP.ST8F2, 'the same, for a byte store');
+
+// --- the block moves, whose chains are generated rather than written out ------
+// push, pop, stm and ldm are the same three shapes at three lengths, so their
+// steps are built by a loop: one cycle a byte, with the address unit walking
+// and the microcode naming which register each cycle reads or writes.
+//
+// THE POINTER COMES BACK THROUGH rtl/rhs.sv's CODE 3.  The address unit's sum
+// is a right-hand operand like any other, so the ALU's pass-through writes it
+// to the register file with no mux on the write port - and the register
+// rtl/predecode.sv names for these instructions IS that pointer, which is why
+// the ordinary EXEC finishes every one of them.
+//
+// pop AND ldm SHARE EVERY STEP.  They differ only in the register predecode
+// names - sp for one, r2 for the other - and no step here mentions it.
+let free = 283;
+const alloc = (w, note) => { const a = free++; rom[a] = word(w); why.set(a, note); return a; };
+STEP.PUSHEND = alloc({ abase: 1, akon: 1, next: STEP.EXEC },
+                     'back to the pc; the flop already holds the new sp');
+STEP.STMEND  = alloc({ abase: 1, akon: 2, next: STEP.EXEC },
+                     'back to the pc, and one more step for the pointer');
+const CHAIN = {};
+for (const n of [1, 2, 3]) {
+  // push walks DOWN and writes each register high byte first, so that the
+  // addresses descend by one throughout; both bytes come off port A.
+  let next = STEP.PUSHEND;
+  for (let i = n; i >= 1; i--) {
+    const lo = alloc({ amem: 1, abase: 1, akon: 3, we: 1, wsel: 0, lalt: i, next },
+                     `push: the low byte of register ${i}, at the lower address`);
+    next = alloc({ amem: 1, abase: i === 1 ? 0 : 1, akon: 3, we: 1, wsel: 1, lalt: i, next: lo },
+                 `push: the high byte of register ${i}`);
+  }
+  CHAIN[`push${n}`] = next;
+  // stm walks UP from the pointer, so it writes low byte first, like a store.
+  next = STEP.STMEND;
+  for (let i = n; i >= 1; i--) {
+    const hi = alloc({ amem: 1, abase: 1, akon: 2, we: 1, wsel: 1, lalt: i, next },
+                     `stm: the high byte of register ${i}`);
+    next = alloc({ amem: 1, abase: i === 1 ? 0 : 1, akon: i === 1 ? 1 : 2,
+                   we: 1, wsel: 0, lalt: i, next: hi },
+                 `stm: the low byte of register ${i}`);
+  }
+  CHAIN[`stm${n}`] = next;
+  // pop and ldm read upwards, shifting each byte into the right-hand flop, and
+  // write each register in the cycle the NEXT one's low byte lands - the write
+  // reads the flop as it stands, and the shift replaces it at the same edge.
+  next = alloc({ wen: 1, dalt: n, abase: 1, akon: 2, next: STEP.EXEC },
+               `pop: write register ${n}, and take the stepped pointer`);
+  for (let k = 2 * n; k >= 1; k--) {
+    const reg = Math.ceil(k / 2), low = k % 2 === 1;
+    const also = (low && reg > 1) ? { wen: 1, dalt: reg - 1 } : {};
+    next = alloc({ amem: k === 2 * n ? 0 : 1, abase: 1, akon: 2, dcap: 1, ...also, next },
+                 `pop: byte ${k}${low && reg > 1 ? `, and write register ${reg - 1}` : ''}`);
+  }
+  CHAIN[`pop${n}`] = alloc({ amem: 1, abase: 0, akon: 1, next },
+                           'pop: the address, which is the pointer itself');
+}
 
 // --- the entry points ------------------------------------------------------------
 const classify = (d) => {
@@ -150,6 +212,16 @@ const classify = (d) => {
       throw new Error(`${d.insn.mnemonic}/${d.form.name}: ${d.nbytes} bytes, and there is no ${mem} routine that length`);
     return cls;
   }
+  // The block moves.  Three shapes - push down, stm up, pop/ldm up and loading
+  // - at one, two or three registers, and the arity is the operand count.
+  {
+    const n = (d.insn.operands ?? []).length;
+    // A store that walks DOWN is push and one that walks up is stm; a load is
+    // pop or ldm, which share every step of the routine.
+    if (/M16\[base[^\]]*\] = R\[a\]/.test(sem))
+      return /= base - \d/.test(sem) ? `push${n}` : `stm${n}`;
+    if (/R\[a\] = M16\[base/.test(sem))                return `pop${n}`;
+  }
   if (sem.includes(';') || /M(8|16)\[/.test(sem) || !/^R\[[a-z]\] = /.test(sem)) return 'trap';
   if (ALU_ELSEWHERE.some(([re]) => re.test(sem))) return 'trap';
   const rule = ALU_RULES.find(([re]) => re.test(sem));
@@ -172,6 +244,15 @@ const ENTRY = {
   pcreg1:   () => word({ next: STEP.PCREG }),
   pcreg2:   () => word({ fetch: 1, next: STEP.PCREG }),
   callreg:  () => word({ fetch: 1, next: STEP.CALLREG }),
+  push1: () => word({ fetch: 1, next: CHAIN.push1 }),
+  push2: () => word({ fetch: 1, next: CHAIN.push2 }),
+  push3: () => word({ fetch: 1, next: CHAIN.push3 }),
+  stm1:  () => word({ fetch: 1, next: CHAIN.stm1 }),
+  stm2:  () => word({ fetch: 1, next: CHAIN.stm2 }),
+  stm3:  () => word({ fetch: 1, next: CHAIN.stm3 }),
+  pop1:  () => word({ fetch: 1, next: CHAIN.pop1 }),
+  pop2:  () => word({ fetch: 1, next: CHAIN.pop2 }),
+  pop3:  () => word({ fetch: 1, next: CHAIN.pop3 }),
   ld1:  () => word({ next: STEP.LDA }),
   ld2:  () => word({ fetch: 1, next: STEP.LDA }),
   ld3:  () => word({ fetch: 1, next: STEP.LDF2 }),
@@ -310,6 +391,20 @@ ${listed('st2')}
 ${listed('st3')}
 ${listed('st82')}
 ${listed('st83')}
+//     the block moves - one cycle a byte, with the address unit walking and the
+//     microcode naming which register each cycle reads; the pointer comes back
+//     through rtl/rhs.sv's code 3, so the ordinary EXEC writes it:
+${listed('push1')}
+${listed('push2')}
+${listed('push3')}
+${listed('stm1')}
+${listed('stm2')}
+${listed('stm3')}
+//     pop and ldm share every step of their routine, differing only in which
+//     register rtl/predecode.sv names as the pointer:
+${listed('pop1')}
+${listed('pop2')}
+${listed('pop3')}
 //     halt:
 ${listed('halt')}
 //     nop - its entry dispatches at once, since the next opcode is already on
@@ -340,10 +435,11 @@ module ucode (
     output logic        abase,     //    its left input: the operand flop, or its own last
     output logic [1:0]  akon,      //    its right: the operand flop, or #0, #1, #-1
     output logic        we,        // -> memory: write the byte on mem_wdata
-    output logic        wsel,      //    which byte of the source register that is
+    output logic [1:0]  wsel,      //    which byte of which register that is
     output logic [1:0]  dcap,      // -> rtl/cpu.sv: take the bus byte into the right
                                    //    operand flop, shifted in or zero extended
-    output logic        alt,       // -> rtl/lhs.sv: port A reads the rd field instead
+    output logic [1:0]  lalt,      // -> rtl/lhs.sv: which field port A reads instead
+    output logic [1:0]  dalt,      // -> rtl/dest.sv: and which the write port reads
     input  logic        defer      // rtl/cpu.sv: the pc is being loaded, so the
                                    // byte on the bus is not the next opcode
 );

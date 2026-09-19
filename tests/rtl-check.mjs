@@ -200,13 +200,14 @@ let failed = /FAIL/.test(out);
 // register, a constant, or immgen in one of its two readings.  regval stands in
 // for the register file, so this covers the wiring rather than the file.
 //
-// ALL SIXTEEN CODES ARE SWEPT, the one still-reserved code included.  Code 3 is
-// not meant to be emitted but decodes as r3 by accident of the wiring, and the
-// check pins that: a later change that gives it a meaning has to come here and
-// say so rather than silently altering what it does - as code 4 did when it
-// became the 16-bit immediate, and as CODE 2 HAS NOW DONE.  It is a call's
-// return address: rtl/cpu.sv's pc adder, read before its flop, which this
-// bench drives as an input of its own.
+// ALL SIXTEEN CODES ARE SWEPT, and nothing in the low half is reserved any
+// more.  The rule this check has now enforced three times is that a code which
+// acquires a meaning must come HERE and say so, rather than quietly ceasing to
+// be what the wiring made it: code 4 did that when it became the 16-bit
+// immediate, code 2 when it became a call's return address, and CODE 3 HAS NOW
+// DONE IT - it is the ADDRESS UNIT's sum, which push, pop, stm and ldm write
+// back as the pointer they walked.  Both adder sums arrive on ports of their
+// own, which this bench drives rather than infers.
 {
   // must match tools/gen-rhs.js
   const REG = { 0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7 };   // src[3]=0
@@ -214,6 +215,7 @@ let failed = /FAIL/.test(out);
   const MODE_IMM = 3, MODE_CIMM = 4, MODE_PORTB = 5;
   const CODE_IMM16 = 4;                                              // src[3]=0
   const CODE_PCSUM = 2;                                              // src[3]=0
+  const CODE_ADR   = 3;                                              // src[3]=0
   const movDec = buildDecoder(spec);
   const MOV16 = [...Array(256).keys()].find((op) => {
     const d = decode(movDec, [op, 0, 0], 0);
@@ -227,16 +229,17 @@ let failed = /FAIL/.test(out);
     for (let src = 0; src < 16; src++)
       for (let i = 0; i < 12; i++) {
         const hi = src >> 3, c = src & 7;
-        const isReg = (!hi && c !== CODE_IMM16 && c !== CODE_PCSUM) || (hi && c === MODE_PORTB);
+        const isReg = (!hi && c !== CODE_IMM16 && c !== CODE_PCSUM && c !== CODE_ADR)
+                   || (hi && c === MODE_PORTB);
         const isImm = hi && (c === MODE_IMM || c === MODE_CIMM);
         if (!hi && c === CODE_IMM16) {
           // The expected value comes from DECODING `mov rd, #imm16` bytes, laid
           // out as rtl/insn.sv holds them, not from knowing where the slice is.
           const op = MOV16 | (rnd() & 7);
           const b1 = rnd() & 0xff, b2 = rnd() & 0xff, rv = rnd() & 0xffff;
-          const ps = rnd() & 0xffff;
+          const ps = rnd() & 0xffff, ad = rnd() & 0xffff;
           const v = decode(movDec, [op, b1, b2], 0).ops.imm;
-          rows.push(`${hex6((b2 << 16) | (b1 << 8) | op)} ${src} ${hex4(rv)} ${hex4(ps)} ${c} ${hex4(v)}`);
+          rows.push(`${hex6((b2 << 16) | (b1 << 8) | op)} ${src} ${hex4(rv)} ${hex4(ps)} ${hex4(ad)} ${c} ${hex4(v)}`);
           continue;
         }
         // immgen drives x at +6 and +7, so reading it there is a microcode bug
@@ -245,33 +248,36 @@ let failed = /FAIL/.test(out);
         const insn = ((rnd() & 0xffff) << 8) | ((rnd() & 0x1f) << 3) | sel;
         const regval = rnd() & 0xffff;
         const pcsum = rnd() & 0xffff;
+        const adr = rnd() & 0xffff;
         const num = hi ? k3(insn) : REG[c];
-        // Code 2 is the pc adder's sum, and it comes in on its own port rather
-        // than through the register file or immgen - so it is neither isReg nor
-        // isImm, and the bench drives it with a value of its own.
+        // Codes 2 and 3 are ADDER SUMS - the pc's and the address unit's - and
+        // each comes in on a port of its own rather than through the register
+        // file or immgen, so neither is isReg or isImm and the bench drives
+        // both with values of its own.
         const rhs = isReg ? regval
                   : isImm ? want(insn, c === MODE_CIMM)
                   : (!hi && c === CODE_PCSUM) ? pcsum
+                  : (!hi && c === CODE_ADR)   ? adr
                   : KON[c];
-        rows.push(`${hex6(insn)} ${src} ${hex4(regval)} ${hex4(pcsum)} ${num} ${hex4(rhs)}`);
+        rows.push(`${hex6(insn)} ${src} ${hex4(regval)} ${hex4(pcsum)} ${hex4(adr)} ${num} ${hex4(rhs)}`);
       }
 
   writeFileSync('build/rhs-vectors.txt', rows.join('\n') + '\n');
   writeFileSync('build/rhs-tb.sv', `module tb;
     logic [23:0] insn;
-    logic [15:0] regval, pcsum, xrhs, grhs;
+    logic [15:0] regval, pcsum, adr, xrhs, grhs;
     logic [2:0] xnum, gnum;
     logic [3:0] src;
     integer f, n = 0, bad = 0, r;
-    rhs u (.insn(insn), .src(src), .regval(regval), .pcsum(pcsum),
+    rhs u (.insn(insn), .src(src), .regval(regval), .pcsum(pcsum), .adr(adr),
            .regnum(gnum), .value(grhs));
     initial begin
         f = $fopen("build/rhs-vectors.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
         while (!$feof(f)) begin
-            r = $fscanf(f, "%h %d %h %h %d %h\\n",
-                        insn, src, regval, pcsum, xnum, xrhs);
-            if (r == 6) begin
+            r = $fscanf(f, "%h %d %h %h %h %d %h\\n",
+                        insn, src, regval, pcsum, adr, xnum, xrhs);
+            if (r == 7) begin
                 #1; n = n + 1;
                 if (grhs !== xrhs || gnum !== xnum) begin
                     bad = bad + 1;
@@ -380,7 +386,12 @@ endmodule
   for (let op = 0; op < 256; op++)
     for (let b1 = 0; b1 < 256; b1++) {
       const e = decode(dec, [op, b1, 0], 0);
-      if (!e || e.nbytes === 1 || /\bsp\s*=\s*sp\b/.test(e.insn.semantics ?? '')) continue;
+      // An instruction that WALKS A POINTER reads it on port A, and the
+      // microcode names it rather than the encoding carrying it - push and pop
+      // step sp, stm and ldm step r1 and r2.  The digit is what keeps branches
+      // out: `pc = pc + off` has the same shape and its register IS a field.
+      if (!e || e.nbytes === 1
+             || /\b[a-z][a-z0-9]* = base [-+] \d/.test(e.insn.semantics ?? '')) continue;
       const portB = Object.values(e.form.fields ?? {}).find((v) => /^[a-z]:reg\[0\]$/.test(v))?.[0];
       const name = portB === 'a' ? 'b' : 'a';
       if (!(e.insn.operands ?? []).some((o) => o.name === name && o.type === 'reg')) continue;
@@ -406,11 +417,18 @@ endmodule
   // one-byte forms and push/pop: a register the microcode names
   for (let reg = 0; reg < 8; reg++)
     for (let i = 0; i < 16; i++) rows.push(row(reg, rnd() & 0xffffff, reg));
-  // every code against every byte 1
+  // Every code against every byte 1.  Codes 8 and 9 are the rd and ra fields;
+  // 10 is port B's, {byte1[7:6], opcode[0]}, which push reaches for its third
+  // register.  The rest are reserved and pinned to what the wiring makes them:
+  // src[1] picks port B's field and src[0] picks between rd and ra otherwise.
   for (let src = 0; src < 16; src++)
     for (let b1 = 0; b1 < 256; b1++) {
-      const insn = ((rnd() & 0xff) << 16) | (b1 << 8) | (rnd() & 0xff);
-      rows.push(row(src, insn, src < 8 ? src : (src & 1) ? (b1 >> 3) & 7 : b1 & 7));
+      const op = rnd() & 0xff;
+      const insn = ((rnd() & 0xff) << 16) | (b1 << 8) | op;
+      const field = (src & 2) ? ((((b1 >> 6) & 3) << 1) | (op & 1))
+                  : (src & 1) ? (b1 >> 3) & 7
+                  :             b1 & 7;
+      rows.push(row(src, insn, src < 8 ? src : field));
     }
 
   writeFileSync('build/lhs-vectors.txt', rows.join('\n') + '\n');
@@ -945,14 +963,21 @@ endmodule
   for (let op = 0; op < 256; op++)
     for (let b1 = 0; b1 < 256; b1++) {
       const d = decode(dec, [op, b1, 0], 0);
-      if (!d || ['br8', 'push8', 'pop8'].includes(d.insn.mnemonic)) continue;
+      if (!d || ['br8'].includes(d.insn.mnemonic)) continue;
       const sem = d.insn.semantics ?? '';
       // The `;` test comes FIRST and applies to every kind.  pop's semantics is
       // `R[a] = M16[sp]; sp = sp + 2`, which matches the load pattern on its
       // first statement - so a test that excluded multi-statement semantics on
       // the ALU branch alone drew pops into the load programs, and the RTL
       // rightly trapped on an instruction the ROM does not implement.
-      const kind = sem.includes(';')                     ? null
+      // The block moves go in with their own kind of traffic: push and stm
+      // WRITE memory, so they belong with the stores, and the only register
+      // either one writes is the pointer it walked - which stays in the safe
+      // window by construction.  pop and ldm write registers from memory, which
+      // is unsafe beside a store but harmless beside a load.
+      const kind = /M16\[base[^\]]*\] = R\[a\]/.test(sem)   ? 'st'
+                 : /R\[a\] = M16\[base/.test(sem)          ? 'ld'
+                 : sem.includes(';')                     ? null
                  : /^R\[[a-z]\] = M(8|16)\[/.test(sem)   ? 'ld'
                  : /^M(8|16)\[/.test(sem)                ? 'st'
                  : /^R\[[a-z]\] = /.test(sem)            ? 'alu' : null;

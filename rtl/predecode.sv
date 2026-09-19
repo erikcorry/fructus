@@ -17,9 +17,9 @@
 //     cond_src   rtl/cond.sv's source
 //     pc_src     where rtl/cpu.sv's next address comes from
 //
-// 135 opcodes, one row each.  An x is a value no step of that instruction reads -
+// 141 opcodes, one row each.  An x is a value no step of that instruction reads -
 // a branch has no ALU operation, a store no destination - left to the mapper as
-// a don't-care.  Rows with an x, per field: alu 28, lhs 17, rhs 6, dest 26, cond 128, pc 0.
+// a don't-care.  Rows with an x, per field: alu 26, lhs 17, rhs 4, dest 26, cond 134, pc 0.
 //
 // THE MICROCODE ROM KEEPS WHAT CHANGES FROM STEP TO STEP: write enables,
 // fetch and dispatch, the pc, memory reads and writes, the next address.  What
@@ -196,16 +196,22 @@ module predecode (
         8'h8d: t = 20'b0111_xxxx_0100_1010_xx_00;    // mov
         8'h8e: t = 20'b0111_xxxx_0100_1010_xx_00;    // mov
         8'h8f: t = 20'b0111_xxxx_0100_1010_xx_00;    // mov
-        8'h90: t = 20'b0000_0110_1110_0110_xx_00;    // push
-        8'h92: t = 20'b0000_0110_1110_0110_xx_00;    // push
-        8'h94: t = 20'bxxxx_0110_xxxx_0110_xx_00;    // push8
-        8'h96: t = 20'b0000_0110_1110_0110_xx_00;    // push
-        8'h97: t = 20'b0000_0110_1110_0110_xx_00;    // push
-        8'h98: t = 20'b0000_0110_1010_1000_xx_00;    // pop
-        8'h9a: t = 20'b0000_0110_1010_1000_xx_00;    // pop
-        8'h9c: t = 20'bxxxx_0110_xxxx_1000_xx_00;    // pop8
-        8'h9e: t = 20'b0000_0110_1010_1000_xx_00;    // pop
-        8'h9f: t = 20'b0000_0110_1010_1000_xx_00;    // pop
+        8'h90: t = 20'b0111_0110_0011_0110_xx_00;    // push
+        8'h91: t = 20'b0111_0001_0011_0001_xx_00;    // stm
+        8'h92: t = 20'b0111_0110_0011_0110_xx_00;    // push
+        8'h93: t = 20'b0111_0001_0011_0001_xx_00;    // stm
+        8'h94: t = 20'b0111_0001_0011_0001_xx_00;    // stm
+        8'h95: t = 20'b0111_0001_0011_0001_xx_00;    // stm
+        8'h96: t = 20'b0111_0110_0011_0110_xx_00;    // push
+        8'h97: t = 20'b0111_0110_0011_0110_xx_00;    // push
+        8'h98: t = 20'b0111_0110_0011_0110_xx_00;    // pop
+        8'h99: t = 20'b0111_0010_0011_0010_xx_00;    // ldm
+        8'h9a: t = 20'b0111_0110_0011_0110_xx_00;    // pop
+        8'h9b: t = 20'b0111_0010_0011_0010_xx_00;    // ldm
+        8'h9c: t = 20'b0111_0010_0011_0010_xx_00;    // ldm
+        8'h9d: t = 20'b0111_0010_0011_0010_xx_00;    // ldm
+        8'h9e: t = 20'b0111_0110_0011_0110_xx_00;    // pop
+        8'h9f: t = 20'b0111_0110_0011_0110_xx_00;    // pop
         8'ha0: t = 20'bxxxx_1000_1100_xxxx_01_01;    // br
         8'ha1: t = 20'bxxxx_1000_xxxx_xxxx_xx_11;    // jmp
         8'ha2: t = 20'bxxxx_xxxx_xxxx_xxxx_xx_10;    // jmp

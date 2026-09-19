@@ -1036,25 +1036,29 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   has to be remembered.
 #
 #   1001_0000                push ra                  2 bytes
-#   1001_0001                -- free
+#   1001_0001                stm  ra                  2 bytes
 #   1001_0010                push ra, rb              2 bytes
-#   1001_0011                -- free
-#   1001_0100                push8  ra                  2 bytes
-#   1001_0101                -- free
+#   1001_0011                stm  ra, rb              2 bytes
+#   1001_010c                stm  ra, rb, rc          TWO opcodes
 #   1001_011c                push ra, rb, rc          TWO opcodes
 #   1001_1000                pop  ra                  2 bytes
-#   1001_1001                -- free
+#   1001_1001                ldm  ra                  2 bytes
 #   1001_1010                pop  ra, rb              2 bytes
-#   1001_1011                -- free
-#   1001_1100                pop8   ra                  2 bytes
-#   1001_1101                -- free
+#   1001_1011                ldm  ra, rb              2 bytes
+#   1001_110c                ldm  ra, rb, rc          TWO opcodes
 #   1001_111c                pop  ra, rb, rc          TWO opcodes
 #
-#   PUSH AND POP ARE NOW THE SAME SHAPE TWICE with nothing borrowed from either
-#   row.  The two branches that used to sit at 1001_0100 and 1001_0101 have gone
-#   back to the control-flow block where they belong, which is what makes the
-#   claim below - everything that writes the pc is a 1001_xxxx opcode - true
-#   again rather than nearly true.
+#   THE ROW IS FULL, AND IT IS THE SAME SHAPE FOUR TIMES: one register, two
+#   registers, three registers, for each of push, stm, pop and ldm.  Reading
+#   down a column still tells you the shape of byte 1 and nothing else has to
+#   be remembered - the low half stores and the high half loads, the stack
+#   forms on the even column pair and the pointer-walking forms on the odd.
+#
+#   WHAT PAID FOR IT.  `push8` and `pop8` held 1001_0100 and 1001_1100, and a
+#   three-register form needs an ADJACENT EVEN/ODD PAIR for the opcode bit that
+#   carries its ninth register bit.  Every odd slot in this row was free and
+#   every even one was taken, so the byte forms were the only way to make a
+#   pair.  See the stm/ldm section for what that trade buys.
 #   ------------------------------------------------------------------------
 #
 #   --- control flow, all of it, in exactly two rows -------------------------
@@ -2496,10 +2500,19 @@ semantics = "R[d] = (R[a] & mask) != 0"
 # exactly as the three-register ALU forms do - same trick, same reason.
 #
 #     0x90  push ra              0x98  pop  ra
+#     0x91  stm  ra              0x99  ldm  ra
 #     0x92  push ra, rb          0x9a  pop  ra, rb
-#     0x94  push8  ra            0x9c  pop8   ra
+#     0x93  stm  ra, rb          0x9b  ldm  ra, rb
+#     0x94  stm  ra, rb, rc      0x9c  ldm  ra, rb, rc
+#     0x95    "                  0x9d    "
 #     0x96  push ra, rb, rc      0x9e  pop  ra, rb, rc
 #     0x97    "                  0x9f    "
+#
+# THE ROW IS FULL, and the four even slots that were `push8` and `pop8` are
+# what made the three-register block moves possible: a third register needs an
+# opcode bit, so it needs an ADJACENT EVEN/ODD PAIR, and every odd slot in this
+# row was already free while every even one was taken.  See the stm/ldm section
+# below for what replaced them and why the byte forms were affordable to lose.
 #
 # ORDER.  A push writes its registers left to right, and the stack grows down,
 # so the FIRST register named lands at the HIGHEST address.  A pop reads left to
@@ -2512,28 +2525,33 @@ semantics = "R[d] = (R[a] & mask) != 0"
 # order - the high half is named first and lands higher, which is little endian.
 # See isa/abi.s.
 #
-# OPEN: whether the assembler should refuse `push sp`.  The encoding has room
-# for it either way, so this is purely an assembler policy question - and the
-# ambiguity is real, since "the value before or after the decrement" has bitten
-# both ARM and x86.  `pop sp` is more defensible, and `mov sp, rX` covers it.
-
-[[insn]]
-mnemonic = "push8"
-summary  = "push the low byte of ra"
-operands = [{ name = "a", type = "reg" }]
-syntax   = "{a}"
-semantics = "sp = sp - 1; M8[sp] = R[a]"
-
-  [[insn.form]]
-  name     = "single"
-  encoding = "1001_0100  0000_0aaa"
+# THE POINTER IS UPDATED AFTER THE TRANSFER, and that settles what it means to
+# name the pointer in its own register list - the question that has bitten both
+# ARM and x86.  It is defined here rather than forbidden:
+#
+#     push sp    stores sp AS IT WAS when the instruction started
+#     pop  sp    has no effect on sp: it is left holding the stepped pointer,
+#                and the word that was loaded into it is discarded
+#
+# and the same for `stm r1` and `ldm r2`.  Neither case is useful, but both are
+# well defined, and no assembler has to know about them.
+#
+# IT IS ALSO WHAT THE HARDWARE DOES FOR ITS OWN REASONS.  The register file has
+# ONE write port, and a pop already fills it with the words it is loading, so
+# the pointer's own write is left until last - see rtl/ucode.sv.  The rule above
+# is that ordering, described rather than imposed.
+#
+# THE SEMANTICS BELOW SAY SO with a name for the pointer's entry value, `base`.
+# Every address is an offset from it, so nothing a load writes can disturb an
+# address still to be used; and the pointer's assignment is last, so it wins.
+# tools/sim.js gives any name that is not a register a life of one instruction.
 
 [[insn]]
 mnemonic = "push"
 summary  = "push ra"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
-semantics = "sp = sp - 2; M16[sp] = R[a]"
+semantics = "base = sp; M16[base - 2] = R[a]; sp = base - 2"
 
   [[insn.form]]
   name     = "single"
@@ -2544,7 +2562,7 @@ mnemonic = "push"
 summary  = "push ra then rb"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
 syntax   = "{a}, {b}"
-semantics = "sp = sp - 2; M16[sp] = R[a]; sp = sp - 2; M16[sp] = R[b]"
+semantics = "base = sp; M16[base - 2] = R[a]; M16[base - 4] = R[b]; sp = base - 4"
 
   [[insn.form]]
   name     = "double"
@@ -2556,7 +2574,7 @@ summary  = "push ra, then rb, then rc"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" },
             { name = "c", type = "reg" }]
 syntax   = "{a}, {b}, {c}"
-semantics = "sp = sp - 2; M16[sp] = R[a]; sp = sp - 2; M16[sp] = R[b]; sp = sp - 2; M16[sp] = R[c]"
+semantics = "base = sp; M16[base - 2] = R[a]; M16[base - 4] = R[b]; M16[base - 6] = R[c]; sp = base - 6"
 
   [[insn.form]]
   name     = "triple"
@@ -2565,42 +2583,26 @@ semantics = "sp = sp - 2; M16[sp] = R[a]; sp = sp - 2; M16[sp] = R[b]; sp = sp -
 
 
 # --- pop --------------------------------------------------------------------
-# THERE IS ONE BYTE POP AND IT ZERO EXTENDS.  An earlier version had two,
-# `pop8u` and `pop8s`, differing only in how the byte reached the top half of
-# the register - and the sign-extending one has been removed.
+# THERE ARE NO BYTE-WIDE STACK OPERATIONS.  `push8` and `pop8` were here and
+# are gone; the four opcodes they held are the three-register stm and ldm
+# below, which could not have existed without them.
 #
-# IT WAS THE ONLY SIGN-EXTENDING MEMORY READ IN THE MACHINE.  `ld8` zero
-# extends and has no signed twin; there is no `ld8s`, and nothing has ever
-# wanted one, because sign extension is what `sxt8` is for.  A pop that broke
-# that rule made the byte-wide reads inconsistent with each other for the sake
-# of one instruction.
+# WHAT IT COSTS.  The ABI still passes a byte argument on the stack UNPADDED -
+# see isa/abi.s - so a caller that puts one there writes the two-instruction
+# form instead, `add sp, sp, #-1` and then `st8`.  That is four bytes where
+# `push8` was two.  It is a rare shape: it needs a function with more arguments
+# than the registers carry AND a byte among the ones that spill, and a compiler
+# usually sinks the whole frame's adjustment into one `add` and fills the slots
+# with stores anyway.  Block moves are common and that trade is the point.
 #
-# It was not paying for itself either.  The ABI already says a byte argument arrives
-# with its high bits UNSPECIFIED and that the callee extends what it needs, so
-# a callee that wants a signed byte writes `sxt8` regardless of how the value
-# arrived; the special pop saved it two bytes in that one case and cost an
-# opcode, a mnemonic, and a decision at every other byte pop.  Zero extension
-# is the one that composes: it leaves the register holding exactly the byte
-# that was on the stack, which is what a caller can rely on.
-#
-# So `pop8` needs no suffix, because there is nothing to distinguish it from.
-[[insn]]
-mnemonic = "pop8"
-summary  = "pop a byte into ra, zero extended"
-operands = [{ name = "a", type = "reg" }]
-syntax   = "{a}"
-semantics = "R[a] = M8[sp]; sp = sp + 1"
-
-  [[insn.form]]
-  name     = "single"
-  encoding = "1001_1100  0000_0aaa"
-
+# `pop8` was rarer still - nothing in libc, nothing in libgcc, and no pattern
+# in the compiler emitted it.
 [[insn]]
 mnemonic = "pop"
 summary  = "pop a word into ra"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
-semantics = "R[a] = M16[sp]; sp = sp + 2"
+semantics = "base = sp; R[a] = M16[base]; sp = base + 2"
 
   [[insn.form]]
   name     = "single"
@@ -2611,7 +2613,7 @@ mnemonic = "pop"
 summary  = "pop two words, into ra then rb"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
 syntax   = "{a}, {b}"
-semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2"
+semantics = "base = sp; R[a] = M16[base]; R[b] = M16[base + 2]; sp = base + 4"
 
   [[insn.form]]
   name     = "double"
@@ -2623,11 +2625,108 @@ summary  = "pop three words, into ra then rb then rc"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" },
             { name = "c", type = "reg" }]
 syntax   = "{a}, {b}, {c}"
-semantics = "R[a] = M16[sp]; sp = sp + 2; R[b] = M16[sp]; sp = sp + 2; R[c] = M16[sp]; sp = sp + 2"
+semantics = "base = sp; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base + 4]; sp = base + 6"
 
   [[insn.form]]
   name     = "triple"
   encoding = "1001_111z  ccbb_baaa"
+  fields   = { z = "c:reg[0]", c = "c:reg[2:1]" }
+
+
+# --- stm / ldm: the block moves ---------------------------------------------
+# push and pop walk the stack; these walk a buffer, and they are the same
+# hardware doing it.  `stm` stores through r1 and `ldm` loads through r2, each
+# stepping its pointer past what it moved - so a copy loop is `ldm` then `stm`
+# with no pointer arithmetic between them at all, and the two pointers advance
+# themselves.
+#
+# THE POINTER IS NAMED, NOT ENCODED, exactly as sp is for push and pop.  That
+# is what leaves all of byte 1 for the registers being moved, which is what
+# makes a three-register form fit in two bytes.  r1 for the store and r2 for
+# the load, so that a copy can hold both at once, and neither is sp.
+#
+# THEY COUNT UP, where push counts down.  A block move runs forwards, and the
+# post-update leaves each pointer one past the last byte it moved - ready for
+# the next iteration with nothing to add.
+#
+# WHY THEY ARE WORTH FOUR OPCODES.  snippets/memcpy.s's fastest rung reaches
+# its speed by pointing sp at the buffers and using push and pop, and then
+# spends more than a third of its cycles handing sp back and forth between the
+# source and the destination.  These have no handover at all: the pointers are
+# different registers and each one updates itself.
+#
+# THE ORDER IS THE SAME AS push's: the first register named is stored first, so
+# with a pointer that counts up it lands at the LOWEST address.  A save through
+# stm and a reload through ldm therefore take the SAME register list, where a
+# push/pop pair reverses it.
+[[insn]]
+mnemonic = "stm"
+summary  = "store ra through r1, stepping r1 past it"
+operands = [{ name = "a", type = "reg" }]
+syntax   = "{a}"
+semantics = "base = r1; M16[base] = R[a]; r1 = base + 2"
+
+  [[insn.form]]
+  name     = "single"
+  encoding = "1001_0001  0000_0aaa"
+
+[[insn]]
+mnemonic = "stm"
+summary  = "store ra then rb through r1"
+operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
+syntax   = "{a}, {b}"
+semantics = "base = r1; M16[base] = R[a]; M16[base + 2] = R[b]; r1 = base + 4"
+
+  [[insn.form]]
+  name     = "double"
+  encoding = "1001_0011  00bb_baaa"
+
+[[insn]]
+mnemonic = "stm"
+summary  = "store ra, then rb, then rc through r1"
+operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" },
+            { name = "c", type = "reg" }]
+syntax   = "{a}, {b}, {c}"
+semantics = "base = r1; M16[base] = R[a]; M16[base + 2] = R[b]; M16[base + 4] = R[c]; r1 = base + 6"
+
+  [[insn.form]]
+  name     = "triple"
+  encoding = "1001_010z  ccbb_baaa"
+  fields   = { z = "c:reg[0]", c = "c:reg[2:1]" }
+
+[[insn]]
+mnemonic = "ldm"
+summary  = "load ra through r2, stepping r2 past it"
+operands = [{ name = "a", type = "reg" }]
+syntax   = "{a}"
+semantics = "base = r2; R[a] = M16[base]; r2 = base + 2"
+
+  [[insn.form]]
+  name     = "single"
+  encoding = "1001_1001  0000_0aaa"
+
+[[insn]]
+mnemonic = "ldm"
+summary  = "load ra then rb through r2"
+operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
+syntax   = "{a}, {b}"
+semantics = "base = r2; R[a] = M16[base]; R[b] = M16[base + 2]; r2 = base + 4"
+
+  [[insn.form]]
+  name     = "double"
+  encoding = "1001_1011  00bb_baaa"
+
+[[insn]]
+mnemonic = "ldm"
+summary  = "load ra, then rb, then rc through r2"
+operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" },
+            { name = "c", type = "reg" }]
+syntax   = "{a}, {b}, {c}"
+semantics = "base = r2; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base + 4]; r2 = base + 6"
+
+  [[insn.form]]
+  name     = "triple"
+  encoding = "1001_110z  ccbb_baaa"
   fields   = { z = "c:reg[0]", c = "c:reg[2:1]" }
 
 

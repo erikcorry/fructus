@@ -91,8 +91,6 @@ start:
         push    lr
         push    lr, r4
         push    r0, r1, r2
-        push8   r1
-        pop8    r1
         pop     r2, r1, r0
         pop     r4, lr
         pop     lr

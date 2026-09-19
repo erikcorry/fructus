@@ -20,7 +20,7 @@ import { loadSpec } from './isa.js';
 import { buildDecoder, decode } from './decode.js';
 import { lhsOf, LHS_FIELD, DEST_FIELD, destWritesOf,
          ALU_OPS, ALU_RULES, ALU_ELSEWHERE, ALU_LATER,
-         RHS_IMM16, RHS_PCSUM, RHS_KON, RHS_MODE, COND_SRC, PC_RULES,
+         RHS_IMM16, RHS_PCSUM, RHS_ADR, RHS_KON, RHS_MODE, COND_SRC, PC_RULES,
          WRITES_LR } from './control.js';
 
 const spec = loadSpec();
@@ -61,9 +61,12 @@ const rhsCode = (d) => {
   // pc + 2 while this code is selected.  It is checked first because a call
   // names a register on the left of the pc as well, and that is port A's.
   if (WRITES_LR.test(sem)) return RHS_PCSUM;
-  // push and pop move sp first; their later steps name other selects themselves
-  if (/\bsp = sp - 2\b/.test(sem)) return konCode(-2);
-  if (/\bsp = sp \+ 2\b/.test(sem)) return konCode(2);
+  // AN INSTRUCTION THAT WALKS A POINTER WRITES IT BACK AS A RIGHT-HAND OPERAND:
+  // rtl/cpu.sv's address unit, read before its flop, exactly as a call reads the
+  // pc adder.  It names the pointer on both sides of a step - `sp = sp - 2` for
+  // push, `r1 = r1 + 2` for stm - and the digit is what keeps `pc = pc + off`
+  // out, since a branch's displacement is not a constant here.
+  if (/\b[a-z][a-z0-9]* = base [-+] \d/.test(sem)) return RHS_ADR;
   if (Object.values(form.fields ?? {}).some((v) => /^[a-z]:reg\[0\]$/.test(v))) return modeCode('port B, from the bytes');
   if ((insn.operands ?? []).some((o) => o.type === 'condimm5')) return modeCode('immgen, as condimm5');
   if (/^R\[[a-z]\] = imm$/.test(sem) && d.nbytes === 3) return RHS_IMM16;
@@ -101,7 +104,13 @@ const lhsCode = (d, op) => {
 // The FIRST register the instruction writes; a later step that writes another
 // names it from the microcode.
 const destCode = (d, op) => {
-  const w = destWritesOf(d.insn)[0];
+  const writes = destWritesOf(d.insn);
+  // AN INSTRUCTION THAT WALKS A POINTER NAMES IT, and that is the write this
+  // table carries - sp for push and pop, r1 for stm, r2 for ldm.  The register
+  // writes in between are the ones a microcode step overrides, and pop has up
+  // to three of them; the pointer write is the one every such instruction ends
+  // with, so it is the one worth predecoding.
+  const w = writes.find((x) => x.named) ?? writes[0];
   if (!w) return X;
   if (w.named) return regIndex(w.named);
   if (d.nbytes === 1) return d.ops[w.operand];

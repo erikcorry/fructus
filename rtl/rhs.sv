@@ -12,7 +12,7 @@
 //    0  r0                       8  #0
 //    1  r1                       9  #1
 //    2  pc + 2, a call's lr     10  #2
-//    3  reserved                11  immgen, normal
+//    3  the address unit's sum  11  immgen, normal
 //    4  imm16, from the bytes   12  immgen, as condimm5
 //    5  r5                      13  port B, from the bytes
 //    6  sp (r6)                 14  #-2
@@ -30,11 +30,12 @@
 // against 136 bare, but 432 cells against 430 once placed beside a real 8x16
 // register file, at the same four LUT levels.  Two cells for a microcode bit.
 //
-// ONE OF THE RESERVED CODES HAS NOW BEEN SPENT, on the terms this paragraph
-// used to set out: 2 and 3 fall in the register half and decode as r2 and r3 by
-// accident of the wiring, so a use for either owes a small decode, and not
-// before.  Code 2 is that use - a call's return address - and code 3 is still
-// r3 by accident and still costs nothing to leave there.
+// BOTH RESERVED CODES ARE NOW SPENT, on the terms this paragraph used to set
+// out: 2 and 3 fall in the register half and decoded as r2 and r3 by accident
+// of the wiring, so a use for either owed a small decode, and not before.  Code
+// 2 is a call's return address and code 3 is the address unit's sum, which is
+// how push, pop, stm and ldm write back the pointer they walked.  Nothing in
+// the low half is reserved any more.
 //
 // WHY THE PC'S ADDER AND NOT AN INCREMENTER OF ITS OWN.  The adder that
 // prepares a relative branch's target is IDLE DURING EVERY CALL: an absolute
@@ -103,6 +104,7 @@ module rhs (
     input  logic [3:0]  src,     // microcode: where the right-hand side comes from
     input  logic [15:0] regval,  // register file port B, addressed by regnum
     input  logic [15:0] pcsum,   // rtl/cpu.sv's pc adder, before its flop
+    input  logic [15:0] adr,     // rtl/cpu.sv's address unit, before its flop
     output logic [2:0]  regnum,  // -> register file port B address
     output logic [15:0] value    // not `rhs`: a port named after its module
                                  // is an error to verilator
@@ -110,7 +112,7 @@ module rhs (
 
     wire [2:0] c = src[2:0];
 
-    wire use_reg = (~src[3] & c != 3'd4 & c != 3'd2)
+    wire use_reg = (~src[3] & c != 3'd4 & c != 3'd2 & c != 3'd3)
                  | (src[3] & c == 3'd5);
     wire use_imm = src[3] & (c == 3'd3
                            | c == 3'd4);
@@ -129,7 +131,8 @@ module rhs (
     // imm16 joins the constants rather than the register value: both are flop
     // outputs, so this mux is on the side of rhs that arrives early.
     wire [15:0] imm16 = insn[23:8];             // byte 1 low, byte 2 high
-    wire [15:0] low   = (c == 3'd2) ? pcsum : imm16;
+    wire [15:0] low   = (c == 3'd2) ? pcsum
+                      : (c == 3'd3)   ? adr : imm16;
     wire [15:0] lit   = src[3] ? konst : low;
 
     assign value = use_reg ? regval : (use_imm ? imm : lit);

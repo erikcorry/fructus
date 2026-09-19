@@ -42,7 +42,7 @@ export function lhsOf(insn, form) {
   const portB = Object.values(form.fields ?? {}).find((v) => /^[a-z]:reg\[0\]$/.test(v))?.[0]
              ?? ('b' in (form.fix ?? {}) ? 'b' : undefined);
   const reads = new Set();
-  let pc = false, sp = false, pcNamed = null;
+  let pc = false, sp = false, pcNamed = null, walked = null;
   for (const stmt of (insn.semantics ?? '').split(';')) {
     const m = stmt.match(/^(.*?[^=!<>])=(?!=)(.*)$/);
     if (!m) continue;
@@ -50,7 +50,12 @@ export function lhsOf(insn, form) {
     const all = (s) => [...s.matchAll(/R\[([a-z])\]/g)].map((x) => x[1]);
     const dest = left.trim().match(/^R\[([a-z])\]$/);
     const memw = /M(8|16)\[/.test(left);
-    if (/\bsp\s*=\s*sp\s*[-+]/.test(stmt)) sp = true;
+    // A POINTER THE INSTRUCTION WALKS is the register it steps from the value
+    // it was entered with: `sp = base - 4` for push, `r1 = base + 4` for stm.
+    // That register is port A's, whichever it is - and it is the LAST thing
+    // such an instruction writes, which is what defines `pop sp`.
+    const step = stmt.match(/\b([a-z][a-z0-9]*)\s*=\s*base\s*[-+]\s*\d/);
+    if (step && regIndex(step[1]) >= 0) { sp = true; walked = step[1]; }
     if (/\bpc\s*$/.test(left) && /^\s*R\[[a-z]\]\s*$/.test(right)) pc = true;
     // `pc = lr' names its register rather than taking it from a field, and it
     // is still a register the ADDRESS PATH reads - so it belongs on port A
@@ -61,7 +66,7 @@ export function lhsOf(insn, form) {
     if (!memw) all(right).forEach((r) => reads.add(r));
   }
   if (portB) reads.delete(portB);
-  if (sp) return { kind: 'microcode', reg: regIndex('sp') };
+  if (sp) return { kind: 'microcode', reg: regIndex(walked) };
   if (pcNamed) return { kind: 'microcode', reg: regIndex(pcNamed) };
   if (reads.size > 1)
     throw new Error(`${insn.mnemonic}/${form.name}: port A would need ${[...reads].join(' and ')}`);
@@ -91,7 +96,7 @@ export const DEST_FIELD = {
 // A statement beginning `R[x] =` writes operand x; one beginning `sp =` or
 // `lr =` writes a register the microcode names.  `pc =` is not the register
 // file's.
-export const destWritesOf = (insn) => [...(insn.semantics ?? '').matchAll(/(?:^|;)\s*(R\[([a-z])\]|[a-z]+)\s*=(?!=)/g)]
+export const destWritesOf = (insn) => [...(insn.semantics ?? '').matchAll(/(?:^|;)\s*(R\[([a-z])\]|[a-z][a-z0-9]*)\s*=(?!=)/g)]
   .map((m) => m[2] ? { operand: m[2] } : { named: m[1] })
   .filter((w) => w.operand || regs.names.includes(regs.aliases?.[w.named] ?? w.named));
 
@@ -106,13 +111,17 @@ export const destWritesOf = (insn) => [...(insn.semantics ?? '').matchAll(/(?:^|
 // -2 and -1.  The three patterns left over - 011, 100, 101, which would have
 // been 3, -4 and -3 - are the modes.
 //
-// Codes 4 and 2 are in the register half but are not registers.  4 is the
-// 16-bit immediate, straight off the bytes.  2 is a call's return address:
-// rtl/cpu.sv's pc adder, read before its flop, with its addend forced to 1 so
-// that the sum is pc + 2.  See tools/gen-cpu.js for why the adder is free.
+// Codes 2, 3 and 4 are in the register half but are not registers, and between
+// them they have spent every code this field had left.  4 is the 16-bit
+// immediate, straight off the bytes.  2 is a call's return address: rtl/cpu.sv's
+// pc adder, read before its flop, with its addend forced to 1 so that the sum is
+// pc + 2.  3 is the ADDRESS UNIT's sum, read the same way - which is how push,
+// pop, stm and ldm write back the pointer they walked, through the ALU's
+// pass-through, without a mux on the register file's write port.
 export const RHS_REG   = { 0: 'r0', 1: 'r1', 5: 'r5', 6: 'sp (r6)', 7: 'lr (r7)' };
 export const RHS_IMM16 = 4;
 export const RHS_PCSUM = 2;
+export const RHS_ADR   = 3;
 export const RHS_KON   = { 0: 0, 1: 1, 2: 2, 6: -2, 7: -1 };
 export const RHS_MODE  = { 3: 'immgen, normal', 4: 'immgen, as condimm5', 5: 'port B, from the bytes' };
 
@@ -161,8 +170,13 @@ export const ALU_RULES = [
   // pc adder's sum and the pass-through carries it to the register file, which
   // is what lets the write port be wired straight from the ALU.
   [/^lr = pc; pc = /,                                      'rhs',   'the return address'],
-  [/^sp = sp - 2; M16\[sp\] = R\[a\]/,                      'add',   'sp and #-2, per register'],
-  [/^R\[a\] = M16\[sp\]; sp = sp \+ 2/,                     'add',   'sp and #2, per register'],
+  // THE BLOCK MOVES ASK THE ALU FOR THE PASS-THROUGH AND NOTHING ELSE, like a
+  // load.  Their addresses are the address unit's, walked a byte at a time;
+  // what reaches the register file is the right-hand operand flop, carrying
+  // either the words a pop assembled or the stepped pointer the address unit
+  // handed to rtl/rhs.sv.  One operation covers every register they write.
+  [/^base = [a-z][a-z0-9]*; M16\[base/,                     'rhs',   'the stepped pointer'],
+  [/^base = [a-z][a-z0-9]*; R\[a\] = M16\[base/,            'rhs',   'the words, then the pointer'],
 ];
 export const ALU_ELSEWHERE = [
   [/^$/,                                                'nothing'],
@@ -173,7 +187,7 @@ export const ALU_ELSEWHERE = [
   [/^pc = (lr|R\[a\]|target|pc \+ target)$/,             'the pc and its own adder'],
   [/^if \(/,                                            'rtl/compare.sv'],
 ];
-export const ALU_LATER = new Set(['br8', 'push8', 'pop8']);
+export const ALU_LATER = new Set(['br8']);
 
 // =============================================================================
 // rtl/cond.sv - which source each branch takes its condition from

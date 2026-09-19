@@ -10,8 +10,7 @@
 // instructions whose semantics call for it:
 //
 //    0  add    lhs + rhs
-//            add, push (sp and #-2, per register), pop (sp and #2, per
-//            register)
+//            add
 //    1  rsb    rhs - lhs
 //            rsb
 //    2  iseq   lhs == rhs, as 0 or 1
@@ -26,7 +25,9 @@
 //            and
 //    7  rhs    rhs
 //            ld8 (the bytes, assembled by the capture), ld (the bytes,
-//            assembled by the capture), mov, call (the return address)
+//            assembled by the capture), mov, push (the stepped pointer), pop
+//            (the words, then the pointer), stm (the stepped pointer), ldm
+//            (the words, then the pointer), call (the return address)
 //    8  shl    lhs << rhs[3:0]
 //            shl
 //    9  lsr    lhs >> rhs[3:0]
@@ -38,7 +39,7 @@
 //   13  slow   rtl/unary.sv's slow pair, registered a cycle earlier: clz or popcount
 //            clz, popcount
 //
-//   10, 14, 15 are free.  Not yet: br8, push8, pop8.
+//   10, 14, 15 are free.  Not yet: br8.
 //
 // BRANCHES ARE DECIDED BESIDE THE ALU, NOT IN IT.  rtl/compare.sv takes the
 // same two operands and answers one bit that never enters this block's result,

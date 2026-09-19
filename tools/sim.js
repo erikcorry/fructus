@@ -213,6 +213,7 @@ export class Machine {
     this.halted = false;
     this.little = spec.cpu.endian === 'little';
     this.count  = 0;
+    this.tmp    = {};      // scratch names, cleared at every instruction
 
     // THE COST MODEL.  See [cpu] in the spec, which is where it is defined.
     // The bus is 6502-like: one cycle per byte, carrying instruction fetch and
@@ -237,7 +238,12 @@ export class Machine {
 
     // sp and lr are register ALIASES in the spec, not hardcoded numbers here.
     const reg = spec.optype.reg;
+    // Both the aliases and the registers' OWN names, because an instruction
+    // that walks a pointer names it outright - `stm` steps r1 and `ldm` steps
+    // r2, the way push and pop step sp - and semantics have to be able to say
+    // so.  Operand names are single letters, so nothing here can collide.
     this.named = {};
+    reg.names.forEach((n, i) => { this.named[n] = i; });
     for (const [alias, target] of Object.entries(reg.aliases ?? {})) this.named[alias] = nameIndex(reg, target);
 
     this.sem = new Map();          // insn object -> parsed statement list
@@ -275,6 +281,7 @@ export class Machine {
         if (n === 'halted') return this.halted ? 1 : 0;
         if (n in this.named) return this.R[this.named[n]];
         if (n in ops)       return ops[n];
+        if (n in this.tmp)  return this.tmp[n];
         throw new Error(`semantics: unknown name '${n}'`);
       }
       case 'part': return ops[node.name][node.part];
@@ -329,6 +336,12 @@ export class Machine {
       if (t.name === 'pc')     { this.pc = u16(v); this.wrotePc = true; return; }
       if (t.name === 'halted') { this.halted = !!v; return; }
       if (t.name in this.named) { this.R[this.named[t.name]] = u16(v); return; }
+      // ANY OTHER NAME IS A SCRATCH VALUE that lives for this instruction only.
+      // push, pop, stm and ldm use one to hold the pointer they were entered
+      // with, so that every address they compute is an offset from it and the
+      // pointer's own update can come last - which is what the hardware does
+      // and what makes `pop sp` mean something definite.  See isa/fructus.toml.
+      this.tmp[t.name] = u16(v); return;
     }
     throw new Error(`semantics: cannot assign to ${JSON.stringify(t)}`);
   }
@@ -362,13 +375,15 @@ export class Machine {
     // after the instruction's last byte arrived, and there is nothing to fetch
     // while the adder runs.  See rtl/cpu.sv's address unit.
     if (/M(8|16)\[/.test(d.insn.semantics ?? '')) this.slow += 1;
-    // AND pop PAYS ONE MORE, because its last act is to write sp and the
-    // register file has ONE write port: that write cannot share the cycle that
-    // writes the last popped register.  push has no such conflict - its sp
-    // write lands in the cycle the next opcode is dispatched in, which is where
-    // every other instruction's result lands too.
-    if (/^R\[[a-z]\] = M16\[sp\]/.test(d.insn.semantics ?? '')) this.slow += 1;
+    // AND A LOADING BLOCK MOVE PAYS ONE MORE - pop and ldm - because its last
+    // act is to write the pointer it walked and the register file has ONE write
+    // port, so that write cannot share the cycle that writes the last register
+    // it loaded.  push and stm have no such conflict: they write no register
+    // from memory, so the pointer write lands in the cycle the next opcode is
+    // dispatched in, which is where every other instruction's result lands too.
+    if (/R\[[a-z]\] = M16\[base/.test(d.insn.semantics ?? '')) this.slow += 1;
     this.wrotePc = false;
+    this.tmp = {};           // no scratch name outlives its instruction
     if (trace) trace(at, d, this);
     for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);
     // TAKEN means the assignment to pc RAN, not that pc ended up somewhere

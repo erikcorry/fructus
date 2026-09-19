@@ -128,16 +128,20 @@ main:
 
         ; takefive ({1, 2, 3, 4, 5}) = 15, all of it on the stack
         mov     r4, #10
+        ; Five unpadded bytes.  With no `push8` in the machine the caller makes
+        ; the room once and fills the slots with stores, which is what the
+        ; compiler does too - and the layout it has to produce is unchanged.
+        add     sp, sp, #-5             ; room for five bytes of argument
         mov     r5, #5
-        push8   r5                      ; e, at the highest address
+        st8     r5, [sp, #4]            ; e, at the highest address
         mov     r5, #4
-        push8   r5
+        st8     r5, [sp, #3]
         mov     r5, #3
-        push8   r5
+        st8     r5, [sp, #2]
         mov     r5, #2
-        push8   r5
+        st8     r5, [sp, #1]
         mov     r5, #1
-        push8   r5                      ; a, at sp
+        st8     r5, [sp, #0]            ; a, at sp
         call    takefive
         add     sp, sp, #5
         mov     r5, #15
