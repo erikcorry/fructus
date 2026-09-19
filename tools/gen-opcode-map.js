@@ -32,9 +32,9 @@ const MODES = [
   { id: 'abbrev',  c: '#F8CE8B', label: 'One-byte abbreviation', bits: 'every operand pinned',            note: 'add r0, r0, #1 &middot; mov r0, r1' },
   { id: 'special', c: '#E3A863', label: 'One-byte special',      bits: 'no operands at all',              note: 'ret &middot; nop &middot; halt' },
 
-  { id: 'rrr',     c: '#9AC4E8', label: 'Three registers',       bits: 'reg 3 (split) + reg 3 + reg 3',   note: 'add rd, ra, rb &middot; push ra, rb, rc' },
-  { id: 'rr',      c: '#B9D9F2', label: 'Two registers',         bits: 'reg 3 + reg 3',                   note: 'push ra, rb &middot; and the unary ALU ops, whose third operand is the opcode' },
-  { id: 'r',       c: '#D2E7F8', label: 'One register',          bits: 'reg 3',                           note: 'push ra &middot; pop ra &middot; call ra' },
+  { id: 'rrr',     c: '#9AC4E8', label: 'Three registers',       bits: 'reg 3 (split) + reg 3 + reg 3',   note: 'add rd, ra, rb &middot; push ra, rb, rc &middot; ldm ra, rb, rc' },
+  { id: 'rr',      c: '#B9D9F2', label: 'Two registers',         bits: 'reg 3 + reg 3',                   note: 'push ra, rb &middot; stm ra, rb &middot; and the unary ALU ops, whose third operand is the opcode' },
+  { id: 'r',       c: '#D2E7F8', label: 'One register',          bits: 'reg 3',                           note: 'push ra &middot; pop ra &middot; ldm ra &middot; call ra' },
 
   { id: 'rri3',    c: '#A6D9B4', label: 'Two registers, 3-bit table', bits: 'table 3 (split) + reg 3 + reg 3', note: 'ld rd, [ra, #off] &middot; st rs, [ra, #off] &middot; add rd, ra, #imm3. Shifts read the same three bits as #shift3' },
   { id: 'rri10',   c: '#CBE5A0', label: 'Two registers, 10-bit', bits: 'reg 3 + reg 3 + int 10',          note: 'the wide displacement and immediate forms' },
