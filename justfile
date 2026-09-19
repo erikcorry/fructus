@@ -136,3 +136,18 @@ test-all: build-tools test
 # The opcode map, as HTML.
 map:
     @npm run --silent map
+
+# ----------------------------------------------------------------- hardware --
+#
+# nextpnr's placer is randomised, and a single placement of this design wanders
+# by two or three MHz - enough to reverse the verdict on a change worth one.  So
+# the unit every figure in rtl/cpu.sv's header is quoted in is a MEDIAN OF
+# EIGHT, and a comparison against them has to be measured the same way.  The
+# recipe prints the spread alongside it, which is there to be read: a median
+# that moves by less than the spread has not been shown to do anything.
+#
+# Needs yosys and nextpnr-ice40, and skips with a message without them.
+
+# Place rtl/ on an iCE40 UP5K behind a real SPRAM and report the median MHz.
+speed seeds='8':
+    @node tools/speed.mjs {{seeds}}
