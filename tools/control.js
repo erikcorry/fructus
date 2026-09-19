@@ -78,6 +78,12 @@ export function lhsOf(insn, form) {
 export const LHS_FIELD = { rd: { code: 8, bits: 'insn[10:8]', of: (b) => b & 7 },
                     ra: { code: 9, bits: 'insn[13:11]', of: (b) => (b >> 3) & 7 } };
 
+// Port B's field read on port A, which push needs for its third register.  It
+// is not in LHS_FIELD because nothing DECODES to it - no instruction's
+// left-hand operand follows it, so tools/gen-predecode.js must not offer it as
+// a candidate; only a microcode step names it.
+export const LHS_PORTB = 10;
+
 // =============================================================================
 // rtl/dest.sv
 // =============================================================================

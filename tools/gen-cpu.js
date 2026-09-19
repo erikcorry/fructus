@@ -13,12 +13,11 @@
 // writes the wiring, and exists so that rtl/ stays generated throughout.
 // =============================================================================
 
-import { RHS_PCSUM as PCSUM, LHS_FIELD, DEST_FIELD } from './control.js';
+import { RHS_PCSUM as PCSUM, DEST_FIELD } from './control.js';
 
 // The microcode's overrides name a field; these are the codes those fields
 // have in rtl/lhs.sv and rtl/dest.sv.  Port B's is 10 on port A and 11 on the
 // write port, because the two blocks number their fields differently.
-const LHS_B   = 10;
 const destOf  = (what) => Number(Object.keys(DEST_FIELD).find((k) => DEST_FIELD[k].name === what));
 const DEST_RD = destOf('rd field'), DEST_RA = destOf('ra field'), DEST_B = destOf('port B field');
 
@@ -200,13 +199,15 @@ module cpu (
     // not dispatch, and the ROM follows its \`next\` into a waiting step instead.
     wire fetch, dispatch, wen;
     wire [1:0] pcload;
-    wire amem, abase, we;
-    wire [1:0] akon, dcap, wsel, lalt, dalt;
+    wire amem, abase, we, luse;
+    wire [1:0] akon, dcap, wsel, dalt;
+    wire [3:0] lalt;
     wire defer;
     ucode u (.clk(clk), .rst(rst), .bus(mem_rdata), .defer(defer), .fetch(fetch),
              .dispatch(dispatch), .wen(wen), .pcload(pcload),
              .amem(amem), .abase(abase), .akon(akon), .we(we), .wsel(wsel),
-             .dcap(dcap), .lalt(lalt), .dalt(dalt), .halt(halted), .trap(trapped));
+             .dcap(dcap), .luse(luse), .lalt(lalt), .dalt(dalt),
+             .halt(halted), .trap(trapped));
 
     logic [15:0] pc;
     wire [15:0] pc_next = pc + 16'd1;
@@ -264,9 +265,21 @@ module cpu (
     // PUSH IS WHY THERE ARE THREE OF THEM.  It reads three registers in turn,
     // from the three places the encoding puts them, while its predecoded select
     // is busy naming sp for the address unit.
-    wire [3:0] lhs_eff = (lalt == 2'd0) ? lhs_src
-                       : (lalt == 2'd1) ? 4'd${LHS_FIELD.rd.code}
-                       : (lalt == 2'd2) ? 4'd${LHS_FIELD.ra.code} : 4'd${LHS_B};
+    //
+    // AND THE STEP CARRIES THE CODE ITSELF, so this is a 2:1 and not a 4:1.
+    // That matters because it is in SERIES with rtl/lhs.sv's own decode and the
+    // register file's read, and that chain ends at the memory's data pins - the
+    // critical path of the whole machine.  A 4:1 over codes is two LUT levels
+    // where this is one, and the microcode bits it costs are free: measured,
+    // padding the word from 29 bits to 37 and taking a fifth block RAM moved
+    // the clock by 0.01 MHz.  Spend width, buy levels.
+    //
+    // MEASURED, medians of eight seeds: 26.28 MHz with a 4:1 over two-bit
+    // selectors and a 29-bit word, 26.91 with this and 32 - and the wider word
+    // still fits in four block RAMs, so the bits were free after all.  The
+    // whole distribution moved, 25.4 .. 26.8 to 26.3 .. 27.4, which is what
+    // distinguishes a real gain from a lucky median.
+    wire [3:0] lhs_eff = luse ? lalt : lhs_src;
     lhs  l (.insn(view), .src(lhs_eff), .regnum(an));
     rhs  r (.insn(view), .src(rhs_src), .regval(R[bn]), .pcsum(pcsum), .adr(adr),
             .regnum(bn), .value(bval));

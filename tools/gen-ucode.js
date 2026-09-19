@@ -25,7 +25,15 @@
 
 import { loadSpec } from './isa.js';
 import { buildDecoder, decode } from './decode.js';
-import { ALU_RULES, ALU_ELSEWHERE, ALU_LATER } from './control.js';
+import { ALU_RULES, ALU_ELSEWHERE, ALU_LATER, LHS_FIELD, LHS_PORTB } from './control.js';
+
+// THE STEP NAMES A PORT-A SOURCE BY ITS CODE, not by a two-bit selector that
+// rtl/cpu.sv has to expand.  A 4:1 mux over codes cost a LUT level in series
+// ahead of rtl/lhs.sv's own decode and the register file's read, and that chain
+// ends at the memory's data pins; a wider ROM word costs nothing measurable.
+// See rtl/cpu.sv's header for both measurements.
+const LHS_CODE = { 1: LHS_FIELD.rd.code, 2: LHS_FIELD.ra.code, 3: LHS_PORTB };
+const reads = (which) => ({ luse: 1, lalt: LHS_CODE[which] });
 
 const spec = loadSpec();
 const dec = buildDecoder(spec);
@@ -48,7 +56,8 @@ const FIELDS = [
   ['we',       1,    'write the byte on mem_wdata at that address'],
   ['wsel',     2,    "which byte: 0/1 port A's low/high, 2 the left operand flop's high"],
   ['dcap',     2,    'capture the bus byte: 1 shift it into the right operand flop, 2 zero extend it there'],
-  ['lalt',     2,    "lhs alternate - which field port A reads: 0 rtl/predecode.sv's choice, 1 rd, 2 ra, 3 port B's"],
+  ['luse',     1,    "lhs alternate: port A reads this step's own code rather than rtl/predecode.sv's"],
+  ['lalt',     4,    'and that code, in rtl/lhs.sv\'s numbering - 8 the rd field, 9 the ra field, 10 port B\'s'],
   ['dalt',     2,    'dest alternate - the same four for the write port, 0 being the pointer predecode names'],
 ];
 const W = FIELDS.reduce((n, [, w]) => n + w, 0);
@@ -61,7 +70,8 @@ const STEP = { EXEC: 256, FETCH2: 257, HALT: 258, TRAP: 259, BOOT: 260, SLOW: 26
                STA: 275, STHI: 276, STA8: 277, STEND: 278,
                LDF2: 279, LD8F2: 280, STF2: 281, ST8F2: 282 };
 const word = (w) => ({ next: 0, fetch: 0, dispatch: 0, wen: 0, halt: 0, trap: 0, pcload: 0,
-                       amem: 0, abase: 0, akon: 0, we: 0, wsel: 0, dcap: 0, lalt: 0, dalt: 0, ...w });
+                       amem: 0, abase: 0, akon: 0, we: 0, wsel: 0, dcap: 0,
+                       luse: 0, lalt: 0, dalt: 0, ...w });
 const rom = new Array(1 << ADDR).fill(null);
 const why = new Map();
 rom[STEP.EXEC]   = word({ wen: 1, dispatch: 1 });        why.set(STEP.EXEC, 'write the result; the next opcode is on the bus');
@@ -110,11 +120,11 @@ rom[STEP.LDA8]  = word({ amem: 1, next: STEP.LD8 });
 why.set(STEP.LDA8, 'the address, for a single byte');
 rom[STEP.LD8]   = word({ dcap: 2, next: STEP.EXEC });
 why.set(STEP.LD8, 'the byte: zero extend it into the flop, and back to the pc');
-rom[STEP.STA]   = word({ amem: 1, we: 1, lalt: 1, next: STEP.STHI });
+rom[STEP.STA]   = word({ amem: 1, we: 1, ...reads(1), next: STEP.STHI });
 why.set(STEP.STA, "the address, and the source register's low byte out with it");
 rom[STEP.STHI]  = word({ amem: 1, abase: 1, akon: 2, we: 1, wsel: 2, next: STEP.STEND });
 why.set(STEP.STHI, 'the next byte up, and the high half out of the flop');
-rom[STEP.STA8]  = word({ amem: 1, we: 1, lalt: 1, next: STEP.STEND });
+rom[STEP.STA8]  = word({ amem: 1, we: 1, ...reads(1), next: STEP.STEND });
 why.set(STEP.STA8, 'the address and the only byte');
 rom[STEP.STEND] = word({ next: STEP.PCDISP });
 why.set(STEP.STEND, 'back to the pc; a store has no register write to wait for');
@@ -152,19 +162,19 @@ for (const n of [1, 2, 3]) {
   // addresses descend by one throughout; both bytes come off port A.
   let next = STEP.PUSHEND;
   for (let i = n; i >= 1; i--) {
-    const lo = alloc({ amem: 1, abase: 1, akon: 3, we: 1, wsel: 0, lalt: i, next },
+    const lo = alloc({ amem: 1, abase: 1, akon: 3, we: 1, wsel: 0, ...reads(i), next },
                      `push: the low byte of register ${i}, at the lower address`);
-    next = alloc({ amem: 1, abase: i === 1 ? 0 : 1, akon: 3, we: 1, wsel: 1, lalt: i, next: lo },
+    next = alloc({ amem: 1, abase: i === 1 ? 0 : 1, akon: 3, we: 1, wsel: 1, ...reads(i), next: lo },
                  `push: the high byte of register ${i}`);
   }
   CHAIN[`push${n}`] = next;
   // stm walks UP from the pointer, so it writes low byte first, like a store.
   next = STEP.STMEND;
   for (let i = n; i >= 1; i--) {
-    const hi = alloc({ amem: 1, abase: 1, akon: 2, we: 1, wsel: 1, lalt: i, next },
+    const hi = alloc({ amem: 1, abase: 1, akon: 2, we: 1, wsel: 1, ...reads(i), next },
                      `stm: the high byte of register ${i}`);
     next = alloc({ amem: 1, abase: i === 1 ? 0 : 1, akon: i === 1 ? 1 : 2,
-                   we: 1, wsel: 0, lalt: i, next: hi },
+                   we: 1, wsel: 0, ...reads(i), next: hi },
                  `stm: the low byte of register ${i}`);
   }
   CHAIN[`stm${n}`] = next;
@@ -438,7 +448,8 @@ module ucode (
     output logic [1:0]  wsel,      //    which byte of which register that is
     output logic [1:0]  dcap,      // -> rtl/cpu.sv: take the bus byte into the right
                                    //    operand flop, shifted in or zero extended
-    output logic [1:0]  lalt,      // -> rtl/lhs.sv: which field port A reads instead
+    output logic        luse,      // -> rtl/cpu.sv: port A takes this step's code
+    output logic [3:0]  lalt,      // -> rtl/lhs.sv: and that code, ready to use
     output logic [1:0]  dalt,      // -> rtl/dest.sv: and which the write port reads
     input  logic        defer      // rtl/cpu.sv: the pc is being loaded, so the
                                    // byte on the bus is not the next opcode
