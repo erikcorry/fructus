@@ -382,6 +382,17 @@ export class Machine {
     // from memory, so the pointer write lands in the cycle the next opcode is
     // dispatched in, which is where every other instruction's result lands too.
     if (/R\[[a-z]\] = M16\[base/.test(d.insn.semantics ?? '')) this.slow += 1;
+    // AND A STORE PAYS ONE MORE, for the cycle that fills the store-data flop.
+    // rtl/cpu.sv drives the memory's data pins from a register, not from a mux,
+    // so the byte must be SELECTED a cycle before it goes out: the address cycle
+    // selects the first one and the bytes follow it instead of riding with it.
+    // One cycle per store whatever its width - push triple fills once and then
+    // writes six bytes.  A LOAD PAYS NOTHING HERE: its bytes arrive from the
+    // memory into the right operand flop, which was always a flop, so nothing
+    // combinational ever stood between the register file and the data pins for
+    // them.  That is why this tests the statement and not just the access.
+    if ((d.insn.semantics ?? '').split(';').some((s) => /^\s*M(8|16)\[/.test(s.trim())))
+      this.slow += 1;
     this.wrotePc = false;
     this.tmp = {};           // no scratch name outlives its instruction
     if (trace) trace(at, d, this);

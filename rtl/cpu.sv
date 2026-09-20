@@ -297,16 +297,32 @@ module cpu (
     always_ff @(posedge clk) if (amem) mar <= adr;
 
     // --- and what a store puts on it --------------------------------------------
-    // The low byte comes straight off port A in the same cycle the address does,
-    // and that cycle latches the register too, so the high byte follows out of a
-    // flop.  That is what keeps a store the same length as the load beside it.
+    // THE STORE DATA COMES OUT OF A FLOP, so nothing combinational stands between
+    // the register file and the memory's data pins.  A step picks the byte with
+    // `wsel` and the NEXT step writes it, which is why a store spends a cycle
+    // filling before its first byte goes out and then one byte a cycle for as
+    // long as it lasts.  The address cycle does the filling, so the cost is one
+    // cycle per store however many bytes it moves: push triple pays it once.
+    //
+    // WHAT IT BUYS, medians of eight placement seeds on the whole processor:
+    // 26.91 MHz with this mux driving the pins directly, 30.46 with the flop.
+    // Every measurement before it ended at `ram_RAM.DATAIN_*`; this one does not
+    // - the critical path moves to the right operand flop and the ALU.
+    //
+    // AND ONLY STORES PAY, because a load's bytes arrive from the memory into
+    // `bq`, which always was a flop - loads, pop and ldm are untouched.  Stores
+    // are 2.7% of all cycles across div32, malloc, setjmp and abi-struct, so the
+    // cost is 1.027 against a clock of 1.132: ten percent faster in real time.
     //
     // PUSH WALKS DOWN, so it writes its HIGH byte first - and it takes both
     // bytes off port A, holding `lalt` on the same register for the pair, which
     // is why there are three sources here and not four.  The fourth, the flop's
     // low half, was measured at 1.6 MHz and is not needed: 25.80 against 27.39.
-    assign mem_wdata = (wsel == 2'd0) ? R[an][7:0]
-                     : (wsel == 2'd1) ? R[an][15:8] : aq[15:8];
+    wire [7:0] wdata_c = (wsel == 2'd0) ? R[an][7:0]
+                       : (wsel == 2'd1) ? R[an][15:8] : aq[15:8];
+    logic [7:0] wdata_q;
+    always_ff @(posedge clk) wdata_q <= wdata_c;
+    assign mem_wdata = wdata_q;
     assign mem_we    = we;
 
     alu  a (.clk(clk), .lhs(aq), .rhs(bq), .op(alu_op), .y(y));

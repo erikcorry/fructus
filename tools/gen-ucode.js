@@ -68,7 +68,8 @@ const STEP = { EXEC: 256, FETCH2: 257, HALT: 258, TRAP: 259, BOOT: 260, SLOW: 26
                PCREG: 268, CALLREG: 269,
                LDA: 270, LDLO: 271, LDHI: 272, LDA8: 273, LD8: 274,
                STA: 275, STHI: 276, STA8: 277, STEND: 278,
-               LDF2: 279, LD8F2: 280, STF2: 281, ST8F2: 282 };
+               LDF2: 279, LD8F2: 280, STF2: 281, ST8F2: 282,
+               STLO: 283, ST8: 284 };
 const word = (w) => ({ next: 0, fetch: 0, dispatch: 0, wen: 0, halt: 0, trap: 0, pcload: 0,
                        amem: 0, abase: 0, akon: 0, we: 0, wsel: 0, dcap: 0,
                        luse: 0, lalt: 0, dalt: 0, ...w });
@@ -105,11 +106,14 @@ rom[STEP.CALLREG] = word({ pcload: 1, dispatch: 1, wen: 1, next: STEP.PCDISP });
 // end in the ordinary EXEC, where the pass-through writes the flop to the
 // register file - the same step every ALU instruction ends in.
 //
-// A STORE'S ADDRESS CYCLE CARRIES ITS FIRST BYTE OUT WITH IT, straight off port
-// A, which is what keeps a store the same length as the load beside it; the
-// same cycle latches the source register so that its high byte can follow from
-// a flop.  A store writes no register, so it ends by pointing the bus back at
-// the pc and dispatching.
+// A STORE'S DATA COMES OUT OF A FLOP - see rtl/cpu.sv - so a step SELECTS the
+// byte that the NEXT step writes.  The address cycle does the selecting and
+// writes nothing, and each byte afterwards goes out while the one behind it is
+// picked; that one cycle is all a store costs over the load beside it, however
+// many bytes it moves.  The same cycle latches the source register, so the high
+// half is selected out of the left operand flop rather than off port A again.
+// A store writes no register, so it ends by pointing the bus back at the pc and
+// dispatching.
 rom[STEP.LDA]   = word({ amem: 1, next: STEP.LDLO });
 why.set(STEP.LDA, 'the address: the two operand flops added, onto the bus');
 rom[STEP.LDLO]  = word({ amem: 1, abase: 1, akon: 2, dcap: 1, next: STEP.LDHI });
@@ -120,12 +124,16 @@ rom[STEP.LDA8]  = word({ amem: 1, next: STEP.LD8 });
 why.set(STEP.LDA8, 'the address, for a single byte');
 rom[STEP.LD8]   = word({ dcap: 2, next: STEP.EXEC });
 why.set(STEP.LD8, 'the byte: zero extend it into the flop, and back to the pc');
-rom[STEP.STA]   = word({ amem: 1, we: 1, ...reads(1), next: STEP.STHI });
-why.set(STEP.STA, "the address, and the source register's low byte out with it");
-rom[STEP.STHI]  = word({ amem: 1, abase: 1, akon: 2, we: 1, wsel: 2, next: STEP.STEND });
-why.set(STEP.STHI, 'the next byte up, and the high half out of the flop');
-rom[STEP.STA8]  = word({ amem: 1, we: 1, ...reads(1), next: STEP.STEND });
-why.set(STEP.STA8, 'the address and the only byte');
+rom[STEP.STA]   = word({ amem: 1, wsel: 0, ...reads(1), next: STEP.STLO });
+why.set(STEP.STA, "the address, and the source register's low byte into the store flop");
+rom[STEP.STLO]  = word({ amem: 1, abase: 1, akon: 1, we: 1, wsel: 2, next: STEP.STHI });
+why.set(STEP.STLO, 'that byte goes out, and the high half is selected behind it');
+rom[STEP.STHI]  = word({ amem: 1, abase: 1, akon: 2, we: 1, next: STEP.STEND });
+why.set(STEP.STHI, 'the next byte up: the high half, out of the store flop');
+rom[STEP.STA8]  = word({ amem: 1, wsel: 0, ...reads(1), next: STEP.ST8 });
+why.set(STEP.STA8, 'the address, and the only byte into the store flop');
+rom[STEP.ST8]   = word({ amem: 1, abase: 1, akon: 1, we: 1, next: STEP.STEND });
+why.set(STEP.ST8, 'and out it goes');
 rom[STEP.STEND] = word({ next: STEP.PCDISP });
 why.set(STEP.STEND, 'back to the pc; a store has no register write to wait for');
 rom[STEP.LDF2]  = word({ fetch: 1, next: STEP.LDA });
@@ -150,34 +158,43 @@ why.set(STEP.ST8F2, 'the same, for a byte store');
 //
 // pop AND ldm SHARE EVERY STEP.  They differ only in the register predecode
 // names - sp for one, r2 for the other - and no step here mentions it.
-let free = 283;
+let free = 285;
 const alloc = (w, note) => { const a = free++; rom[a] = word(w); why.set(a, note); return a; };
 STEP.PUSHEND = alloc({ abase: 1, akon: 1, next: STEP.EXEC },
                      'back to the pc; the flop already holds the new sp');
 STEP.STMEND  = alloc({ abase: 1, akon: 2, next: STEP.EXEC },
                      'back to the pc, and one more step for the pointer');
 const CHAIN = {};
+// A BLOCK MOVE'S WRITES, built from a list of [register, wsel] in WRITE ORDER.
+// The store data comes out of a flop, so every step selects the byte the next
+// one writes and a fill step in front selects the first - and that fill is the
+// address cycle, which is why six bytes cost one cycle more than five do not.
+// `step` is the akon that walks the address, `fillkon` the one that reaches the
+// first address from the pointer: push starts at pointer - 1 and stm at the
+// pointer itself.
+const writes = (order, step, fillkon, end, what) => {
+  let next = end;
+  for (let k = order.length - 1; k >= 0; k--) {
+    const ahead = order[k + 1];
+    const sel = ahead ? { wsel: ahead[1], ...reads(ahead[0]) } : {};
+    next = alloc({ amem: 1, abase: 1, akon: k === 0 ? 1 : step, we: 1, ...sel, next },
+                 `${what}: byte ${k + 1} goes out` + (ahead
+                   ? `, and the ${ahead[1] === 1 ? 'high' : 'low'} half of register ${ahead[0]} is selected`
+                   : ''));
+  }
+  const [reg, sel] = order[0];
+  return alloc({ amem: 1, abase: 0, akon: fillkon, wsel: sel, ...reads(reg), next },
+               `${what}: the address, and the first byte into the store flop`);
+};
 for (const n of [1, 2, 3]) {
   // push walks DOWN and writes each register high byte first, so that the
-  // addresses descend by one throughout; both bytes come off port A.
-  let next = STEP.PUSHEND;
-  for (let i = n; i >= 1; i--) {
-    const lo = alloc({ amem: 1, abase: 1, akon: 3, we: 1, wsel: 0, ...reads(i), next },
-                     `push: the low byte of register ${i}, at the lower address`);
-    next = alloc({ amem: 1, abase: i === 1 ? 0 : 1, akon: 3, we: 1, wsel: 1, ...reads(i), next: lo },
-                 `push: the high byte of register ${i}`);
-  }
-  CHAIN[`push${n}`] = next;
-  // stm walks UP from the pointer, so it writes low byte first, like a store.
-  next = STEP.STMEND;
-  for (let i = n; i >= 1; i--) {
-    const hi = alloc({ amem: 1, abase: 1, akon: 2, we: 1, wsel: 1, ...reads(i), next },
-                     `stm: the high byte of register ${i}`);
-    next = alloc({ amem: 1, abase: i === 1 ? 0 : 1, akon: i === 1 ? 1 : 2,
-                   we: 1, wsel: 0, ...reads(i), next: hi },
-                 `stm: the low byte of register ${i}`);
-  }
-  CHAIN[`stm${n}`] = next;
+  // addresses descend by one throughout; stm walks UP from its pointer and so
+  // writes low byte first, like a store.  Both are the same chain either way.
+  const down = [], up = [];
+  for (let i = 1; i <= n; i++) { down.push([i, 1], [i, 0]); up.push([i, 0], [i, 1]); }
+  CHAIN[`push${n}`] = writes(down, 3, 3, STEP.PUSHEND, 'push');
+  CHAIN[`stm${n}`]  = writes(up,   2, 1, STEP.STMEND,  'stm');
+  let next;
   // pop and ldm read upwards, shifting each byte into the right-hand flop, and
   // write each register in the cycle the NEXT one's low byte lands - the write
   // reads the flop as it stands, and the shift replaces it at the same edge.
