@@ -10,17 +10,16 @@
 // what changes from step to step; everything an instruction wants throughout
 // comes from rtl/predecode.sv.
 //
-// WHAT IT RUNS: every instruction in the ISA but one.  The ALU groups, mov, the
+// WHAT IT RUNS: every instruction in the ISA.  The ALU groups, mov, the
 // unary operations, iseq and isset, in their one-, two- and three-byte forms;
 // the transfers of control; the loads and stores, at both widths and in every
 // addressing form; the block moves - push, pop, and the post-updating stm and
 // ldm; and halt and nop.
 //
-// br8 IS THE EXCEPTION, by decision rather than oversight - it is the list of
-// one that tools/control.js's ALU_LATER now holds.  It and every free opcode go
-// to a trap word, so a program cannot run an unimplemented instruction
-// silently.  Which opcodes are which is worked out from the spec, through
-// tools/control.js.
+// EVERY FREE OPCODE GOES TO A TRAP WORD, so a program cannot run an
+// unimplemented instruction silently.  Which opcodes are which is worked out
+// from the spec, through tools/control.js - whose ALU_LATER, the list of
+// instructions deliberately left unimplemented, is empty now.
 // =============================================================================
 
 import { loadSpec } from './isa.js';

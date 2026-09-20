@@ -39,7 +39,7 @@
 //   13  slow   rtl/unary.sv's slow pair, registered a cycle earlier: clz or popcount
 //            clz, popcount
 //
-//   10, 14, 15 are free.  Not yet: br8.
+//   10, 14, 15 are free.  Not yet: .
 //
 // BRANCHES ARE DECIDED BESIDE THE ALU, NOT IN IT.  rtl/compare.sv takes the
 // same two operands and answers one bit that never enters this block's result,

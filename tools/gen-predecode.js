@@ -128,7 +128,6 @@ const pcCode = (d) => {
 };
 
 const condCode = (insn) => {
-  if (insn.mnemonic === 'br8') return X;
   const hit = COND_SRC.find(([re]) => re.test(insn.semantics ?? ''));
   return hit ? hit[1] : X;
 };

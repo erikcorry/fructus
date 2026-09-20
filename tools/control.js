@@ -193,7 +193,7 @@ export const ALU_ELSEWHERE = [
   [/^pc = (lr|R\[a\]|target|pc \+ target)$/,             'the pc and its own adder'],
   [/^if \(/,                                            'rtl/compare.sv'],
 ];
-export const ALU_LATER = new Set(['br8']);
+export const ALU_LATER = new Set([]);
 
 // =============================================================================
 // rtl/cond.sv - which source each branch takes its condition from

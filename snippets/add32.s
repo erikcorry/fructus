@@ -21,10 +21,6 @@
 ; you want the predicate without the sum, complement instead of negating -
 ; `A + B >= 2^16` is exactly `A > ~B`, and `~0 = 65535` behaves correctly.
 ;
-; ----------------------------------------------------------------------------
-; The comparison must be br, not br8.  br8 compares low bytes only and would
-; miss every carry that depends on the upper half of the sum.
-; ----------------------------------------------------------------------------
 
 
 ; ============================================================================

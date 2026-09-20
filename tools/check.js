@@ -191,10 +191,11 @@ for (const [name, t] of Object.entries(types)) {
 // test here is semantic: evaluate each entry over every register value it could
 // see and compare the truth sets.
 //
-// THE COMPARISON WIDTH MATTERS.  br8 compares low bytes, br16 whole words, and
-// both index the SAME table - so two entries only waste a slot if they agree at
-// BOTH widths.  Differing at either width means both are earning their place.
-const WIDTHS = [8, 16];
+// THE COMPARISON WIDTH MATTERS.  br compares whole words and is the only
+// instruction indexing this table now, so two entries waste a slot when they
+// agree at 16 bits.  While a byte-wide twin read the same table, differing at
+// either width was enough for both to earn their place.
+const WIDTHS = [16];
 
 // The truth set of one predicate, as a packed bitmap over all 2^w register
 // values.  Returns null for a condition this evaluator does not model.
@@ -544,8 +545,8 @@ for (const al of spec.alias ?? []) {
 // would have caught.  So every line of it that names one opcode is checked
 // against the encodings below it.
 //
-// An alias may stand in for what it expands to - the block says `br` where the
-// encoding says `br8`, and that is the point of the alias.
+// An alias may stand in for what it expands to - the block may say `sub` where
+// the encoding says `rsb`, and that is the point of the alias.
 {
   const aliasOf = new Map();
   for (const a of spec.alias ?? []) {

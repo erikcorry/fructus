@@ -29,13 +29,10 @@ process.stdout.write(`// =======================================================
 // \`npm run rtl\`.
 //
 // What runs: whatever rtl/ucode.sv implements, which is now EVERY INSTRUCTION
-// IN THE ISA BUT ONE.  Every instruction whose effect is one ALU result written
-// to one register; the transfers of control; the loads and stores, at both
-// widths and in every addressing form; the block moves - push, pop, and the
-// post-updating stm and ldm; and halt and nop.
-//
-// br8 is the exception, and by decision rather than oversight: see
-// tools/control.js's ALU_LATER, which is the list of one it now holds.
+// IN THE ISA.  Every instruction whose effect is one ALU result written to one
+// register; the transfers of control; the loads and stores, at both widths and
+// in every addressing form; the block moves - push, pop, and the post-updating
+// stm and ldm; and halt and nop.
 //
 // MEMORY IS OUTSIDE, as a synchronous read: \`mem_addr\` is sampled at the clock
 // edge and the byte at that address is on \`mem_rdata\` for the following cycle.

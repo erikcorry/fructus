@@ -330,7 +330,7 @@ name   = "BFD_RELOC_8_PCREL"
 bits   = 8
 pcrel  = true
 signed = true
-used_by = "br, br8, brclear, brset, jmpr rel8 - the off8 displacement"
+used_by = "br, brclear, brset, jmpr rel8 - the off8 displacement"
 
 [[reloc]]
 name   = "BFD_RELOC_16_PCREL"
@@ -596,12 +596,6 @@ swapped = { gt = "lt", ge = "le", hi = "lo", hs = "ls", cs = "ls" }
 #   and steps by TWO, so += 2 and -= 2 are the same question for a tagged
 #   representation.  That is the whole reason both step sizes are here.
 #
-#   AND WHY THEY NEED NOT MAKE SENSE TO br8.  An unboxed number fills a whole
-#   register, so a 16-bit test is the only test there is; `br8 ge, ra, #32767`
-#   compares a byte against -1 and means nothing, which costs nothing.  check.js
-#   only objects when two entries agree at BOTH widths, and these differ from
-#   everything at 16.
-#
 # WHICH IS WHY THE CONSTANTS ARE FREE NOW.  They used to be pinned to imm3 so
 # the five bits could ride the imm3 lookup that already existed.  They no longer
 # do: rtl/immgen.sv holds a 32-entry table of its own for this mode, indexed by
@@ -622,10 +616,11 @@ swapped = { gt = "lt", ge = "le", hi = "lo", hs = "ls", cs = "ls" }
 # The moment they were freed it silently stopped covering them: nothing tells
 # you that `hi #255` has quietly become unassemblable when `hs #256` arrives.
 #
-# The derivation is per INSTRUCTION, not per table, because br reads these five
-# bits at 16 bits and br8 at 8.  `hi #255` and `hs #256` are one predicate for
-# br and two different ones for br8, where 256 masks to zero - so br accepts the
-# spelling and br8 correctly refuses it.
+# The derivation is per INSTRUCTION, not per table, and stays that way though
+# only one width reads these five bits now.  It mattered when a byte-wide twin
+# read the same table at 8: `hi #255` and `hs #256` are two predicates at 16
+# bits and one at 8, so a per-table rewrite would have had to be right for both
+# at once.  Comparing truth sets never had to know which width it was.
 [optype.condimm5]
 kind   = "combo"
 bits   = 5
@@ -845,13 +840,11 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #       0x03 ld   / 0x04 ld8        the one-byte implicit pair
 #       0x08 st   / 0x10 st8        the store rows
 #       0x18 ld   / 0x20 ld8        the load rows
-#       0x90 push / 0x91 push8      and the same for pop at 0x98
-#       0xa0 br   / 0xa8 br8        and again at 0xa6 / 0xae
 #
-#   The 16-bit form is the common one - a byte load is the special case, a byte
-#   push is an argument rather than a register save - so it gets the name
-#   without a suffix and the opcode you reach first.  Naming and numbering say
-#   the same thing, which means neither has to be remembered separately.
+#   The 16-bit form is the common one - a byte load is the special case - so it
+#   gets the name without a suffix and the opcode you reach first.  Naming and
+#   numbering say the same thing, which means neither has to be remembered
+#   separately.
 #
 #   STORES COME FIRST, and the reason is the gap.  A store has no tied form, so
 #   its two rows begin at .2 and the .0 and .1 columns stand empty; a load fills
@@ -1076,22 +1069,14 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1010_0100                brclear ra, #immbit5, target
 #   1010_0101                brclear ra, #immask5, target
 #   1010_011z                br      <cond>, ra, rb, target    TWO opcodes
-#   1010_1000                br8     <cond,#imm5>, ra, target
+#   1010_1000                -- free
 #   1010_1001                call    ra                 2 bytes, INDIRECT
 #   1010_1010                call    target             3 bytes, absolute
 #   1010_1011                ret                        1 byte, pc = lr
 #   1010_1100                brset   ra, #immbit5, target
 #   1010_1101                brset   ra, #immask5, target
-#   1010_111z                br8     <cond>, ra, rb, target    TWO opcodes
+#   1010_1110 .. 1010_1111   -- free
 #   1011_0000 .. 1111_1111   -- free, 80 slots
-#
-#   THE TWO ROWS ARE br AND br8, EIGHT APART, which is the same relationship
-#   st/st8 and ld/ld8 already have and for the same reason: the 16-bit form is
-#   the common one and gets the opcode you reach first, the byte form sits
-#   directly below it in the same column.  Both of br8's forms moved to get
-#   this - the two-register pair from 1010_010b to 1010_101b, the packed form
-#   from 1010_0001 to 1010_1000 - and what it buys is that a reader never has
-#   to remember where the byte version of anything is.  It is one row down.
 #
 #   AND THE COLUMNS SAY WHAT BYTE 1 LOOKS LIKE, exactly as they do everywhere
 #   else in the map:
@@ -1102,10 +1087,10 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #     .2         iiii_iiii   a 16-bit target and no register at all
 #     .3         tttt_tttt   a displacement byte
 #
-#   AND EVERY COLUMN IS A PAIR SPLIT BY BIT 3, though what the split means
-#   depends on the column: .0, .6 and .7 are br against br8, .4 and .5 are
-#   brclear against brset, and .1, .2 and .3 are a jump against the call that
-#   reaches the same way.  Nothing in the block is unpaired.
+#   AND FIVE COLUMNS ARE PAIRS SPLIT BY BIT 3: .4 and .5 are brclear against
+#   brset, and .1, .2 and .3 are a jump against the call that reaches the same
+#   way.  .0, .6 and .7 were the branch against a byte-wide twin and lost it,
+#   so 1010_1000 and 1010_111z stand free below the branch row.
 #
 #   .0, .4 AND .5 ARE THE ALU'S CONSTANT COLUMNS, and that is not an analogy.
 #   Byte 1 of `br cond, ra, #imm5` is `aaak_kkkk` and byte 1 of `brclear ra,
@@ -2142,21 +2127,20 @@ extra_cycles = 1
   encoding = "0011_0011  10aa_addd"
 
 
-# --- br8 / br -------------------------------------------------------------
+# --- br ---------------------------------------------------------------------
 # Conditional subtract-and-branch.  The comparison is a subtract whose result
-# is discarded; only the condition it sets is used.  br8 compares at 8-bit
-# width, br at 16, matching the ld/st naming.
+# is discarded; only the condition it sets is used, at 16-bit width.
 #
 # The two-register form is the `rsb` three-register encoding with its
 # DESTINATION field replaced by a 3-bit condition, plus a displacement byte:
 #
-#     byte 0:  1 0 0 1 w 1 1 z    0xa6/0xa7 for br, 0xae/0xaf for br8
+#     byte 0:  1 0 1 0 0 1 1 z    0xa6/0xa7
 #     byte 1:  c c c b b b e e    condition, SECOND reg, first reg bits 2 and 1
 #     byte 2:  t t t t t t t t    signed displacement from the next instruction
 #
-# w IS THE WIDTH BIT and it is bit 3 in both forms: clear for br, set for br8,
-# which puts the byte-wide row eight opcodes below the word-wide one exactly as
-# st/st8 and ld/ld8 sit.
+# BIT 3 IS CLEAR IN BOTH FORMS.  It was a width bit, putting a byte-wide row
+# eight opcodes below this one the way st/st8 and ld/ld8 sit.  That row is free
+# now and the bit is a constant.
 #
 # THE TWO REGISTERS ARE THE OTHER WAY ROUND FROM THE SYNTAX, and that is what
 # lets the comparison be an `rsb` with no extra multiplexing.  `rsb rd, ra, rb`
@@ -2183,7 +2167,7 @@ extra_cycles = 1
 # with one 5-bit index into the `condimm5` table, which supplies a condition
 # and a constant together:
 #
-#     byte 0:  1 0 0 1 w 0 0 0    0xa0 for br, 0xa8 for br8
+#     byte 0:  1 0 1 0 0 0 0 0    0xa0
 #     byte 1:  a a a k k k k k    register, condition-and-constant index
 #     byte 2:  t t t t t t t t    displacement
 #
@@ -2192,41 +2176,6 @@ extra_cycles = 1
 # table reading those five bits differs.  So these three share a row the way an
 # ALU group's +0, +4 and +5 forms do, and for the same reason - see the opcode
 # map at the top of this file.
-[[insn]]
-mnemonic      = "br8"
-summary       = "compare low bytes of two registers and branch"
-operands = [
-  { name = "cond", type = "cond3" },
-  { name = "a",    type = "reg"   },
-  { name = "b",    type = "reg"   },
-  { name = "off",  type = "int16", pcrel = true },
-]
-syntax        = "{cond}, {a}, {b}, {off}"
-semantics = "if (test(cond, R[a] & 255, R[b] & 255, 8)) pc = pc + off"
-swap_operands = ["a", "b"]
-
-  [[insn.form]]
-  name     = "cond_reg_reg"
-  encoding = "1010_111z  eebb_bccc  tttt_tttt"
-  fields   = { c = "cond:cond3", z = "a:reg[0]", e = "a:reg[2:1]", t = "off:off8" }
-
-[[insn]]
-mnemonic = "br8"
-summary  = "compare low byte against a table constant and branch"
-operands = [
-  { name = "k",   type = "condimm5" },
-  { name = "a",   type = "reg" },
-  { name = "off", type = "int16", pcrel = true },
-]
-syntax   = "{k.cond}, {a}, #{k.imm}, {off}"
-semantics = "if (test(k.cond, R[a] & 255, k.imm & 255, 8)) pc = pc + off"
-
-  [[insn.form]]
-  name     = "cond_reg_imm"
-  encoding = "1010_1000  kkkk_kaaa  tttt_tttt"
-  fields   = { k = "k:condimm5", t = "off:off8" }
-
-
 [[insn]]
 mnemonic      = "br"
 summary       = "compare two registers and branch"
@@ -2306,8 +2255,8 @@ semantics = "if ((R[a] & mask) == 0) pc = pc + off"
   # whether a whole FIELD is empty.  Same byte 1, same 5 bits, different table:
   # +4 of the row reads them as immbit5 and +5 reads them as immask5, which is
   # the relationship every ALU group has between its two mask forms.  Clear and
-  # set are separated by BIT 3 rather than bit 0 - brclear is the br row, brset
-  # is the br8 row one below - so both spellings of each land in one column.
+  # set are separated by BIT 3 rather than bit 0 - brclear is the upper row and
+  # brset the row eight below - so both spellings of each land in one column.
   [[insn.form]]
   name     = "reg_mask5"
   encoding = "1010_0101  mmmm_maaa  tttt_tttt"
@@ -2333,8 +2282,8 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
   # whether a whole FIELD is empty.  Same byte 1, same 5 bits, different table:
   # +4 of the row reads them as immbit5 and +5 reads them as immask5, which is
   # the relationship every ALU group has between its two mask forms.  Clear and
-  # set are separated by BIT 3 rather than bit 0 - brclear is the br row, brset
-  # is the br8 row one below - so both spellings of each land in one column.
+  # set are separated by BIT 3 rather than bit 0 - brclear is the upper row and
+  # brset the row eight below - so both spellings of each land in one column.
   [[insn.form]]
   name     = "reg_mask5"
   encoding = "1010_1101  mmmm_maaa  tttt_tttt"
@@ -3001,11 +2950,6 @@ operands = [
 syntax   = "{d}, {a}, {b}"
 expand   = { mnemonic = "rsb", args = { d = "d", a = "b", b = "a" } }
 
-# --- br (unconditional relative branch) -------------------------------------
-# MNEMONIC IS A GUESS.  `br8 eq, r0, r0, target` - r0 compared with itself, so
-# always taken - has a two-byte encoding of its own, and this puts a readable
-# name on it.  `jmp` is left free on the assumption it wants the absolute imm16
-# form.
 # --- mov (register to register) ---------------------------------------------
 # There is no register-to-register move opcode.  `or rd, rs, #0` is a copy, and
 # 0 is in the imm3 table, so the two-register form is two bytes for free.  When

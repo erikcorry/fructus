@@ -98,7 +98,6 @@ start:
 
 btarget:
         jmpr    btarget                   ; 2  the short jmpr form
-        br8     ne, r1, r2, btarget       ; 3
         br      gt, r1, r2, btarget       ; 3  swapped -> lt
         br      eq, r3, #0, btarget       ; 3  condimm5, encoded
         br      hs, r3, #3, btarget       ; 3  condimm5, imm3 constant

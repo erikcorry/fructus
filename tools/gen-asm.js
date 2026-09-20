@@ -291,16 +291,14 @@ function truthBits(cond, k, w) {
   return out;
 }
 
-// THE COMPARISON WIDTH IS PART OF THE SPELLING.  br reads the table at 16 bits
-// and br8 at 8, and an identity at one width need not hold at the other - so
-// the accept list is per width, and a slot says which one it wants.
-//
-// Requiring both widths instead is subtly wrong, and cost `br le, r3, #0'.  At
-// 16 bits `le #0' is `lt #1'; at 8 bits `lt #1' and `lt #-32767' have the same
-// truth set, because -32767 & 255 is 1 - so the eight-bit table maps that set
-// to the later entry and the two widths disagree about which index to use.
-// The eight-bit coincidence has nothing to do with a sixteen-bit branch.
-const WIDTHS = [8, 16];
+// THE COMPARISON WIDTH IS PART OF THE SPELLING, and the list stays per width
+// though only 16 bits reads the table now.  An identity at one width need not
+// hold at the other, and requiring both was subtly wrong: it cost `br le, r3,
+// #0'.  At 16 bits `le #0' is `lt #1'; at 8 bits `lt #1' and `lt #-32767' have
+// the same truth set, because -32767 & 255 is 1 - so an eight-bit table maps
+// that set to the later entry and the two widths disagree about which index to
+// use.  An eight-bit coincidence has nothing to do with a sixteen-bit branch.
+const WIDTHS = [16];
 const conds = Object.keys(t.cond3.swapped ?? {}).concat(t.cond3.names);
 const cd = t.condimm5.values;
 

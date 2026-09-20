@@ -3,13 +3,13 @@
 <text x="26" y="37" font-size="10" fill="#6A7180" letter-spacing="1.4">FRUCTUS · 16-BIT · FIRST-BYTE DECODE</text>
 <text x="26" y="76" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="34" font-weight="700" fill="#16181D">Opcode Map</text>
 <text x="26" y="98" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="12.5" fill="#6A7180">Instruction length comes from the first byte alone, so this table is the whole decoder.</text>
-<text x="26" y="130" font-size="20" font-weight="600" fill="#16181D">141</text>
+<text x="26" y="130" font-size="20" font-weight="600" fill="#16181D">138</text>
 <text x="26" y="144" font-size="8.5" fill="#9AA1AE" letter-spacing="1.2">ASSIGNED</text>
-<text x="101.6" y="130" font-size="20" font-weight="600" fill="#16181D">115</text>
+<text x="101.6" y="130" font-size="20" font-weight="600" fill="#16181D">118</text>
 <text x="101.6" y="144" font-size="8.5" fill="#9AA1AE" letter-spacing="1.2">FREE</text>
 <text x="166.6" y="130" font-size="20" font-weight="600" fill="#16181D">17</text>
 <text x="166.6" y="144" font-size="8.5" fill="#9AA1AE" letter-spacing="1.2">ADDRESSING MODES</text>
-<text x="291.8" y="130" font-size="20" font-weight="600" fill="#16181D">58</text>
+<text x="291.8" y="130" font-size="20" font-weight="600" fill="#16181D">56</text>
 <text x="291.8" y="144" font-size="8.5" fill="#9AA1AE" letter-spacing="1.2">INSTRUCTION ENTRIES</text>
 <rect x="26" y="156" width="893" height="2" fill="#16181D"/>
 <text x="118" y="191" font-size="10" fill="#6A7180" text-anchor="middle">·0</text>
@@ -781,12 +781,8 @@
 <text x="823" y="1543" font-size="8.5" fill="rgba(0,0,0,.62)">cond, ra, rb,</text>
 <text x="823" y="1553" font-size="8.5" fill="rgba(0,0,0,.62)">target</text>
 <text x="57" y="1598" font-size="10" fill="#6A7180" text-anchor="end">a8</text>
-<rect x="66" y="1563" width="104" height="62" rx="3" fill="#E4A2C4"/>
-<text x="74" y="1577" font-size="9" fill="rgba(0,0,0,.45)">a8</text>
-<text x="162" y="1577" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">3B</text>
-<text x="74" y="1594" font-size="13" font-weight="600" fill="#000">br8</text>
-<text x="74" y="1608" font-size="8.5" fill="rgba(0,0,0,.62)">cond, ra, #imm,</text>
-<text x="74" y="1618" font-size="8.5" fill="rgba(0,0,0,.62)">target</text>
+<rect x="66" y="1563" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
+<text x="74" y="1578" font-size="9" fill="#B9BFC9">a8</text>
 <rect x="173" y="1563" width="104" height="62" rx="3" fill="#D2E7F8"/>
 <text x="181" y="1577" font-size="9" fill="rgba(0,0,0,.45)">a9</text>
 <text x="269" y="1577" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">2B</text>
@@ -813,18 +809,10 @@
 <text x="609" y="1594" font-size="13" font-weight="600" fill="#000">brset</text>
 <text x="609" y="1608" font-size="8.5" fill="rgba(0,0,0,.62)">ra, #immask5,</text>
 <text x="609" y="1618" font-size="8.5" fill="rgba(0,0,0,.62)">target</text>
-<rect x="708" y="1563" width="104" height="62" rx="3" fill="#F5C2DC"/>
-<text x="716" y="1577" font-size="9" fill="rgba(0,0,0,.45)">ae</text>
-<text x="804" y="1577" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">3B</text>
-<text x="716" y="1594" font-size="13" font-weight="600" fill="#000">br8</text>
-<text x="716" y="1608" font-size="8.5" fill="rgba(0,0,0,.62)">cond, ra, rb,</text>
-<text x="716" y="1618" font-size="8.5" fill="rgba(0,0,0,.62)">target</text>
-<rect x="815" y="1563" width="104" height="62" rx="3" fill="#F5C2DC"/>
-<text x="823" y="1577" font-size="9" fill="rgba(0,0,0,.45)">af</text>
-<text x="911" y="1577" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">3B</text>
-<text x="823" y="1594" font-size="13" font-weight="600" fill="#000">br8</text>
-<text x="823" y="1608" font-size="8.5" fill="rgba(0,0,0,.62)">cond, ra, rb,</text>
-<text x="823" y="1618" font-size="8.5" fill="rgba(0,0,0,.62)">target</text>
+<rect x="708" y="1563" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
+<text x="716" y="1578" font-size="9" fill="#B9BFC9">ae</text>
+<rect x="815" y="1563" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
+<text x="823" y="1578" font-size="9" fill="#B9BFC9">af</text>
 <text x="26" y="1647" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="11.5" fill="#9AA1AE">Rows below b0 are omitted: 80 unbroken free opcodes run from b0 to ff.</text>
 <text x="26" y="1677" font-family="'DejaVu Sans','Liberation Sans',Helvetica,Arial,sans-serif" font-size="11.5" font-weight="700" fill="#6A7180" letter-spacing="1.5">ADDRESSING MODES</text>
 <rect x="26" y="1701" width="14" height="14" rx="2" fill="#F8CE8B"/>
@@ -874,11 +862,11 @@
 <rect x="621.3333333333334" y="1839" width="14" height="14" rx="2" fill="#F5C2DC"/>
 <text x="643.3333333333334" y="1850" font-size="11.5" font-weight="600" fill="#16181D">Condition, two registers, target</text>
 <text x="643.3333333333334" y="1864" font-size="9.5" fill="#6A7180">reg 3 (split) + cond 3 + reg 3 + int 8</text>
-<text x="903" y="1850" font-size="10" fill="#6A7180" text-anchor="end">4</text>
+<text x="903" y="1850" font-size="10" fill="#6A7180" text-anchor="end">2</text>
 <rect x="26" y="1885" width="14" height="14" rx="2" fill="#E4A2C4"/>
 <text x="48" y="1896" font-size="11.5" font-weight="600" fill="#16181D">Packed condition, register, target</text>
 <text x="48" y="1910" font-size="9.5" fill="#6A7180">reg 3 + cond+const 5 + int 8</text>
-<text x="307.6666666666667" y="1896" font-size="10" fill="#6A7180" text-anchor="end">2</text>
+<text x="307.6666666666667" y="1896" font-size="10" fill="#6A7180" text-anchor="end">1</text>
 <rect x="323.6666666666667" y="1885" width="14" height="14" rx="2" fill="#F2B5A5"/>
 <text x="345.6666666666667" y="1896" font-size="11.5" font-weight="600" fill="#16181D">Register, bit mask, target</text>
 <text x="345.6666666666667" y="1910" font-size="9.5" fill="#6A7180">reg 3 + table 5 + int 8</text>

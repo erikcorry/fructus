@@ -13,7 +13,7 @@
 // cannot arrive without an answer to "which operation".
 //
 // Branch decisions are not the ALU's: rtl/compare.sv takes the same operands
-// and answers them.  Not yet: br8, by decision.
+// and answers them.
 // =============================================================================
 
 import { loadSpec } from './isa.js';

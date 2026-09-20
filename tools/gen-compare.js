@@ -12,7 +12,7 @@
 //
 // WHICH INSTRUCTIONS it serves is read off their `semantics`: every `if (...)`
 // that decides a branch.  One the rules here do not recognise makes the
-// generator fail.  br8 is not yet here, by decision.
+// generator fail.
 // =============================================================================
 
 import { loadSpec } from './isa.js';
@@ -29,7 +29,7 @@ const RULES = [
   [/^if \(\(R\[a\] & mask\) == 0\) /,              'mask',     'brclear, eq'],
   [/^if \(\(R\[a\] & mask\) != 0\) /,              'mask',     'brset, ne'],
 ];
-const LATER = new Set(['br8']);
+const LATER = new Set([]);
 const served = { subtract: [], mask: [] };
 for (const insn of spec.insn) {
   const sem = insn.semantics ?? '';

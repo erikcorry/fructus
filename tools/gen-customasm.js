@@ -143,12 +143,12 @@ function relAssert(name, t) {
 // the interesting cases are not all of that shape - the unsigned bound of one
 // collapsing to a zero test is the obvious one.
 //
-// AT THE INSTRUCTION'S OWN WIDTH, which is the subtlety.  br reads this table at
-// 16 bits and br8 at 8, so `hi #255` and `hs #256` are one predicate for br and
-// two different ones for br8, where 256 masks to 0.  Deriving per instruction
-// rather than per table is what lets br accept the spelling while br8 correctly
-// refuses it.  The width is the last argument of the `test(...)` call in the
-// instruction's own semantics.
+// AT THE INSTRUCTION'S OWN WIDTH, which is the subtlety.  Only br reads this
+// table now, at 16 bits, but the derivation stays per instruction rather than
+// per table: a byte-wide twin read the same five bits at 8, where `hi #255` and
+// `hs #256` collapse to one predicate that is two at 16.  A per-table rewrite
+// would have had to be right for both at once.  The width is the last argument
+// of the `test(...)` call in the instruction's own semantics.
 //
 // Candidates are every cond3 spelling against each entry's constant and its two
 // neighbours.  That is enough: an equivalence between different conditions can

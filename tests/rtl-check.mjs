@@ -838,7 +838,7 @@ endmodule
     const forms = new Map();
     for (let b1 = 0; b1 < 256; b1++) {
       const d = decode(dec, [op, b1, 0], 0);
-      if (!d || d.insn.mnemonic === 'br8') continue;
+      if (!d) continue;
       const sem = d.insn.semantics ?? '';
       const write = /^R\[[a-z]\] = /.test(sem) && !/M(8|16)\[/.test(sem) && !sem.includes(';');
       const branch = /^if \(/.test(sem);
@@ -963,7 +963,7 @@ endmodule
   for (let op = 0; op < 256; op++)
     for (let b1 = 0; b1 < 256; b1++) {
       const d = decode(dec, [op, b1, 0], 0);
-      if (!d || ['br8'].includes(d.insn.mnemonic)) continue;
+      if (!d) continue;
       const sem = d.insn.semantics ?? '';
       // The `;` test comes FIRST and applies to every kind.  pop's semantics is
       // `R[a] = M16[sp]; sp = sp + 2`, which matches the load pattern on its
