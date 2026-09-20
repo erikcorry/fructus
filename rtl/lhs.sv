@@ -38,8 +38,8 @@
 // THE COLUMN NEARLY DECIDES IT - +0, +4 and +5 are rd, the rest ra - and the
 // exceptions, computed rather than remembered, are:
 //
-//     0xa1  jmp/reg, column +1, rd field - a pc transfer, not an ALU operation
-//     0xa9  call/reg, column +1, rd field - a pc transfer, not an ALU operation
+//     0xa2  jmp/reg, column +2, rd field - a pc transfer, not an ALU operation
+//     0xaa  call/reg, column +2, rd field - a pc transfer, not an ALU operation
 //
 // So the choice is a microcode bit rather than a decode of opcode[2:0].  That
 // is also the cheaper place for it on its own merits: a registered microcode

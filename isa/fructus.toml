@@ -1063,15 +1063,15 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   nothing spilling into a neighbouring row.
 #
 #   1010_0000                br      <cond,#imm5>, ra, target
-#   1010_0001                jmp     ra                 2 bytes, INDIRECT
-#   1010_0010                jmp     target             3 bytes, absolute
+#   1010_0001                jmp     target             3 bytes, absolute
+#   1010_0010                jmp     ra                 2 bytes, INDIRECT
 #   1010_0011                jmpr    target             2 bytes, SHORT form
 #   1010_0100                brclear ra, #immbit5, target
 #   1010_0101                brclear ra, #immask5, target
 #   1010_011z                br      <cond>, ra, rb, target    TWO opcodes
 #   1010_1000                -- free
-#   1010_1001                call    ra                 2 bytes, INDIRECT
-#   1010_1010                call    target             3 bytes, absolute
+#   1010_1001                call    target             3 bytes, absolute
+#   1010_1010                call    ra                 2 bytes, INDIRECT
 #   1010_1011                ret                        1 byte, pc = lr
 #   1010_1100                brset   ra, #immbit5, target
 #   1010_1101                brset   ra, #immask5, target
@@ -1083,9 +1083,21 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #     .0 .4 .5   aaa?_????   one register and a 5-bit field
 #     .6 .7      cccb_bbee   two registers and a condition
-#     .1         0000_0aaa   one register: the indirect transfers
-#     .2         iiii_iiii   a 16-bit target and no register at all
+#     .1         iiii_iiii   a 16-bit target and no register at all
+#     .2         0000_0aaa   one register: the indirect transfers
 #     .3         tttt_tttt   a displacement byte
+#
+#   THE SHORT FORMS SIT IN ADJACENT COLUMNS, which is why jmp and call put
+#   their imm16 form at .1 and their register form at .2 rather than the other
+#   way round.  Nothing in this implementation reads a length from the opcode -
+#   rtl/ucode.sv's entry word says how many bytes to fetch, and binutils
+#   carries a 256-entry table - so the arrangement buys it nothing.  It is for
+#   a decoder that wants the answer from the bits alone, where `is this three
+#   bytes' is the most critical question asked and the one that cannot wait.
+#   With the short forms at .2 and .3 it is op[2:1] == 01: two adjacent bits,
+#   the low one a don't-care.  With them at .1 and .3, where they were, it
+#   needed bit 0 and bit 2.  `ret' at .3 is one byte rather than two, so the
+#   test answers "not three" rather than "exactly two".
 #
 #   AND FIVE COLUMNS ARE PAIRS SPLIT BY BIT 3: .4 and .5 are brclear against
 #   brset, and .1, .2 and .3 are a jump against the call that reaches the same
@@ -2742,7 +2754,7 @@ semantics = "pc = target"
 
   [[insn.form]]
   name     = "abs16"
-  encoding = "1010_0010  iiii_iiii  jjjj_jjjj"
+  encoding = "1010_0001  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 # Return is just pc = lr, so it needs no operands and fits in one byte - and
@@ -2774,7 +2786,7 @@ semantics = "lr = pc; pc = target"
 
   [[insn.form]]
   name     = "abs16"
-  encoding = "1010_1010  iiii_iiii  jjjj_jjjj"
+  encoding = "1010_1001  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 # --- the indirect call ------------------------------------------------------
@@ -2802,7 +2814,7 @@ semantics = "lr = pc; pc = R[a]"
 
   [[insn.form]]
   name     = "reg"
-  encoding = "1010_1001  0000_0aaa"
+  encoding = "1010_1010  0000_0aaa"
 
 [[insn]]
 mnemonic = "ret"
@@ -2857,7 +2869,7 @@ semantics = "pc = R[a]"
 
   [[insn.form]]
   name     = "reg"
-  encoding = "1010_0001  0000_0aaa"
+  encoding = "1010_0010  0000_0aaa"
 
 
 # --- halt / nop -------------------------------------------------------------
