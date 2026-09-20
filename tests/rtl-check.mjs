@@ -328,7 +328,7 @@ endmodule
     wire  [15:0] fast, slow, y;
     logic sel, isslow;
     integer f, n = 0, bad = 0, r;
-    unary u (.clk(clk), .a(a), .araw(a), .sel(sel), .fast(fast), .slow(slow));
+    unary u (.clk(clk), .a(a), .sel(sel), .fast(fast), .slow(slow));
     assign y = isslow ? slow : fast;
     initial begin
         f = $fopen("build/unary-vectors.txt", "r");
@@ -336,10 +336,7 @@ endmodule
         while (!$feof(f)) begin
             r = $fscanf(f, "%h %d %d %h\\n", a, sel, isslow, want_);
             if (r == 4) begin
-                // TWO clocks: popcount's nibble counts are registered a cycle
-                // before its adds - see rtl/unary.sv - and araw carries the same
-                // value as a, one cycle earlier, exactly as rtl/cpu.sv wires it.
-                #1 clk = 1; #1 clk = 0; #1 clk = 1; #1 clk = 0; #1; n = n + 1;
+                #1 clk = 1; #1 clk = 0; #1; n = n + 1;
                 if (y !== want_) begin
                     bad = bad + 1;
                     if (bad < 6)
@@ -689,16 +686,15 @@ endmodule
     logic [3:0] op;
     logic [15:0] l, r, want_, got;
     integer f, n = 0, bad = 0, rr;
-    alu u (.clk(clk), .lhs(l), .lraw(l), .rhs(r), .op(op), .y(got));
+    alu u (.clk(clk), .lhs(l), .rhs(r), .op(op), .y(got));
     initial begin
         f = $fopen("build/alu-tb.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
         while (!$feof(f)) begin
             rr = $fscanf(f, "%d %h %h %h\\n", op, l, r, want_);
             if (rr == 4) begin
-                // TWO clocks, so the slow pair - whose nibble counts are
-                // registered a cycle before its adds - has its answer too
-                #1 clk = 1; #1 clk = 0; #1 clk = 1; #1 clk = 0; #1; n = n + 1;
+                // one clock, so the registered slow pair has its answer too
+                #1 clk = 1; #1 clk = 0; #1; n = n + 1;
                 if (got !== want_) begin
                     bad = bad + 1;
                     if (bad < 6) $display("  MISMATCH op=%0d lhs=%h rhs=%h: want %h got %h", op, l, r, want_, got);
@@ -888,7 +884,7 @@ endmodule
                  .rhs_src(rhs_src), .dest_src(dest_src), .cond_src(cond_src));
     lhs l (.insn(insn), .src(lhs_src), .regnum(an));
     rhs r (.insn(insn), .src(rhs_src), .regval(R[bn]), .regnum(bn), .value(bval));
-    alu a (.clk(clk), .lhs(R[an]), .lraw(R[an]), .rhs(bval), .op(alu_op), .y(y));
+    alu a (.clk(clk), .lhs(R[an]), .rhs(bval), .op(alu_op), .y(y));
     cond k (.insn(insn), .src(cond_src), .code(c), .neg(ng), .mask(mk));
     compare x (.lhs(R[an]), .rhs(bval), .cond(c), .neg(ng), .mask(mk), .taken(taken));
     dest w (.insn(insn), .src(dest_src), .regnum(wn));
@@ -903,10 +899,9 @@ endmodule
                 // the dispatch cycle: the opcode is on the bus
                 bus = insn[7:0]; dispatch = 1; #1 clk = 1; #1 clk = 0; dispatch = 0;
                 R[0] = r0; R[1] = r1; R[2] = r2; R[3] = r3; R[4] = r4; R[5] = r5; R[6] = r6; R[7] = r7;
-                // TWO clocks with nothing dispatched: predecode holds, and the
-                // slow pair fills - rtl/unary.sv registers popcount's nibble
-                // counts a cycle before its adds, as the SLOW step lets it
-                #1 clk = 1; #1 clk = 0; #1 clk = 1; #1 clk = 0; #1; n = n + 1;
+                // one clock with nothing dispatched: predecode holds, and a
+                // registered slow result fills, as the SLOW step lets it
+                #1 clk = 1; #1 clk = 0; #1; n = n + 1;
                 if (kind == 0 ? (wn !== wreg[2:0] || y !== wval) : (taken !== wval[0])) begin
                     bad = bad + 1;
                     if (bad < 6)

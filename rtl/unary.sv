@@ -50,7 +50,6 @@
 module unary (
     input  logic        clk,
     input  logic [15:0] a,
-    input  logic [15:0] araw,    // the same read, one cycle earlier: see popcount
     input  logic        sel,     // rhs[2]: which operation of the pair
     output logic [15:0] fast,    // bitrev or sxt8, this cycle
     output logic [15:0] slow     // clz or popcount, of the previous cycle's a
@@ -85,7 +84,7 @@ module unary (
         default:  cl = 5'd16;                   // a == 0
     endcase
 
-    // --- popcount: the nibble counts a cycle early, then the adds ---------------
+    // --- popcount: the counts before the flop, the adds after it -----------------
     function automatic [2:0] cnt4(input [3:0] n);
         case (n)
         4'h0: cnt4 = 3'd0;
@@ -121,39 +120,43 @@ module unary (
         c[3] = (x[3] & y[3]) | (c[2] & (x[3] ^ y[3]));
         add4 = {c[3], x[3] ^ y[3] ^ c[2], x[2] ^ y[2] ^ c[1], x[1] ^ y[1] ^ c[0], x[0] ^ y[0]};
     endfunction
-    // STAGE ONE IS THE FOUR NIBBLE COUNTS AND NOTHING ELSE.  It reads araw, the
-    // register file's output BEFORE the operand flop, so it runs in the cycle
-    // that READS the register rather than the cycle after it - and it costs
-    // that cycle one LUT4 level, because each of a count's three bits is a
-    // function of the nibble's four.
-    //
-    // STAGE TWO is both 3-bit adds and the 4-bit add, out of the flop alone.
-    // The slow pair's own cycle used to be nearly empty; now it carries the
-    // tree, and the two cycles are level instead of one being twice the other.
-    //
-    // THE LATENCY DOES NOT CHANGE, which is the whole point.  q holds the counts
-    // of the value read in the previous cycle, which is the value the operand
-    // flop is presenting now, so slow still lands one cycle after a and the two
-    // instructions still declare extra_cycles = 1.  Nothing above the RTL moves:
-    // not the cost model, not the microcode, not a single cycle count.
-    //
-    // MEASURED on the whole processor, medians of sixteen placement seeds:
-    //
-    //   the tree whole, as it was            27.96 MHz
-    //   counts AND both adds in cycle one    27.95   the adds spend the slack
-    //   the whole tree behind its own flop   29.93   but costs a second cycle
-    //   the counts alone, as written here    30.27
-    //
-    // The second row is why the split is HERE and not one level later: cycle
-    // one already holds the microcode read, rtl/predecode.sv and the register
-    // file, and the two 3-bit adds are more than its remaining slack.
-    wire [2:0] p0 = cnt4(araw[3:0]),   p1 = cnt4(araw[7:4]);
-    wire [2:0] p2 = cnt4(araw[11:8]),  p3 = cnt4(araw[15:12]);
-    logic [11:0] q;
-    always_ff @(posedge clk) q <= {p3, p2, p1, p0};
-    wire [4:0] pc = add4(add3(q[2:0], q[5:3]), add3(q[8:6], q[11:9]));
+    wire [2:0] p0 = cnt4(a[3:0]),   p1 = cnt4(a[7:4]);
+    wire [2:0] p2 = cnt4(a[11:8]),  p3 = cnt4(a[15:12]);
 
-    // --- the slow pair, registered -----------------------------------------------
-    always_ff @(posedge clk) slow <= sel ? {11'd0, pc} : {11'd0, cl};
+    // --- the slow pair spans BOTH of the cycles it always had --------------------
+    // ITS CONTRACT IS TO DELIVER LATE, NOT TO START EARLY.  clz and popcount are
+    // given the SLOW step and then EXEC, so the register belongs in the MIDDLE of
+    // the work and not at the end of it: the nibble counts and the priority
+    // encoder run in the SLOW cycle and land in these flops, and the adds run in
+    // EXEC and reach rtl/alu.sv's output mux as wiring.  Both stages read a - the
+    // operand flop - exactly as add and rsb do, so nothing in the ALU takes its
+    // left operand from anywhere else.
+    //
+    // THE WRONG VALUE SITS ON slow THROUGH THE SLOW CYCLE, and that is allowed:
+    // rtl/ucode.sv's SLOW step asserts no write, so nothing can see it, and EXEC
+    // is the cycle the answer is promised in.  extra_cycles stays 1.
+    //
+    // WHY THE SPLIT IS AFTER THE COUNTS AND NOT AFTER THE 3-BIT ADDS.  Medians of
+    // sixteen placement seeds, on the whole processor:
+    //
+    //   the tree whole, one cycle, registered out    27.96 MHz
+    //   counts and both 3-bit adds before the flop   28.57   the SLOW cycle binds
+    //   the counts alone before the flop             30.19
+    //
+    // A count is one LUT4 level - each of its three bits is a function of the
+    // nibble's four - and an add written out is two or three.  At the third row
+    // the unary unit leaves the critical path entirely: no endpoint of any seed
+    // lands in it any more.
+    //
+    // AND THE ADDS STAY WRITTEN AS GATES.  Written with a plus they take the
+    // carry chain, which saves LUTs and spends clock, because carry cells must
+    // sit in one column and the placer can no longer shorten what feeds them:
+    // 75 carry cells and 1199 LUT4 at 30.30 MHz as they are, against 85 and 1166
+    // at 26.05 with every add written as a plus.
+    logic [11:0] q;
+    logic [4:0]  cl_q;
+    always_ff @(posedge clk) begin q <= {p3, p2, p1, p0}; cl_q <= cl; end
+    wire [4:0] pc = add4(add3(q[2:0], q[5:3]), add3(q[8:6], q[11:9]));
+    assign slow = sel ? {11'd0, pc} : {11'd0, cl_q};
 
 endmodule
