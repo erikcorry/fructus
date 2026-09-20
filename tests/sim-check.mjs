@@ -242,11 +242,11 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   };
 
   const rungs = [
-    ['memcpy',                 18.0000, 1],
-    ['memcpy2',                10.0000, 1],
-    ['memcpy3',                 9.0000, 1],
-    ['memcpy4',                 7.0000, 1],
-    ['memcpy_divisible_by_32',  5.2188, 32],
+    ['memcpy',                 19.0000, 1],
+    ['memcpy2',                10.5000, 1],
+    ['memcpy3',                 9.5000, 1],
+    ['memcpy4',                 7.5000, 1],
+    ['memcpy_divisible_by_32',  5.4688, 32],
   ];
 
   for (const [name, want, unit] of rungs) {
@@ -723,7 +723,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     else if (r[2] !== 0x2222 || r[3] !== 0x3333 || r[4] !== 0x4444) { bad = n; why = 'clobbered a callee saved register'; }
   }
   check('digits3 is right', bad < 0, `n = ${bad}: ${why}`);
-  check('digits3 costs 55', best === 55 && worst === 55, `measured ${best}..${worst}`);
+  check('digits3 costs 58', best === 58 && worst === 58, `measured ${best}..${worst}`);
   console.log('ok    snippets/digits3.s: 1000 inputs, and its cycle count');
 }
 

@@ -21,9 +21,11 @@
 ;
 ;       1.000   bus: one WRITE per byte, and no read       IRREDUCIBLE
 ;       0.333   push fetch: 2 instruction bytes per 6 written
+;       0.167   push addresses: one cycle per push, over the 6 it writes
+;       0.167   push data: one cycle per push to fill the data flop
 ;       0.000   pointer maintenance: push does it
 ;       -----
-;       1.333   the floor, plus the branch
+;       1.667   the floor, plus the branch
 ;
 ; memcpy pays 2.000 on the bus because every byte is read and written, and it
 ; pays 1.000 in fetch because the destination goes through `st`, two instruction
@@ -32,9 +34,11 @@
 ;
 ; The exact cost of P pushes and one branch is
 ;
-;       (2P + 4 + 6P) / 6P  =  1.3333 + 0.6667/P
+;       (2P + 4 + 6P + 2P) / 6P  =  1.6667 + 0.6667/P
 ;
-; where the branch is three bytes and a fourth cycle for being taken.  So the
+; where the branch is three bytes and a fourth cycle for being taken, and the
+; 2P is the two cycles each push pays beyond its bytes and its data: one for
+; the address, one to fill the store-data flop.  So the
 ; branch is the entire gap above the floor, and P is capped only by how much
 ; code you are willing to spend.  P = 43 fills 258 bytes per iteration in 89
 ; bytes of code.
@@ -42,9 +46,9 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED
 ; ----------------------------------------------------------------------------
-;   258 bytes/iteration   89 bytes   1.5194 cycles/byte
+;   258 bytes/iteration   89 bytes   1.6822 cycles/byte
 ;
-; Against the memcpy core in the neighbouring file at 4.4333, and against a
+; Against the memcpy core in the neighbouring file at 4.9333, and against a
 ; 6502, which needs about 4 cycles a byte with unrolled self-modifying stores.
 ; Filling is where this machine is furthest ahead of a 6502, because `push` is
 ; doing three things at once that a 6502 does in three instructions.

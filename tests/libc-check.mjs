@@ -242,12 +242,12 @@ function dispatch(name, r, dest, src, n) {
   const a = 64, b = MAXN;
   const cost = (n) => call(entry, BUF + HIGH, BUF + LOW, n).cycles;
   const per = (cost(b) - cost(a)) / (b - a);
-  check('memcpy bulk cost', Math.abs(per - 4.7500) < 0.0001,
-        `${per.toFixed(4)} cycles/byte, the file says 4.7500`);
+  check('memcpy bulk cost', Math.abs(per - 5.2500) < 0.0001,
+        `${per.toFixed(4)} cycles/byte, the file says 5.2500`);
 
   // The byte head is the expensive part, and its worst case is 15 bytes.
   const head = (cost(15) - cost(0)) / 15;
-  check('memcpy head cost', Math.abs(head - 20) < 0.0001, `${head.toFixed(2)} cycles/byte`);
+  check('memcpy head cost', Math.abs(head - 21) < 0.0001, `${head.toFixed(2)} cycles/byte`);
   console.log(`ok    bulk loop ${per.toFixed(4)} cycles/byte, ` +
               `byte head ${head.toFixed(2)} for up to 15 bytes`);
 }
@@ -356,12 +356,12 @@ function dispatch(name, r, dest, src, n) {
   // Cost, differenced so the head and the prologue cancel.
   const cost = (n) => shot(memset, { 0: BUF + AT, 1: 0xff, 2: n }).cycles;
   const bulk = (cost(64 + 32 * 32) - cost(64)) / (32 * 32);
-  check('memset fill loop', Math.abs(bulk - 1.6875) < 0.0005,
-        `${bulk.toFixed(4)} cycles/byte, the file says 1.6875`);
+  check('memset fill loop', Math.abs(bulk - 1.8750) < 0.0005,
+        `${bulk.toFixed(4)} cycles/byte, the file says 1.8750`);
   // The head pushes words, so it costs 3.5 cycles a byte; measured over a pure
   // even length so the odd-byte peel does not muddy it.
   const head = (cost(14) - cost(0)) / 14;
-  check('memset head', Math.abs(head - 4.3571) < 0.0005, `${head.toFixed(4)} cycles/byte`);
+  check('memset head', Math.abs(head - 4.8571) < 0.0005, `${head.toFixed(4)} cycles/byte`);
 
   // TWO STRUCTURAL CLAIMS, neither of which a byte comparison can see.
   //

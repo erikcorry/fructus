@@ -38,9 +38,11 @@
 ;               costs two cycles - see the cost model
 ;       0.067   the branch: 3 bytes and a taken cycle, over 60
 ;       0.500   store addresses: one cycle per store, over the 2 it writes
+;       0.500   store data: one cycle per store to fill the data flop that
+;               rtl/cpu.sv drives the memory's data pins from
 ;       0.333   pop addresses and sp write-backs: two cycles per pop, over 6
 ;       -----
-;       4.433   the floor for this instruction mix, at N = 60
+;       4.933   the floor for this instruction mix, at N = 60
 ;
 ; THE BRANCH TERM IS THE ONLY ONE THAT SHRINKS WITH N, which is what makes a
 ; longer loop worth anything at all once the rest is fixed: at N = 32 it is
@@ -61,26 +63,28 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED
 ; ----------------------------------------------------------------------------
-;   erik   32 bytes/iteration   51 bytes   4.6250 cycles/byte
-;   mine   60 bytes/iteration   89 bytes   4.4333 cycles/byte
+;   erik   32 bytes/iteration   51 bytes   5.1250 cycles/byte
+;   mine   60 bytes/iteration   89 bytes   4.9333 cycles/byte
 ;
 ; For scale: a 6502 does 13 cycles/byte, or 10 with self-modifying code.
 ;
-; 4.4333 is the best available under a 90-byte core.  Searching every loop
+; 4.9333 is the best available under a 90-byte core.  Searching every loop
 ; length and every stores-per-bump count that fits, N = 60 with five stores per
 ; bump wins; N = 58, 54 and 48 come next at 4.3505, 4.3518 and 4.3541.  The
-; ordering is untouched by the address cycle, because every candidate has the
-; same stores and pops per byte and so pays exactly 0.8333 more than it did.
+; ordering is untouched by the address cycle and by the store-data flop alike,
+; because every candidate has the same stores and pops per byte and so pays
+; exactly 1.3333 more than it did before either was charged.
 ;
-; THE SEARCH AND THE TAIL FIGURES BELOW PREDATE THE TWO-CYCLE RULE for one-byte
-; forms, so the alternatives' figures are a pointer-bump term light; the winner
-; is unaffected, since every candidate bumps the same way.  The next
+; THE SEARCH AND THE TAIL FIGURES BELOW PREDATE BOTH the two-cycle rule for
+; one-byte forms and the store-data flop, so the alternatives' figures are a
+; pointer-bump term light and a store term light; the winner is unaffected,
+; since every candidate bumps and stores the same way.  The next
 ; step up, N = 66, needs 98 bytes.
 ; ============================================================================
 
 
 ; ============================================================================
-; erik - 32 bytes per iteration, 51 bytes, 3.7500 cycles/byte
+; erik - 32 bytes per iteration, 51 bytes, 5.1250 cycles/byte
 ; ============================================================================
 ; Correct, and the sp lands exactly on src + n.  What holds it back is that 32
 ; bytes is 16 words, which is not a multiple of three - so the last `pop` moves
@@ -119,7 +123,7 @@ erik_end:
 
 
 ; ============================================================================
-; 60 bytes per iteration, 89 bytes, 3.6000 cycles/byte
+; 60 bytes per iteration, 89 bytes, 4.9333 cycles/byte
 ; ============================================================================
 ; Sixty is the smallest length that makes both counts come out whole: it is a
 ; multiple of six, so every `pop` moves three registers, and a multiple of ten,
@@ -194,7 +198,7 @@ memcpy_core_end:
 ;       br lo, r0, r2, memcpy_core           ; r2 = dst + count - N + 1
 ;
 ; and the loop runs while at least N bytes remain, then falls out with the
-; remainder unhandled.  Same instruction, same three bytes, same 3.6000
+; remainder unhandled.  Same instruction, same three bytes, same 4.9333
 ; cycles/byte - measured, including at counts of 61, 119, 121 and 613, where it
 ; copies floor(count/60)*60 and never overruns.  No modulo anywhere, for either
 ; core.  This is strictly better than `ne` and the only reason not to write it
@@ -204,6 +208,13 @@ memcpy_core_end:
 ; 59 bytes for a tail loop; N = 32 leaves up to 31.  Tails, both `lo`
 ; terminated: six bytes at a time is 13 bytes of code at 4.3333 cycles/byte, and
 ; two at a time is 8 bytes at 6.5000.
+;
+; THOSE TWO FIGURES AND THE TABLE BELOW ARE COMPUTED, NOT MEASURED - the tails
+; are described here and not written out - and they predate both the address
+; cycle and the store-data flop, so every row understates itself.  The ORDERING
+; is untouched, and that is checkable: both cores and both tails write exactly
+; one store per two bytes - 30 per 60, 16 per 32, 3 per 6, 1 per 2 - so each
+; charge adds the same amount per byte to every candidate.
 ;
 ; Whole-copy cost with those tails, in cycles - computed from the per-iteration
 ; costs above rather than run end to end, since the tails are described here
