@@ -348,7 +348,10 @@ module cpu (
     assign mem_wdata = wdata_q;
     assign mem_we    = we;
 
-    alu  a (.clk(clk), .lhs(aq), .rhs(bq), .op(alu_op), .y(y));
+    // lraw IS THE REGISTER FILE'S OUTPUT, not the flop's: rtl/unary.sv counts
+    // popcount's nibbles from it, in the cycle that reads the register rather
+    // than the cycle after, so its tree is level across the two.  Same latency.
+    alu  a (.clk(clk), .lhs(aq), .lraw(R[an]), .rhs(bq), .op(alu_op), .y(y));
     // AND A STEP MAY OVERRIDE THE WRITE PORT, which is pop's need.  Predecode
     // carries the POINTER an instruction walks - sp, r1 or r2 - because that is
     // the write every one of them ends with; the registers loaded on the way

@@ -91,6 +91,7 @@ ${listed}
 module unary (
     input  logic        clk,
     input  logic [15:0] a,
+    input  logic [15:0] araw,    // the same read, one cycle earlier: see popcount
     input  logic        sel,     // rhs[${L.selBit}]: which operation of the pair
     output logic [15:0] fast,    // ${L.fast[0]} or ${L.fast[1]}, this cycle
     output logic [15:0] slow     // ${L.slow[0]} or ${L.slow[1]}, of the previous cycle's a
@@ -110,7 +111,7 @@ ${clzRows}
         default:  cl = 5'd16;                   // a == 0
     endcase
 
-    // --- popcount: four nibble counts, then two adds written as gates ------------
+    // --- popcount: the nibble counts a cycle early, then the adds ---------------
     function automatic [2:0] cnt4(input [3:0] n);
         case (n)
 ${pcRows}
@@ -131,9 +132,37 @@ ${pcRows}
         c[3] = (x[3] & y[3]) | (c[2] & (x[3] ^ y[3]));
         add4 = {c[3], x[3] ^ y[3] ^ c[2], x[2] ^ y[2] ^ c[1], x[1] ^ y[1] ^ c[0], x[0] ^ y[0]};
     endfunction
-    wire [2:0] p0 = cnt4(a[3:0]),   p1 = cnt4(a[7:4]);
-    wire [2:0] p2 = cnt4(a[11:8]),  p3 = cnt4(a[15:12]);
-    wire [4:0] pc = add4(add3(p0, p1), add3(p2, p3));
+    // STAGE ONE IS THE FOUR NIBBLE COUNTS AND NOTHING ELSE.  It reads araw, the
+    // register file's output BEFORE the operand flop, so it runs in the cycle
+    // that READS the register rather than the cycle after it - and it costs
+    // that cycle one LUT4 level, because each of a count's three bits is a
+    // function of the nibble's four.
+    //
+    // STAGE TWO is both 3-bit adds and the 4-bit add, out of the flop alone.
+    // The slow pair's own cycle used to be nearly empty; now it carries the
+    // tree, and the two cycles are level instead of one being twice the other.
+    //
+    // THE LATENCY DOES NOT CHANGE, which is the whole point.  q holds the counts
+    // of the value read in the previous cycle, which is the value the operand
+    // flop is presenting now, so slow still lands one cycle after a and the two
+    // instructions still declare extra_cycles = 1.  Nothing above the RTL moves:
+    // not the cost model, not the microcode, not a single cycle count.
+    //
+    // MEASURED on the whole processor, medians of sixteen placement seeds:
+    //
+    //   the tree whole, as it was            27.96 MHz
+    //   counts AND both adds in cycle one    27.95   the adds spend the slack
+    //   the whole tree behind its own flop   29.93   but costs a second cycle
+    //   the counts alone, as written here    30.27
+    //
+    // The second row is why the split is HERE and not one level later: cycle
+    // one already holds the microcode read, rtl/predecode.sv and the register
+    // file, and the two 3-bit adds are more than its remaining slack.
+    wire [2:0] p0 = cnt4(araw[3:0]),   p1 = cnt4(araw[7:4]);
+    wire [2:0] p2 = cnt4(araw[11:8]),  p3 = cnt4(araw[15:12]);
+    logic [11:0] q;
+    always_ff @(posedge clk) q <= {p3, p2, p1, p0};
+    wire [4:0] pc = add4(add3(q[2:0], q[5:3]), add3(q[8:6], q[11:9]));
 
     // --- the slow pair, registered -----------------------------------------------
     always_ff @(posedge clk) slow <= sel ? ${impl(L.slow[1])} : ${impl(L.slow[0])};

@@ -94,6 +94,7 @@
 module alu (
     input  logic        clk,     // for rtl/unary.sv's slow pair only
     input  logic [15:0] lhs,     // register file port A: rtl/lhs.sv
+    input  logic [15:0] lraw,    // the same, before the flop: popcount's first stage
     input  logic [15:0] rhs,     // rtl/rhs.sv
     input  logic [3:0]  op,      // microcode: which operation
     output logic [15:0] y
@@ -105,7 +106,7 @@ module alu (
     wire [15:0] andv = lhs & rhs;
     wire [3:0]  amt  = rhs[3:0];
     wire [15:0] unf, uns;
-    unary u (.clk(clk), .a(lhs), .sel(rhs[2]), .fast(unf), .slow(uns));   // a bit of the imm3 value
+    unary u (.clk(clk), .a(lhs), .araw(lraw), .sel(rhs[2]), .fast(unf), .slow(uns));   // a bit of the imm3 value
 
     always_comb case (op)
         4'd0, 4'd1: y = sum;
