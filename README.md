@@ -5,8 +5,9 @@ complete enough to write code and evaluate how the ISA should be changed.
 
 Ports of gas, gcc, ld, objdump etc are provided.  A minimal libc (with an O(1) malloc
 implementation) and tuned
-math operations for libgcc are provided.  A simulator as available, and a
-FPGA implementation is started, but far from complete.
+math operations for libgcc are provided.  A simulator is available, and a
+complete FPGA implementation including interrupts is written, but never
+tested on hardware.
 
 ![The Fructus opcode map: 128 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
 
@@ -27,6 +28,7 @@ But we don't want to pay the typical code density penalty of RISC on a 64k machi
 - Compact encodings for smaller and common immediates like -16 to 15, single-bit-set, and common masks.
 - One-byte encodings for very popular ALU operations that hard code all three arguments.
 - The length of the instructions is 1-3 bytes and the first byte determines the length.
+- Still many free opcodes for experimentation eg. instructions garbage collectors.
 - The intention is that the assembler programmer can code as if all three-register and two-register-imm16
   forms were available, but the tooling selects the shortest possible encoding. For C code, gcc is aware
   of the encoding tradeoffs and selects instructions to match.
@@ -46,7 +48,7 @@ branch and the "? 1 : 0" instructions iseq, isset, isclear) have a fourth 3-bit
 input which selects the condition. Unary operations will be implemented as
 binary operations where the second (immediate) input selects the operation.
 
-Right now half the opcode space is still free. Some short forms have been specified
+Right now almost half the opcode space is still free. Some short forms have been specified
 that likely aren't worth it and will be removed. The FPGA implementation will provide
 input as to which features make sense.
 
