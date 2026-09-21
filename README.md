@@ -3,11 +3,17 @@
 A 16-bit proposed retrocomputer instruction set, and a toolchain that's
 complete enough to write code and evaluate how the ISA should be changed.
 
-Ports of gas, gcc, ld, objdump etc are provided.  A minimal libc (with an O(1) malloc
-implementation) and tuned
-math operations for libgcc are provided.  A simulator is available, and a
-complete FPGA implementation including interrupts is written, but never
-tested on hardware.
+Ports of gas, gcc, ld, objdump etc are provided.  A minimal libc
+(with an O(1) malloc implementation) and tuned
+integer math operations for libgcc are provided. Printf with optimized
+int-to-decimal.
+
+A simulator is available.
+
+A complete FPGA implementation including interrupts is written, but never
+tested on hardware. Simulation says it runs at about 30MHz on ICE40 and
+most byte codes take two cycles. Full barrel shifter, but no cache, branch
+predictor, or mul instruction. Not very pipelined.
 
 ![The Fructus opcode map: 128 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
 
