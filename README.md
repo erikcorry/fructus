@@ -39,7 +39,7 @@ But we don't want to pay the typical code density penalty of RISC on a 64k machi
   forms were available, but the tooling selects the shortest possible encoding. For C code, gcc is aware
   of the encoding tradeoffs and selects instructions to match.
 - Up to three arbitrary registers can be pushed or popped in a single two-byte instruction for compact
-  function prologs and epilogs. store-multiple and load-multiple can write or read up to three registers
+  function prologs and epilogs. Store-multiple and load-multiple can write or read up to three registers
   (repeats allowed) for memcpy, memset, strlen.
 
 It is conceived to run on the
