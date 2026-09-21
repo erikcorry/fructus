@@ -1,19 +1,20 @@
 /* A 16K ROM at the top of the address space, RAM below it.
  *
  *   0x0000 - 0xbfff   48K RAM
- *   0xc000 - 0xfff9   16K ROM, less the six bytes of vectors
- *   0xfffa - 0xffff   the vectors
+ *   0xc000 - 0xffcf   16K ROM, less the vector table
+ *   0xffd0 - 0xffff   the vectors, twelve four-byte slots
  *
- * The vector layout is the 6502's, which is what the microtan hardware
- * expects: three little-endian 16-bit addresses the CPU jumps to.
+ * THE VECTORS ARE JUMP ADDRESSES, NOT POINTERS.  The processor puts one of
+ * these in the pc and executes what it finds, so every slot holds a `jmp' -
+ * three bytes of instruction with a fourth to spare.  See [cpu.vectors] in
+ * isa/fructus.toml for the table and why it is shaped this way.
  *
- *   0xfffa  NMI
- *   0xfffc  RESET
- *   0xfffe  IRQ / BRK
- *
- * A program supplies _start.  It may also supply __nmi and __irq; where it
- * does not, those vectors point at _start too, so a stray interrupt restarts
- * the machine rather than jumping into whatever the ROM happened to end with.
+ * SO THIS SCRIPT CANNOT FILL THEM IN, and that is the difference from the
+ * 6502 layout this replaced.  `SHORT(_start)' emits a pointer, which a linker
+ * can do; a jump is an instruction and has to be assembled.  The table
+ * therefore arrives as a .vectors input section from the program, and all this
+ * does is place it.  A program that supplies none gets a zero-filled slot,
+ * which decodes as `brk' and traps - loudly, and not into arbitrary code.
  */
 
 OUTPUT_FORMAT("elf32-fructus")
@@ -23,8 +24,8 @@ ENTRY(_start)
 MEMORY
 {
   ram (rwx) : ORIGIN = 0x0000, LENGTH = 48K
-  rom (rx)  : ORIGIN = 0xc000, LENGTH = 16K - 6
-  vec (r)   : ORIGIN = 0xfffa, LENGTH = 6
+  rom (rx)  : ORIGIN = 0xc000, LENGTH = 16K - 48
+  vec (rx)  : ORIGIN = 0xffd0, LENGTH = 48
 }
 
 SECTIONS
@@ -51,11 +52,9 @@ SECTIONS
   } > ram
   __bss_size = __bss_end - __bss_start;
 
-  .vectors : {
-    SHORT(DEFINED(__nmi) ? __nmi : _start);   /* 0xfffa */
-    SHORT(_start);                            /* 0xfffc */
-    SHORT(DEFINED(__irq) ? __irq : _start);   /* 0xfffe */
-  } > vec
+  /* KEEP, because nothing refers to this section and --gc-sections would
+     otherwise drop the whole table on the floor.  */
+  .vectors : { KEEP(*(.vectors)) } > vec
 
   /* The stack grows down from the top of RAM.  */
   __stack_top = ORIGIN(ram) + LENGTH(ram);

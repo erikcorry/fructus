@@ -27,7 +27,9 @@
 //            ld8 (the bytes, assembled by the capture), ld (the bytes,
 //            assembled by the capture), mov, push (the stepped pointer), pop
 //            (the words, then the pointer), stm (the stepped pointer), ldm
-//            (the words, then the pointer), call (the return address)
+//            (the words, then the pointer), call (the return address), brk
+//            (the shadows, through the flop), rti (the shadows, through the
+//            flop)
 //    8  shl    lhs << rhs[3:0]
 //            shl
 //    9  lsr    lhs >> rhs[3:0]

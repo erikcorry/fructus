@@ -25,15 +25,19 @@ const boot = (keys) => {
   return m;
 };
 
-// --- the reset vector, read rather than executed -----------------------------
+// --- the reset vector, executed rather than read -----------------------------
+// The slot holds a jump, so the machine STARTS at 0xfffc instead of loading a
+// word from it.  Checking the pc before the first instruction and again after
+// it separates the two: a board that still read a pointer would already be
+// somewhere in the ROM at the first check.
 {
   const m = new Microtan(spec).loadRom(code);
-  check('reset vector is read from 0xfffc',
-        m.pc === (code[0x3ffc] | (code[0x3ffd] << 8)),
+  check('reset starts AT the vector rather than reading a word from it',
+        m.pc === MICROTAN.vectors.reset,
         `pc=0x${m.pc.toString(16)}`);
   m.batch(1);
-  check('reset points into the ROM',
-        m.pc >= MICROTAN.rom.base && m.pc < MICROTAN.vectors.nmi,
+  check('and the jump it finds there lands in the ROM',
+        m.pc >= MICROTAN.rom.base && m.pc < MICROTAN.vectors.irq0,
         `after one instruction pc=0x${m.pc.toString(16)}`);
 }
 
@@ -90,14 +94,18 @@ const boot = (keys) => {
   check('second key delivered once the port clears', m.mem[MICROTAN.key] === 0x62, `${m.mem[MICROTAN.key]}`);
 }
 
-// --- an unprogrammed ROM stops at reset --------------------------------------
-// A blank socket reads as zeros, and halt is opcode zero, so the board stops on
-// the first fetch instead of running away through 1K of nop.
+// --- an unprogrammed ROM traps at reset --------------------------------------
+// A blank socket reads as zeros, and brk is opcode zero, so the board traps on
+// the first fetch instead of running away through 1K of nop.  The vector is
+// blank too, so the trap re-enters itself and the pc is PINNED there - which is
+// the property the halt that used to be at zero was for, and the reason a nop
+// at zero would be the worse failure.  The board does not stop, but it does not
+// go anywhere either, and the address it sits at is one a reader can look up.
 {
   const m = new Microtan(spec).loadRom(new Uint8Array(MICROTAN.rom.size));
   m.batch(100);
-  check("blank rom halts at reset", m.halted && m.count === 1,
-        `halted=${m.halted} after ${m.count} instructions, pc=0x${m.pc.toString(16)}`);
+  check("blank rom traps at reset and stays there", m.pc === spec.cpu.vectors.brk,
+        `pc=0x${m.pc.toString(16)} after ${m.count} instructions, vector=0x${spec.cpu.vectors.brk.toString(16)}`);
 }
 
 // --- an oversized ROM is refused rather than wrapping ------------------------

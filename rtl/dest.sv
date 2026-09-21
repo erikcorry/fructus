@@ -48,8 +48,8 @@
 //               add/r0_r0_r1
 //     r1        add/r1_r1_r0, or/mov_r1_r0, stm
 //     r2        ldm
-//     sp (r6)   push, pop
-//     lr (r7)   call
+//     sp (r6)   brk, rti, push, pop
+//     lr (r7)   brk, rti, call
 //
 // MEASURED on an iCE40 UP5K, yosys 0.52 -nobram + nextpnr-ice40 0.7: an 8x16
 // register file written at this block's address, logic cells and the median of

@@ -11,12 +11,24 @@
 //     0x0200 - 0x03ff  the screen.  32 x 16 characters, one byte each,
 //                      row major, written directly by the CPU.
 //     0xc000 - 0xffff  ROM, 16K, read only.
-//     0xfffa - 0xffff  the vectors.
+//     0xffd0 - 0xffff  the vectors.
 //
-// The vectors are the 6502's, and the hardware reads them rather than executing
-// them: three little-endian 16-bit addresses, NMI at 0xfffa, reset at 0xfffc,
-// IRQ and BRK at 0xfffe.  So a machine starts by loading the word at 0xfffc
-// into the program counter.  ld/fructus-rom16k.ld is what fills them in.
+// THE VECTORS ARE JUMP ADDRESSES AND NOT POINTERS, which is where this board
+// stops being a 6502.  The hardware EXECUTES the slot rather than reading a
+// word out of it, so each one holds a `jmp' to wherever the handler really is -
+// three bytes of instruction in a four-byte slot, with a byte to spare.  A
+// machine starts by setting the program counter to 0xfffc and running what it
+// finds there.
+//
+// THE 6502'S INDIRECTION BOUGHT NOTHING HERE.  It exists on that part because
+// it has no instruction that can sit at a fixed address and reach anywhere;
+// this machine has `jmp target'.  Reading a pointer instead would cost an
+// address cycle and two data cycles at the front of every exception.  This
+// board needs a custom ROM for this instruction set in any case, so there was
+// no compatibility to keep.
+//
+// See [cpu.vectors] in isa/fructus.toml for the whole table, most of which is
+// reserved rather than implemented; ld/fructus-rom16k.ld fills it in.
 //
 // THE KEYBOARD HANDSHAKE.  A key press is queued, and delivered to 0x0001 only
 // when that byte reads zero.  The monitor zeroes it after picking a character
@@ -40,7 +52,10 @@ export const MICROTAN = {
   key:    0x0001,
   screen: { base: 0x0200, cols: 32, rows: 16 },
   rom:    { base: 0xc000, size: 0x4000 },
-  vectors: { nmi: 0xfffa, reset: 0xfffc, irq: 0xfffe },
+  // STRAIGHT OUT OF THE SPEC, not transcribed.  The board and the processor
+  // have to agree about where an exception lands, and two copies of a table
+  // are two things to keep in step.
+  vectors: loadSpec().cpu.vectors,
 };
 
 export class Microtan extends Machine {
@@ -72,11 +87,13 @@ export class Microtan extends Machine {
     return this.resetVector();
   }
 
-  // Start where 0xfffc says to.  Reading it through rd16 charges the bus the
-  // way the hardware would, so a cycle count starts from the same place a real
-  // machine does.
+  // START AT THE RESET VECTOR AND EXECUTE IT.  The slot holds a `jmp' and not a
+  // pointer, so there is no word to read and no bus cycle to charge - the
+  // machine simply begins there, exactly as it does on a trap.  That is one
+  // fewer way for the board and the processor to disagree: both reach a handler
+  // by putting an address in the pc and nothing else.
   resetVector() {
-    this.pc = this.rd16(this.L.vectors.reset);
+    this.pc = this.L.vectors.reset;
     return this;
   }
 

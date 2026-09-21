@@ -78,6 +78,20 @@
 #   pc                see below                          in `endian` order
 #   halted            set by `halt`
 #
+#   ie                the interrupt-enable flag, set by `sei` and cleared by
+#                     `cli`.  Write-only: nothing reads it back.
+#   shadow_sp         where an exception parks the interrupted code's sp
+#   shadow_isp        where regular code parks the INTERRUPT stack pointer
+#   shadow_lr         where an exception parks the interrupted code's lr
+#   vector            the address an exception enters at, [cpu] interrupt_vector
+#
+# THE THREE SHADOWS ARE MACHINE STATE AND NOT REGISTERS.  No instruction names
+# them as an operand and nothing in the register file reaches them; they exist
+# because `brk` and `rti` move values through them, which is the only way their
+# contents can be observed at all.  They are named here rather than hidden
+# inside the two instructions so that the semantics of an exception are written
+# out the same way every other instruction's are.
+#
 #   sxt8              extend from 8 bits         clz bitrev popcount
 #   shl lsr asr       shift by a count           test(cond, x, y, width)
 #
@@ -202,6 +216,8 @@ endian     = "little"    # byte order of 16-bit values in *data* memory
 # it will reject an otherwise reasonable encoding that violates it.
 length_from_first_byte = true
 
+# Where an exception enters is [cpu.vectors], at the end of this section.
+
 # =============================================================================
 # THE COST MODEL
 # =============================================================================
@@ -282,6 +298,55 @@ length_from_first_byte = true
 # semantics already say.  `pc = pc + off` mentions pc on the right and is
 # therefore relative; `pc = target` and `pc = lr` do not and are absolute.
 taken_branch_penalty = 1
+
+
+# =============================================================================
+# THE VECTORS
+# =============================================================================
+# Where an exception enters.  Each of these is an ADDRESS THE MACHINE JUMPS TO,
+# and not a pointer it reads.
+#
+# THAT IS THE DEPARTURE FROM THE 6502, whose layout the microtan hardware used
+# to borrow.  A jump is one internal register write and no bus cycle at all; an
+# indirect vector is an address cycle and two data cycles at the front of EVERY
+# exception.  The indirection earns its keep on a 6502 because that part has no
+# instruction that can sit at a fixed address and reach anywhere - so the vector
+# has to be data.  This machine has `jmp target`, so the slot can simply BE the
+# jump and the hardware needs to know nothing but an address.
+#
+# THEY ARE AT THE TOP OF MEMORY, WHICH IS TRADITIONALLY ROM.  The bottom of the
+# address space is where globals and the stack live, so a vector down there has
+# to be carved out of space a program is already using - which is exactly what
+# makes a low vector collide with a flat image linked from zero.  The top is the
+# part an exception can rely on being non-volatile.
+#
+# FOUR BYTES APART, DESCENDING.  Four is what `jmp target` costs plus one, so
+# every slot holds a jump to anywhere in the address space with a byte to spare;
+# and four is a power of two, so picking the nth vector is a shift rather than a
+# multiply, which matters to whatever decodes an interrupt line into a slot.
+#
+# ONE VECTOR PER REASON, RATHER THAN ONE ENTRY POINT AND A STATUS REGISTER.  The
+# handler knows why it was entered from the address it was entered at, before it
+# has executed an instruction - so a trap handler and a timer handler share no
+# code and no dispatch.  The alternative needs a readable cause register, and
+# this machine deliberately has no way to read even the interrupt-enable flag.
+#
+# MOST OF THESE ARE RESERVED AND NOTHING IMPLEMENTS THEM YET.  They are written
+# down now so the addresses cannot be claimed by something else later, and so
+# that the spacing is fixed while it is still free to fix.
+[cpu.vectors]
+reset        = 0xfffc   # the board's, not the bare part's: reset presents 0
+brk          = 0xfff8   # IMPLEMENTED: `brk`, and the hardware interrupt line
+illegal_insn = 0xfff4   # reserved: an opcode rtl/ucode.sv does not implement
+nmi          = 0xfff0   # reserved
+irq7         = 0xffec   # reserved: hardware interrupt lines, 7 down to 0
+irq6         = 0xffe8
+irq5         = 0xffe4
+irq4         = 0xffe0
+irq3         = 0xffdc
+irq2         = 0xffd8
+irq1         = 0xffd4
+irq0         = 0xffd0
 
 
 # =============================================================================
@@ -736,9 +801,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   instead of a set of bit fields, and it is why an ALU operation cannot be
 #   decoded from a fixed position.
 #
-#   0000_0000                halt                       1 byte
-#   0000_0001                -- free, 1 one-byte slot
-#   0000_0010                -- free, 1 one-byte slot
+#   0000_0000                brk                        1 byte
+#   0000_0001                halt                       1 byte
+#   0000_0010                rti                        1 byte
 #   0000_0011                ld   r0, [r0, #0]          1 byte
 #   0000_0100                ld8  r0, [r0, #0]          1 byte
 #   0000_0101                add  r0, r0, #1            1 byte
@@ -753,28 +818,29 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1000_0110                -- free, 1 one-byte slot
 #   1000_0111                nop                        1 byte
 #
-#   THE THREE CONTROL-FLOW STUBS ARE THE FIRST THREE OPCODES, which is what
-#   putting `jmp r5' at 0x02 bought: halt, ret and a jump through a register
-#   are what this block has of control flow, and they are now adjacent.  It
-#   cost the low half its ninth member - the one-byte region is sixteen slots,
-#   not eight, so `add r0, r0, r1' moved out to 0x85 and joined `add r1, r1,
-#   r0' in the other half.  It could not go to 0000_1000: bit 3 is set there,
-#   and "is this one byte" is `(op & 0x78) == 0'.
+#   THE THREE EXCEPTION INSTRUCTIONS ARE THE FIRST THREE OPCODES: enter one,
+#   wait for one, return from one.  They are adjacent because a wild jump lands
+#   on low addresses, and they cost the low half its ninth member - the
+#   one-byte region is sixteen slots, not eight, so `add r0, r0, r1' moved out
+#   to 0x85 and joined `add r1, r1, r0' in the other half.  It could not go to
+#   0000_1000: bit 3 is set there, and "is this one byte" is `(op & 0x78) == 0'.
 #
-#   THE TWO ENDS OF THE BLOCK ARE THE TWO INSTRUCTIONS THAT DO NOTHING USEFUL,
-#   and putting them there is the point.  halt and ret hold 0x00 and 0x01: both
-#   write the pc and neither takes an operand, so the two opcodes a wild jump
-#   is likeliest to land on are the two that stop or unwind.  nop holds 0x87 at
-#   the other end, as far from 0x00 as the block reaches - which matters for the
-#   reason halt is at zero in the first place: a nop sled through erased memory
-#   is the failure that looks like a working machine.
+#   THE LOW END OF THE BLOCK IS WHERE A MISTAKE LANDS, and putting the three
+#   exception opcodes there is the point.  Erased memory and a zeroed page
+#   decode as brk, so a wild jump traps to the handler with the faulting
+#   address in lr instead of running on; the two opcodes after it stop the
+#   machine and return from a trap.  None of the three takes an operand, so
+#   none can be led further astray by the byte that follows.
 #
-#   The split moved nop further from halt rather than nearer, so the argument
-#   survives the rearrangement unchanged.
+#   nop holds 0x87 at the other end, as far from 0x00 as the block reaches -
+#   which matters for the reason brk is at zero in the first place: a nop sled
+#   through erased memory is the failure that looks like a working machine, and
+#   it is the harder of the two to diagnose.  The split moved nop further from
+#   the low end rather than nearer, so the argument survives unchanged.
 #
 #   Everything between them is an ABBREVIATION - a form of some instruction
 #   that also exists in full elsewhere, with every operand pinned.  So the block
-#   reads as three things and not sixteen: three control-flow stubs, eleven
+#   reads as three things and not sixteen: three exception instructions, eleven
 #   pinned forms, one nop, and the free slot sits next to the nop rather than in
 #   the middle of the abbreviations.
 #   ------------------------------------------------------------------------
@@ -1055,12 +1121,24 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   ------------------------------------------------------------------------
 #
 #   --- control flow, all of it, in exactly two rows -------------------------
-#   EVERY OPCODE THAT WRITES THE PC IS 1010_xxxx AND NOTHING ELSE IS, with no
-#   exception at all now that `ret` has joined them at 1010_1011.  It is still
-#   one byte - it has no operand to encode - it simply spends one of this
-#   block's opcodes rather than one of the sixteen in the one-byte region,
-#   which is the scarcer of the two.  Sixteen slots, sixteen instructions,
-#   nothing spilling into a neighbouring row.
+#   EVERY PROGRAM TRANSFER OF CONTROL IS 1010_xxxx AND NOTHING ELSE IS - every
+#   branch, jump, call and return, including `ret` at 1010_1011.  It is one
+#   byte and has no operand to encode; it simply spends one of this block's
+#   opcodes rather than one of the sixteen in the one-byte region, which is the
+#   scarcer of the two.
+#
+#   THE EXCEPTIONS ARE NOT IN THIS ROW AND ARE NOT MEANT TO BE.  brk and rti
+#   write the pc from 0x00 and 0x02, and that does not weaken the rule, because
+#   the rule is about the transfers a compiler EMITS, a disassembler FOLLOWS and
+#   a decoder PREDICTS.  An exception is reached from a pin or a trap rather
+#   than from the instruction stream, and its destination is a chip constant
+#   rather than anything in the instruction, so nothing that reads this row is
+#   looking for it.  See the exception block below.
+#
+#   WHAT THE ROW GIVES UP IS ITS LENGTH REGULARITY, at .e and .f.  `ret` was the
+#   only one-byte member; sei and cli make three, so reading length from the
+#   bits alone now means `.b, .e, .f` rather than one exception.  Two of the
+#   sixteen one-byte opcodes would have cost more - see the sei/cli block.
 #
 #   1010_0000                br      <cond,#imm5>, ra, target
 #   1010_0001                jmp     target             3 bytes, absolute
@@ -1075,7 +1153,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1010_1011                ret                        1 byte, pc = lr
 #   1010_1100                brset   ra, #immbit5, target
 #   1010_1101                brset   ra, #immask5, target
-#   1010_1110 .. 1010_1111   -- free
+#   1010_1110                sei                        1 byte, ie = 1
+#   1010_1111                cli                        1 byte, ie = 0
 #   1011_0000 .. 1111_1111   -- free, 80 slots
 #
 #   AND THE COLUMNS SAY WHAT BYTE 1 LOOKS LIKE, exactly as they do everywhere
@@ -2853,11 +2932,14 @@ semantics = "pc = lr"
 # What it gives up: at 0x01 a wild jump into erased memory found halt and then
 # an unwind, which was a deliberate bit of damage control.  What it buys: the
 # one-byte region is sixteen opcodes and the control block had a free slot, so
-# the scarcer space keeps its slot; and `every opcode that writes the pc is
-# 1010_xxxx` stops having an exception, which is worth more than it sounds -
-# it is the kind of claim a decoder, a disassembler and a reader all lean on.
-# 0x01 is free now, so that wild jump traps instead of returning, which is
-# louder than an accidental unwind and easier to find.
+# the scarcer space keeps its slot; and `every program transfer of control is
+# 1010_xxxx` holds without exception, which is worth more than it sounds - it
+# is the kind of claim a decoder, a disassembler and a reader all lean on.
+#
+# THE SLOT IT LEFT IS HALT, and the damage control came back stronger than it
+# went away.  0x00, 0x01 and 0x02 are brk, halt and rti now, so a wild jump into
+# a zeroed page traps to a handler that can name the faulting address rather
+# than unwinding to wherever lr happened to point.
 [[insn]]
 mnemonic = "jmp"
 summary  = "pc = ra"
@@ -2872,38 +2954,169 @@ semantics = "pc = R[a]"
   encoding = "1010_0010  0000_0aaa"
 
 
-# --- halt / nop -------------------------------------------------------------
-# HALT IS OPCODE ZERO, AND THAT IS THE WHOLE POINT.  Erased memory, an unwritten
-# ROM and a wild jump into a zeroed page all land on 0x00, and the useful thing
-# for the machine to do there is stop.  With nop at zero the same mistake runs a
-# nop sled to the top of memory, wraps, and keeps going - it produces a machine
-# that looks alive while executing nothing, which is the harder failure to
-# diagnose of the two.  A halt at the point of the mistake leaves the pc sitting
-# on the instruction that was wrong.
+# --- sei / cli --------------------------------------------------------------
+# THE INTERRUPT-ENABLE FLAG IS WRITE-ONLY, and deliberately so.  There is no
+# instruction that reads it and no way to save and restore it, so a critical
+# section is `cli` ... `sei` and the code is expected to know which state it was
+# in.  A readable flag invites the save-and-restore idiom, which needs a
+# register to hold it and a conditional to act on it - and on a machine with
+# eight registers that is a real cost paid at every critical section, to buy
+# nesting that hand-written kernel code can simply not do.
 #
-# It costs nothing.  Neither instruction has operands, so the two encodings are
-# interchangeable, and nop being 0x0f makes it no less of a nop.
+# THEY ARE ONE BYTE AND THEY ARE IN THE CONTROL ROW, which costs the length
+# decode something and is the one place this pair is not free.  `ret` at .b was
+# the row's only one-byte member; .e and .f make three, so a decoder reading
+# length from the bits alone needs `.b, .e, .f` rather than a single exception.
+# The alternative was two of the sixteen one-byte opcodes, and those are worth
+# more: they hold abbreviations that save a byte at thousands of sites, where
+# sei and cli appear a few dozen times in a whole kernel.  Spending the scarcer
+# space on the rarer instruction is the wrong way round.
+[[insn]]
+mnemonic = "sei"
+summary  = "enable interrupts"
+operands = []
+syntax   = ""
+semantics = "ie = 1"
+
+  [[insn.form]]
+  encoding = "1010_1110"
+
+
+[[insn]]
+mnemonic = "cli"
+summary  = "disable interrupts"
+operands = []
+syntax   = ""
+semantics = "ie = 0"
+
+  [[insn.form]]
+  encoding = "1010_1111"
+
+
+# --- the exception block: brk, halt, rti ------------------------------------
+# THE THREE LOWEST OPCODES ARE THE THREE EXCEPTION INSTRUCTIONS - enter one,
+# wait for one, return from one - and they are at 0x00, 0x01 and 0x02 for the
+# reason halt used to be at zero on its own.  Erased memory, an unwritten ROM
+# and a wild jump into a zeroed page all land on 0x00, and the useful thing for
+# the machine to do there is stop in a way somebody can find afterwards.
 #
-# NOP IS AT THE FAR END OF THE ROW, at 0x0f, which is the same argument run the
-# other way.  0x00 is what a mistake lands on and 0x01 is one past it, so those
-# two slots go to halt and ret - the two instructions that stop or unwind, both
-# of them pc writers with no operands.  Putting nop as far from them as the row
-# reaches keeps the sled failure out of the neighbourhood of the stop, and it
-# bookends the one-byte block: control flow at one end, nothing at the other,
-# abbreviations in between.
+# BRK IS STRICTLY BETTER AT ZERO THAN HALT WAS.  A halt at the point of the
+# mistake leaves the pc sitting on the instruction that was wrong, which is
+# already far better than a nop sled - but it stops the machine dead and the
+# only way to learn anything is to attach something to the bus.  brk traps to
+# the handler with the faulting address in lr, so a monitor can print it.  The
+# sled argument that put halt at zero is unchanged and now buys more.
 #
-# `ret` on a wild jump is not as safe as `halt` and is not meant to be - lr
-# holds whatever it held - but it is far better than a sled, because it lands
-# somewhere a debugger can name.
+# NOP IS STILL AT THE FAR END, at 0x87, which is the same argument run the other
+# way: the low opcodes are what a mistake lands on, so they hold the three
+# instructions that stop or divert, and nop sits as far from them as the block
+# reaches.  A nop sled through erased memory produces a machine that looks alive
+# while executing nothing, which is the harder failure to diagnose of the two.
+#
+# THEY ARE ALL IN THE ONE-BYTE REGION ALREADY, and that is not a coincidence
+# worth ignoring: `(op & 0x78) == 0` is the one-byte test, and 0x00, 0x01 and
+# 0x02 all satisfy it.  So three new one-byte instructions cost the length
+# decode nothing at all.  See the control row for what `sei` and `cli` cost it
+# instead, which is not nothing.
+#
+# WHY THESE THREE WRITE THE PC FROM OUTSIDE 1010_xxxx.  The control row's rule
+# is about PROGRAM control flow - the transfers a compiler emits, a disassembler
+# follows and a decoder predicts.  An exception is not that: it is not reached
+# from the instruction stream and its destination is not in the instruction.
+# So the row keeps its meaning and these keep theirs, and the map is read as
+# `1010_xxxx is every branch, jump, call and return` rather than as a claim
+# about the pc that now has three exceptions.
+#
+# ----------------------------------------------------------------------------
+# brk                                                                  1 byte
+# ----------------------------------------------------------------------------
+# A SOFTWARE INTERRUPT, and it takes the same path as a hardware one: the same
+# microcode routine, the same shadow registers, the same vector.  What differs
+# is only that it is reached by executing an opcode rather than by a pin, and
+# so it is NOT maskable - `ie` gates the pin and nothing else.  A syscall that
+# could be ignored because the caller happened to be inside a critical section
+# would be useless.
+#
+# IT RESUMES AFTER ITSELF, where a hardware interrupt restarts the instruction
+# it preempted.  `pc` is advanced before the semantics run - see the semantics
+# section at the top of this file - so `lr = pc` saves the address FOLLOWING the
+# brk, and `rti` returns there.  That is what a syscall wants.  The hardware
+# path saves the address of the instruction that had not started yet, so that
+# one is restarted instead; both are `lr = pc` and the difference is entirely in
+# which cycle the interrupt is taken in.
+[[insn]]
+mnemonic = "brk"
+summary  = "software interrupt: enter the handler"
+operands = []
+syntax   = ""
+semantics = "shadow_lr = lr; lr = pc; shadow_sp = sp; sp = shadow_isp; ie = 0; pc = vector"
+
+  [[insn.form]]
+  encoding = "0000_0000"
+
+
+# ----------------------------------------------------------------------------
+# halt                                                                 1 byte
+# ----------------------------------------------------------------------------
+# STOP UNTIL AN INTERRUPT, and with interrupts disabled that is stop forever -
+# which is the old halt, unchanged, and is what a wild jump still finds.  The
+# two behaviours are one instruction because `ie` already distinguishes them.
+#
+# IT RESUMES ON ITSELF AND HALTS AGAIN.  The halt step consumes nothing, so the
+# pc stands still on the halt opcode, and the interrupt therefore saves the
+# halt's OWN address in lr.  An `rti` returns to the halt and the machine waits
+# again, which is what an idle loop wants and costs no hardware to arrange.
+#
+# A HANDLER THAT WANTS TO GO ON SAYS SO, in two bytes: `add lr, lr, #1` before
+# the `rti` steps past the halt.  That puts the policy in the handler, where it
+# belongs - one idle loop may want to keep sleeping through a timer tick and
+# another may want to wake on it, and the hardware should not have to guess.
 [[insn]]
 mnemonic = "halt"
-summary  = "stop the machine"
+summary  = "stop the machine until an interrupt"
 operands = []
 syntax   = ""
 semantics = "halted = 1"
 
   [[insn.form]]
-  encoding = "0000_0000"
+  encoding = "0000_0001"
+
+
+# ----------------------------------------------------------------------------
+# rti                                                                  1 byte
+# ----------------------------------------------------------------------------
+# THE EXACT INVERSE OF THE ENTRY, statement for statement, which is what makes
+# the pair safe to reason about.  Note that it is not a swap in either
+# direction: there are TWO shadow stack pointers, and each move is one way.
+#
+# `sp` AND `shadow_isp` ARE NEVER EXCHANGED IN ONE CYCLE, and that is the whole
+# reason there are two shadows rather than one.  A swap needs the old value of
+# each side while the new one arrives, which on this machine means a mux in
+# front of the register file's write port - measured at 3.3 MHz, see rtl/cpu.sv,
+# and paid by every instruction rather than by the two that need it.  Two
+# one-way moves in two cycles cost the datapath nothing and the exception a
+# cycle, and the exception is where a cycle is affordable.
+#
+# IT IS ALSO THE BOOT SEQUENCE.  With interrupts disabled at reset, the stub
+#
+#       mov lr, #user_entry_point
+#       mov sp, #interrupt_stack_base
+#       rti
+#
+# loads the interrupt stack into `shadow_isp` on its way past and lands on
+# user_entry_point with interrupts on - seven bytes, and both stack pointers
+# are then set up.  The garbage it leaves in sp is overwritten by the first
+# thing user_entry_point does, and an interrupt arriving in that window is
+# harmless because it swaps sp away before the handler can touch it.
+[[insn]]
+mnemonic = "rti"
+summary  = "return from an interrupt"
+operands = []
+syntax   = ""
+semantics = "pc = lr; lr = shadow_lr; shadow_isp = sp; sp = shadow_sp; ie = 1"
+
+  [[insn.form]]
+  encoding = "0000_0010"
 
 
 [[insn]]

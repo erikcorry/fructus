@@ -1050,6 +1050,13 @@ endmodule
     return [...code];
   });
 
+  // THE TERMINATOR COMES FROM THE SPEC.  It was a literal 0x00 with `halt' in
+  // a comment beside it, which stopped being halt the day brk took opcode
+  // zero - and a random program that ends in a trap instead of a stop tests
+  // the trap handler, which is not what any of this is for.
+  const HALT = parseInt(spec.insn.find((i) => i.mnemonic === 'halt')
+                            .form[0].encoding.replace(/[\s_]/g, ''), 2);
+
   const N_ALU = 40, N_LD = 10, N_ST = 10;
   const PROGRAMS = N_ALU + N_LD + N_ST + assembled.length;
   const programs = [];
@@ -1061,7 +1068,7 @@ endmodule
     if (p < N_ALU)                       picks = p === 0 ? all : some(all);
     else if (p < N_ALU + N_LD)           picks = p === N_ALU ? loads : some([...all, ...loads]);
     else if (p < N_ALU + N_LD + N_ST) { picks = p === N_ALU + N_LD ? stores : some(stores); draws = safe; }
-    const bytes = picks ? picks.flatMap(draw).concat([0x00])    // halt
+    const bytes = picks ? picks.flatMap(draw).concat([HALT])
                         : assembled[p - N_ALU - N_LD - N_ST];
     const reg = Array.from({ length: 8 }, draws);
     const m = new Machine(spec).load(bytes, 0);
@@ -1094,8 +1101,14 @@ endmodule
     wire we;
     wire halted, trapped;
     cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
-           .mem_wdata(wdata), .mem_we(we), .halted(halted), .trapped(trapped),
+           .mem_wdata(wdata), .mem_we(we), .irq(1'b0), .halted(halted), .trapped(trapped),
            .result());
+    // IRQ IS TIED LOW HERE AND THAT COSTS NOTHING, because this is functional
+    // simulation rather than synthesis: there is no timing number to distort by
+    // letting the take path fold away.  tools/fpga-top.sv must NOT do this -
+    // a constant there would delete the ie flop, the take term and the vector
+    // arm before anything measured them.  These programs exercise the datapath,
+    // and brk and rti are reached by executing them, not by a pin.
     // ONE PORT, as the part has: the address is sampled at the edge, the byte
     // read appears after it, and a write lands at that same edge.  A read in a
     // writing cycle sees what was there before - which is what the microcode

@@ -17,9 +17,9 @@
 //     cond_src   rtl/cond.sv's source
 //     pc_src     where rtl/cpu.sv's next address comes from
 //
-// 138 opcodes, one row each.  An x is a value no step of that instruction reads -
+// 142 opcodes, one row each.  An x is a value no step of that instruction reads -
 // a branch has no ALU operation, a store no destination - left to the mapper as
-// a don't-care.  Rows with an x, per field: alu 23, lhs 17, rhs 4, dest 23, cond 131, pc 0.
+// a don't-care.  Rows with an x, per field: alu 25, lhs 20, rhs 8, dest 25, cond 135, pc 0.
 //
 // THE MICROCODE ROM KEEPS WHAT CHANGES FROM STEP TO STEP: write enables,
 // fetch and dispatch, the pc, memory reads and writes, the next address.  What
@@ -87,7 +87,9 @@ module predecode (
     always_comb begin
         (* rom_style = "logic" *)
         case (bus)
-        8'h00: t = 20'bxxxx_xxxx_xxxx_xxxx_xx_00;    // halt
+        8'h00: t = 20'b0111_xxxx_xxxx_0111_xx_00;    // brk
+        8'h01: t = 20'bxxxx_xxxx_xxxx_xxxx_xx_00;    // halt
+        8'h02: t = 20'b0111_0111_xxxx_0111_xx_11;    // rti
         8'h03: t = 20'b0111_0000_1000_0000_xx_00;    // ld
         8'h04: t = 20'b0111_0000_1000_0000_xx_00;    // ld8
         8'h05: t = 20'b0000_0000_1001_0000_xx_00;    // add
@@ -225,6 +227,8 @@ module predecode (
         8'hab: t = 20'bxxxx_0111_0111_xxxx_xx_11;    // ret
         8'hac: t = 20'bxxxx_1000_1011_xxxx_11_01;    // brset
         8'had: t = 20'bxxxx_1000_1011_xxxx_11_01;    // brset
+        8'hae: t = 20'bxxxx_xxxx_xxxx_xxxx_xx_00;    // sei
+        8'haf: t = 20'bxxxx_xxxx_xxxx_xxxx_xx_00;    // cli
         default: t = 20'bxxxxxxxxxxxxxxxxxxxx;
         endcase
     end

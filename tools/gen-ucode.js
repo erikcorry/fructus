@@ -57,7 +57,17 @@ const FIELDS = [
   ['dcap',     2,    'capture the bus byte: 1 shift it into the right operand flop, 2 zero extend it there'],
   ['luse',     1,    "lhs alternate: port A reads this step's own code rather than rtl/predecode.sv's"],
   ['lalt',     4,    'and that code, in rtl/lhs.sv\'s numbering - 8 the rd field, 9 the ra field, 10 port B\'s'],
-  ['dalt',     2,    'dest alternate - the same four for the write port, 0 being the pointer predecode names'],
+  ['dalt',     3,    'dest alternate - 0 the pointer predecode names, 1 rd, 2 ra, 3 port B, 4 sp, 5 lr'],
+  // --- the exception lines -------------------------------------------------
+  // Four fields and seven bits, and none of them is near the register file.
+  // WIDTH IS THE CHEAP THING TO SPEND: padding this word from 29 bits to 37
+  // and taking a fifth block RAM moved the clock by 0.01 MHz, so a field that
+  // buys a mux arm somewhere shallow is always the better trade than a mux in
+  // front of the eight registers.  See rtl/cpu.sv's header.
+  ['shwe',     2,    'latch port A into a shadow: 1 shadow_sp, 2 shadow_lr, 3 shadow_isp'],
+  ['shsel',    2,    'which shadow the right operand flop takes under dcap 3: 0 shadow_isp, 1 pc, 2 shadow_sp, 3 shadow_lr'],
+  ['iesel',    2,    'the interrupt-enable flag: 1 set it, 2 clear it'],
+  ['vec',      1,    'load the pc from the exception vector'],
 ];
 const W = FIELDS.reduce((n, [, w]) => n + w, 0);
 
@@ -159,6 +169,65 @@ why.set(STEP.ST8F2, 'the same, for a byte store');
 // names - sp for one, r2 for the other - and no step here mentions it.
 let free = 285;
 const alloc = (w, note) => { const a = free++; rom[a] = word(w); why.set(a, note); return a; };
+// --- the exceptions ------------------------------------------------------------
+// brk and a hardware interrupt run the SAME four steps and rti runs their
+// inverse.  NOTHING HERE IS A SWAP: there are two shadow stack pointers and
+// every move is one way, which is the whole reason the register file needs no
+// mux for this.  An exchange wants both old values while both new ones arrive,
+// and on this machine that means a mux in front of the write port - measured at
+// 3.3 MHz, paid by every instruction rather than by the two that need it.
+//
+// THE SHADOWS REACH THE REGISTER FILE THROUGH THE RIGHT-HAND OPERAND FLOP,
+// under `dcap` 3, and the ALU's pass-through carries that flop to the write
+// port exactly as it carries a loaded word.  See rtl/cpu.sv.
+//
+// `shsel` RUNS ONE STEP AHEAD OF `dcap`, and that is why these routines are
+// laid out the way they are rather than the obvious way.  Choosing a shadow in
+// the cycle the operand flop loads puts a 4:1 in front of a mux that was
+// already the binding path, and it MEASURED 0.93 MHz and 102 cells - medians
+// of sixteen seeds, 29.25 against 30.18 with that arm removed altogether.  So
+// the selection is registered, and every step here names the shadow the NEXT
+// one will consume.
+//
+// AND THAT COSTS NO CYCLES, which is what makes it the right answer rather
+// than a trade: there was always a step in front to carry the selection.  An
+// earlier version of this comment claimed a three-arm mux going to four was
+// free in LUT levels.  It is not, and the ablation is what says so.
+//
+// FOUR CYCLES EACH, and they are affordable here in a way they would not be in
+// an ALU instruction: an exception happens when a pin says so, not in a loop.
+// Each step reads one register on port A while the previous one's value is
+// still in the flop, so the reads and the writes pipeline against each other
+// and nothing waits.
+//
+// BRK3 DOES NOT DISPATCH, and that is not an oversight.  rtl/cpu.sv's `defer`
+// is driven from `pcload`, and this step loads the pc from the vector without
+// it - so a dispatch here would not be deferred and would execute the byte
+// already on the bus instead of the handler's first.  Every other pc-loading
+// step goes through PCDISP for the same reason; rti's last step can say
+// `dispatch` because it DOES use pcload and so defers itself.
+STEP.BRK3 = alloc({ wen: 1, dalt: 5, vec: 1, next: STEP.PCDISP },
+                  'brk: lr = pc, and the vector goes on the bus');
+STEP.BRK2 = alloc({ wen: 1, dalt: 4, shwe: 2, dcap: 3, next: STEP.BRK3 },
+                  'brk: sp = shadow_isp, shadow_lr = lr, and the pc into the flop');
+STEP.BRK1 = alloc({ luse: 1, lalt: 7, shwe: 1, dcap: 3, shsel: 1, next: STEP.BRK2 },
+                  'brk: shadow_sp = sp, read lr, shadow_isp into the flop, pc selected');
+STEP.BRK0 = alloc({ luse: 1, lalt: 6, iesel: 2, shsel: 0, next: STEP.BRK1 },
+                  'brk: read sp on port A, interrupts off, shadow_isp selected');
+
+// rti runs the same shape backwards.  The pc is loaded from lr in the LAST
+// step, not the first, so that lr is still the interrupted address while the
+// earlier steps read it - and `pcload` 1 with rtl/predecode.sv's pc_src 3
+// reaches it the same way `ret` does, off port A.
+STEP.RTI3 = alloc({ wen: 1, dalt: 5, pcload: 1, dispatch: 1, next: STEP.PCDISP },
+                  'rti: lr = shadow_lr, and the return address goes on the bus');
+STEP.RTI2 = alloc({ wen: 1, dalt: 4, shwe: 3, dcap: 3, iesel: 1, next: STEP.RTI3 },
+                  'rti: sp = shadow_sp, shadow_isp = sp, shadow_lr into the flop, interrupts on');
+STEP.RTI1 = alloc({ luse: 1, lalt: 6, dcap: 3, shsel: 3, next: STEP.RTI2 },
+                  'rti: read sp on port A, shadow_sp into the flop, shadow_lr selected');
+STEP.RTI0 = alloc({ luse: 1, lalt: 7, shsel: 2, next: STEP.RTI1 },
+                  'rti: read lr on port A, and shadow_sp selected');
+
 STEP.PUSHEND = alloc({ abase: 1, akon: 1, next: STEP.EXEC },
                      'back to the pc; the flop already holds the new sp');
 STEP.STMEND  = alloc({ abase: 1, akon: 2, next: STEP.EXEC },
@@ -227,6 +296,12 @@ const classify = (d) => {
   // since a one-byte form has no byte to fetch.
   if (/^pc = (lr|R\[[a-z]\])$/.test(sem))  return d.nbytes === 1 ? 'pcreg1' : d.nbytes === 2 ? 'pcreg2' : 'trap';
   if (/^lr = pc; pc = R\[[a-z]\]$/.test(sem)) return d.nbytes === 2 ? 'callreg' : 'trap';
+  // The exceptions.  These are tested HERE, above the catch-all below that
+  // sends anything containing a `;' to the trap word - brk and rti both do.
+  if (/^shadow_lr = lr;/.test(sem))          return d.nbytes === 1 ? 'brk' : 'trap';
+  if (/^pc = lr; lr = shadow_lr;/.test(sem)) return d.nbytes === 1 ? 'rti' : 'trap';
+  if (sem === 'ie = 1')                      return 'sei';
+  if (sem === 'ie = 0')                      return 'cli';
   // The memory families.  Width and direction pick the routine; the entry word
   // differs only in how many bytes it fetches before joining it, and a form
   // whose length has no routine is refused rather than quietly trapped.
@@ -295,6 +370,14 @@ const ENTRY = {
   alu3: () => word({ fetch: 1, next: STEP.FETCH2 }),
   halt: () => word({ halt: 1, next: STEP.HALT }),
   nop:  () => word({ dispatch: 1 }),
+  // brk enters the same routine a hardware interrupt does, which is the point
+  // of it: one path, tested by every trap whether or not a pin ever fires.
+  brk:  () => word({ next: STEP.BRK0 }),
+  rti:  () => word({ next: STEP.RTI0 }),
+  // sei and cli have no operand, no result and nothing to fetch, so like nop
+  // they dispatch in their entry cycle; the flag moves at that same edge.
+  sei:  () => word({ iesel: 1, dispatch: 1 }),
+  cli:  () => word({ iesel: 2, dispatch: 1 }),
   trap: () => word({ trap: 1, next: STEP.TRAP }),
 };
 const byClass   = Object.fromEntries(Object.keys(ENTRY).map((c) => [c, []]));
@@ -431,6 +514,12 @@ ${listed('stm3')}
 ${listed('pop1')}
 ${listed('pop2')}
 ${listed('pop3')}
+//     the exceptions - brk enters the routine a hardware interrupt enters, and
+//     rti runs it backwards; sei and cli move a flag and dispatch at once:
+${listed('brk')}
+${listed('rti')}
+${listed('sei')}
+${listed('cli')}
 //     halt:
 ${listed('halt')}
 //     nop - its entry dispatches at once, since the next opcode is already on
@@ -466,7 +555,11 @@ module ucode (
                                    //    operand flop, shifted in or zero extended
     output logic        luse,      // -> rtl/cpu.sv: port A takes this step's code
     output logic [3:0]  lalt,      // -> rtl/lhs.sv: and that code, ready to use
-    output logic [1:0]  dalt,      // -> rtl/dest.sv: and which the write port reads
+    output logic [2:0]  dalt,      // -> rtl/dest.sv: and which the write port reads
+    output logic [1:0]  shwe,      // -> rtl/cpu.sv: latch port A into a shadow register
+    output logic [1:0]  shsel,     //    and which shadow the operand flop takes
+    output logic        vec,       //    load the pc from the exception vector
+    input  logic        irq,       // <- the chip: an interrupt is pending
     input  logic        defer      // rtl/cpu.sv: the pc is being loaded, so the
                                    // byte on the bus is not the next opcode
 );
@@ -480,15 +573,52 @@ ${inits}
     logic [${W - 1}:0] word;
     wire  [${ADDR - 1}:0] next;
     wire  taking;                  // this step's dispatch, before the deferral
+    wire  [1:0] iesel;             // the flag's own line; it never leaves this module
     assign {${unpack.replace('dispatch', 'taking')}} = word;
+
+    // --- the interrupt-enable flag ---------------------------------------------
+    // IT LIVES HERE AND NOT IN rtl/cpu.sv, and that is what keeps the interrupt
+    // decision out of a combinational loop.  \`dispatch\` is this module's
+    // OUTPUT; a take computed outside from \`dispatch\` and fed back would close
+    // a ring through the ROM's address.  Computed inside from \`taking\` - the
+    // ROM bit before the deferral - it cannot.
+    //
+    // A TAKEN INTERRUPT CLEARS IT, so the handler runs with interrupts off and
+    // the shadow registers cannot be overwritten by a second exception before
+    // the first has saved them.  \`rti\` sets it again on its way out.
+    logic ie;
+    always_ff @(posedge clk)
+        if (rst)                ie <= 1'b0;
+        else if (iesel == 2'd1) ie <= 1'b1;
+        else if (iesel == 2'd2) ie <= 1'b0;
+        else if (take)          ie <= 1'b0;
+
+    // --- where an interrupt is taken -------------------------------------------
+    // WHERE AN INSTRUCTION WOULD HAVE BEEN DISPATCHED, AND NOWHERE ELSE.  That
+    // cycle is the only one in which no instruction is in flight: the previous
+    // one's write is landing at this same edge, the next has not begun, and the
+    // pc still names an instruction whose first byte has not been consumed.  So
+    // the interrupted instruction is RESTARTED rather than resumed, and nothing
+    // anywhere has to be unwound.
+    //
+    // A HALT STEP IS THE OTHER PLACE, because a halted machine never dispatches
+    // and would otherwise be unreachable.  The pc stands still there, so \`lr\`
+    // gets the halt's own address and an \`rti\` returns to it and waits again -
+    // which is what an idle loop wants.  A handler that means to go on adds one
+    // to lr before returning.
+    wire take = irq & ie & (halt | (taking & ~defer));
 
     // A step that loads the pc says \`dispatch\` because the NEXT cycle's byte
     // is an opcode; it is this cycle's that is not, when the load actually
     // happens.  So the deferral suppresses both the line and the ROM's use of
-    // the bus, and the word's own \`next\` carries the wait.
-    assign dispatch = taking & ~defer;
+    // the bus, and the word's own \`next\` carries the wait.  A taken interrupt
+    // suppresses it for the same reason: the byte on the bus is an opcode that
+    // is not going to be executed yet.
+    assign dispatch = taking & ~defer & ~take;
 
-    wire [${ADDR - 1}:0] addr = rst ? ${ADDR}'d${STEP.BOOT} : (dispatch ? {1'b0, bus} : next);
+    wire [${ADDR - 1}:0] addr = rst  ? ${ADDR}'d${STEP.BOOT}
+                              : take ? ${ADDR}'d${STEP.BRK0}
+                              : (dispatch ? {1'b0, bus} : next);
     always_ff @(posedge clk) word <= rom[addr];
 
 endmodule

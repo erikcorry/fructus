@@ -72,10 +72,15 @@ rom *sources='rom/hello.s': build-tools
         build/rom/image.elf build/fructus.rom
     text=$({{build}}/binutils/readelf -S build/rom/image.elf \
            | sed -n 's/.*\.text  *PROGBITS  *[0-9a-f]*  *[0-9a-f]*  *\([0-9a-f]*\).*/\1/p')
-    lo=$(od -A n -t x1 -j 16380 -N 1 build/fructus.rom | tr -d ' ')
-    hi=$(od -A n -t x1 -j 16381 -N 1 build/fructus.rom | tr -d ' ')
+    # The reset slot holds `jmp target' and not a pointer: one opcode byte and
+    # a little-endian address after it.  Reading it as a 16-bit word - which is
+    # what this did under the 6502 layout - reports the opcode as half of an
+    # address and looks plausible while being wrong.
+    op=$(od -A n -t x1 -j 16380 -N 1 build/fructus.rom | tr -d ' ')
+    lo=$(od -A n -t x1 -j 16381 -N 1 build/fructus.rom | tr -d ' ')
+    hi=$(od -A n -t x1 -j 16382 -N 1 build/fructus.rom | tr -d ' ')
     echo "build/fructus.rom: 16384 bytes, $((16#$text)) in .text"
-    echo "reset vector at 0xfffc: 0x$hi$lo"
+    echo "reset slot at 0xfffc: opcode 0x$op, jmp 0x$hi$lo"
 
 # Run a ROM image on the microtan board.
 run-rom rom='build/fructus.rom' *args:

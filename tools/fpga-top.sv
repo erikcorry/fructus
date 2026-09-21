@@ -27,10 +27,22 @@
 // timing path.
 // =============================================================================
 
-module top (input logic clk, input logic din, output wire dout);
+module top (input logic clk, input logic din, input logic irq, output wire dout);
 
     logic rst_q, rst;
     always_ff @(posedge clk) begin rst_q <= din; rst <= rst_q; end
+
+    // IRQ ARRIVES ON A REAL PIN, and that is deliberate rather than tidy.
+    // Tying it to a constant here would be worse than useless: yosys would fold
+    // the interrupt-enable flop, the `take' term and the vector arm of the
+    // address mux out of the design entirely, and every frequency below would
+    // then be measured against a processor that cannot be interrupted.  The
+    // path has to exist to be timed.
+    //
+    // Synchronised through two flops like reset, because it is asynchronous to
+    // this clock and because it keeps the input pad off the timing path.
+    logic irq_q, irq_s;
+    always_ff @(posedge clk) begin irq_q <= irq; irq_s <= irq_q; end
 
     wire [15:0] addr;
     wire [15:0] word;
@@ -54,7 +66,7 @@ module top (input logic clk, input logic din, output wire dout);
     wire halted, trapped;
     wire [15:0] result;
     cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
-           .mem_wdata(wdata), .mem_we(we), .halted(halted), .trapped(trapped),
+           .mem_wdata(wdata), .mem_we(we), .irq(irq_s), .halted(halted), .trapped(trapped),
            .result(result));
 
     logic [15:0] so;

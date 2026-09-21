@@ -183,6 +183,17 @@ export const ALU_RULES = [
   // handed to rtl/rhs.sv.  One operation covers every register they write.
   [/^base = [a-z][a-z0-9]*; M16\[base/,                     'rhs',   'the stepped pointer'],
   [/^base = [a-z][a-z0-9]*; R\[a\] = M16\[base/,            'rhs',   'the words, then the pointer'],
+  // THE EXCEPTIONS ASK FOR THE PASS-THROUGH AND NOTHING ELSE, like a load.
+  // Every value brk and rti move is already a whole 16-bit word - the pc, or
+  // one of the three shadows - so what the register file needs is a ROUTE from
+  // rtl/cpu.sv's right-hand operand flop, not an operation.  That flop's input
+  // mux had a spare arm (`dcap` 3) and taking it is the whole datapath cost.
+  //
+  // It has to be the pass-through and not a don't-care: these steps write sp
+  // and lr through the ordinary write port, so whatever the ALU is doing IS
+  // what lands in the register file.
+  [/^shadow_lr = lr;/,                                      'rhs',   'the shadows, through the flop'],
+  [/^pc = lr; lr = shadow_lr;/,                             'rhs',   'the shadows, through the flop'],
 ];
 export const ALU_ELSEWHERE = [
   [/^$/,                                                'nothing'],
@@ -192,6 +203,9 @@ export const ALU_ELSEWHERE = [
   [/^M(8|16)\[R\[a\] \+ (off|R\[b\])\] = R\[s\]$/,       'the address unit and the bus'],
   [/^pc = (lr|R\[a\]|target|pc \+ target)$/,             'the pc and its own adder'],
   [/^if \(/,                                            'rtl/compare.sv'],
+  // sei and cli move nothing at all: there is no operand, no result and no
+  // register write, only a flag that lives in rtl/ucode.sv.
+  [/^ie = [01]$/,                                       'no datapath'],
 ];
 export const ALU_LATER = new Set([]);
 

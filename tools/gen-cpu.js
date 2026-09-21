@@ -14,6 +14,14 @@
 // =============================================================================
 
 import { RHS_PCSUM as PCSUM, DEST_FIELD } from './control.js';
+import { loadSpec } from './isa.js';
+
+// THE EXCEPTION VECTOR IS THE SPEC'S, not a number here - see [cpu] in
+// isa/fructus.toml.  The machine JUMPS to it rather than reading a pointer from
+// it, so it reaches the hardware as a constant on one arm of the address mux,
+// which synthesis folds; an indirect vector would have cost an address cycle
+// and two data cycles at the front of every interrupt instead.
+const VECTOR = loadSpec().cpu.vectors.brk;
 
 // The microcode's overrides name a field; these are the codes those fields
 // have in rtl/lhs.sv and rtl/dest.sv.  Port B's is 10 on port A and 11 on the
@@ -141,6 +149,37 @@ process.stdout.write(`// =======================================================
 // subtracted from; the table above compares the memory unit against the
 // machine as it stood immediately before it.
 //
+// INTERRUPTS, MEASURED THE SAME WAY BUT OVER SIXTEEN SEEDS - kept in a table of
+// its own for that reason, since a median of sixteen and a median of eight are
+// not comparable and mixing them in one column would invite exactly that:
+//
+//                                             cells   block RAMs     MHz
+//     before any of this                       1432        4        30.95
+//     shadows selected combinationally         1537        5        29.25
+//     THE SELECTION REGISTERED, as it is now   1547        5        30.12
+//
+// SO FULL INTERRUPT SUPPORT COSTS 0.83 MHz, 115 cells and a fifth block RAM.
+//
+// AND REGISTERING THE SHADOW SELECTION IS WORTH 0.87 OF THE 1.70 IT OTHERWISE
+// COSTS, for sixteen flops and no cycles at all.  Choosing a shadow in the same
+// cycle the right-hand operand flop loads puts a 4:1 in front of a mux that was
+// already binding; the microcode names the shadow one step early instead, and
+// there was always a step in front to carry it.
+//
+// WHAT IS LEFT IS NOT LOGIC.  An ablation that removed the shadow read path
+// entirely came back at 30.18 MHz and 1435 cells - three cells above the
+// baseline - so the residual is the widened microcode word and the fifth block
+// RAM it forced, not anything combinational.  Shrinking the word is the only
+// thing that would buy it back.
+//
+// \`irq\` MUST REACH A REAL PIN IN tools/fpga-top.sv, and this is the trap to
+// avoid when re-measuring: tie it to a constant and yosys folds the enable
+// flop, the take term and the vector arm out of the design, so the number
+// describes a processor that cannot be interrupted.  It is also why \`irq_s\`
+// appearing as a critical-path SOURCE in six of sixteen seeds means nothing on
+// its own - tying it low was measured at 28.91 MHz, slower, and moved the
+// report to an equally long path ending at the same flop.
+//
 // READING THE OPERANDS EARLY IS THE LARGEST STEP MEASURED SO FAR: 23.3 to 34.3
 // MHz, medians of eight placement seeds, and 72 cells smaller.  The critical
 // path went from ten cells to seven - instruction register, select, register
@@ -184,6 +223,9 @@ module cpu (
     input  logic [7:0]  mem_rdata,   // <- the byte at the address sampled last edge
     output logic [7:0]  mem_wdata,   // -> memory: the byte to write there
     output logic        mem_we,      // -> memory: write it at that same edge
+    input  logic        irq,         // <- the chip: an interrupt is pending.  Level
+                                     //    sensitive, and sampled only where an
+                                     //    instruction would have been dispatched
     output logic        halted,
     output logic        trapped,
     output logic [15:0] result       // the ALU's output; the stores below give the datapath
@@ -196,14 +238,16 @@ module cpu (
     // not dispatch, and the ROM follows its \`next\` into a waiting step instead.
     wire fetch, dispatch, wen;
     wire [1:0] pcload;
-    wire amem, abase, we, luse;
-    wire [1:0] akon, dcap, wsel, dalt;
+    wire amem, abase, we, luse, vecload;
+    wire [1:0] akon, dcap, wsel, shwe, shsel;
+    wire [2:0] dalt;
     wire [3:0] lalt;
     wire defer;
-    ucode u (.clk(clk), .rst(rst), .bus(mem_rdata), .defer(defer), .fetch(fetch),
-             .dispatch(dispatch), .wen(wen), .pcload(pcload),
+    ucode u (.clk(clk), .rst(rst), .bus(mem_rdata), .defer(defer), .irq(irq),
+             .fetch(fetch), .dispatch(dispatch), .wen(wen), .pcload(pcload),
              .amem(amem), .abase(abase), .akon(akon), .we(we), .wsel(wsel),
              .dcap(dcap), .luse(luse), .lalt(lalt), .dalt(dalt),
+             .shwe(shwe), .shsel(shsel), .vec(vecload),
              .halt(halted), .trap(trapped));
 
     logic [15:0] pc;
@@ -291,11 +335,53 @@ module cpu (
     // own; zero extended, it is an 8-bit load complete.  The left flop is left
     // alone on purpose - it feeds rtl/unary.sv, and a mux in front of it costs
     // clz and popcount five MHz.  See the table above.
+    // --- the exception state ----------------------------------------------------
+    // THREE SHADOW REGISTERS, AND TWO OF THEM ARE THERE TO AVOID A SWAP.  An
+    // exchange of sp with a single shadow needs each side's old value while the
+    // new one arrives, which on this machine means a mux in front of the
+    // register file's write port - measured at 3.3 MHz and paid by every
+    // instruction, not by the two that want it.  With a shadow for each
+    // direction every move is ONE WAY, so each is an ordinary write in a cycle
+    // of its own and the register file is untouched.
+    //
+    // THEY ARE WRITTEN FROM PORT A, which the microcode has already pointed at
+    // sp or lr with \`lalt\` - codes 0..7 of rtl/lhs.sv are literal register
+    // numbers, so reading r6 and r7 from a step needed no new hardware at all.
+    //
+    // AND THEY ARE READ BACK THROUGH THE RIGHT-HAND OPERAND FLOP, whose input
+    // mux already had three arms for the loads and a spare code.  \`dcap\` 3 is
+    // that arm.  Going in through rtl/rhs.sv instead was not possible - its
+    // sixteen codes are all spoken for - and would have widened a 16:1 mux in
+    // front of the same flop to 32:1.
+    //
+    // THE SELECTION IS REGISTERED, AND THAT WAS NOT OPTIONAL.  Selecting a
+    // shadow combinationally in the cycle the operand flop loads put a 4:1 in
+    // front of a mux that was already the binding path, and it was MEASURED at
+    // 0.93 MHz and 102 cells - medians of sixteen seeds, 29.25 against 30.18
+    // with this arm removed altogether.  An earlier comment here claimed a
+    // three-arm mux going to four was free in LUT levels; it is not, and the
+    // ablation is what says so.
+    //
+    // THE FLOP COSTS NO CYCLES, which is what makes it the right answer rather
+    // than a trade.  \`shsel\` is set on the step that performs the PREVIOUS
+    // capture, so the value is always chosen a cycle before it is used and the
+    // exception routines stay four steps long.  The pc is safe to capture early
+    // for the same reason it is safe to save at all: no step of those routines
+    // fetches or dispatches, so it stands still throughout.
     logic [15:0] aq, bq;
+    logic [15:0] shadow_sp, shadow_isp, shadow_lr, shv_q;
+    wire  [15:0] shv = (shsel == 2'd0) ? shadow_isp
+                     : (shsel == 2'd1) ? pc
+                     : (shsel == 2'd2) ? shadow_sp : shadow_lr;
     always_ff @(posedge clk) begin
         aq <= R[an];
+        shv_q <= shv;
         bq <= (dcap == 2'd1) ? {mem_rdata, bq[15:8]}
-            : (dcap == 2'd2) ? {8'h00, mem_rdata} : bval;
+            : (dcap == 2'd2) ? {8'h00, mem_rdata}
+            : (dcap == 2'd3) ? shv_q : bval;
+        if (shwe == 2'd1) shadow_sp  <= aq;
+        if (shwe == 2'd2) shadow_lr  <= aq;
+        if (shwe == 2'd3) shadow_isp <= aq;
     end
 
     // --- the address unit -------------------------------------------------------
@@ -352,9 +438,14 @@ module cpu (
     // are named by the step instead, and there can be three of them.  This mux
     // picks between 4-bit codes out of flops and the ROM, feeding a decode
     // rtl/dest.sv already had, which is why it measured four cells and no clock.
-    wire [3:0] dest_eff = (dalt == 2'd0) ? dest_src
-                        : (dalt == 2'd1) ? 4'd${DEST_RD}
-                        : (dalt == 2'd2) ? 4'd${DEST_RA} : 4'd${DEST_B};
+    // Codes 4 and 5 are sp and lr as LITERAL register numbers, which rtl/dest.sv
+    // decodes at 0..7 exactly as rtl/lhs.sv does - so the exception routines
+    // name the two registers they write without a field to carry them.
+    wire [3:0] dest_eff = (dalt == 3'd0) ? dest_src
+                        : (dalt == 3'd1) ? 4'd${DEST_RD}
+                        : (dalt == 3'd2) ? 4'd${DEST_RA}
+                        : (dalt == 3'd3) ? 4'd${DEST_B}
+                        : (dalt == 3'd4) ? 4'd6 : 4'd7;
     dest d (.insn(q), .src(dest_eff), .regnum(wn));
 
     // --- the condition, decided a cycle before it is used ----------------------
@@ -385,6 +476,11 @@ module cpu (
     always_comb begin
         if (rst)          mem_addr = 16'd0;
         else if (amem)    mem_addr = adr;      // a data cycle: the address unit has it
+        // THE VECTOR IS A CONSTANT ARM, which is why a direct jump is so much
+        // cheaper here than the 6502's indirection: synthesis folds it, and the
+        // exception costs no bus cycle to find its handler.  It is tested above
+        // \`taking\` because this step loads the pc without \`pcload\`.
+        else if (vecload) mem_addr = 16'd${VECTOR};
         else if (!taking) mem_addr = seq;
         else case (pc_src)
             2'd2:         mem_addr = wide;         // the wide target, as it arrives

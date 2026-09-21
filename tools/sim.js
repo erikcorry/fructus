@@ -211,6 +211,21 @@ export class Machine {
     this.R     = new Uint16Array(spec.optype.reg.names.length);
     this.pc    = 0;
     this.halted = false;
+
+    // THE EXCEPTION STATE, which is not in the register file and is not
+    // reachable from one.  `brk` and `rti` move values through these and
+    // nothing else touches them, which is why they live here beside `halted`
+    // rather than in `named` below - `named` is built from the spec's register
+    // list, and a shadow is deliberately not a register.  See isa/fructus.toml.
+    //
+    // ie STARTS CLEAR because the machine boots with interrupts disabled: the
+    // boot stub arms shadow_isp with an `rti` on its way to user code, and an
+    // interrupt arriving before that would find a stack pointer nobody set.
+    this.ie         = false;
+    this.shadow_sp  = 0;
+    this.shadow_isp = 0;
+    this.shadow_lr  = 0;
+    this.vector     = spec.cpu.vectors.brk;
     this.little = spec.cpu.endian === 'little';
     this.count  = 0;
     this.tmp    = {};      // scratch names, cleared at every instruction
@@ -279,6 +294,11 @@ export class Machine {
         const n = node.name;
         if (n === 'pc')     return this.pc;
         if (n === 'halted') return this.halted ? 1 : 0;
+        if (n === 'ie')     return this.ie ? 1 : 0;
+        if (n === 'vector') return this.vector;
+        if (n === 'shadow_sp')  return this.shadow_sp;
+        if (n === 'shadow_isp') return this.shadow_isp;
+        if (n === 'shadow_lr')  return this.shadow_lr;
         if (n in this.named) return this.R[this.named[n]];
         if (n in ops)       return ops[n];
         if (n in this.tmp)  return this.tmp[n];
@@ -335,6 +355,16 @@ export class Machine {
     if (t.n === 'var') {
       if (t.name === 'pc')     { this.pc = u16(v); this.wrotePc = true; return; }
       if (t.name === 'halted') { this.halted = !!v; return; }
+      // THESE MUST BE TESTED BEFORE THE SCRATCH FALLBACK BELOW.  An unknown
+      // name becomes a per-instruction temporary, so a misspelling here would
+      // not fail - `brk` would assign its shadow to a value that is discarded
+      // at the end of the instruction and the interrupt would silently lose
+      // the interrupted code's sp.  `vector` is deliberately absent: it is a
+      // chip constant and nothing may assign to it.
+      if (t.name === 'ie')         { this.ie = !!v; return; }
+      if (t.name === 'shadow_sp')  { this.shadow_sp  = u16(v); return; }
+      if (t.name === 'shadow_isp') { this.shadow_isp = u16(v); return; }
+      if (t.name === 'shadow_lr')  { this.shadow_lr  = u16(v); return; }
       if (t.name in this.named) { this.R[this.named[t.name]] = u16(v); return; }
       // ANY OTHER NAME IS A SCRATCH VALUE that lives for this instruction only.
       // push, pop, stm and ldm use one to hold the pointer they were entered
@@ -362,12 +392,29 @@ export class Machine {
     // its own instead.  nop and halt are not here: they compute nothing and
     // read nothing.  See rtl/ucode.sv's one-byte entry words and rtl/cpu.sv.
     if (d.nbytes === 1 && computes(d.insn.semantics ?? '')) this.slow += 1;
+    // AN EXCEPTION IS SIX CYCLES, and it is recognised by naming a shadow -
+    // which only `brk' and `rti' do.  The count comes from rtl/ucode.sv and not
+    // from arithmetic here: an entry word that fetches nothing, the four steps
+    // that move the shadow registers, and the cycle that dispatches the
+    // handler's first opcode.  One byte, so five cycles beyond it.
+    //
+    // FOUR OF THE SIX ARE THE SHADOWS, and they are the price of not putting a
+    // mux in front of the register file: two stack pointers moved one way each,
+    // plus lr, at one register per cycle.  A swap would be one cycle and 3.3
+    // MHz off every instruction in the machine.  See rtl/cpu.sv.
+    const exception = /shadow_lr|shadow_sp/.test(d.insn.semantics ?? '');
+    if (exception) this.slow += 5;
     // A TRANSFER WHOSE TARGET IS A REGISTER COSTS THREE CYCLES, whatever its
     // length: one to read the register, one to present it as an address, and
     // one for the target's opcode to arrive.  `ret' is one byte and pays two
     // of them, `jmp ra' and `call ra' are two bytes and pay one.  A target in
     // the instruction's own bytes needs none of this - it is already there.
-    if (/\bpc = (lr|R\[[a-z]\])/.test(d.insn.semantics ?? '')) this.slow += 3 - d.nbytes;
+    //
+    // `rti' IS EXCLUDED THOUGH ITS SEMANTICS OPEN WITH `pc = lr'.  It does read
+    // the return address off port A the way `ret' does, but that read is one
+    // step of the six counted above rather than an extra on top of them, and
+    // without this guard it would be charged twice.
+    if (!exception && /\bpc = (lr|R\[[a-z]\])/.test(d.insn.semantics ?? '')) this.slow += 3 - d.nbytes;
     // A MEMORY ACCESS COSTS ONE CYCLE MORE THAN ITS BYTES AND THE BYTES IT
     // MOVES, for the add that produces the address.  It is the taken branch's
     // cycle over again, for the same reason: the operands are read a cycle

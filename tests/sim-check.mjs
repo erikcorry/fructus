@@ -520,22 +520,35 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   console.log('ok    cost model: taken relative branches cost one cycle, absolute none');
 }
 
-// --- zeroed memory stops the machine ----------------------------------------
-// halt is opcode 0x00 so that erased memory, an unwritten ROM and a wild jump
-// into a zeroed page all stop where the mistake happened.  With nop at zero the
-// same jump runs a nop sled to the top of memory, wraps, and keeps going.
+// --- zeroed memory traps, and does not run away ------------------------------
+// brk is opcode 0x00 so that erased memory, an unwritten ROM and a wild jump
+// into a zeroed page all trap where the mistake happened, with the faulting
+// address in lr for a monitor to print.  With nop at zero the same jump runs a
+// nop sled to the top of memory, wraps, and keeps going.
+//
+// THE ADDRESS IS WHAT THIS BUYS over the halt that used to be here.  A halt
+// stopped the machine and said nothing; the trap names the byte after the
+// mistake, which is enough to find it in a listing.
 {
   const blank = machine();
   blank.pc = 0x4000;
   blank.step();
-  check('zeroed memory halts', blank.halted && blank.pc === 0x4001,
-        `halted=${blank.halted} pc=0x${blank.pc.toString(16)}`);
+  check('zeroed memory traps to the vector', blank.pc === spec.cpu.vectors.brk,
+        `pc=0x${blank.pc.toString(16)}, vector=0x${spec.cpu.vectors.brk.toString(16)}`);
+  check('and lr names where it happened', blank.R[blank.named.lr] === 0x4001,
+        `lr=0x${blank.R[blank.named.lr].toString(16)}`);
+  check('and interrupts are off inside the handler', blank.ie === false, `ie=${blank.ie}`);
 
-  // and the pc is left on the instruction after the mistake, not miles away
+  // AND IT DOES NOT RUN AWAY.  The vector is zeroed too in a blank machine, so
+  // the trap re-enters itself and the pc is PINNED at the vector rather than
+  // sledding through memory.  That is the property the old halt had and the
+  // one worth keeping: a machine that has stopped making progress at one
+  // nameable address, not one that looks alive.
   const drift = machine();
   drift.pc = 0x4000;
   drift.run({ max: 1000 });
-  check('and stays put', drift.count === 1, `${drift.count} instructions`);
+  check('and stays put', drift.pc === spec.cpu.vectors.brk,
+        `pc=0x${drift.pc.toString(16)} after ${drift.count} instructions`);
 
   // THE OPCODES COME FROM THE SPEC.  This test used to spell nop as a literal
   // 0x01, which is how it came to be testing `ret` the day the one-byte row was
@@ -552,15 +565,14 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   check('nop still does nothing', !n.halted && n.pc === 2 && n.regs().every((r) => r === 0),
         `pc=${n.pc} halted=${n.halted}`);
 
-  // And the layout the argument above depends on: the two instructions a wild
-  // jump is likeliest to hit are the two that stop or unwind, so they sit at
-  // the two ENDS of the one-byte row and nop sits at neither.  halt is at the
-  // bottom because zeroed memory has to stop; ret was moved to the top when it
-  // stopped being a one-byte special case and became a compact `jmp lr'.
+  // And the layout the argument above depends on: the instructions a wild jump
+  // is likeliest to hit are the three that trap, stop or return from a trap,
+  // so they take the LOWEST opcodes in the machine and nop sits far away.
   // Stated as PROPERTIES, not addresses.  These were pinned to 0x00/0x01/0x0f
   // and the whole block moved, so the assertions failed for the right reason
   // and had to be rewritten anyway - which is the argument for writing the
-  // property in the first place.
+  // property in the first place.  They were rewritten a second time when brk
+  // took opcode zero, and the property survived the move unchanged.
   const oneByte = [];
   for (const insn of spec.insn)
     for (const form of insn.form ?? []) {
@@ -568,13 +580,68 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
       if (bits.length === 8 && /^[01]{8}$/.test(bits)) oneByte.push(parseInt(bits, 2));
     }
   oneByte.sort((a, b) => a - b);
-  const top = oneByte[oneByte.length - 1];
-  check('halt and ret are the two ends of the one-byte row',
-        oneByte[0] === opcodeOf('halt') && top === opcodeOf('ret'),
-        `the ends are 0x${oneByte[0].toString(16)}, 0x${top.toString(16)}`);
-  check('nop is at neither end', NOP !== oneByte[0] && NOP !== top,
-        `nop=0x${NOP.toString(16)}, ends are 0x${oneByte[0].toString(16)}, 0x${top.toString(16)}`);
-  console.log('ok    halt is opcode zero: zeroed memory stops the machine');
+  const exception = ['brk', 'halt', 'rti'].map(opcodeOf);
+  check('the three exception opcodes are the lowest in the machine',
+        exception.every((op, k) => oneByte[k] === op) && exception[0] === 0,
+        `lowest are ${oneByte.slice(0, 3).map((o) => '0x' + o.toString(16)).join(' ')}`);
+  check('and brk is opcode zero, so erased memory traps',
+        opcodeOf('brk') === 0, `brk=0x${opcodeOf('brk').toString(16)}`);
+  check('nop is nowhere near them',
+        NOP > exception[2] + 8, `nop=0x${NOP.toString(16)}`);
+  console.log('ok    brk is opcode zero: zeroed memory traps where the mistake happened');
+}
+
+// --- brk and rti, the whole round trip ---------------------------------------
+// NOTHING ELSE IN THIS SUITE EXERCISES rti OR THE SHADOW REGISTERS.  The check
+// above reaches brk only through zeroed memory, which pins where the pc lands
+// and nothing else - not the return address, not which way sp and shadow_isp
+// move, and not that rti puts any of it back.
+//
+// THE ROUND TRIP IS THE ASSERTION.  Every register has to come back to exactly
+// where it started, because that is what makes an exception invisible to the
+// code it interrupted.  Checking the two halves separately would pass a pair of
+// moves that are wrong in the same direction - a shadow written but never read
+// looks right from one end and the value is simply lost.
+//
+// AND THE CYCLE COUNT IS PINNED, because the cost model charges it: six cycles,
+// which is rtl/ucode.sv's entry word, the four steps that move the shadows, and
+// the cycle that dispatches the handler's first opcode.  Four of those six are
+// the price of having no mux in front of the register file - two stack pointers
+// moved one way each, plus lr, one register per cycle.
+{
+  const opcodeOf = (mnemonic) => {
+    const i = spec.insn.find((x) => x.mnemonic === mnemonic && !(x.operands ?? []).length);
+    return parseInt(i.form[0].encoding.replace(/[\s_]/g, ''), 2);
+  };
+  const VEC = spec.cpu.vectors.brk;
+  const m = machine();
+  const SP = m.named.sp, LR = m.named.lr;
+  m.reset();
+  m.R[SP] = 0x1000; m.R[LR] = 0xbeef;
+  m.shadow_isp = 0x2000; m.ie = true;
+  m.mem[0]   = opcodeOf('brk');
+  m.mem[VEC] = opcodeOf('rti');      // the handler is a bare return
+  m.pc = 0;
+
+  const hex = (v) => `0x${v.toString(16)}`;
+  m.step();
+  check('brk enters at the vector',        m.pc === VEC,            `pc=${hex(m.pc)}`);
+  check('brk saves the address after it',  m.R[LR] === 1,           `lr=${hex(m.R[LR])}`);
+  check('brk parks the interrupted sp',    m.shadow_sp === 0x1000,  `shadow_sp=${hex(m.shadow_sp)}`);
+  check('brk loads the interrupt stack',   m.R[SP] === 0x2000,      `sp=${hex(m.R[SP])}`);
+  check('brk parks the interrupted lr',    m.shadow_lr === 0xbeef,  `shadow_lr=${hex(m.shadow_lr)}`);
+  check('brk disables interrupts',         m.ie === false,          `ie=${m.ie}`);
+  check('brk costs six cycles',            m.cycles() === 6,        `${m.cycles()} cycles`);
+
+  const half = m.cycles();
+  m.step();
+  check('rti returns where brk came from', m.pc === 1,              `pc=${hex(m.pc)}`);
+  check('rti restores lr',                 m.R[LR] === 0xbeef,      `lr=${hex(m.R[LR])}`);
+  check('rti restores sp',                 m.R[SP] === 0x1000,      `sp=${hex(m.R[SP])}`);
+  check('rti puts the interrupt stack back', m.shadow_isp === 0x2000, `shadow_isp=${hex(m.shadow_isp)}`);
+  check('rti enables interrupts',          m.ie === true,           `ie=${m.ie}`);
+  check('rti costs six cycles',            m.cycles() - half === 6, `${m.cycles() - half} cycles`);
+  console.log('ok    brk and rti: every register back where it started, six cycles each');
 }
 
 // --- iseq / isset: the row that is two instructions --------------------------

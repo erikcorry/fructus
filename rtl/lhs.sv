@@ -54,7 +54,7 @@
 //     r1        add/r1_r1_r0, or/mov_r0_r1, stm
 //     r2        ldm
 //     sp (r6)   push, pop
-//     lr (r7)   ret
+//     lr (r7)   rti, ret
 //
 // `ret` and `jmp r5` are not here: they take their target on port B, through
 // rhs.sv's lr and r5 codes.  Port A could carry them just as well - nothing

@@ -45,10 +45,17 @@ poll:
 done:
         halt
 
-; The vectors, which the hardware reads rather than executes: three
-; little-endian addresses.  Nothing here handles an interrupt, so NMI and IRQ
-; restart the machine rather than land somewhere arbitrary.
-#addr 0xfffa
-        dw      start           ; 0xfffa  NMI
-        dw      start           ; 0xfffc  reset
-        dw      start           ; 0xfffe  IRQ / BRK
+; The vectors, which the hardware EXECUTES rather than reads: a jump in each
+; four-byte slot.  Nothing here handles an exception, so every one of them
+; restarts the machine rather than landing somewhere arbitrary.
+;
+; `jmp target' is three bytes and the slots are four apart, so each #addr both
+; places the jump and leaves the spare byte alone.
+#addr 0xfff0
+        jmp     start           ; 0xfff0  NMI
+#addr 0xfff4
+        jmp     start           ; 0xfff4  illegal instruction
+#addr 0xfff8
+        jmp     start           ; 0xfff8  brk, and the hardware interrupt line
+#addr 0xfffc
+        jmp     start           ; 0xfffc  reset
