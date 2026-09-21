@@ -18,7 +18,7 @@ predictor, or mul instruction. Not very pipelined.
 ![The Fructus opcode map: 128 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
 
 The design is RISC-inspired:
-- The only memory operations are load, store, push, pop
+- The only memory operations are load, store, push, pop, store-multiple, load-multiple.
 - 8 16 bit registers, and all ALU instructions can use all 8.
 - Flat 16 bit address space.
 - All ALU operations have a regular three-register form, rd = ra * rb
@@ -34,12 +34,13 @@ But we don't want to pay the typical code density penalty of RISC on a 64k machi
 - Compact encodings for smaller and common immediates like -16 to 15, single-bit-set, and common masks.
 - One-byte encodings for very popular ALU operations that hard code all three arguments.
 - The length of the instructions is 1-3 bytes and the first byte determines the length.
-- Still many free opcodes for experimentation eg. instructions garbage collectors.
+- Still many free opcodes for experimentation eg. instructions for garbage collectors (we already have popcount and clz).
 - The intention is that the assembler programmer can code as if all three-register and two-register-imm16
   forms were available, but the tooling selects the shortest possible encoding. For C code, gcc is aware
   of the encoding tradeoffs and selects instructions to match.
 - Up to three arbitrary registers can be pushed or popped in a single two-byte instruction for compact
-  function prologs and epilogs.
+  function prologs and epilogs. store-multiple and load-multiple can write or read up to three registers
+  (repeats allowed) for memcpy, memset, strlen.
 
 It is conceived to run on the
 kind of machine a 6502 ran on — a narrow memory bus where every instruction byte
