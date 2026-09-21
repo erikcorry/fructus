@@ -161,23 +161,28 @@
 # the way two `[[insn]]` entries may share one - `mov rd, #imm` is a real
 # instruction and `mov rd, rs` is an alias onto `or`.
 #
-# By default the disassembler does NOT print an alias; it prints the real
-# instruction that was encoded, so `sub r1, r2, r3` comes back as
-# `rsb r1, r3, r2`.  Round-trip tests must compare against the rewritten text.
+# NO DISASSEMBLER PRINTS AN ALIAS.  Both of them - binutils' and the one in
+# tools/decode.js - print the instruction that was actually encoded, so
+# `sub r1, r2, r3` comes back as `rsb r1, r3, r2` and `mov r0, r1` comes back
+# as `or r0, r1, #0`.  Round-trip tests must compare against the rewritten
+# text.
 #
-# `prefer = true` reverses that for one alias.  Before printing, the
-# disassembler checks whether that alias's rewrite would produce exactly the
-# instruction and operand values in hand, and if so prints the alias instead -
-# so `or r0, r1, #0` comes out as `mov r0, r1`.
+# `prefer = true` NAMES THE SPELLING THE OPCODE MAP USES, and nothing else.
+# tools/gen-opcode-map.js runs the rewrite backwards to label a cell, so the
+# map reads `mov rd, rs` where a listing of the same bytes reads `or`.
 #
-# A preferred alias must be INVERTIBLE: every rewrite argument is either a
-# literal or a distinct operand of the alias, and every operand of the alias is
-# used exactly once.  Otherwise the rewrite cannot be run backwards.  Where
-# several preferred aliases match, the first in file order wins.
+# IT WAS ONCE SPECIFIED AS DISASSEMBLER BEHAVIOUR AND NEVER IMPLEMENTED THERE,
+# which is worth recording rather than quietly correcting: the two
+# disassemblers agreed with each other and only the prose disagreed, so
+# tests/dis-check.mjs - which compares them operand by operand - stayed green
+# throughout.  Nothing in this suite compares a tool against a paragraph, and
+# this is what that gap looks like.
 #
-# `prefer` does not endanger round-tripping - `mov r0, r1` re-assembles to the
-# bytes it was printed from - but it does mean the mnemonic in a listing may
-# not be the one in the opcode map.
+# A preferred alias must still be INVERTIBLE: every rewrite argument is either
+# a literal or a distinct operand of the alias, and every operand of the alias
+# is used exactly once, or the rewrite cannot be run backwards.  tools/check.js
+# enforces it.  Where several preferred aliases match, the first in file order
+# wins.
 #
 # ---------------------------------------------------------------------------
 # INVARIANTS A VALIDATOR SHOULD ENFORCE
@@ -3141,11 +3146,13 @@ semantics = ""
 #   sub rd, ra, rb    ->  rsb rd, rb, ra     sources swapped
 #   sub rd, ra, #imm  ->  add rd, ra, #-imm  immediate negated
 #
-# Neither `sub` alias is preferred for disassembly.  Preferring the register
-# one would erase `rsb` from every listing, since every rsb is some sub with
-# its sources swapped; preferring the immediate one would reprint every add of
-# a negative constant as a subtract.  Both are arguable as taste, neither is
-# clearly an improvement, so listings show the instruction that actually ran.
+# Neither `sub` alias sets `prefer`, so neither names a cell of the opcode map.
+# Preferring the register one would erase `rsb` from the map, since every rsb
+# is some sub with its sources swapped; preferring the immediate one would
+# label every add of a negative constant a subtract.  Both are arguable as
+# taste and neither is clearly an improvement.  Listings are unaffected either
+# way: no disassembler prints an alias, so they show the instruction that
+# actually ran whatever this flag says.
 #
 # WATCH THE IMMEDIATE CASE.  Negation happens before form selection, so the
 # form chosen depends on -imm, not imm, and the imm3 table is lopsided: it

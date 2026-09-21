@@ -60,8 +60,17 @@ if [ -n "$stale" ]; then
     # The C half of the library: the odds and ends in libc.c, and the heap.
     # Each is one object, but a section per function, and the link below
     # collects garbage, so a program still carries only what it calls.
+    #
+    # -Wall -Werror IS HERE AND NOT ON $CC, and the difference matters.  This
+    # loop compiles OUR code, where a warning is a defect and should stop the
+    # build.  $CC also compiles whatever a caller hands it, and that includes
+    # every file in gcc.c-torture/execute - thousands of deliberately odd C
+    # programs whose warnings are not ours to fix.  Worse, tools/torture.mjs
+    # classifies outcomes by matching `error:' in the output, so promoting
+    # warnings to errors there would file working programs as compile
+    # failures.
     for c in libc malloc; do
-        $CC -Os -ffunction-sections -c $root/crt/$c.c -o $B/crt/$c.o
+        $CC -Os -Wall -Werror -ffunction-sections -c $root/crt/$c.c -o $B/crt/$c.o
         $X/fructus-elf-ar rc $lib $B/crt/$c.o
     done
     $X/fructus-elf-ranlib $lib

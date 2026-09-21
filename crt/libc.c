@@ -38,8 +38,9 @@ memchr (const void *s, int c, size_t n)
 }
 
 /* strlen, strcmp and strncmp live in libc/strcmp.s.  They were here in C as
-   well, and the assembly always won the link - tools/fcc adds the libc/*.s
-   objects to the archive before this one - so the C copies were unreachable
+   well, and the assembly always won the link - tools/fcc adds the assembly
+   objects from libc/ to the archive before this one - so the C copies were
+   unreachable
    and only misleading.  Measured, cycles per byte of string against the C at
    -Os: strlen 4.25 against 13.00, strcmp 17 against 22, strncmp 20 against 23.
    strcat and strncat below call strlen, and now get the fast one.  */
@@ -379,34 +380,28 @@ vsnprintf (char *buf, size_t size, const char *fmt, va_list ap)
 	  *--p = va_arg (ap, int);
 	  str = p;
 	  break;
-	case 'f': case 'g': case 'e':
-	  {
-	    /* Fixed point only, and only as far as an unsigned long reaches -
-	       enough for what a test prints.  Rounded to the precision.  The
-	       fraction is the one place a width of leading zeros is wanted:
-	       0.5 to three places is "500", not "5".  */
-	    double v = va_arg (ap, double);
-	    int digits = prec < 0 ? 6 : prec;
-	    double scale = 1;
-	    for (int i = 0; i < digits; i++)
-	      scale *= 10;
-	    if (v < 0)
-	      neg = 1, v = -v;
-	    unsigned long whole = v;
-	    unsigned long frac = (v - whole) * scale + 0.5;
-	    if (frac >= scale)
-	      whole++, frac -= scale;
-	    if (digits)
-	      {
-		p = dec (frac, p, digits);
-		*--p = '.';
-	      }
-	    p = dec (whole, p, 0);
-	    if (neg)
-	      *--p = '-';
-	    str = p;
-	    break;
-	  }
+	/* THERE IS NO %f, %g OR %e, AND LEAVING THEM OUT IS WORTH 6188 BYTES.
+	   They fall through to `default' as "?" like any other unknown
+	   conversion.  MEASURED, a program whose entire body is
+	   printf ("%d\n", 42): 7764 bytes when this case existed, 1576 without
+	   it.  Eighty per cent of that program was a conversion nothing called.
+
+	   WHAT WENT WITH IT was the whole soft-double library - __adddf3,
+	   __subdf3, __muldf3, __fixdfsi, __fixunsdfsi, __floatunsidf, __gedf2
+	   and __ltdf2 - because the old code did its arithmetic in `double'
+	   however fixed-point the output looked.
+
+	   --gc-sections COULD NOT HAVE SAVED IT.  That drops unused SECTIONS,
+	   and this was a `case' inside vsnprintf, so every program that printed
+	   an integer linked all eight routines in order to reach code it never
+	   executed.  A feature nobody calls is free only when the linker can
+	   see that nobody calls it.
+
+	   AND IT WAS NEVER THIS MACHINE'S FLOAT ANYWAY.  What fructus works in
+	   is the BBC Micro's five-byte format - an 8-bit biased exponent and a
+	   32-bit mantissa, see snippets/fpadd.s - which shares no code and no
+	   layout with IEEE double.  If printing a float is ever wanted here, it
+	   wants that format, and it wants to cost what that format costs.  */
 	case 's':
 	  str = va_arg (ap, const char *);
 	  if (!str)
@@ -440,7 +435,13 @@ vsnprintf (char *buf, size_t size, const char *fmt, va_list ap)
   return s.count;
 }
 
-int vsprintf (char *b, const char *f, va_list ap) { return vsnprintf (b, 65535, f, ap); }
+/* 32767 AND NOT 65535, because that is the largest object this target can
+   have: ptrdiff_t is signed 16 bits, so no conforming pointer difference
+   reaches further and gcc says so with -Wformat-truncation.  vsprintf has no
+   bound of its own, and the widest one it can honestly claim is the widest a
+   buffer could be.  emit() reads this as a capacity INCLUDING the terminator,
+   which is why it stops at `left > 1'.  */
+int vsprintf (char *b, const char *f, va_list ap) { return vsnprintf (b, 32767, f, ap); }
 int vprintf (const char *f, va_list ap) { return vsnprintf (NULL, 0, f, ap); }
 int vfprintf (FILE *o, const char *f, va_list ap) { (void) o; return vprintf (f, ap); }
 
