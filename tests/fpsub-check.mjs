@@ -9,38 +9,38 @@ const shl = (v, n) => (v << (n & 15)) & M;
 const lsr = (v, n) => (v & M) >>> (n & 15);
 
 function sub(xh, xl, yh, yl) {
-  let r0 = xh, r1 = xl, r2 = yh, r3 = yl, r4, r5;
+  let r0 = xl, r1 = xh, r2 = yl, r3 = yh, r4, r5;
   // 1. which is larger, and |X - Y|
   let yBigger;
-  if (r0 < r2) yBigger = true;
-  else if (r0 > r2) yBigger = false;
-  else yBigger = r1 < r3;
+  if (r1 < r3) yBigger = true;
+  else if (r1 > r3) yBigger = false;
+  else yBigger = r0 < r2;
   if (!yBigger) {
-    if (!(r1 >= r3)) r0 = (r0 - 1) & M;
-    r1 = (r1 - r3) & M; r0 = (r0 - r2) & M; r4 = 0x7fff;
+    if (!(r0 >= r2)) r1 = (r1 - 1) & M;
+    r0 = (r0 - r2) & M; r1 = (r1 - r3) & M; r4 = 0x7fff;
   } else {
-    if (!(r3 >= r1)) r2 = (r2 - 1) & M;
-    r1 = (r3 - r1) & M; r0 = (r2 - r0) & M; r4 = 0xffff;
+    if (!(r2 >= r0)) r3 = (r3 - 1) & M;
+    r0 = (r2 - r0) & M; r1 = (r3 - r1) & M; r4 = 0xffff;
   }
   // 2. distance from normalised
   r2 = 0;
-  if (r0 === 0) {
-    if (r1 === 0) return { hi: 0, lo: 0, exp: 0, zero: true };
-    r0 = r1; r1 = 0; r2 = 16;
+  if (r1 === 0) {
+    if (r0 === 0) return { hi: 0, lo: 0, exp: 0, zero: true };
+    r1 = r0; r0 = 0; r2 = 16;
   }
   // 3. normalise
-  r3 = clz16(r0);
+  r3 = clz16(r1);
   r2 = (r2 + r3) & M;
-  r0 = shl(r0, r3);
-  r5 = lsr(r1, 1);
   r1 = shl(r1, r3);
+  r5 = lsr(r0, 1);
+  r0 = shl(r0, r3);
   r3 = (0 + 15 - r3) & M;
   r5 = lsr(r5, r3);
-  r0 = (r0 | r5) & M;
+  r1 = (r1 | r5) & M;
   // 4. sign and adjustment
-  r0 = r0 & r4;   // 0x7fff clears the implicit bit, 0xffff keeps it as a sign
+  r1 = r1 & r4;   // 0x7fff clears the implicit bit, 0xffff keeps it as a sign
   r2 = (0 - r2) & M;
-  return { hi: r0, lo: r1, exp: (r2 & 0x8000) ? r2 - 0x10000 : r2, zero: false };
+  return { hi: r1, lo: r0, exp: (r2 & 0x8000) ? r2 - 0x10000 : r2, zero: false };
 }
 
 function reference(X, Y) {

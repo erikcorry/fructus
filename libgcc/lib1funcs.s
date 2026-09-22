@@ -60,11 +60,10 @@
 ;       r1  b, then the multiplicand          lr  untouched: this is a leaf
 ;
 ; r1 IS LEFT AS RUBBISH - the multiplicand, shifted up by however many nibbles
-; the loop ran.  An earlier draft zeroed it, so that the pair r0:r1 would be a
-; well-formed 32-bit value and __umulhisi3 could tail-call this routine when
-; the product provably fit.  isa/abi.s puts the HIGH half of a pair in r0, so
-; that would have been the wrong way round; __umulhisi3 has to exchange the two
-; halves after the call and sets both, and the two bytes bought nothing.
+; the loop ran.  Zeroing it would make the pair r0:r1 a well-formed 32-bit
+; value, low half first as isa/abi.s has it, and let __umulhisi3 tail-call this
+; routine when the product provably fits.  But every int multiply would pay the
+; two cycles for the zero, so __umulhisi3 writes the high half itself.
 ;
 ; THE SMALLER OPERAND BECOMES THE MULTIPLIER, because the loop costs time per
 ; bit of it and stops as soon as it runs out.  The test doubles as the setup:
@@ -112,16 +111,15 @@ __mulhi3:
 
 
 ; ============================================================================
-; __umulhisi3 - 16 x 16 -> 32, unsigned                              59 bytes
+; __umulhisi3 - 16 x 16 -> 32, unsigned                              67 bytes
 ; ============================================================================
-;       r0  a, then the product HIGH        r2  multiplicand high
-;       r1  b, then the product LOW         r3  accumulator high
+;       r0  a, then the product LOW         r2  multiplicand high
+;       r1  b, then the product HIGH        r3  accumulator high
 ;       lr  multiplicand low                r5  scratch
 ;
-; THE PAIR IS r0:r1 AS HIGH:LOW, which is what isa/abi.s says a 32-bit value is
-; and NOT what snippets/mul.s uses - that file's mul_16_16_32 is a library
-; internal and returns low:high.  This one is called by compiler-generated code
-; and has to match.
+; THE PAIR IS r0:r1 AS LOW:HIGH, which is what isa/abi.s says a 32-bit value
+; is, and the same order as snippets/mul.s's mul_16_16_32.  This one is called
+; by compiler-generated code and has to match.
 ;
 ; IT SORTS FIRST AND ASKS ABOUT OVERFLOW SECOND, which makes both cheaper.
 ; Sorted, the overflow question is about the LARGER operand alone - if that is
@@ -132,17 +130,10 @@ __mulhi3:
 ; The narrow path then enters __mulhi3 at `.sorted`, past the comparison it has
 ; already made.
 ;
-; IT IS A CALL AND NOT A TAIL CALL, and that is the high:low convention's
-; doing.  __mulhi3 returns the product in r0, and this routine needs it in r1
-; with zero in r0 - so the two have to be set after the multiply, which `jmpr`
-; cannot do.
-;
-;       tail call, returning low:high    72 cycles   60 bytes   ABI-wrong
-;       call and exchange, high:low      84          68         correct
-;
-; Twelve cycles and eight bytes for the convention.  Both halves are written
-; explicitly here, so __mulhi3 does not have to leave anything particular in
-; r1 - which is why it no longer bothers.
+; IT IS A CALL AND NOT A TAIL CALL.  __mulhi3 returns the product in r0, which
+; is already the low half, but r1 has to be zeroed after the multiply, which
+; `jmpr` cannot do.  A tail call would need __mulhi3 to zero r1 itself, and
+; every int multiply would pay for that.
 
 __umulhisi3:
         br      ls, r1, r0, .sorted     ; 3   b is already the smaller
@@ -177,16 +168,14 @@ __umulhisi3:
         brset   r1, #1, .set            ; 3
         br      ne, r1, #0, .clear      ; 3
 .done:
-        mov     r1, r0                  ; 1   the low half moves to r1 ...
-        mov     r0, r3                  ; 2   ... and the high half to r0
+        mov     r1, r3                  ; 2   the high half; the low is in r0
         pop     lr, r3, r2              ; 8
         ret                             ; 1
 .narrow:
         push    lr                      ; 4
         call    __mulhi3.sorted         ; 3   past the comparison already made
         pop     lr                      ; 4
-        mov     r1, r0                  ; 1   the product is the LOW half
-        mov     r0, #0                  ; 1   ... and the high half is zero
+        mov     r1, #0                  ; 2   the product is the LOW half, in r0
         ret                             ; 1
 
 
@@ -210,22 +199,22 @@ __mulhisi3:
         push    r2, r3, lr              ; 8
         mov     r2, r0                  ; 2   keep a
         mov     r3, r1                  ; 2   keep b
-        call    __umulhisi3             ; 3   r0:r1 = high:low, unsigned
+        call    __umulhisi3             ; 3   r0:r1 = low:high, unsigned
         brclear r2, #0x8000, .a_pos     ; 3   a negative?
-        rsb     r0, r3, r0              ; 2   high -= b
+        rsb     r1, r3, r1              ; 2   high -= b
 .a_pos:
         brclear r3, #0x8000, .b_pos     ; 3   b negative?
-        rsb     r0, r2, r0              ; 2   high -= a
+        rsb     r1, r2, r1              ; 2   high -= a
 .b_pos:
         pop     lr, r3, r2              ; 8
         ret                             ; 1
 
 
 ; ============================================================================
-; __mulsi3 - 32 x 32 -> 32, signed or unsigned                       43 bytes
+; __mulsi3 - 32 x 32 -> 32, signed or unsigned                       40 bytes
 ; ============================================================================
-;       a in r0:r1 as high:low          b in r2:r3 as high:low
-;       result in r0:r1 as high:low
+;       a in r0:r1 as low:high          b in r2:r3 as low:high
+;       result in r0:r1 as low:high
 ;
 ; Four argument registers, so by isa/abi.s's sliding rule r2 and r3 are
 ; caller-saved here and this routine owns r0, r1, r2, r3 and r5 outright.  Only
@@ -235,17 +224,17 @@ __mulhisi3:
 ;
 ; The ah*bh term is entirely above bit 31 and is not computed.  The two cross
 ; terms only need their low sixteen bits, which is __mulhi3; the al*bl term
-; needs all thirty-two, which is __umulhisi3 - and its high:low result is
+; needs all thirty-two, which is __umulhisi3 - and its low:high result is
 ; already in the right registers, so folding the cross terms in is one `add`.
 ;
 ; ONE PUSH, NOT TWO.  A three-register push is nine cycles and two bytes where
 ; pushing two and then one is twelve cycles and four - a push pays for its
 ; address once however many registers it carries - and the order works out: `push
-; r4, lr, r1` writes r4 highest and al lowest, so `ld r0, [sp]` finds al, and
+; r4, lr, r0` writes r4 highest and al lowest, so `ld r0, [sp]` finds al, and
 ; the later `pop r0` then `pop lr, r4` unwind it in the right order.
 ;
 ; NEITHER HELPER TOUCHES r2, r3 OR r4.  __mulhi3 uses r0, r1 and r5 and nothing
-; else; __umulhisi3 saves r2 and r3 and restores them.  So bh and bl sit in
+; else; __umulhisi3 saves r2 and r3 and restores them.  So bl and bh sit in
 ; their argument registers across all three calls and only al has to be spilled
 ; - once, and read back without popping the first time it is wanted.
 ;
@@ -254,11 +243,11 @@ __mulhisi3:
 ; ----------------------------------------------------------------------------
 ; If ah and bh are both zero then a and b are 16-bit values, both cross terms
 ; vanish, and the answer is just the widening product of the low halves - which
-; __umulhisi3 already returns as high:low in r0:r1, exactly where this routine
+; __umulhisi3 already returns as low:high in r0:r1, exactly where this routine
 ; has to leave it.  Nothing to fix up afterwards, so it is a real tail call:
 ; the test happens before the prologue and there is no lr to save.
 ;
-;       or      r5, r0, r2              ; both high words at once
+;       or      r5, r1, r3              ; both high words at once
 ;
 ; Five cycles to ask, and it turns 625 into about 330 - or about 105 when the
 ; low halves are small enough for __umulhisi3's own shortcut.  A `long` holding
@@ -270,34 +259,33 @@ __mulhisi3:
 ; two paths, and the case is much rarer than both being zero.
 
 __mulsi3:
-        or      r5, r0, r2              ; 2   ah | bh
+        or      r5, r1, r3              ; 2   ah | bh
         br      eq, r5, #0, .narrow     ; 3   both zero: a 16 x 16 widening
-        push    r4, lr, r1              ; 8   three for the price of two:
+        push    r4, lr, r0              ; 8   three for the price of two:
                                         ;     al ends up lowest, so [sp] finds it
-        mov     r1, r3                  ; 2   ah * bl
+        mov     r0, r2                  ; 2   bl * ah, with ah already in r1
         call    __mulhi3                ; 3
         mov     r4, r0                  ; 2
         ld      r0, [sp]                ; 4   al back, but leave it there
-        mov     r1, r2                  ; 2   al * bh
+        mov     r1, r3                  ; 2   al * bh
         call    __mulhi3                ; 3
         add     r4, r4, r0              ; 2   the two cross terms
         pop     r0                      ; 4   al, for the last time
-        mov     r1, r3                  ; 2   al * bl, widened
+        mov     r1, r2                  ; 2   al * bl, widened
         call    __umulhisi3             ; 3
-        add     r0, r0, r4              ; 2   fold the cross terms into the high
+        add     r1, r1, r4              ; 2   fold the cross terms into the high
         pop     lr, r4                  ; 6
         ret                             ; 1
 .narrow:
-        mov     r0, r1                  ; 1   al, pinned
-        mov     r1, r3                  ; 2   bl
-        jmp     __umulhisi3             ; 3   its high:low result is ours
+        mov     r1, r2                  ; 2   bl; al is already in r0
+        jmp     __umulhisi3             ; 3   its low:high result is ours
 
 
 ; ============================================================================
 ; __umulsidi3 - 32 x 32 -> 64, unsigned
 ; ============================================================================
-;       a in r0:r1 as high:low          b in r2:r3 as high:low
-;       result in r0:r1:r2:r3, high word to low word
+;       a in r0:r1 as low:high          b in r2:r3 as low:high
+;       result in r0:r1:r2:r3, low word to high word
 ;
 ; This is what libgcc2.c builds __muldi3 out of, so it is the last helper a
 ; port needs for `long long`.  The result exactly overwrites its arguments,
@@ -337,10 +325,10 @@ __mulsi3:
 ; of halves near 0xffff to find, which tests/libgcc-check.mjs does deliberately.
 
 __umulsidi3:
-        or      r5, r0, r2              ; 2   ah | bh
+        or      r5, r1, r3              ; 2   ah | bh
         br      eq, r5, #0, .narrow     ; 3   both zero: it is a 16 x 16
-        push    r4, lr, r0              ; 8   r4, lr, ah      ah lowest
-        push    r1, r2, r3              ; 8   al, bh, bl      bl lowest
+        push    r4, lr, r1              ; 8   r4, lr, ah      ah lowest
+        push    r0, r3, r2              ; 8   al, bh, bl      bl lowest
         add     sp, sp, #-2             ; 2   and a slot for w0
         ;      w0(0)  bl(2)  bh(4)  al(6)  ah(8)  lr(10)  r4(12)
 
@@ -348,20 +336,20 @@ __umulsidi3:
         ld      r0, [sp, #6]            ; 4
         ld      r1, [sp, #4]            ; 4
         call    __umulhisi3             ; 3
-        mov     r2, r0                  ; 2   X.hi
-        mov     r3, r1                  ; 2   X.lo
+        mov     r2, r1                  ; 2   X.hi
+        mov     r3, r0                  ; 2   X.lo
 
         ; --- P2 = ah * bl, and X = P1 + P2 ----------------------------------
         ld      r0, [sp, #8]            ; 4
         ld      r1, [sp, #2]            ; 4
         call    __umulhisi3             ; 3
         mov     r4, #0                  ; 2   cx
-        add     r3, r3, r1              ; 2   X.lo
-        br      hs, r3, r1, .nc1        ; 3
-        add     r0, r0, #1              ; 2   into P2.hi; it cannot wrap
+        add     r3, r3, r0              ; 2   X.lo
+        br      hs, r3, r0, .nc1        ; 3
+        add     r1, r1, #1              ; 2   into P2.hi; it cannot wrap
 .nc1:
-        add     r2, r2, r0              ; 2   X.hi
-        br      hs, r2, r0, .nc2        ; 3
+        add     r2, r2, r1              ; 2   X.hi
+        br      hs, r2, r1, .nc2        ; 3
         add     r4, r4, #1              ; 2
 .nc2:
 
@@ -369,9 +357,9 @@ __umulsidi3:
         ld      r0, [sp, #6]            ; 4
         ld      r1, [sp, #2]            ; 4
         call    __umulhisi3             ; 3
-        st      r1, [sp, #0]            ; 4   w0 is finished
-        add     r3, r3, r0              ; 2   w1 = X.lo + P0.hi
-        br      hs, r3, r0, .nc3        ; 3
+        st      r0, [sp, #0]            ; 4   w0 is finished
+        add     r3, r3, r1              ; 2   w1 = X.lo + P0.hi
+        br      hs, r3, r1, .nc3        ; 3
         add     r2, r2, #1              ; 2   k1 into X.hi ...
         br      ne, r2, #0, .nc3        ; 3   ... which CAN wrap
         add     r4, r4, #1              ; 2
@@ -381,34 +369,29 @@ __umulsidi3:
         ld      r0, [sp, #8]            ; 4
         ld      r1, [sp, #4]            ; 4
         call    __umulhisi3             ; 3
-        add     r2, r2, r1              ; 2   w2 = X.hi + k1 + P3.lo
-        br      hs, r2, r1, .nc4        ; 3
+        add     r2, r2, r0              ; 2   w2 = X.hi + k1 + P3.lo
+        br      hs, r2, r0, .nc4        ; 3
         add     r4, r4, #1              ; 2
 .nc4:
-        add     r0, r0, r4              ; 2   w3 = P3.hi + cx + k2
+        add     r4, r4, r1              ; 2   w3 = P3.hi + cx + k2
 
         ; --- place the four words and unwind --------------------------------
-        mov     r1, r2                  ; 2   w2
-        mov     r2, r3                  ; 2   w1
-        ld      r3, [sp, #0]            ; 4   w0
+        mov     r1, r3                  ; 2   w1; w2 is in r2 already
+        mov     r3, r4                  ; 2   w3, before the pop restores r4
+        ld      r0, [sp, #0]            ; 4   w0
         add     sp, sp, #10             ; 2
         pop     lr, r4                  ; 6
         ret                             ; 1
 
 ; BOTH HIGH WORDS ZERO leaves only P0, so the answer is one widening multiply
-; with two zero words above it.  `mov r1, r0` after r0 is zeroed is the pinned
-; one-byte encoding, so both top words cost two bytes between them.
+; with two zero words above it.  IT IS A TAIL CALL: the zero words go in r2 and
+; r3 before the jump, and __umulhisi3 preserves both, so they are still there
+; when it returns P0 in r0:r1 - which is where w0 and w1 belong.
 .narrow:
-        push    lr                      ; 4
-        mov     r0, r1                  ; 1   al, pinned
-        mov     r1, r3                  ; 2   bl
-        call    __umulhisi3             ; 3
-        mov     r2, r0                  ; 2   w1
-        mov     r3, r1                  ; 2   w0
-        mov     r0, #0                  ; 1   w3
-        mov     r1, r0                  ; 1   w2, pinned
-        pop     lr                      ; 4
-        ret                             ; 1
+        mov     r1, r2                  ; 2   bl; al is already in r0
+        mov     r2, #0                  ; 2   w2
+        mov     r3, r2                  ; 2   w3
+        jmp     __umulhisi3             ; 3
 
 ; ============================================================================
 ; __udivmodhi4 - 16 / 16 -> quotient and remainder, unsigned
@@ -422,7 +405,8 @@ __umulsidi3:
 ; BOTH RESULTS AT ONCE, because the caller usually wants both.  `x / 10' and
 ; `x % 10' next to each other is every digit of every number ever printed,
 ; and a quotient-only routine does that work twice.  r0:r1 is what abi.s
-; calls a 32-bit return, so to C this is one `unsigned long'.
+; calls a 32-bit return, so to C this is one `unsigned long' with the quotient
+; in the low half and the remainder in the high.
 ;
 ; ----------------------------------------------------------------------------
 ; THREE PATHS, AND THE MIDDLE ONE IS WHY

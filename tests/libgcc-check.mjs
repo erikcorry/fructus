@@ -9,11 +9,11 @@
 //
 // THE REGISTER CONVENTION IS THE THING MOST LIKELY TO BE WRONG, so it is what
 // most of these checks are about.  isa/abi.s says a 32-bit value lives in a
-// register pair as HIGH:LOW, which is the opposite of what the study routines
-// in snippets/ use - and these are called by compiler-generated code, so they
-// have to match the ABI and not the study.  A routine that returned the pair
-// the other way round would pass every "is the product right" test written in
-// terms of its own convention, so the halves are checked separately.
+// register pair as LOW:HIGH - the low half in the lower-numbered register, the
+// same order as memory - and these are called by compiler-generated code, so
+// they have to match.  A routine that returned the pair the other way round
+// would pass every "is the product right" test written in terms of its own
+// convention, so the halves are checked separately.
 // =============================================================================
 
 import { assemble, machine } from './harness.mjs';
@@ -58,9 +58,8 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
 
 // --- __mulhi3 ----------------------------------------------------------------
 // The narrow helper, and the one every int multiply goes through.  It leaves
-// rubbish in r1 and is entitled to: an earlier draft zeroed it so the pair
-// r0:r1 would be a 32-bit value, but abi.s puts the high half in r0, so that
-// was backwards and __umulhisi3 writes both halves itself.
+// rubbish in r1 and is entitled to: a 16-bit return says nothing about r1, and
+// __umulhisi3 writes the high half itself.
 {
   let wrong = 0, eg = '';
   for (const [a, b] of pairs) {
@@ -78,12 +77,12 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   let wrongU = 0, wrongS = 0, egU = '', egS = '';
   for (const [a, b] of pairs) {
     const u = run('__umulhisi3', { 0: a, 1: b });
-    const gotU = u.R[0] * 65536 + u.R[1];          // HIGH:LOW, per isa/abi.s
+    const gotU = u.R[1] * 65536 + u.R[0];          // LOW:HIGH, per isa/abi.s
     if (u.why !== 'stopped' || gotU !== a * b || u.sp !== SP0 || u.R[4] !== R4) {
       if (!wrongU++) egU = `${a} * ${b} = ${a * b}, got ${gotU}`;
     }
     const s = run('__mulhisi3', { 0: a, 1: b });
-    const gotS = (s.R[0] * 65536 + s.R[1]) | 0;
+    const gotS = (s.R[1] * 65536 + s.R[0]) | 0;
     const wantS = (s16(a) * s16(b)) | 0;
     if (s.why !== 'stopped' || gotS !== wantS || s.sp !== SP0 || s.R[4] !== R4) {
       if (!wrongS++) egS = `${s16(a)} * ${s16(b)} = ${wantS}, got ${gotS}`;
@@ -96,16 +95,15 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   // agree with a reference written the same way round, so pin one product
   // whose halves differ and say which register holds which.
   const q = run('__umulhisi3', { 0: 0xffff, 1: 0xffff });   // 0xfffe0001
-  check('__umulhisi3 is high:low', q.R[0] === 0xfffe && q.R[1] === 0x0001,
+  check('__umulhisi3 is low:high', q.R[0] === 0x0001 && q.R[1] === 0xfffe,
         `0xffff squared put 0x${q.R[0].toString(16)} in r0 and ` +
-        `0x${q.R[1].toString(16)} in r1; abi.s says r0 is the high half`);
+        `0x${q.R[1].toString(16)} in r1; abi.s says r0 is the low half`);
   console.log(`ok    __umulhisi3 and __mulhisi3: ${pairs.length} products each, halves in the right registers`);
 }
 
 // --- the shortcut ------------------------------------------------------------
 // Both operands under 256 means the product is under 65536, so the whole thing
-// is one narrow multiply.  It is worth roughly four times the general case, and
-// it is the reason __mulhi3 promises a zero.
+// is one narrow multiply.  It is worth roughly four times the general case.
 {
   const small = () => run('__umulhisi3', { 0: r16() & 0xff, 1: r16() & 0xff }).cycles;
   const big = () => run('__umulhisi3', { 0: 0x8000 | r16(), 1: 0x8000 | r16() }).cycles;
@@ -118,7 +116,7 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
 }
 
 // --- __mulsi3 ----------------------------------------------------------------
-// 32 x 32 -> 32, with both arguments as high:low pairs.  Math.imul is exactly
+// 32 x 32 -> 32, with both arguments as low:high pairs.  Math.imul is exactly
 // this operation, which is what makes the reference a one-liner.
 {
   let wrong = 0, eg = '';
@@ -136,8 +134,8 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   for (let i = 0; i < 500; i++) cases.push([((r16() * 65536) + r16()) >>> 0, r16()]);
 
   for (const [A, B] of cases) {
-    const q = run('__mulsi3', { 0: A >>> 16, 1: A & 0xffff, 2: B >>> 16, 3: B & 0xffff });
-    const got = ((q.R[0] * 65536 + q.R[1]) >>> 0);
+    const q = run('__mulsi3', { 0: A & 0xffff, 1: A >>> 16, 2: B & 0xffff, 3: B >>> 16 });
+    const got = ((q.R[1] * 65536 + q.R[0]) >>> 0);
     const want = Math.imul(A, B) >>> 0;
     if (q.why !== 'stopped' || got !== want || q.sp !== SP0 || q.R[4] !== R4) {
       if (!wrong++) eg = `0x${A.toString(16)} * 0x${B.toString(16)} = 0x${want.toString(16)}, ` +
@@ -148,14 +146,14 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
 
   // THE SHORTCUT.  Both high words zero means both cross terms vanish and the
   // answer is the widening product of the low halves - which __umulhisi3
-  // already returns as high:low, so it is a tail call with nothing to fix up.
+  // already returns as low:high, so it is a tail call with nothing to fix up.
   const cost = (regs) => run('__mulsi3', regs).cycles;
   let wide = 0, narrow = 0, tiny = 0;
   for (let i = 0; i < 200; i++) {
     const p = [r16(), r16(), r16(), r16()];
-    wide   += cost({ 0: p[0] | 0x8000, 1: p[1], 2: p[2] | 0x8000, 3: p[3] });
-    narrow += cost({ 0: 0, 1: p[1], 2: 0, 3: p[3] });
-    tiny   += cost({ 0: 0, 1: p[1] & 0xff, 2: 0, 3: p[3] & 0xff });
+    wide   += cost({ 0: p[0], 1: p[1] | 0x8000, 2: p[2], 3: p[3] | 0x8000 });
+    narrow += cost({ 0: p[0], 1: 0, 2: p[2], 3: 0 });
+    tiny   += cost({ 0: p[0] & 0xff, 1: 0, 2: p[2] & 0xff, 3: 0 });
   }
   check('__mulsi3 shortcut', narrow / 200 < wide / 200 * 0.6,
         `16-bit longs cost ${(narrow / 200).toFixed(0)} against ${(wide / 200).toFixed(0)} ` +
@@ -170,7 +168,7 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
 
 // --- __umulsidi3 -------------------------------------------------------------
 // 32 x 32 -> 64, so BigInt is the reference: the product does not fit a double.
-// The four words come back high to low in r0:r1:r2:r3.
+// The four words come back low to high in r0:r1:r2:r3.
 //
 // THE CARRIES ARE WHAT THIS IS REALLY TESTING.  Three of the four additions can
 // carry into the next word, and one of those carries can itself wrap - which
@@ -186,16 +184,16 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
     m.R[m.named.sp] = SP0;
     m.R[m.named.lr] = RET;
     m.R[4] = R4;
-    m.R[0] = Number((A >> 16n) & 0xffffn); m.R[1] = Number(A & 0xffffn);
-    m.R[2] = Number((B >> 16n) & 0xffffn); m.R[3] = Number(B & 0xffffn);
+    m.R[0] = Number(A & 0xffffn); m.R[1] = Number((A >> 16n) & 0xffffn);
+    m.R[2] = Number(B & 0xffffn); m.R[3] = Number((B >> 16n) & 0xffffn);
     m.pc = syms.get('__umulsidi3'); m.halted = false; m.count = 0;
     m.reset();
     let why;
     try { why = m.run({ max: 20000, stopAt: RET }); }
     catch (e) { why = `ran off the rails: ${e.message}`; }
     return { why, sp: m.R[m.named.sp], r4: m.R[4], cycles: m.cycles(),
-             product: (BigInt(m.R[0]) << 48n) | (BigInt(m.R[1]) << 32n) |
-                      (BigInt(m.R[2]) << 16n) | BigInt(m.R[3]) };
+             product: (BigInt(m.R[3]) << 48n) | (BigInt(m.R[2]) << 32n) |
+                      (BigInt(m.R[1]) << 16n) | BigInt(m.R[0]) };
   };
   const r32n = () => (BigInt(r16()) << 16n) | BigInt(r16());
 

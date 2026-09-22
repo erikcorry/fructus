@@ -5,7 +5,7 @@
 ;
 ;   take2c    {char a, b}            a in r0, b in r1 - a register each
 ;   takepair  {int a, b}             a in r0, b in r1
-;   takemixed {int a; long b}        a in r0, b in r1:r2 as high:low
+;   takemixed {int a; long b}        a in r0, b in r1:r2 as low:high
 ;   fat_bump  {char *p; unsigned t}  in r0, r1 and back in r0, r1
 ;   make_pair                        two fields returned in r0 and r1
 ;   no_room   (int, int, int, {int, int})
@@ -61,18 +61,18 @@ main:
         jmp     fail
 .ok2:
 
-        ; takemixed ({1000, 0x20003}) = 0x000203eb, returned high:low
+        ; takemixed ({1000, 0x20003}) = 0x000203eb, returned low:high
         mov     r4, #3
         mov     r0, #1000
-        mov     r1, #2                  ; the long's high half
-        mov     r2, #3                  ; and its low half
+        mov     r1, #3                  ; the long's low half
+        mov     r2, #2                  ; and its high half
         call    takemixed
-        mov     r5, #2
+        mov     r5, #0x03eb
         br      eq, r0, r5, .ok3
         jmp     fail
 .ok3:
         mov     r4, #4
-        mov     r5, #0x03eb
+        mov     r5, #2
         br      eq, r1, r5, .ok4
         jmp     fail
 .ok4:

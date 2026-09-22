@@ -24,44 +24,45 @@
 
 
 ; ============================================================================
-; 32-bit add, in place                                              8 bytes
+; 32-bit add, in place                                              9 bytes
 ; ============================================================================
-; X in r0:r1 as high:low, Y in r2:r3 as high:low.  X += Y.
+; X in r0:r1 as low:high, Y in r2:r3 as low:high.  X += Y.
 ;
 ; The low add runs first and in place, which destroys XL - so the carry test
 ; compares the sum against YL rather than XL.  They are equivalent, and only
 ; one of them is still available.
 
 add32:
-        add     r1, r1, r3              ; XL += YL, wrapping            2
-        add     r0, r0, r2              ; XH += YH                      2
-        br      hs, r1, r3, no_carry    ; sum >= YL means no carry      3
-        add     r0, r0, #1              ; propagate                     1
+        add     r0, r0, r2              ; XL += YL, wrapping            2
+        add     r1, r1, r3              ; XH += YH                      2
+        br      hs, r0, r2, no_carry    ; sum >= YL means no carry      3
+        add     r1, r1, #1              ; propagate, tied imm5 form     2
 no_carry:
 
-; The last instruction is ONE byte only because the destination is r0: the
-; one-byte region has `add r0, r0, #1` at 0x04.  Put the high half anywhere
-; else and it becomes the two-byte tied form, for nine bytes total.  Worth
-; keeping in mind when allocating registers around multi-word arithmetic.
+; The propagate would be ONE byte if the high half were in r0: the one-byte
+; region has `add r0, r0, #1` at 0x04.  Under the old high:low convention it
+; was, and this was eight bytes.  With the low half in r0 the carry lands in
+; r1, and `add r1, r1, #1` is the two-byte tied form.
 
 
 ; ============================================================================
-; 32-bit add, high half not in r0                                   9 bytes
+; 32-bit add, other registers                                       9 bytes
 ; ============================================================================
-; X in r4:r5, Y in r6:r7.  Identical shape, one byte more.
+; X in r4:r5, Y in r6:r7, both low:high.  Identical shape and size: no
+; one-byte form is involved in either.
 
 add32_r4r5:
-        add     r5, r5, r7              ; XL += YL                      2
-        add     r4, r4, r6              ; XH += YH                      2
-        br      hs, r5, r7, no_carry2   ; sum >= YL means no carry      3
-        add     r4, r4, #1              ; propagate, tied imm5 form     2
+        add     r4, r4, r6              ; XL += YL                      2
+        add     r5, r5, r7              ; XH += YH                      2
+        br      hs, r4, r6, no_carry2   ; sum >= YL means no carry      3
+        add     r5, r5, #1              ; propagate, tied imm5 form     2
 no_carry2:
 
 
 ; ============================================================================
-; 32-bit += 3, in place                                             6 bytes
+; 32-bit += 3, in place                                             7 bytes
 ; ============================================================================
-; X in r0:r1 as high:low.
+; X in r0:r1 as low:high.
 ;
 ; Adding a CONSTANT is the same shape, except the comparison partner can be the
 ; constant itself: after `XL += k`, the carry test is just `sum < k`.  That is a
@@ -70,9 +71,9 @@ no_carry2:
 ; the add can happen in place.
 
 add32_plus3:
-        add     r1, r1, #3              ; XL += 3, wrapping             2
-        br      hs, r1, #3, no_carry3   ; sum >= 3 means no carry       3
-        add     r0, r0, #1              ; propagate                     1
+        add     r0, r0, #3              ; XL += 3, wrapping             2
+        br      hs, r0, #3, no_carry3   ; sum >= 3 means no carry       3
+        add     r1, r1, #1              ; propagate                     2
 no_carry3:
 
 ; The boundary behaves: at k = 0 the sum is XL and `XL >= 0` is always true, so
@@ -82,8 +83,8 @@ no_carry3:
 ; are degenerate as unsigned bounds.  That is not a coincidence: condimm5's
 ; unsigned constants were chosen to be imm3 precisely so that widening an
 ; `add #k` can test against the same k.  Under the earlier powers-of-two table
-; this very sequence was impossible for 3 and 6, and cost eight bytes and a
-; scratch register instead of six.
+; this very sequence was impossible for 3 and 6, and cost nine bytes and a
+; scratch register instead of seven.
 ;
 ; DECREMENT IS NOT THIS SHAPE.  `+= -1` is a 32-bit add of 0xffffffff, so the
 ; high word adds 0xffff too rather than just taking a carry, and the sequence
@@ -102,14 +103,14 @@ no_carry3:
 ;
 ; which is and, or, xor, and, or, lsr - six instructions to produce a 0 or 1,
 ; plus the two adds and one more add to fold it in.  Nine instructions, 18
-; bytes, against 8 for the branched version.  Only reach for it if a
+; bytes, against 9 for the branched version.  Only reach for it if a
 ; mispredicted branch costs more than ten bytes of fetch.
 ;
 ; SUBTRACTION is the same shape and slightly easier, because the borrow out of
 ; `A - B` is just `A < B` and can be tested on the original operands, before
 ; anything is overwritten:
 ;
-;       br      hs, r1, r3, no_borrow   ; XL >= YL means no borrow
+;       br      hs, r0, r2, no_borrow   ; XL >= YL means no borrow
 ;
 ; WIDER VALUES chain the same way: each limb adds, then tests its own sum
 ; against one of its inputs, then conditionally bumps the next limb up.  The

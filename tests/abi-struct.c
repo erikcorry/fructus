@@ -27,7 +27,7 @@ takepair (struct pair s)
   return s.a * 100 + s.b;
 }
 
-/* Three registers: the long takes two of them, high half first.  */
+/* Three registers: the long takes two of them, low half first.  */
 long
 takemixed (struct mixed s)
 {

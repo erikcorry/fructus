@@ -49,10 +49,10 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 
   for (const [xh, xl, yh, yl] of cases) {
     const r = callRoutine(m, code, syms.get('fpadd_mantissa'), syms.get('done'),
-                          { 0: xh, 1: xl, 2: yh, 3: yl });
+                          { 0: xl, 1: xh, 2: yl, 3: yh });
     const X = (BigInt(xh) << 16n) | BigInt(xl), Y = (BigInt(yh) << 16n) | BigInt(yl);
     const e = ref(X, Y);
-    const got = (BigInt(r[0]) << 16n) | BigInt(r[1]);
+    const got = (BigInt(r[1]) << 16n) | BigInt(r[0]);
     check('fpadd', got === e.v && r[2] === e.exp,
           `${hex32(X)} + ${hex32(Y)} -> ${hex32(got)} exp ${r[2]}, want ${hex32(e.v)} exp ${e.exp}`);
   }
@@ -94,10 +94,10 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 
   for (const [xh, xl, yh, yl] of cases) {
     const r = callRoutine(m, code, syms.get('fpsub_mantissa'), syms.get('done'),
-                          { 0: xh, 1: xl, 2: yh, 3: yl });
+                          { 0: xl, 1: xh, 2: yl, 3: yh });
     const X = (BigInt(xh) << 16n) | BigInt(xl), Y = (BigInt(yh) << 16n) | BigInt(yl);
     const e = ref(X, Y);
-    const got = (BigInt(r[0]) << 16n) | BigInt(r[1]);
+    const got = (BigInt(r[1]) << 16n) | BigInt(r[0]);
     const exp = r[2] >= 0x8000 ? r[2] - 0x10000 : r[2];
     check('fpsub', got === e.v && exp === e.exp,
           `${hex32(X)} - ${hex32(Y)} -> ${hex32(got)} exp ${exp}, want ${hex32(e.v)} exp ${e.exp}`);
@@ -119,9 +119,9 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   // in place, X in r0:r1 and Y in r2:r3
   let n = 0;
   for (const [xh, xl] of pairs) for (const [yh, yl] of pairs) {
-    const r = callRoutine(m, code, syms.get('add32'), syms.get('no_carry'), { 0: xh, 1: xl, 2: yh, 3: yl });
+    const r = callRoutine(m, code, syms.get('add32'), syms.get('no_carry'), { 0: xl, 1: xh, 2: yl, 3: yh });
     const want = (((BigInt(xh) << 16n) | BigInt(xl)) + ((BigInt(yh) << 16n) | BigInt(yl))) & M32;
-    const got = (BigInt(r[0]) << 16n) | BigInt(r[1]);
+    const got = (BigInt(r[1]) << 16n) | BigInt(r[0]);
     check('add32', got === want, `${hex32((BigInt(xh)<<16n)|BigInt(xl))} + ${hex32((BigInt(yh)<<16n)|BigInt(yl))} -> ${hex32(got)}, want ${hex32(want)}`);
     n++;
   }
@@ -130,18 +130,18 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   // as ordinary data, so this also checks the harness is not quietly reserving it
   for (let i = 0; i < 3000; i++) {
     const [xh, xl, yh, yl] = [rnd() & 0xffff, rnd() & 0xffff, rnd() & 0xffff, rnd() & 0xffff];
-    const r = callRoutine(m, code, syms.get('add32_r4r5'), syms.get('no_carry2'), { 4: xh, 5: xl, 6: yh, 7: yl });
+    const r = callRoutine(m, code, syms.get('add32_r4r5'), syms.get('no_carry2'), { 4: xl, 5: xh, 6: yl, 7: yh });
     const want = (((BigInt(xh) << 16n) | BigInt(xl)) + ((BigInt(yh) << 16n) | BigInt(yl))) & M32;
-    const got = (BigInt(r[4]) << 16n) | BigInt(r[5]);
+    const got = (BigInt(r[5]) << 16n) | BigInt(r[4]);
     check('add32_r4r5', got === want, `${hex32(got)} want ${hex32(want)}`);
     n++;
   }
 
   // += 3, where the carry test compares against the constant itself
   for (const [xh, xl] of pairs) {
-    const r = callRoutine(m, code, syms.get('add32_plus3'), syms.get('no_carry3'), { 0: xh, 1: xl });
+    const r = callRoutine(m, code, syms.get('add32_plus3'), syms.get('no_carry3'), { 0: xl, 1: xh });
     const want = (((BigInt(xh) << 16n) | BigInt(xl)) + 3n) & M32;
-    const got = (BigInt(r[0]) << 16n) | BigInt(r[1]);
+    const got = (BigInt(r[1]) << 16n) | BigInt(r[0]);
     check('add32_plus3', got === want, `${hex32((BigInt(xh)<<16n)|BigInt(xl))} + 3 -> ${hex32(got)}, want ${hex32(want)}`);
     n++;
   }

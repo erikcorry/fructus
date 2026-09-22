@@ -281,7 +281,7 @@
 ; ----------------------------------------------------------------------------
 ;
 ; One register per value up to 16 bits.  A 32-bit value takes two registers,
-; HIGH half first.  Structs are decomposed into their fields and each field is
+; LOW half first - the same order as in memory, which is little endian.  Structs are decomposed into their fields and each field is
 ; assigned independently - there is no such thing as passing a struct.
 ;
 ; Assignment walks the arguments left to right over the list r0, r1, r2, r3 and
@@ -346,8 +346,8 @@
 ;
 ;   up to 8 bits     r0, low byte, high byte unspecified
 ;   up to 16 bits    r0
-;   32 bits          r0:r1, high:low - the same shape as an argument pair
-;   64 bits          r0:r1:r2:r3, high to low - an argument quad
+;   32 bits          r0:r1, low:high - the same shape as an argument pair
+;   64 bits          r0:r1:r2:r3, low to high - an argument quad
 ;   an aggregate     decomposed into its fields exactly as an argument is, and
 ;                    returned in r0 upwards if they fit in four registers
 ;   anything else    the CALLER allocates the space and passes a pointer to it
@@ -448,56 +448,37 @@ fat_bump:
 ; and the reason is the same one.
 ;
 ; ----------------------------------------------------------------------------
-; THE PUSH ORDER AND THE REGISTER ORDER ARE INDEPENDENT
+; REGISTER ORDER IS MEMORY ORDER
 ; ----------------------------------------------------------------------------
 ;
-; Reversing the argument order does NOT force 32-bit values into lo:hi register
-; order.  There are two orderings here and they are separate:
+; A 32-bit value in r0:r1 has its low half in r0 and its high half in r1 - the
+; lower-numbered register holds the lower-addressed word, exactly as
+; `endian = "little"` lays the value out in data memory.  So does every longer
+; value: a 64-bit one in r0:r1:r2:r3 runs from its lowest word in r0 to its
+; highest in r3.
 ;
-;   BETWEEN arguments   reversed - last argument pushed first
-;   WITHIN an argument   NOT reversed - high half pushed first
+; THIS WAS ONCE THE OTHER WAY ROUND, high half in r0, on the argument that the
+; register order and the push order were independent and either would do.
+; They are independent; the other order was still the wrong choice.  A little
+; endian machine with its register pairs big endian has two orders to keep in
+; mind instead of one, and every tool pays for it: the GCC port had to number
+; its registers backwards, r7 down to r0, because GCC puts the low word of a
+; multi-register value at the lower register number and nowhere offers a way to
+; say otherwise.  With the low half first, GCC's numbering is the machine's.
 ;
-; The second one is fixed by endianness alone and has nothing to do with the
-; first.  The stack grows down, so whichever half is pushed first lands higher;
-; little endian wants the low half lower; therefore the high half is pushed
-; first, whatever order the arguments themselves are in.  f(a32, b32) both on
-; the stack pushes b.hi, b.lo, a.hi, a.lo, and comes out as
+; PUSHING a pair names the HIGH register first.  `push ra, rb` pushes ra first,
+; and the stack grows down, so the first register named lands at the higher
+; address:
+;
+;       push    r1, r0          ; a 32-bit value in r0:r1, little endian  2
+;
+; and `pop r0, r1` takes it back off in the same shape.  Between arguments the
+; order is reversed as above - last argument pushed first - so f(a32, b32)
+; with both on the stack pushes b.hi, b.lo, a.hi, a.lo and comes out as
 ;
 ;       sp+0  a.lo    sp+2  a.hi    sp+4  b.lo    sp+6  b.hi
 ;
-; - first argument nearest sp, and each value little endian.  Both properties at
-; once, with the registers still written high:low.
-;
-; THE INFERENCE IS RIGHT FOR ONE PARTICULAR IMPLEMENTATION.  If the reversal is
-; defined over the flat list of REGISTERS rather than over the arguments -
-; "emit the pushes backwards" - then a hi:lo pair comes out lo first and lands
-; big endian, and the fix really is to swap the register convention to lo:hi.
-; Both schemes produce the identical instruction sequence and the identical
-; memory image; they differ only in which register holds the high half.
-;
-; SO KEEP hi:lo, for three reasons that all point the same way.  Every 32-bit
-; routine already written assumes it - add32.s, roll32.s, fpadd.s and fpsub.s
-; all use r0:r1 as high:low.  `push ra, rb` pushes ra first, so the two-
-; register push already takes its operands in high:low order.  And "reverse the
-; arguments" is the rule a compiler wants anyway, because argument boundaries
-; are where the no-splitting rule lives.
-;
-; ----------------------------------------------------------------------------
-; WHY hi:lo LOOKS LITTLE ENDIAN ON THE STACK
-; ----------------------------------------------------------------------------
-;
-; A 32-bit value lives in a register pair as high:low, and it is pushed in that
-; order - high first.  The stack grows down, so the FIRST thing pushed lands at
-; the HIGHER address.  The low half therefore ends up below the high half,
-; which is exactly the layout `endian = "little"` gives a 32-bit value in data
-; memory.  Register order and memory order agree without anything having to be
-; reversed, and a spilled 32-bit value can be reloaded by a pair of ld16s at
-; consecutive addresses in either direction.
-;
-; The multi-register push takes its operands in that same order, so a 32-bit
-; value is pushed by naming its pair the way it is already written:
-;
-;       push    r0, r1          ; a 32-bit value in r0:r1, correctly ordered  2
+; - first argument nearest sp, and each value little endian.
 ;
 ; NOTHING IS COALESCED.  What is written is what runs: `push r0` followed by
 ; `push r1` is two instructions and four bytes, and `push r0, r1` is one
@@ -789,7 +770,7 @@ vararg_example:
 ; va_arg FOR A 32-BIT TYPE reads two consecutive words and finds the low half
 ; first, because the caller pushed the high half first and it landed higher.
 ; The register convention and the memory convention agree, so a 32-bit vararg
-; loads into a high:low register pair with ld at #2 and #0 and needs no
+; loads into a low:high register pair with ld at #0 and #2 and needs no
 ; shuffling - the same layout as a spilled local or a struct field.
 ;
 ; WHERE THE no-backfill RULE EARNS ITS KEEP.  If a small argument after a

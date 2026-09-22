@@ -10,8 +10,8 @@
 ; caller has swapped the operands so the larger EXPONENT is first, unpacked both
 ; implicit ones, and shifted the second down to align.
 ;
-;       in      r0:r1   X, high:low, unsigned, implicit bit restored
-;               r2:r3   Y, high:low, unsigned, implicit bit restored then
+;       in      r0:r1   X, low:high, unsigned, implicit bit restored
+;               r2:r3   Y, low:high, unsigned, implicit bit restored then
 ;                       shifted right to match X's exponent
 ;       out     r0:r1   X - Y, normalised, with bit 31 holding the SIGN of the
 ;                       result rather than the implicit one
@@ -70,23 +70,23 @@ fpsub_mantissa:
 ; non-negative result, which is cheaper than subtracting one way and negating:
 ; `rsb` already computes its operands the other way round, so the second arm
 ; costs an extra byte rather than an extra ten.
-        br      lo, r0, r2, y_bigger    ; XH < YH                          3
-        br      hi, r0, r2, x_bigger    ; XH > YH                          3
-        br      lo, r1, r3, y_bigger    ; high halves equal: low decides   3
+        br      lo, r1, r3, y_bigger    ; XH < YH                          3
+        br      hi, r1, r3, x_bigger    ; XH > YH                          3
+        br      lo, r0, r2, y_bigger    ; high halves equal: low decides   3
 x_bigger:
-        br      hs, r1, r3, xb_nb       ; XL >= YL: no borrow              3
-        add     r0, r0, #-1             ; propagate the borrow             1
+        br      hs, r0, r2, xb_nb       ; XL >= YL: no borrow              3
+        add     r1, r1, #-1             ; propagate the borrow             2
 xb_nb:
-        sub     r1, r1, r3              ; XL -= YL                         2
-        sub     r0, r0, r2              ; XH -= YH                         2
+        sub     r0, r0, r2              ; XL -= YL                         2
+        sub     r1, r1, r3              ; XH -= YH                         2
         mov     r4, #0x7fff             ; positive: mask off the top bit    2
         jmpr    have_mag                ;                                  2
 y_bigger:
-        br      hs, r3, r1, yb_nb       ; YL >= XL: no borrow              3
-        add     r2, r2, #-1             ; propagate the borrow             2
+        br      hs, r2, r0, yb_nb       ; YL >= XL: no borrow              3
+        add     r3, r3, #-1             ; propagate the borrow             2
 yb_nb:
-        rsb     r1, r1, r3              ; r1 = YL - XL                     2
-        rsb     r0, r0, r2              ; r0 = YH - XH                     2
+        rsb     r0, r0, r2              ; r0 = YL - XL                     2
+        rsb     r1, r1, r3              ; r1 = YH - XH                     2
         mov     r4, #-1                 ; negative: leave the top bit set   2
 have_mag:
 
@@ -95,10 +95,10 @@ have_mag:
 ; three bytes here and saves the counter a range it cannot reach anyway, since
 ; `clz` only sees sixteen bits at a time.
         mov     r2, #0                  ; shift count so far               2
-        br      ne, r0, #0, have_hi     ; high half already non-zero       3
-        br      eq, r1, #0, done        ; both halves zero: exact cancel   3
-        mov     r0, r1                  ; step up by sixteen bits          1
-        mov     r1, #0                  ;                                  2
+        br      ne, r1, #0, have_hi     ; high half already non-zero       3
+        br      eq, r0, #0, done        ; both halves zero: exact cancel   3
+        mov     r1, r0                  ; step up by sixteen bits          1
+        mov     r0, #0                  ;                                  1
         mov     r2, #16                 ; ... and record it                2
 have_hi:
 
@@ -109,28 +109,28 @@ have_hi:
 ; around it.  See the note at the bottom.
 
 ; --- 3. normalise ----------------------------------------------------------
-; r0 is non-zero, so clz lands in 0..15 and the shift is a real 32-bit one.
+; r1 is non-zero, so clz lands in 0..15 and the shift is a real 32-bit one.
 ;
 ; The crossing bits are `lo >> (16 - n)`, and 16 - n is exactly the count a
 ; shift cannot express: the hardware reads only the low four bits, so a distance
 ; of 16 would be read as 0 and the whole low half would be OR-ed in when n = 0.
 ; Shifting right by one first and then by 15 - n keeps every count inside 0..15
 ; and is correct at both ends.
-        clz     r3, r0                  ; leading zeros, 0..15             2
+        clz     r3, r1                  ; leading zeros, 0..15             2
         add     r2, r2, r3              ; total left shift                 2
-        shl     r0, r0, r3              ; hi <<= n                         2
-        lsr     r5, r1, #1              ; the bits that cross over ...     2
-        shl     r1, r1, r3              ; lo <<= n                         2
+        shl     r1, r1, r3              ; hi <<= n                         2
+        lsr     r5, r0, #1              ; the bits that cross over ...     2
+        shl     r0, r0, r3              ; lo <<= n                         2
         rsb     r3, r3, #15             ; 15 - n, n is dead after this     3
         lsr     r5, r5, r3              ; ... = lo >> (16 - n)             2
-        or      r0, r0, r5              ; merge them into the high half    2
+        or      r1, r1, r5              ; merge them into the high half    2
 
 ; --- 4. sign, and the exponent adjustment ----------------------------------
 ; Normalising leaves bit 31 set, which is the implicit one - and for a negative
 ; result that is exactly the sign bit wanted.  So the whole of "apply the sign"
 ; is "clear that bit, or don't", which is an AND with a mask step 1 already
 ; chose.  No branch, no test, constant time.
-        and     r0, r0, r4              ; 0x7fff clears it, 0xffff keeps   2
+        and     r1, r1, r4              ; 0x7fff clears it, 0xffff keeps   2
         rsb     r2, r2, #0              ; the exponent goes DOWN by n      2
 done:                                   ;                          total  65
 
@@ -151,11 +151,11 @@ done:                                   ;                          total  65
 ; loop is about the same size:
 ;
 ;       norm_loop:
-;               brset   r0, #0x8000, norm_done  ; 3
-;               lsr     r5, r1, #15             ; 2   the bit crossing over
-;               shl     r0, r0, #1              ; 2
-;               or      r0, r0, r5              ; 2
+;               brset   r1, #0x8000, norm_done  ; 3
+;               lsr     r5, r0, #15             ; 2   the bit crossing over
 ;               shl     r1, r1, #1              ; 2
+;               or      r1, r1, r5              ; 2
+;               shl     r0, r0, #1              ; 2
 ;               add     r2, r2, #1              ; 2
 ;               br      norm_loop               ; 2
 ;
@@ -176,7 +176,7 @@ done:                                   ;                          total  65
 ;
 ;   mov r2, #16          3 -> 2   16 is 1<<4, which imm5 could not reach
 ;   mov r4, #0x7fff      -       a mask is now as cheap to load as a flag
-;   and r0, r0, r4       5 -> 2   which is what turned a branch into an and
+;   and r1, r1, r4       5 -> 2   which is what turned a branch into an and
 ;
 ; The last one is the interesting one, and it is not really about the encoding
 ; of a constant.  `shl`+`lsr` was only ever a way to clear one bit without

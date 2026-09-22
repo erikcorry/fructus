@@ -16,29 +16,29 @@ const check = (name, ok, detail = '') => {
 };
 
 // ============================================================================
-// fpadd_mantissa - caller has unpacked and aligned.  32 bytes.
+// fpadd_mantissa - caller has unpacked and aligned.  33 bytes.
 // ============================================================================
 function aligned(xh, xl, yh, yl) {
-  let r0 = xh, r1 = xl, r2 = yh, r3 = yl;
-  const yl0 = r3, yh0 = r2;
-  r1 = (r1 + r3) & M;                      // add  r1, r1, r3
+  let r0 = xl, r1 = xh, r2 = yl, r3 = yh;
+  const yl0 = r2, yh0 = r3;
   r0 = (r0 + r2) & M;                      // add  r0, r0, r2
+  r1 = (r1 + r3) & M;                      // add  r1, r1, r3
   let ovf;
-  if (r1 >= yl0) {                         // br   hs, r1, r3, no_lo
-    ovf = r0 < yh0;                        //   br   lo, r0, r2, shift_down
+  if (r0 >= yl0) {                         // br   hs, r0, r2, no_lo
+    ovf = r1 < yh0;                        //   br   lo, r1, r3, shift_down
   } else {
-    r0 = (r0 + 1) & M;                     //   add  r0, r0, #1
-    ovf = r0 <= yh0;                       //   br   ls, r0, r2, shift_down
+    r1 = (r1 + 1) & M;                     //   add  r1, r1, #1
+    ovf = r1 <= yh0;                       //   br   ls, r1, r3, shift_down
   }
   if (!ovf) {
-    r0 = r0 & 0x7fff;                      // and  r0, r0, #0x7fff
-    return { hi: r0, lo: r1, exp: 0 };     // mov  r2, #0
+    r1 = r1 & 0x7fff;                      // and  r1, r1, #0x7fff
+    return { hi: r1, lo: r0, exp: 0 };     // mov  r2, #0
   }
-  r1 = r1 >>> 1;                           // lsr  r1, r1, #1
-  r3 = (r0 << 15) & M;                     // shl  r3, r0, #15
-  r1 = (r1 | r3) & M;                      // or   r1, r1, r3
   r0 = r0 >>> 1;                           // lsr  r0, r0, #1
-  return { hi: r0, lo: r1, exp: 1 };       // mov  r2, #1
+  r3 = (r1 << 15) & M;                     // shl  r3, r1, #15
+  r0 = (r0 | r3) & M;                      // or   r0, r0, r3
+  r1 = r1 >>> 1;                           // lsr  r1, r1, #1
+  return { hi: r1, lo: r0, exp: 1 };       // mov  r2, #1
 }
 
 function refAligned(X, Y) {

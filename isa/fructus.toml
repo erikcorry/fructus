@@ -2566,9 +2566,8 @@ semantics = "R[d] = (R[a] & mask) != 0"
 #
 #     push lr, r4, r5   ...   pop r5, r4, lr
 #
-# That is also why the pair push takes a 32-bit value's registers in high:low
-# order - the high half is named first and lands higher, which is little endian.
-# See isa/abi.s.
+# So a 32-bit value in r0:r1, low half in r0, is pushed as `push r1, r0` - the
+# high half named first lands higher, which is little endian.  See isa/abi.s.
 #
 # THE POINTER IS UPDATED AFTER THE TRANSFER, and that settles what it means to
 # name the pointer in its own register list - the question that has bitten both

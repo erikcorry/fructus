@@ -12,9 +12,9 @@
 ; This routine runs after the sign comparison has chosen addition, and after the
 ; caller has done the unpacking and the alignment.
 ;
-;       in      r0:r1   X, high:low.  The larger operand, still normalised,
+;       in      r0:r1   X, low:high.  The larger operand, still normalised,
 ;                       so bit 31 is set.
-;               r2:r3   Y, high:low.  The smaller operand, implicit bit
+;               r2:r3   Y, low:high.  The smaller operand, implicit bit
 ;                       restored and THEN shifted right to match X's exponent,
 ;                       so its bit 31 is set only when the exponents were equal.
 ;       out     r0:r1   the sum, normalised, ready to store
@@ -65,27 +65,27 @@
 ; ============================================================================
 
 fpadd_mantissa:
-        add     r1, r1, r3              ; XL += YL, wrapping                2
-        add     r0, r0, r2              ; XH += YH, wrapping                2
-        br      hs, r1, r3, no_lo       ; no carry out of the low half      3
-        add     r0, r0, #1              ; propagate it                      1
-        br      ls, r0, r2, shift_down  ; sum <= YH means it carried        3
+        add     r0, r0, r2              ; XL += YL, wrapping                2
+        add     r1, r1, r3              ; XH += YH, wrapping                2
+        br      hs, r0, r2, no_lo       ; no carry out of the low half      3
+        add     r1, r1, #1              ; propagate it                      2
+        br      ls, r1, r3, shift_down  ; sum <= YH means it carried        3
         jmpr    no_shift                ;                                   2
 no_lo:
-        br      lo, r0, r2, shift_down  ; sum <  YH means it carried        3
+        br      lo, r1, r3, shift_down  ; sum <  YH means it carried        3
 
 no_shift:                               ; sum < 2^32: already normalised
-        and     r0, r0, #0x7fff         ; drop the implicit bit             2
+        and     r1, r1, #0x7fff         ; drop the implicit bit             2
         mov     r2, #0                  ; exponent unchanged                2
         jmpr    done                    ;                                   2
 
 shift_down:                             ; sum reached bit 32
-        lsr     r1, r1, #1              ; shift the 33-bit sum right one    2
-        shl     r3, r0, #15             ; high bit 0 -> bit 15 of the low   2
-        or      r1, r1, r3              ;                                   2
-        lsr     r0, r0, #1              ; and bit 31 falls out 0            2
+        lsr     r0, r0, #1              ; shift the 33-bit sum right one    2
+        shl     r3, r1, #15             ; high bit 0 -> bit 15 of the low   2
+        or      r0, r0, r3              ;                                   2
+        lsr     r1, r1, #1              ; and bit 31 falls out 0            2
         mov     r2, #1                  ; exponent +1                       2
-done:                                   ;                          total   32
+done:                                   ;                          total   33
 
 
 ; ============================================================================
@@ -99,7 +99,7 @@ done:                                   ;                          total   32
 ; truncation means when nothing overflows.
 ;
 ; ROUND-TO-EVEN WAS AVAILABLE AND IS NOT TAKEN.  It would be nine bytes on the
-; overflow path - `brclear r1, #2` to test the bit that will become the new
+; overflow path - `brclear r0, #2` to test the bit that will become the new
 ; low bit, add half an ulp, propagate - and cheap only because a one-place shift
 ; discards exactly one bit, making every inexact case an exact tie.
 ;
@@ -110,7 +110,7 @@ done:                                   ;                          total   32
 ; Adding the nine bytes without it would round to even on ties that are not
 ; ties, which is worse than truncating: it would look principled and be wrong.
 ;
-; THE SIGN-BIT CLEAR IS ONE INSTRUCTION, not two.  `and r0, r0, #0x7fff` reads
+; THE SIGN-BIT CLEAR IS ONE INSTRUCTION, not two.  `and r1, r1, #0x7fff` reads
 ; as a mask because it is one: 0x7fff is an immbit5 constant - fifteen ones is
 ; ~(1<<15) - so it fits the same two bytes a `shl` would have.  Before that form
 ; existed this line was a `shl`/`lsr` pair, four bytes of shifting to express a
