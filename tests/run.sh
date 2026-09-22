@@ -235,6 +235,23 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     done
     rm -f build/_sc build/_sc.bin
 
+    # --- a masked shift count may lose its mask -----------------------------
+    # fructus.h says SHIFT_COUNT_TRUNCATED, so GCC may drop the `& 15', `& 31'
+    # or `& 63' on a count and rely on the shift reading only those bits.
+    # tests/shift-trunc.c tries int, long and long long with every count up
+    # to 127: the 16-bit instruction, the helpers, and at -O2 the 32-bit
+    # shift GCC expands inline.
+    for o in -O2 -Os -O0; do
+        if tools/fcc $o tests/shift-trunc.c -o build/_st 2>build/_err \
+           && node tools/fcc-run.mjs build/_st.bin; then
+            printf 'ok    masked shift counts at %s\n' "$o"
+        else
+            printf 'FAIL  a masked shift count goes wrong at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    rm -f build/_st build/_st.bin
+
     # --- 32-bit division, against its own identity --------------------------
     # tests/div32.c needs no reference implementation: a quotient and
     # remainder are right exactly when a == q * b + r and r < b, and the
