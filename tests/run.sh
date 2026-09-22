@@ -219,6 +219,22 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     done
     rm -f build/_sj build/_sj.bin
 
+    # --- a tail call through a pointer keeps its target ---------------------
+    # The epilogue runs between loading the target and the jump, and pops the
+    # callee-saved registers, so the target has to be staged in r5 - which a
+    # frame over 511 bytes must then not use to unwind itself.  tests/sibcall.c
+    # has both shapes.  -Os as well, because that is where it went wrong.
+    for o in -O2 -Os -O0; do
+        if tools/fcc $o tests/sibcall.c -o build/_sc 2>build/_err \
+           && node tools/fcc-run.mjs build/_sc.bin; then
+            printf 'ok    indirect tail calls keep their target at %s\n' "$o"
+        else
+            printf 'FAIL  an indirect tail call loses its target at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    rm -f build/_sc build/_sc.bin
+
     # --- 32-bit division, against its own identity --------------------------
     # tests/div32.c needs no reference implementation: a quotient and
     # remainder are right exactly when a == q * b + r and r < b, and the
