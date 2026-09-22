@@ -19,7 +19,55 @@ set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
 B=$root/build
 X=$B/cross-bin
-CC="$B/gcc/gcc/xgcc -B$B/gcc/gcc/ -B$X/ -isystem $root/crt/include"
+# C OR C++, DECIDED BY THE SOURCE NAMES.  A C++ source switches the driver, the
+# include paths and the runtime library together, because on this target none
+# of the three is found by default.
+#
+# THE TWO -I FLAGS ARE BOTH REQUIRED.  GCC was configured to look for its C++
+# headers under $HOME/fructus-tools, which build-gcc.sh never installs to, so
+# xg++ finds NOTHING on its own - `xg++ -E -v' reports only gcc/include and
+# gcc/include-fixed.  The first path is the library's headers; the second holds
+# bits/c++config.h, which is generated per target, and <type_traits> does not
+# compile without it.
+#
+# THE EMBEDDED SUBSET, as on an ESP32: no exceptions, no RTTI, no thread-safe
+# statics.
+#
+# operator new AND delete ARE OURS, in crt/new.cc, and that is not a taste.
+# libsupc++ defines them, but it was built WITH exceptions, so its operator new
+# throws std::bad_alloc when malloc fails - and the archive member defining it
+# reaches __cxa_throw and then _Unwind_RaiseException, which this target has
+# not got.  Defining them ourselves means that member is never extracted.
+# crt/new.cc explains why neither -fno-exceptions nor --gc-sections can help.
+#
+# AND STATIC CONSTRUCTORS ARE NOT RUN.  crt0.s calls main directly and neither
+# linker script collects .init_array, so a global object with a constructor
+# comes up zero-filled from .bss.  It fails silently; see tools/build-gcc.sh.
+cxx=
+for a in "$@"; do case $a in *.cc|*.cpp|*.cxx|*.C|*.c++) cxx=1 ;; esac; done
+
+L3=$B/gcc/fructus-elf/libstdc++-v3
+CXXF="-I$L3/include -I$L3/include/fructus-elf \
+      -fno-exceptions -fno-rtti -fno-threadsafe-statics"
+
+# THE LIBRARY IS ALWAYS BUILT BY THE SAME TWO COMPILERS, whatever the program
+# is.  $CC follows the caller's sources, but crt/libc.c and crt/malloc.c are C,
+# crt/new.cc is C++, and all three go into ONE archive that both kinds of
+# program link against.  Choosing their compiler by what the caller happened to
+# hand us would make the archive's contents depend on which program was built
+# first - and the staleness check below compares only source timestamps, so it
+# would never notice.  That is the same shape as every other staleness trap
+# here: a check that compares the wrong thing.
+CCC="$B/gcc/gcc/xgcc -B$B/gcc/gcc/ -B$X/ -isystem $root/crt/include"
+CXXC="$B/gcc/gcc/xg++ -B$B/gcc/gcc/ -B$X/ -isystem $root/crt/include $CXXF"
+
+CXXLIB=
+if [ -n "$cxx" ]; then
+    CC="$CXXC"
+    CXXLIB="-L$L3/libsupc++/.libs -lsupc++"
+else
+    CC="$CCC"
+fi
 
 out=a.out
 prev=
@@ -34,8 +82,9 @@ lib=$B/crt/libc.a
 mkdir -p $B/crt
 stale=
 [ -f $lib ] || stale=1
-for s in $root/crt/crt0.s $root/crt/*.c $root/crt/include/*.h $root/libc/*.s \
-         $root/snippets/digits3.s $B/gcc/gcc/cc1; do
+for s in $root/crt/crt0.s $root/crt/*.c $root/crt/*.cc $root/crt/include/*.h \
+         $root/libc/*.s $root/snippets/digits3.s $B/gcc/gcc/cc1 \
+         $B/gcc/gcc/cc1plus; do
     [ $s -nt $lib ] && stale=1
 done
 if [ -n "$stale" ]; then
@@ -70,14 +119,21 @@ if [ -n "$stale" ]; then
     # warnings to errors there would file working programs as compile
     # failures.
     for c in libc malloc; do
-        $CC -Os -Wall -Werror -ffunction-sections -c $root/crt/$c.c -o $B/crt/$c.o
+        $CCC -Os -Wall -Werror -ffunction-sections -c $root/crt/$c.c -o $B/crt/$c.o
         $X/fructus-elf-ar rc $lib $B/crt/$c.o
     done
+    # THE C++ RUNTIME SUPPORT, ALWAYS BUILT AND ALWAYS ARCHIVED.  A C program
+    # pays nothing for it: a member is extracted from an archive only to
+    # resolve an UNDEFINED symbol, and a C program has no operator new to
+    # resolve.  Building it unconditionally is what keeps the archive the same
+    # whichever language the caller brought.
+    $CXXC -Os -Wall -Werror -ffunction-sections -c $root/crt/new.cc -o $B/crt/new.o
+    $X/fructus-elf-ar rc $lib $B/crt/new.o
     $X/fructus-elf-ranlib $lib
 fi
 
 # The image is RAM, code and data alike, so the one segment is RWX on purpose.
 $CC -nostdlib -T $root/ld/fructus-sim.ld -Wl,--no-warn-rwx-segments,--gc-sections \
     $B/crt/crt0.o "$@" \
-    -Wl,--start-group $lib -L$B/gcc/fructus-elf/libgcc -lgcc -Wl,--end-group
+    -Wl,--start-group $lib $CXXLIB -L$B/gcc/fructus-elf/libgcc -lgcc -Wl,--end-group
 $X/fructus-elf-objcopy -O binary $out $out.bin
