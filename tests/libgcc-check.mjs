@@ -341,5 +341,73 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   console.log(`ok    the four division helpers: ${signed.length} signed pairs, 2000 unsigned`);
 }
 
+// --- the shifts by a variable count -----------------------------------------
+// Every legal count, against BigInt.  The 32-bit ones take the value in r0:r1
+// and the count in r2; the 64-bit ones fill r0-r3 with the value, so the count
+// is the one stack argument, at [sp] on entry.
+//
+// THE REGISTERS THEY MUST NOT TOUCH are checked too.  The 32-bit ones take
+// three argument registers, so r3 is callee saved there as well as r4; the
+// 64-bit ones borrow r4 and lr and must give both back.
+{
+  const M32n = 0xffffffffn, M64n = 0xffffffffffffffffn;
+  const R3 = 0x3e3e;
+  const sx = (v, w) => (v >> BigInt(w - 1)) & 1n ? v - (1n << BigInt(w)) : v;
+  const refs = {
+    __ashlsi3: (v, n) => (v << n) & M32n,
+    __lshrsi3: (v, n) => v >> n,
+    __ashrsi3: (v, n) => (sx(v, 32) >> n) & M32n,
+    __ashldi3: (v, n) => (v << n) & M64n,
+    __lshrdi3: (v, n) => v >> n,
+    __ashrdi3: (v, n) => (sx(v, 64) >> n) & M64n,
+  };
+  const r64n = () => (BigInt(r16()) << 48n) | (BigInt(r16()) << 32n) | (BigInt(r16()) << 16n) | BigInt(r16());
+  const edge32 = [0n, 1n, 0x7fffffffn, 0x80000000n, 0xffffffffn, 0x12345678n, 0x8000ffffn, 0x0000ffffn];
+  const edge64 = [0n, 1n, 0x7fffffffffffffffn, 0x8000000000000000n, M64n, 0x0123456789abcdefn,
+                  0xfedcba9876543210n, 0x00000000ffff0000n];
+
+  const shift = (name, v, n) => {
+    const wide = name.endsWith('di3');
+    m.mem.fill(0);
+    m.load(code);
+    m.R.fill(0);
+    m.R[m.named.sp] = SP0;
+    m.R[m.named.lr] = RET;
+    m.R[4] = R4;
+    for (let w = 0; w < (wide ? 4 : 2); w++) m.R[w] = Number((v >> BigInt(16 * w)) & 0xffffn);
+    if (wide) { m.mem[SP0] = n & 0xff; m.mem[SP0 + 1] = n >> 8; }
+    else { m.R[2] = n; m.R[3] = R3; }
+    m.pc = syms.get(name); m.halted = false; m.count = 0;
+    m.reset();
+    let why;
+    try { why = m.run({ max: 2000, stopAt: RET }); }
+    catch (e) { why = `ran off the rails: ${e.message}`; }
+    let got = 0n;
+    for (let w = (wide ? 3 : 1); w >= 0; w--) got = (got << 16n) | BigInt(m.R[w]);
+    const kept = m.R[4] === R4 && m.R[m.named.sp] === SP0 && (wide || m.R[3] === R3);
+    return { why, got, kept, cycles: m.cycles() };
+  };
+
+  for (const [name, ref] of Object.entries(refs)) {
+    const wide = name.endsWith('di3'), bits = wide ? 64 : 32;
+    const vals = [...(wide ? edge64 : edge32)];
+    for (let i = 0; i < 40; i++) vals.push(wide ? r64n() : r64n() & M32n);
+    let wrong = 0, eg = '', n = 0, worst = 0;
+    for (const v of vals)
+      for (let k = 0; k < bits; k++) {
+        const q = shift(name, v, k), want = ref(v, BigInt(k));
+        if (q.why !== 'stopped' || q.got !== want || !q.kept) {
+          if (!wrong++) eg = `0x${v.toString(16)} by ${k} = 0x${want.toString(16)}, got ` +
+                             (q.why !== 'stopped' ? q.why : `0x${q.got.toString(16)}` +
+                              (q.kept ? '' : ', and a register it must keep changed'));
+        }
+        worst = Math.max(worst, q.cycles);
+        n++;
+      }
+    check(name, wrong === 0, `${wrong} of ${n} wrong, e.g. ${eg}`);
+    console.log(`ok    ${name}: ${n} shifts, every count 0..${bits - 1}, at most ${worst} cycles`);
+  }
+}
+
 console.log(`${checks} checks, ${fails} failures`);
 process.exit(fails ? 1 : 0);

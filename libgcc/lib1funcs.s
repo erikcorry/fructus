@@ -1,5 +1,5 @@
 ; ============================================================================
-; libgcc/lib1funcs.s - the multiply helpers GCC calls
+; libgcc/lib1funcs.s - the multiply, divide and shift helpers GCC calls
 ; ============================================================================
 ;
 ; With short = int = 16 bits and long = 32, GCC names its helpers after machine
@@ -27,6 +27,11 @@
 ; compiler that wants `x / 10' and `x % 10' together can then have them for one
 ; call.  The 32-bit division helpers are still C, in the GCC tree's
 ; libgcc/config/fructus/lib2div.c.
+;
+; And the shifts by a variable count, at the end of the file:
+;
+;       __ashlsi3  __lshrsi3  __ashrsi3     32-bit <<, unsigned >>, signed >>
+;       __ashldi3  __lshrdi3  __ashrdi3     the same for 64 bits
 ;
 ; ONE ROUTINE SERVES SIGNED AND UNSIGNED for everything that is not widening.
 ; The low n bits of a two's complement product do not depend on the signedness
@@ -588,4 +593,170 @@ __modhi3:
         rsb     r0, r0, #0              ; 2
 .pos:
         pop     r2, lr                  ; 6
+        ret                             ; 1
+
+; ============================================================================
+; The shifts by a variable count
+; ============================================================================
+;       __ashlsi3   __lshrsi3   __ashrsi3     32-bit value in r0:r1, count in r2
+;       __ashldi3   __lshrdi3   __ashrdi3     64-bit value in r0:r1:r2:r3,
+;                                             count on the stack at [sp]
+;
+; GCC calls the 32-bit ones at -Os - at -O2 it expands a two-word shift inline
+; - and the 64-bit ones always.  The count is an int, so the 64-bit value fills
+; every argument register and the count is the one stack argument.
+;
+; EVERY MACHINE SHIFT READS ONLY THE LOW FOUR BITS OF ITS COUNT, so a shift of
+; a multi-word value is done in two stages.  The high bits of the count move
+; whole words - bit 5 moves two of them, bit 4 one - which is register moves
+; and nothing else.  Then the low four bits, n, shift every word by n and carry
+; the n bits that cross each boundary into the neighbouring word.
+;
+; THE CROSSING BITS NEED A SHIFT BY 16 - n, and that is one `rsb` from #0, not
+; from #16: only the low four bits of the distance are read, and those are the
+; same for -n as for 16 - n.  #0 is imm5 and two bytes; #16 is three.  At n = 0
+; the distance would read as 0 and the whole word would cross, so n = 0 is
+; tested for first and returns - it is the whole-words-only case anyway.
+;
+; A COUNT OF THE VALUE'S WIDTH OR MORE is undefined in C.  These read only the
+; bits a legal count can have, so 32 shifts a long by 0 rather than clearing it.
+;
+; The 32-bit ones take three argument registers, so r3 and r4 are callee saved
+; there, and they touch neither: r0, r1, r2 and r5 are enough.  The 64-bit ones
+; need two more registers than they own - one for 16 - n and one for the bits
+; in transit - and borrow r4 and lr, which is one push and one pop.
+
+__ashlsi3:
+        brclear r2, #0x0010, .lt16      ; 3   under 16: no whole word moves
+        mov     r1, r0                  ; 1   pinned
+        mov     r0, #0                  ; 1   pinned
+.lt16:
+        brclear r2, #0x000f, .done      ; 3   a whole number of words
+        rsb     r5, r2, #0              ; 2   16 - n, in the bits that count
+        lsr     r5, r0, r5              ; 2   the bits crossing into the high
+        shl     r1, r1, r2              ; 2
+        or      r1, r1, r5              ; 2
+        shl     r0, r0, r2              ; 2
+.done:
+        ret                             ; 1
+
+__lshrsi3:
+        brclear r2, #0x0010, .lt16      ; 3
+        mov     r0, r1                  ; 1   pinned
+        mov     r1, #0                  ; 2
+.lt16:
+        brclear r2, #0x000f, .done      ; 3
+        rsb     r5, r2, #0              ; 2   16 - n
+        shl     r5, r1, r5              ; 2   the bits crossing into the low
+        lsr     r0, r0, r2              ; 2
+        or      r0, r0, r5              ; 2
+        lsr     r1, r1, r2              ; 2
+.done:
+        ret                             ; 1
+
+__ashrsi3:
+        brclear r2, #0x0010, .lt16      ; 3
+        mov     r0, r1                  ; 1   pinned
+        asr     r1, r1, #15             ; 2   the sign, in every bit
+.lt16:
+        brclear r2, #0x000f, .done      ; 3
+        rsb     r5, r2, #0              ; 2   16 - n
+        shl     r5, r1, r5              ; 2
+        lsr     r0, r0, r2              ; 2   LOGICAL: the low word has no sign
+        or      r0, r0, r5              ; 2
+        asr     r1, r1, r2              ; 2
+.done:
+        ret                             ; 1
+
+__ashldi3:
+        ld      r5, [sp, #0]            ; 4   the count
+        brclear r5, #0x0020, .lt32      ; 3   whole words, two at a time ...
+        mov     r3, r1                  ; 2
+        mov     r2, r0                  ; 2
+        mov     r0, #0                  ; 1   pinned
+        mov     r1, r0                  ; 1   pinned
+.lt32:
+        brclear r5, #0x0010, .lt16      ; 3   ... then one
+        mov     r3, r2                  ; 2
+        mov     r2, r1                  ; 2
+        mov     r1, r0                  ; 1   pinned
+        mov     r0, #0                  ; 1   pinned
+.lt16:
+        brclear r5, #0x000f, .done      ; 3
+        push    r4, lr                  ; 6
+        rsb     r4, r5, #0              ; 2   16 - n
+        shl     r3, r3, r5              ; 2   top word first, while the word
+        lsr     lr, r2, r4              ; 2   below it is still unshifted
+        or      r3, r3, lr              ; 2
+        shl     r2, r2, r5              ; 2
+        lsr     lr, r1, r4              ; 2
+        or      r2, r2, lr              ; 2
+        shl     r1, r1, r5              ; 2
+        lsr     lr, r0, r4              ; 2
+        or      r1, r1, lr              ; 2
+        shl     r0, r0, r5              ; 2
+        pop     lr, r4                  ; 6
+.done:
+        ret                             ; 1
+
+__lshrdi3:
+        ld      r5, [sp, #0]            ; 4
+        brclear r5, #0x0020, .lt32      ; 3
+        mov     r0, r2                  ; 2
+        mov     r1, r3                  ; 2
+        mov     r2, #0                  ; 2
+        mov     r3, r2                  ; 2
+.lt32:
+        brclear r5, #0x0010, .lt16      ; 3
+        mov     r0, r1                  ; 1   pinned
+        mov     r1, r2                  ; 2
+        mov     r2, r3                  ; 2
+        mov     r3, #0                  ; 2
+.lt16:
+        brclear r5, #0x000f, .done      ; 3
+        push    r4, lr                  ; 6
+        rsb     r4, r5, #0              ; 2   16 - n
+        lsr     r0, r0, r5              ; 2   bottom word first, while the
+        shl     lr, r1, r4              ; 2   word above it is unshifted
+        or      r0, r0, lr              ; 2
+        lsr     r1, r1, r5              ; 2
+        shl     lr, r2, r4              ; 2
+        or      r1, r1, lr              ; 2
+        lsr     r2, r2, r5              ; 2
+        shl     lr, r3, r4              ; 2
+        or      r2, r2, lr              ; 2
+        lsr     r3, r3, r5              ; 2
+        pop     lr, r4                  ; 6
+.done:
+        ret                             ; 1
+
+__ashrdi3:
+        ld      r5, [sp, #0]            ; 4
+        brclear r5, #0x0020, .lt32      ; 3
+        mov     r0, r2                  ; 2
+        mov     r1, r3                  ; 2
+        asr     r3, r3, #15             ; 2   the sign, in every bit ...
+        mov     r2, r3                  ; 2   ... of both top words
+.lt32:
+        brclear r5, #0x0010, .lt16      ; 3
+        mov     r0, r1                  ; 1   pinned
+        mov     r1, r2                  ; 2
+        mov     r2, r3                  ; 2
+        asr     r3, r3, #15             ; 2
+.lt16:
+        brclear r5, #0x000f, .done      ; 3
+        push    r4, lr                  ; 6
+        rsb     r4, r5, #0              ; 2   16 - n
+        lsr     r0, r0, r5              ; 2
+        shl     lr, r1, r4              ; 2
+        or      r0, r0, lr              ; 2
+        lsr     r1, r1, r5              ; 2
+        shl     lr, r2, r4              ; 2
+        or      r1, r1, lr              ; 2
+        lsr     r2, r2, r5              ; 2
+        shl     lr, r3, r4              ; 2
+        or      r2, r2, lr              ; 2
+        asr     r3, r3, r5              ; 2   only the top word is signed
+        pop     lr, r4                  ; 6
+.done:
         ret                             ; 1
