@@ -46,8 +46,8 @@ const MODES = [
 
   { id: 'crrt',    c: '#F5C2DC', label: 'Condition, two registers, target', bits: 'reg 3 (split) + cond 3 + reg 3 + int 8', note: 'br cond, ra, rb, target' },
   { id: 'ckt',     c: '#E4A2C4', label: 'Packed condition, register, target', bits: 'reg 3 + cond+const 5 + int 8', note: 'one five-bit field holds the condition AND the constant' },
-  { id: 'rmt',     c: '#F2B5A5', label: 'Register, bit mask, target', bits: 'reg 3 + table 5 + int 8',    note: 'brset &middot; brclear, on one bit' },
-  { id: 'rimt',    c: '#E09A98', label: 'Register, field mask, target', bits: 'reg 3 + table 5 + int 8',   note: 'the same three fields read through #immask5: brset &middot; brclear on a whole field' },
+  { id: 'rmt',     c: '#F2B5A5', label: 'Register, bit mask, target', bits: 'reg 3 + table 5 + int 8',    note: 'brset &middot; brclr, on one bit' },
+  { id: 'rimt',    c: '#E09A98', label: 'Register, field mask, target', bits: 'reg 3 + table 5 + int 8',   note: 'the same three fields read through #immask5: brset &middot; brclr on a whole field' },
   { id: 't8',      c: '#FAD4D4', label: 'Target only, 8-bit',    bits: 'int 8',                           note: 'the short jmpr' },
   { id: 't16',     c: '#F0AEAE', label: 'Target only, 16-bit',   bits: 'int 16 (split)',                  note: 'jmp &middot; jmpr &middot; call &middot; callr' },
 ];

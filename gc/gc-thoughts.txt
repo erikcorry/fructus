@@ -13,7 +13,7 @@ Assume heap is fixed size and contiguous
 Write barrier: Write a byte or bit when pointer goes upwards.
 Pages are 64 bytes large because we have >> 6 in imm.
     st src, addr, off
-    brclear src, #1, .no_write_barrier  ; Smi write.
+    brclr src, #1, .no_write_barrier  ; Smi write.
     br ge, addr, src, .no_write_barrier ; Downwards pointer.
     lsr tmp, addr, 6  ; Page number
     mov tmp2, #1

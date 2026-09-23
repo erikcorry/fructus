@@ -26,7 +26,7 @@ if (STRUCT.some((n, i) => NAMES[i] !== n))
 const RULES = [
   [/^if \(test\(cond, R\[a\], R\[b\], 16\)\) /,    'subtract', 'br, the cond3 field'],
   [/^if \(test\(k\.cond, R\[a\], k\.imm, 16\)\) /, 'subtract', 'br, the condimm5 table'],
-  [/^if \(\(R\[a\] & mask\) == 0\) /,              'mask',     'brclear, eq'],
+  [/^if \(\(R\[a\] & mask\) == 0\) /,              'mask',     'brclr, eq'],
   [/^if \(\(R\[a\] & mask\) != 0\) /,              'mask',     'brset, ne'],
 ];
 const LATER = new Set([]);

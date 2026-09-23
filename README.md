@@ -51,7 +51,7 @@ The non-interactive SVG opcode map above and the interactive HTML form with per-
 `npm run map`.
 
 The ALU is strictly two-input, single output. Comparator operations (conditional
-branch and the "? 1 : 0" instructions iseq, isset, isclear) have a fourth 3-bit
+branch and the "? 1 : 0" instructions iseq, isset) have a fourth 3-bit
 input which selects the condition. Unary operations will be implemented as
 binary operations where the second (immediate) input selects the operation.
 
@@ -73,8 +73,8 @@ Current ALU instruction forms (those requiring 9 bits take up two opcodes):
 Current condition forms (all *2-byte*, but the branch instructions add a third byte for the relative PC offset):
 - reg, reg, cond - The usual 8 conditions including overflow. Their inverses are achieved by reversing the two registers
 - reg, imm5 - The imm5 selects common constant-condition pairs
-- reg, immbit5 - Immediate as above is and-ed with the register and tested for zero (brclear, isclear) or non-zero (brset, isset)
-- reg, immmask5 - Immediate as above is and-ed with the register and tested for zero (brclear, isclear) or non-zero (brset, isset)
+- reg, immbit5 - Immediate as above is and-ed with the register and tested for zero (brclr) or non-zero (brset, isset)
+- reg, immmask5 - Immediate as above is and-ed with the register and tested for zero (brclr) or non-zero (brset, isset)
 
 ## The implementation structure
 
@@ -222,7 +222,7 @@ three placements tried.
 
 Generated, not written. `rtl/immgen.sv` produces the 16-bit immediate right-hand
 side for every instruction that has one — the ALU and shift groups, `mov`, the
-load and store displacements, `brclear`/`brset`, and the packed branch's
+load and store displacements, `brclr`/`brset`, and the packed branch's
 `condimm5` constant — from the instruction register and one control line. 109
 LUT4 and three LUT levels on an iCE40 UP5K.
 

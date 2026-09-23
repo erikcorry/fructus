@@ -129,7 +129,7 @@ memset:
 ; odd n is never a multiple of 32, so subtracting one from it cannot cross a
 ; block boundary, and n & ~31 is the same either way.
 
-        brclear r2, #1, .even           ; even length: no byte to peel
+        brclr   r2, #1, .even           ; even length: no byte to peel
         add     sp, sp, #-1             ; the odd byte, at the very top    2
         st8     r1, [sp, #0]            ;                                  5
 .even:

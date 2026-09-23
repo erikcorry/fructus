@@ -94,18 +94,18 @@ __mulhi3:
 .go:
         mov     r0, #0                  ; 1   the accumulator, pinned
 .top:
-        brclear r5, #0x0001, .s0        ; 3
+        brclr   r5, #0x0001, .s0        ; 3
         add     r0, r0, r1              ; 1
 .s0:
-        brclear r5, #0x0002, .s1        ; 3
+        brclr   r5, #0x0002, .s1        ; 3
         add     r0, r0, r1              ; 1   twice: r1 has not moved, and
         add     r0, r0, r1              ; 1   two of a<<i is a<<(i+1)
 .s1:
         shl     r1, r1, #2              ; 2   one shift for the pair
-        brclear r5, #0x0004, .s2        ; 3
+        brclr   r5, #0x0004, .s2        ; 3
         add     r0, r0, r1              ; 1
 .s2:
-        brclear r5, #0x0008, .s3        ; 3
+        brclr   r5, #0x0008, .s3        ; 3
         add     r0, r0, r1              ; 1
         add     r0, r0, r1              ; 1
 .s3:
@@ -205,10 +205,10 @@ __mulhisi3:
         mov     r2, r0                  ; 2   keep a
         mov     r3, r1                  ; 2   keep b
         call    __umulhisi3             ; 3   r0:r1 = low:high, unsigned
-        brclear r2, #0x8000, .a_pos     ; 3   a negative?
+        brclr   r2, #0x8000, .a_pos     ; 3   a negative?
         rsb     r1, r3, r1              ; 2   high -= b
 .a_pos:
-        brclear r3, #0x8000, .b_pos     ; 3   b negative?
+        brclr   r3, #0x8000, .b_pos     ; 3   b negative?
         rsb     r1, r2, r1              ; 2   high -= a
 .b_pos:
         pop     lr, r3, r2              ; 8
@@ -627,11 +627,11 @@ __modhi3:
 ; in transit - and borrow r4 and lr, which is one push and one pop.
 
 __ashlsi3:
-        brclear r2, #0x0010, .lt16      ; 3   under 16: no whole word moves
+        brclr   r2, #0x0010, .lt16      ; 3   under 16: no whole word moves
         mov     r1, r0                  ; 1   pinned
         mov     r0, #0                  ; 1   pinned
 .lt16:
-        brclear r2, #0x000f, .done      ; 3   a whole number of words
+        brclr   r2, #0x000f, .done      ; 3   a whole number of words
         rsb     r5, r2, #0              ; 2   16 - n, in the bits that count
         lsr     r5, r0, r5              ; 2   the bits crossing into the high
         shl     r1, r1, r2              ; 2
@@ -641,11 +641,11 @@ __ashlsi3:
         ret                             ; 1
 
 __lshrsi3:
-        brclear r2, #0x0010, .lt16      ; 3
+        brclr   r2, #0x0010, .lt16      ; 3
         mov     r0, r1                  ; 1   pinned
         mov     r1, #0                  ; 2
 .lt16:
-        brclear r2, #0x000f, .done      ; 3
+        brclr   r2, #0x000f, .done      ; 3
         rsb     r5, r2, #0              ; 2   16 - n
         shl     r5, r1, r5              ; 2   the bits crossing into the low
         lsr     r0, r0, r2              ; 2
@@ -655,11 +655,11 @@ __lshrsi3:
         ret                             ; 1
 
 __ashrsi3:
-        brclear r2, #0x0010, .lt16      ; 3
+        brclr   r2, #0x0010, .lt16      ; 3
         mov     r0, r1                  ; 1   pinned
         asr     r1, r1, #15             ; 2   the sign, in every bit
 .lt16:
-        brclear r2, #0x000f, .done      ; 3
+        brclr   r2, #0x000f, .done      ; 3
         rsb     r5, r2, #0              ; 2   16 - n
         shl     r5, r1, r5              ; 2
         lsr     r0, r0, r2              ; 2   LOGICAL: the low word has no sign
@@ -670,19 +670,19 @@ __ashrsi3:
 
 __ashldi3:
         ld      r5, [sp, #0]            ; 4   the count
-        brclear r5, #0x0020, .lt32      ; 3   whole words, two at a time ...
+        brclr   r5, #0x0020, .lt32      ; 3   whole words, two at a time ...
         mov     r3, r1                  ; 2
         mov     r2, r0                  ; 2
         mov     r0, #0                  ; 1   pinned
         mov     r1, r0                  ; 1   pinned
 .lt32:
-        brclear r5, #0x0010, .lt16      ; 3   ... then one
+        brclr   r5, #0x0010, .lt16      ; 3   ... then one
         mov     r3, r2                  ; 2
         mov     r2, r1                  ; 2
         mov     r1, r0                  ; 1   pinned
         mov     r0, #0                  ; 1   pinned
 .lt16:
-        brclear r5, #0x000f, .done      ; 3
+        brclr   r5, #0x000f, .done      ; 3
         push    r4, lr                  ; 6
         rsb     r4, r5, #0              ; 2   16 - n
         shl     r3, r3, r5              ; 2   top word first, while the word
@@ -701,19 +701,19 @@ __ashldi3:
 
 __lshrdi3:
         ld      r5, [sp, #0]            ; 4
-        brclear r5, #0x0020, .lt32      ; 3
+        brclr   r5, #0x0020, .lt32      ; 3
         mov     r0, r2                  ; 2
         mov     r1, r3                  ; 2
         mov     r2, #0                  ; 2
         mov     r3, r2                  ; 2
 .lt32:
-        brclear r5, #0x0010, .lt16      ; 3
+        brclr   r5, #0x0010, .lt16      ; 3
         mov     r0, r1                  ; 1   pinned
         mov     r1, r2                  ; 2
         mov     r2, r3                  ; 2
         mov     r3, #0                  ; 2
 .lt16:
-        brclear r5, #0x000f, .done      ; 3
+        brclr   r5, #0x000f, .done      ; 3
         push    r4, lr                  ; 6
         rsb     r4, r5, #0              ; 2   16 - n
         lsr     r0, r0, r5              ; 2   bottom word first, while the
@@ -732,19 +732,19 @@ __lshrdi3:
 
 __ashrdi3:
         ld      r5, [sp, #0]            ; 4
-        brclear r5, #0x0020, .lt32      ; 3
+        brclr   r5, #0x0020, .lt32      ; 3
         mov     r0, r2                  ; 2
         mov     r1, r3                  ; 2
         asr     r3, r3, #15             ; 2   the sign, in every bit ...
         mov     r2, r3                  ; 2   ... of both top words
 .lt32:
-        brclear r5, #0x0010, .lt16      ; 3
+        brclr   r5, #0x0010, .lt16      ; 3
         mov     r0, r1                  ; 1   pinned
         mov     r1, r2                  ; 2
         mov     r2, r3                  ; 2
         asr     r3, r3, #15             ; 2
 .lt16:
-        brclear r5, #0x000f, .done      ; 3
+        brclr   r5, #0x000f, .done      ; 3
         push    r4, lr                  ; 6
         rsb     r4, r5, #0              ; 2   16 - n
         lsr     r0, r0, r5              ; 2

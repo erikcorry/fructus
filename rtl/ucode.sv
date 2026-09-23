@@ -114,7 +114,7 @@
 //     three-byte ALU:
 //         add rsb xor or and iseq mov
 //     conditional branches - fetch both bytes, then take or dispatch:
-//         br brclear brset
+//         br brclr brset
 //     the short relative jump, a byte of displacement:
 //         jmpr
 //     wide targets, absolute, with and without a link:

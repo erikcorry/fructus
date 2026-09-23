@@ -11,7 +11,7 @@
 //   subtract   the condition on the flags of rhs - lhs
 //              br, the cond3 field; br, the condimm5 table
 //   mask       eq or ne on lhs & rhs being zero
-//              brclear, eq; brset, ne
+//              brclr, eq; brset, ne
 //
 // The mode is rtl/cond.sv's `mask`, which is its source field's bit 1: the
 // fixed eq and ne sources serve exactly the two mask branches.  So choosing the

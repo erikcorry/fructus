@@ -642,7 +642,7 @@ endmodule
 // a comparison is wrong at the edges and right almost everywhere else.
 //
 // Then END TO END, through cond.sv: real branch bytes decoded with
-// tools/decode.js - two-register, packed, brclear and brset - the condition and
+// tools/decode.js - two-register, packed, brclr and brset - the condition and
 // mode cond.sv produces from them, and compare.sv's bit against the semantics.
 {
   const rnd = (() => { let s = 521288629;
@@ -746,7 +746,7 @@ endmodule
 
   // --- end to end: branch bytes -> cond.sv -> compare.sv ----------------------
   // The microcode's source for each: 0 the two-register branch (rhs = R[a],
-  // lhs = R[b]), 1 the packed one (rhs = the constant, lhs = R[a]), 2 brclear
+  // lhs = R[b]), 1 the packed one (rhs = the constant, lhs = R[a]), 2 brclr
   // and 3 brset (rhs = the mask, lhs = R[a]).
   const dec = buildDecoder(spec);
   const e2e = [];
@@ -823,7 +823,7 @@ endmodule
 //
 // Single-step means one write and no memory: every ALU operation, mov, the unary
 // operations, iseq and isset, the one-byte forms that touch no memory, and br,
-// brclear and brset.  Loads, stores, push, pop and calls take microcode steps
+// brclr and brset.  Loads, stores, push, pop and calls take microcode steps
 // that override these selects, so predecode alone does not decide them.
 {
   const rnd = (() => { let s = 1103515245;
@@ -1023,7 +1023,7 @@ endmodule
     `       mov  r0, #0
             brset r0, #1, odd
             mov  r1, #0x0f0f
-            brclear r1, #0xf0f0, clear
+            brclr r1, #0xf0f0, clear
             halt
     clear:  add  r1, r1, #1
             jmpr done

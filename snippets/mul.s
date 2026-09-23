@@ -37,7 +37,7 @@
 ; on it.  It costs 10 cycles for a set bit and 11 for a clear one, and about
 ; 6.5 of that is the two branches.  The obvious loop -
 ;
-;       .top:   brclear r1, #1, .skip
+;       .top:   brclr   r1, #1, .skip
 ;               add     r0, r0, r5
 ;       .skip:  shl     r5, r5, #1
 ;               lsr     r1, r1, #1
@@ -216,18 +216,18 @@ mul_16_x4:
         mov     r1, r0                  ; 1   ... so the multiplicand can have it
         mov     r0, #0                  ; 1   acc = 0
 .top:
-        brclear r5, #0x0001, .s0        ; 3
+        brclr   r5, #0x0001, .s0        ; 3
         add     r0, r0, r1              ; 1   += a<<i, in one byte
 .s0:
-        brclear r5, #0x0002, .s1        ; 3
+        brclr   r5, #0x0002, .s1        ; 3
         add     r0, r0, r1              ; 1   twice, because r1 has not moved
         add     r0, r0, r1              ; 1   ... and 2*(a<<i) is a<<(i+1)
 .s1:
         shl     r1, r1, #2              ; 2   one shift for the pair
-        brclear r5, #0x0004, .s2        ; 3
+        brclr   r5, #0x0004, .s2        ; 3
         add     r0, r0, r1              ; 1
 .s2:
-        brclear r5, #0x0008, .s3        ; 3
+        brclr   r5, #0x0008, .s3        ; 3
         add     r0, r0, r1              ; 1
         add     r0, r0, r1              ; 1
 .s3:
@@ -250,7 +250,7 @@ mul_16_x4:
 ; so each block is three instructions and exactly seven bytes:
 ;
 ;       shl     r0, r0, #1              double the accumulator
-;       brclear r1, #1<<k, .next        this bit clear: nothing to add
+;       brclr   r1, #1<<k, .next        this bit clear: nothing to add
 ;       add     r0, r0, r5              set: add the multiplicand
 ;
 ; and a stays put in r5 the whole way, where the loop above has to keep
@@ -328,49 +328,49 @@ mul_16_fast:
 .short:
         ret                             ; 1
 .b14:     shl     r0, r0, #1              ; 2
-        brclear r1, #0x4000, .b13   ; 3
+        brclr   r1, #0x4000, .b13   ; 3
         add     r0, r0, r5              ; 2
 .b13:     shl     r0, r0, #1              ; 2
-        brclear r1, #0x2000, .b12   ; 3
+        brclr   r1, #0x2000, .b12   ; 3
         add     r0, r0, r5              ; 2
 .b12:     shl     r0, r0, #1              ; 2
-        brclear r1, #0x1000, .b11   ; 3
+        brclr   r1, #0x1000, .b11   ; 3
         add     r0, r0, r5              ; 2
 .b11:     shl     r0, r0, #1              ; 2
-        brclear r1, #0x0800, .b10   ; 3
+        brclr   r1, #0x0800, .b10   ; 3
         add     r0, r0, r5              ; 2
 .b10:     shl     r0, r0, #1              ; 2
-        brclear r1, #0x0400, .b9    ; 3
+        brclr   r1, #0x0400, .b9    ; 3
         add     r0, r0, r5              ; 2
 .b9:      shl     r0, r0, #1              ; 2
-        brclear r1, #0x0200, .b8    ; 3
+        brclr   r1, #0x0200, .b8    ; 3
         add     r0, r0, r5              ; 2
 .b8:      shl     r0, r0, #1              ; 2
-        brclear r1, #0x0100, .b7    ; 3
+        brclr   r1, #0x0100, .b7    ; 3
         add     r0, r0, r5              ; 2
 .b7:      shl     r0, r0, #1              ; 2
-        brclear r1, #0x0080, .b6    ; 3
+        brclr   r1, #0x0080, .b6    ; 3
         add     r0, r0, r5              ; 2
 .b6:      shl     r0, r0, #1              ; 2
-        brclear r1, #0x0040, .b5    ; 3
+        brclr   r1, #0x0040, .b5    ; 3
         add     r0, r0, r5              ; 2
 .b5:      shl     r0, r0, #1              ; 2
-        brclear r1, #0x0020, .b4    ; 3
+        brclr   r1, #0x0020, .b4    ; 3
         add     r0, r0, r5              ; 2
 .b4:      shl     r0, r0, #1              ; 2
-        brclear r1, #0x0010, .b3    ; 3
+        brclr   r1, #0x0010, .b3    ; 3
         add     r0, r0, r5              ; 2
 .b3:      shl     r0, r0, #1              ; 2
-        brclear r1, #0x0008, .b2    ; 3
+        brclr   r1, #0x0008, .b2    ; 3
         add     r0, r0, r5              ; 2
 .b2:      shl     r0, r0, #1              ; 2
-        brclear r1, #0x0004, .b1    ; 3
+        brclr   r1, #0x0004, .b1    ; 3
         add     r0, r0, r5              ; 2
 .b1:      shl     r0, r0, #1              ; 2
-        brclear r1, #0x0002, .b0    ; 3
+        brclr   r1, #0x0002, .b0    ; 3
         add     r0, r0, r5              ; 2
 .b0:      shl     r0, r0, #1              ; 2
-        brclear r1, #0x0001, .done  ; 3
+        brclr   r1, #0x0001, .done  ; 3
         add     r0, r0, r5              ; 2
 .done:
         ret                             ; 1
@@ -404,63 +404,63 @@ mul_16_fast_erik:
         ret       ; jmp lr
 .branch_table:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x4000, .b13   ; 3
+        brclr   r1, #0x4000, .b13   ; 3
         add     r0, r0, r5              ; 2
 .b13:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x2000, .b12   ; 3
+        brclr   r1, #0x2000, .b12   ; 3
         add     r0, r0, r5              ; 2
 .b12:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x1000, .b11   ; 3
+        brclr   r1, #0x1000, .b11   ; 3
         add     r0, r0, r5              ; 2
 .b11:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x0800, .b10   ; 3
+        brclr   r1, #0x0800, .b10   ; 3
         add     r0, r0, r5              ; 2
 .b10:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x0400, .b9    ; 3
+        brclr   r1, #0x0400, .b9    ; 3
         add     r0, r0, r5              ; 2
 .b9:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x0200, .b8    ; 3
+        brclr   r1, #0x0200, .b8    ; 3
         add     r0, r0, r5              ; 2
 .b8:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x0100, .b7    ; 3
+        brclr   r1, #0x0100, .b7    ; 3
         add     r0, r0, r5              ; 2
 .b7:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x0080, .b6    ; 3
+        brclr   r1, #0x0080, .b6    ; 3
         add     r0, r0, r5              ; 2
 .b6:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x0040, .b5    ; 3
+        brclr   r1, #0x0040, .b5    ; 3
         add     r0, r0, r5              ; 2
 .b5:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x0020, .b4    ; 3
+        brclr   r1, #0x0020, .b4    ; 3
         add     r0, r0, r5              ; 2
 .b4:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x0010, .b3    ; 3
+        brclr   r1, #0x0010, .b3    ; 3
         add     r0, r0, r5              ; 2
 .b3:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x0008, .b2    ; 3
+        brclr   r1, #0x0008, .b2    ; 3
         add     r0, r0, r5              ; 2
 .b2:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x0004, .b1    ; 3
+        brclr   r1, #0x0004, .b1    ; 3
         add     r0, r0, r5              ; 2
 .b1:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x0002, .b0    ; 3
+        brclr   r1, #0x0002, .b0    ; 3
         add     r0, r0, r5              ; 2
 .b0:
         shl     r0, r0, #1              ; 2
-        brclear r1, #0x0001, .done  ; 3
+        brclr   r1, #0x0001, .done  ; 3
         add     r0, r0, r5              ; 2
 .done:                                  ; table + 7*15, reached when b == 1
         pop     lr                      ; 6

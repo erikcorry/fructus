@@ -72,7 +72,7 @@ start:
         xor     r2, r2, #0xaaaa         ; 2  immask5, flip alternate bits
         add     r3, r3, #0xff00         ; 2  immask5 on add
         add     r4, r4, #0x0100         ; 2  immbit5 on add, the new +1 slot
-        brclear r5, #0x000f, .mask_ok   ; 3  immask5 branch
+        brclr   r5, #0x000f, .mask_ok   ; 3  immask5 branch
         brset   r5, #0xff00, .mask_ok   ; 3
 .mask_ok:
         mov     r2, #-17                ; 2  immbit5, ~16
@@ -118,8 +118,8 @@ btarget:
         br      gt, r3, #7, btarget       ; 3  REWRITE -> ge #8
         br      le, r3, #-2, btarget      ; 3  REWRITE -> lt #-1
         brset   r4, #0x8000, btarget      ; 3  the sign bit is set
-        brclear r4, #1, btarget           ; 3  the low bit is clear
-        brclear r4, #0x7fff, btarget      ; 3  NOTHING but the sign bit is set
+        brclr   r4, #1, btarget           ; 3  the low bit is clear
+        brclr   r4, #0x7fff, btarget      ; 3  NOTHING but the sign bit is set
         brset   r4, #0xfffe, btarget      ; 3  some bit other than 0 is set
 ; --- iseq / isset: one row, two instructions, chosen by column --------------
         iseq    r0, r0, #7              ; 2  +0  imm5, dest tied to source

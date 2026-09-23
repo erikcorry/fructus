@@ -129,7 +129,7 @@ memcpy2:
 ; only stop on an even boundary.
 
 memcpy3:
-        brclear r2, #1, .even           ; count even?  one instruction, no ALU
+        brclr   r2, #1, .even           ; count even?  one instruction, no ALU
         ld8     r5, [r0]
         st8     r5, [r1]
         add     r0, r0, #1
@@ -147,7 +147,7 @@ memcpy3:
 .done:
         ret
 
-; `brclear r2, #1` tests bit 0 in one three-byte instruction and touches no
+; `brclr r2, #1` tests bit 0 in one three-byte instruction and touches no
 ; register.  The mask is an immbit5, which holds single bits and their
 ; complements - so #1 is fine and #3 would be rejected, which matters in the
 ; next rung.
@@ -161,7 +161,7 @@ memcpy3:
 ; offset field for free, since `[r0, #2]` is the same two bytes as `[r0]`.
 ;
 ; The head is a loop rather than a straight run because the alignment condition
-; is `count & 3`, and brclear cannot express a two-bit mask: immbit5 holds
+; is `count & 3`, and brclr cannot express a two-bit mask: immbit5 holds
 ; single bits and their complements, nothing else.  So this rung pays an `and`
 ; and re-tests, which is why the setup is uglier than rung 3's.
 

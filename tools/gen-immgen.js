@@ -95,7 +95,7 @@ process.stdout.write(`// =======================================================
 // the spec and regenerate with \`npm run rtl\`.
 //
 // One combinational block serving 58 opcodes: every ALU and shift group, mov,
-// the load and store displacements, and brclear/brset.  Its inputs are the
+// the load and store displacements, and brclr/brset.  Its inputs are the
 // instruction register and one microcode line, cimm.  NOTHING ELSE - no width
 // bit, no shift bit, no opcode decode.  Five properties of the encoding make
 // that possible.
@@ -166,7 +166,7 @@ process.stdout.write(`// =======================================================
 // THAT USED TO BE A CONTRACT ON THE MICROCODE.  This block once read a shifting
 // immreg holding the newest two bytes, where byte 1 moved up as byte 2 came in.
 // Any five-bit field had to be consumed before the third byte was fetched -
-// brclear's mask test ahead of its displacement - and imm10's two halves sat at
+// brclr's mask test ahead of its displacement - and imm10's two halves sat at
 // opposite ends of the register, though they are adjacent in the stream.
 // Neither is true now: a mask can be read in any cycle of its instruction, and
 // imm10 is the one slice invariant 4b in tools/check.js says it is.

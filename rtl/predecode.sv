@@ -218,8 +218,8 @@ module predecode (
         8'ha1: t = 20'bxxxx_xxxx_xxxx_xxxx_xx_10;    // jmp
         8'ha2: t = 20'bxxxx_1000_xxxx_xxxx_xx_11;    // jmp
         8'ha3: t = 20'bxxxx_xxxx_1011_xxxx_xx_01;    // jmpr
-        8'ha4: t = 20'bxxxx_1000_1011_xxxx_10_01;    // brclear
-        8'ha5: t = 20'bxxxx_1000_1011_xxxx_10_01;    // brclear
+        8'ha4: t = 20'bxxxx_1000_1011_xxxx_10_01;    // brclr
+        8'ha5: t = 20'bxxxx_1000_1011_xxxx_10_01;    // brclr
         8'ha6: t = 20'bxxxx_1001_1101_xxxx_00_01;    // br
         8'ha7: t = 20'bxxxx_1001_1101_xxxx_00_01;    // br
         8'ha9: t = 20'b0111_xxxx_0010_0111_xx_10;    // call

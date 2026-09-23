@@ -763,13 +763,13 @@
 <rect x="494" y="1498" width="104" height="62" rx="3" fill="#F2B5A5"/>
 <text x="502" y="1512" font-size="9" fill="rgba(0,0,0,.45)">a4</text>
 <text x="590" y="1512" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">3B</text>
-<text x="502" y="1529" font-size="13" font-weight="600" fill="#000">brclear</text>
+<text x="502" y="1529" font-size="13" font-weight="600" fill="#000">brclr</text>
 <text x="502" y="1543" font-size="8.5" fill="rgba(0,0,0,.62)">ra, #immbit5,</text>
 <text x="502" y="1553" font-size="8.5" fill="rgba(0,0,0,.62)">target</text>
 <rect x="601" y="1498" width="104" height="62" rx="3" fill="#E09A98"/>
 <text x="609" y="1512" font-size="9" fill="rgba(0,0,0,.45)">a5</text>
 <text x="697" y="1512" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">3B</text>
-<text x="609" y="1529" font-size="13" font-weight="600" fill="#000">brclear</text>
+<text x="609" y="1529" font-size="13" font-weight="600" fill="#000">brclr</text>
 <text x="609" y="1543" font-size="8.5" fill="rgba(0,0,0,.62)">ra, #immask5,</text>
 <text x="609" y="1553" font-size="8.5" fill="rgba(0,0,0,.62)">target</text>
 <rect x="708" y="1498" width="104" height="62" rx="3" fill="#F5C2DC"/>

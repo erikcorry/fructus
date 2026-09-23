@@ -10,7 +10,7 @@
 //
 //     0  the cond3 field, insn[10:8]      br cond, ra, rb
 //     1  the condimm5 table, insn[15:11]  br cond, ra, #imm
-//     2  eq                               brclear
+//     2  eq                               brclr
 //     3  ne                               brset
 //
 // The fixed eq and ne serve exactly the two mask branches, so bit 1 of the

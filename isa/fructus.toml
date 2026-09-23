@@ -400,7 +400,7 @@ name   = "BFD_RELOC_8_PCREL"
 bits   = 8
 pcrel  = true
 signed = true
-used_by = "br, brclear, brset, jmpr rel8 - the off8 displacement"
+used_by = "br, brclr, brset, jmpr rel8 - the off8 displacement"
 
 [[reloc]]
 name   = "BFD_RELOC_16_PCREL"
@@ -486,8 +486,8 @@ signed = true
 # the fifth inverts, so the 32 entries are 1<<n for n = 0..15 followed by the
 # sixteen ~(1<<n).  Five bits, 32 distinct 16-bit constants, no gaps.
 #
-# This started life as brset and brclear's 4-bit index.  A 16-bit word needs
-# only four bits to name a bit, brset and brclear used the fifth to say which
+# This started life as brset and brclr's 4-bit index.  A 16-bit word needs
+# only four bits to name a bit, brset and brclr used the fifth to say which
 # of the two they were - and that made the whole field a 1<<n generator that
 # only two instructions could reach.  Promoting it to an operand type spends
 # the fifth bit on inversion instead and hands the generator to the ALU:
@@ -1149,8 +1149,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1010_0001                jmp     target             3 bytes, absolute
 #   1010_0010                jmp     ra                 2 bytes, INDIRECT
 #   1010_0011                jmpr    target             2 bytes, SHORT form
-#   1010_0100                brclear ra, #immbit5, target
-#   1010_0101                brclear ra, #immask5, target
+#   1010_0100                brclr   ra, #immbit5, target
+#   1010_0101                brclr   ra, #immask5, target
 #   1010_011z                br      <cond>, ra, rb, target    TWO opcodes
 #   1010_1000                -- free
 #   1010_1001                call    target             3 bytes, absolute
@@ -1183,13 +1183,13 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   needed bit 0 and bit 2.  `ret' at .3 is one byte rather than two, so the
 #   test answers "not three" rather than "exactly two".
 #
-#   AND FIVE COLUMNS ARE PAIRS SPLIT BY BIT 3: .4 and .5 are brclear against
+#   AND FIVE COLUMNS ARE PAIRS SPLIT BY BIT 3: .4 and .5 are brclr against
 #   brset, and .1, .2 and .3 are a jump against the call that reaches the same
 #   way.  .0, .6 and .7 were the branch against a byte-wide twin and lost it,
 #   so 1010_1000 and 1010_111z stand free below the branch row.
 #
 #   .0, .4 AND .5 ARE THE ALU'S CONSTANT COLUMNS, and that is not an analogy.
-#   Byte 1 of `br cond, ra, #imm5` is `aaak_kkkk` and byte 1 of `brclear ra,
+#   Byte 1 of `br cond, ra, #imm5` is `aaak_kkkk` and byte 1 of `brclr ra,
 #   #mask` is `aaam_mmmm`: one register and five bits, identically placed.  The
 #   only difference is which table reads the five bits - a packed condition and
 #   signed constant at +0, immbit5 at +4, immask5 at +5 - which is precisely the
@@ -2268,7 +2268,7 @@ extra_cycles = 1
 #     byte 2:  t t t t t t t t    displacement
 #
 # BYTE 1 IS THE MASK BRANCHES' BYTE 1.  `aaak_kkkk` here and `aaam_mmmm` in
-# brclear and brset are one register and five bits in the same places; only the
+# brclr and brset are one register and five bits in the same places; only the
 # table reading those five bits differs.  So these three share a row the way an
 # ALU group's +0, +4 and +5 forms do, and for the same reason - see the opcode
 # map at the top of this file.
@@ -2307,23 +2307,23 @@ semantics = "if (test(k.cond, R[a], k.imm, 16)) pc = pc + off"
   fields   = { k = "k:condimm5", t = "off:off8" }
 
 
-# --- brset / brclear --------------------------------------------------------
+# --- brset / brclr --------------------------------------------------------
 # Branch on a masked test of one register: `ra & mask` against zero.
 #
-#     brclear ra, #mask, target      taken when (ra & mask) == 0
-#     brset   ra, #mask, target      taken when (ra & mask) != 0
+#     brclr ra, #mask, target      taken when (ra & mask) == 0
+#     brset ra, #mask, target      taken when (ra & mask) != 0
 #
 # The mask is an immbit5, so the two of them together cover every single bit of
 # every register in both senses - which is all they used to do - plus every
 # ALL-BUT-ONE-BIT test, which is new and is what the fifth bit used to be spent
-# on.  `brclear r0, #0x7fff, L` branches when nothing but the sign bit is set.
+# on.  `brclr r0, #0x7fff, L` branches when nothing but the sign bit is set.
 #
 # THESE ARE TWO OPCODES NOW, and the bit that separates them is exactly the bit
 # that separates `eq` from `ne` in cond3 - which is what they are: the mask
 # feeds the ALU, the result is compared with zero, and the opcode carries the
 # condition.  Nothing new is needed in the compare path.
 #
-#     byte 0:  1 0 0 0 0 1 1 e    0x96 = eq (brclear), 0x97 = ne (brset)
+#     byte 0:  1 0 0 0 0 1 1 e    0x96 = eq (brclr), 0x97 = ne (brset)
 #     byte 1:  a a a m m m m m    register, immbit5 mask
 #     byte 2:  t t t t t t t t    displacement
 #
@@ -2332,7 +2332,7 @@ semantics = "if (test(k.cond, R[a], k.imm, 16)) pc = pc + off"
 # immbit5 holds no such value.  The assembler rejects it rather than guessing,
 # which is the right outcome for a change of meaning this quiet.
 [[insn]]
-mnemonic = "brclear"
+mnemonic = "brclr"
 summary  = "branch if ra & mask is zero"
 operands = [
   { name = "a",    type = "reg"   },
@@ -2351,7 +2351,7 @@ semantics = "if ((R[a] & mask) == 0) pc = pc + off"
   # whether a whole FIELD is empty.  Same byte 1, same 5 bits, different table:
   # +4 of the row reads them as immbit5 and +5 reads them as immask5, which is
   # the relationship every ALU group has between its two mask forms.  Clear and
-  # set are separated by BIT 3 rather than bit 0 - brclear is the upper row and
+  # set are separated by BIT 3 rather than bit 0 - brclr is the upper row and
   # brset the row eight below - so both spellings of each land in one column.
   [[insn.form]]
   name     = "reg_mask5"
@@ -2378,7 +2378,7 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
   # whether a whole FIELD is empty.  Same byte 1, same 5 bits, different table:
   # +4 of the row reads them as immbit5 and +5 reads them as immask5, which is
   # the relationship every ALU group has between its two mask forms.  Clear and
-  # set are separated by BIT 3 rather than bit 0 - brclear is the upper row and
+  # set are separated by BIT 3 rather than bit 0 - brclr is the upper row and
   # brset the row eight below - so both spellings of each land in one column.
   [[insn.form]]
   name     = "reg_mask5"
@@ -2393,7 +2393,7 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 #     iseq  rd, a, b     rd = (a == b)      1 or 0
 #     isset rd, a, b     rd = (a & b) != 0  1 or 0
 #
-# That looks irregular and is the same shape br already has: brclear and brset
+# That looks irregular and is the same shape br already has: brclr and brset
 # read the same five bits through immbit5 and immask5 and mean different things
 # by column, and the ALU's +4 and +5 are per-operation rather than universal.
 # The rule here is simply that the mask columns take `isset` and everything else

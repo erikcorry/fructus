@@ -95,7 +95,7 @@ strncmp:
 ; length is recovered from the cursor at the end.
 strlen:
   mov r5, r0   ; Save start
-  brclear r0, #3, .aligned
+  brclr   r0, #3, .aligned
 .unaligned:
   ld8 r1, [r0]
   br eq, r1, #0, .done
@@ -107,16 +107,16 @@ strlen:
 .top:
   ldm r1, r3        ; Load 32 bits, r2 += 4   ; 8
   and r0, r1, r3                              ; 2
-  brclear r0, #0xff, .slow_block              ; 3
+  brclr   r0, #0xff, .slow_block              ; 3
   brset r0, #0xff00, .top                     ; 4
 ; Slow case, but the low bytes are known not zero.
-  brclear r1, #0xff00, .minus3                ; 3
+  brclr   r1, #0xff00, .minus3                ; 3
   brset r3, #0xff00, .top    ; no zero byte here after all: keep scanning
   jmpr .minus1
 .slow_block:
-  brclear r1, #0xff, .minus4                  ; 3
-  brclear r1, #0xff00, .minus3                ; 3
-  brclear r3, #0xff, .minus2                  ; 3
+  brclr   r1, #0xff, .minus4                  ; 3
+  brclr   r1, #0xff00, .minus3                ; 3
+  brclr   r3, #0xff, .minus2                  ; 3
   brset r3, #0xff00, .top    ; no zero byte here after all: keep scanning
   jmpr .minus1               ; r3's high byte is the zero
 .minus4:

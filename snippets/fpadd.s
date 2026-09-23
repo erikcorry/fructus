@@ -99,7 +99,7 @@ done:                                   ;                          total   33
 ; truncation means when nothing overflows.
 ;
 ; ROUND-TO-EVEN WAS AVAILABLE AND IS NOT TAKEN.  It would be nine bytes on the
-; overflow path - `brclear r0, #2` to test the bit that will become the new
+; overflow path - `brclr r0, #2` to test the bit that will become the new
 ; low bit, add half an ulp, propagate - and cheap only because a one-place shift
 ; discards exactly one bit, making every inexact case an exact tie.
 ;
