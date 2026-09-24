@@ -95,6 +95,11 @@ disassemble file:
     @{{build}}/gas/as-new -o build/_j.o {{file}}
     @{{build}}/binutils/objdump -d build/_j.o
 
+# Compile a C or C++ file at -Os and print what the compiler made of it.
+disassemble-c file:
+    @tools/fcc -Os -c -o build/_k.o {{file}}
+    @{{build}}/binutils/objdump -d build/_k.o
+
 # ----------------------------------------------------------------- compiler --
 
 # Regenerate the GCC port's immediate tables from isa/fructus.toml.
