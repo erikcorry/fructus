@@ -413,6 +413,79 @@ letterboxed one.
 The sync inputs are high-impedance TTL, so 3.3 V drives them directly. Each
 goes through a 47–100 Ω series resistor to damp ringing and protect the pin.
 
+## 640×512 @ 50 Hz (experimental)
+
+For BBC Micro emulation. Horizontal timing is exactly 640×480's; the
+vertical total is stretched to make 50 Hz at the same pixel clock:
+
+| | visible | front porch | sync | back porch | total |
+|---|---|---|---|---|---|
+| horizontal (pixels) | 640 | 16 | 96 | 48 | 800 |
+| vertical (lines) | 512 | 46 | 2 | 69 | 629 |
+
+25.175 MHz / 800 / 629 = 50.03 Hz (49.93 Hz from the PLL's 25.125 MHz; the
+BBC ran at 50.08 Hz). Syncs −/−, as for 640×480.
+
+Not every monitor will take it. Many LCDs accept 50 Hz for 576p TV timing
+(31.25 kHz, 625 lines, close to this), but some are specified from 56 Hz.
+It can be tried from a PC's VGA output first:
+
+```
+xrandr --newmode "640x512_50" 25.175  640 656 752 800  512 558 560 629  -hsync -vsync
+```
+
+512 lines is the most the line tables hold: 512 × 2 bytes fills each 1 KB
+array exactly.
+
+### BBC Micro modes
+
+| BBC mode | | here | frame buffer |
+|---|---|---|---|
+| 0 | 640×256, 2 colours | 1 bpp, width 1, each line pointer twice | 20 KB |
+| 1 | 320×256, 4 colours | 2 bpp, width 2 | 20 KB |
+| 2 | 160×256, 16 colours | 4 bpp, width 4 | 20 KB |
+| 7 | teletext, 40×25 | text, doubled pixels, 20 lines per row | 1 KB + font |
+
+The background palette ranges match the BBC's colour counts: mode 0 uses
+entries 28–29, mode 1 24–27, mode 2 0–15. VDU 19 and flashing colours are
+palette writes.
+
+### Teletext
+
+Mode 7 is 25 rows of 20 lines, 500 of the 512.
+
+Teletext attributes (colour, mosaics, double height, flash, conceal, hold)
+take effect from a control code to the end of the row. The GPU does not
+parse them: the CPU walks each 40-byte row as the SAA5050 would and writes
+per-cell character codes, foreground colours and background.
+
+**Double height can start mid-row.** The font has 192 glyphs and 40 rows:
+
+| codes | glyphs | rows 0–19 | rows 20–39 |
+|---|---|---|---|
+| 32–127 | normal | the 20-row glyph | the same again |
+| 128–223 | double height | top half, each row twice | bottom half, each row twice |
+
+From a double-height control code on, the CPU adds 96 to the codes. An upper
+row uses font rows 0–19 and the row below it rows 20–39, so the same codes
+show the bottom halves while normal characters look the same in both.
+
+192 glyphs is a stride of 6: `font_line = 6r`, and row r covers
+0x1000 + 192r + 32 to 0x1000 + 192r + 223. A byte of `font_line` reaches
+row 42, so all 40 fit: 7,680 bytes, ending at 0x2D5F.
+
+The 128 mosaic glyphs don't fit beside these in 256 codes. They may go in the
+background layer instead: a 16-pixel cell is two 8-wide background pixels,
+the mosaic's two columns, and its three block rows (6, 8 and 6 lines) are
+line-table entries. Contiguous mosaics fit that directly.
+
+Separated mosaics are approximate. The gap between block rows is a line
+whose pointer shows the cell's background in mosaic cells, which is cheap.
+The gap between the left and right blocks is not possible: a block is one
+8-wide pixel, and narrower pixels (width 2, 4 bpp) would cost about 24 KB
+for a screen. So separated mosaics are drawn with gap lines but no gap
+columns.
+
 ## Registers
 
 Under 64 bytes, in an I/O page whose place in the memory map is not yet
