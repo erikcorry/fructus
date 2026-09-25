@@ -337,6 +337,11 @@ Original VGA told the monitor its mode by the sync polarities alone. −/−
 means 480 lines. −/+ is the 400-line text mode (640×400, 720×400 @ 70 Hz)
 and +/− is 350 lines. Later VESA modes such as 800×600 @ 60 Hz are +/+.
 
+The polarities are fixed at −/−; there are no polarity bits. The target is
+640×480 and letterboxed or narrower pictures inside it, which the monitor
+sees as the same mode, and modern monitors identify a mode mainly by its
+line and frame rates.
+
 ### Pixel clock
 
 Officially 25.175 MHz; anything from about 25.0 to 25.2 MHz works. From a
@@ -355,23 +360,44 @@ SB_PLL40_PAD #(
 
 Use `SB_PLL40_CORE` instead if the clock pin can't feed the PLL pad.
 
-### Counters
+### Timing generator
 
-```systemverilog
-logic [9:0] hc, vc;                  // 0..799, 0..524
+The timing is programmable, in the order the phases happen:
 
-always_ff @(posedge pclk) begin
-    if (hc == 799) begin
-        hc <= 0;
-        vc <= (vc == 524) ? 0 : vc + 1;
-    end else
-        hc <= hc + 1;
-end
-
-wire visible = hc < 640 && vc < 480;
-wire hsync_n = !(hc >= 656 && hc < 752);   // 640+16 .. +96
-wire vsync_n = !(vc >= 490 && vc < 492);   // 480+10 .. +2
+```c
+struct timing {
+  // Standard VGA             H      V
+  uint16_t front_porch;   // 16    10
+  uint16_t pulse;         // 96     2
+  uint16_t back_porch;    // 48    33
+  uint16_t pixels;        // 640  480
+  //       total             800  525
+};
 ```
+
+One module, instantiated twice: the horizontal copy steps every pixel clock,
+the vertical copy once per line. It never adds the lengths up, so no total
+appears in the hardware:
+
+```
+phase    2 bits      FP → SYNC → BP → VISIBLE → FP ...
+count    10 bits     down counter, loaded with timing[phase] on entering a phase;
+                     the phase advances when it reaches 1
+sync_n = !(phase == SYNC)
+active =  (phase == VISIBLE)
+```
+
+Every length must be at least 1: a 0 wraps to 1023. Ten bits cover
+everything at this pixel clock.
+
+A line counter, cleared as the vertical VISIBLE phase begins, gives the
+line number n that indexes the line tables.
+
+A letterboxed or narrow picture keeps these standard timings and draws black
+where the picture isn't, so the monitor sees plain 640×480. An LCD's
+auto-adjust finds the picture's edges from where the content stops being
+black, though, so run it on a full-screen image or it may stretch or shift a
+letterboxed one.
 
 - `hsync_n`, `vsync_n` and `visible` go through as many flops as the pixel
   pipeline (fetch, palette EBR, output register), so sync and blanking line
@@ -379,13 +405,33 @@ wire vsync_n = !(vc >= 490 && vc < 492);   // 480+10 .. +2
 - The DAC pins are forced to 0 whenever the delayed `visible` is false. The
   monitor takes the back porch as its black reference; colour there tints
   or drifts the picture.
-- The syncs are registered, ideally in IO flops: the comparisons are
+- The syncs are registered, ideally in IO flops: the phase decode is
   combinational, and a glitch on HSYNC causes jitter.
 
 ### Electrical
 
 The sync inputs are high-impedance TTL, so 3.3 V drives them directly. Each
 goes through a 47–100 Ω series resistor to damp ringing and protect the pin.
+
+## Registers
+
+Under 64 bytes, in an I/O page whose place in the memory map is not yet
+chosen.
+
+| register | contents | access |
+|---|---|---|
+| `timing_h` | `struct timing`, 4 × 16 bits, 10 used | write only |
+| `timing_v` | `struct timing`, 4 × 16 bits, 10 used | write only |
+| control | display enable, which buffer is shown, write-through request | write |
+| status | current line (10 bits), vertical blank, write-through in progress | read |
+| palette | 32 × 8 bits | write, through the EBR's second port |
+
+The timing registers are write only because reading them back would need a
+16-bit 8-to-1 mux onto the data bus, about 50 LUTs, for values the CPU wrote
+itself. The timing costs 80 flops of the UP5K's 5,280.
+
+The status register's current line lets the CPU time a mid-frame palette
+change by polling, without an interrupt.
 
 ## Connector (DE-15)
 
