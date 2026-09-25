@@ -57,6 +57,158 @@ UP5K has four. SPRAM reads are registered, so the data comes a cycle after
 its address: the write-through address into B is the display's read address
 delayed one clock.
 
+SPRAM is static: no refresh. But unlike EBR it is not loaded by the
+bitstream, and comes up holding garbage, so the CPU writes the line tables
+and font before the display is enabled. Its `STANDBY`, `SLEEP` and
+`POWEROFF` inputs are tied inactive; `POWEROFF` loses the contents.
+
+## Line tables
+
+The start of each frame buffer holds four 480-entry arrays of 16-bit entries,
+one entry per scan line:
+
+| address | array | entry |
+|---|---|---|
+| 0x0000 | `background_color` | pointer to the line's background pixels |
+| 0x0400 | `graphics_mode` | mode byte and `font_line` byte |
+| 0x0800 | `character_data` | pointer to the line's character codes |
+| 0x0c00 | `character_color` | pointer to the line's foreground colours |
+
+At the start of scan line n the GPU reads the four entries for line n, 8
+bytes in all. Every line therefore has its own mode, font row and data
+location, set by the table and not by interrupts: the Elite split-screen
+trick, systematized. Scrolling rewrites pointers and moves no text.
+
+A text line is 80 character codes and 80 foreground colours, one of each per
+8-pixel cell. A foreground colour is one byte in the [8-bit pixel
+format](#8-bit-pixel-format): 0x00–0x1F select a palette entry, and
+0x20–0xFF are direct colours, 0x20 being black.
+
+Under consideration: a mode bit that **doubles pixels horizontally** for the
+text generator, giving 40 columns of 16-pixel cells, so each line is 40 codes
+and 40 colours. That is native teletext (640 / 40 = 16 = 8 doubled) and a
+320-wide tile mode for games. There is no bit to disable the text generator:
+pointing `character_data` at a line of spaces does the same, as long as glyph
+32 is blank in the rows used.
+
+For VT100, 30 text rows of 16 lines: `character_data` holds 16 copies of a
+pointer to the first row's 80 bytes, then 16 copies of a pointer to the
+second row's, and so on.
+
+### Fonts
+
+Glyphs are always 8 pixels wide, one byte per glyph row. The font area
+starts at 0x1000; its size depends on the glyph count and height, typically
+4 KB.
+
+At the start of each line the GPU sets
+
+```
+font_base = 0x1000 + (font_line << 5)
+```
+
+and each character code c then fetches its pixels from `font_base + c`. The
+font is stored row-major, row 0 of every glyph, then row 1 of every glyph, so
+`font_line` steps by the glyph count divided by 32 for each glyph row:
+
+| font | `font_line` for glyph row r | size, 16 rows |
+|---|---|---|
+| 256 glyphs | 8r (up to 32 rows) | 4 KB |
+| 128 glyphs | 4r | 2 KB |
+| ASCII 32–127 | 3r | 1.5 KB |
+| 64 or 32 glyphs | 2r or r | 1 KB or 512 B |
+
+The ASCII font works because rows are 96 bytes apart and codes start at 32:
+row r covers 0x1000 + 96r + 32 to 0x1000 + 96r + 127, so consecutive rows
+touch without overlapping. Only the 32 bytes at 0x1000 are unused.
+
+Games can use the same mechanism for tiles: a 32×32 tile is 4 code points
+wide, and a 256-glyph font of 32 rows holds 64 of them.
+
+Because the row comes from the table, some effects are just table contents:
+
+- **Double height:** repeat each `font_line` twice.
+- **Smooth scroll:** start the top text row part-way into its glyph.
+- **Mixed fonts:** different areas of the screen point at different fonts.
+
+`font_line` is a byte, so the font area ends at most at
+0x1000 + 255 × 32 + 255 = 0x30DF.
+
+### Background
+
+A glyph bit of 1 shows the cell's foreground colour; a 0 shows the
+background pixel from the line's `background_color` data: 640 screen pixels
+at 1, 2, 3, 4 or 8 bits per pixel, each pixel 1, 2, 3, 4 or 8 screen pixels
+wide.
+
+An 8-bit pixel is a byte in the [8-bit pixel format](#8-bit-pixel-format).
+Fewer bits select a palette entry, with a fixed prefix per depth so that no
+two depths overlap and no addition is needed:
+
+| bpp | palette index | entries | pixels per word | bytes per line (width 1) |
+|---|---|---|---|---|
+| 1 | `1110p` | 28–29 | 16 | 80 |
+| 2 | `110pp` | 24–27 | 8 | 160 |
+| 3 | `10ppp` | 16–23 | 5, bit 15 unused | 256 |
+| 4 | `0pppp` | 0–15 | 4 | 320 |
+| 8 | the byte itself | any | 2 | 640 |
+
+Palette entries 30 and 31 are not reachable from the background at under 8
+bits.
+
+A low-depth pixel so becomes the pixel-format byte `000xxxxx`, and every
+depth goes down one path from there. Wider pixels divide the byte count: a
+text mode is 8 bits per pixel, 8 wide, so 80 bytes per line, one background
+colour per cell. Width 3 gives 213 pixels and leaves the last screen column
+over.
+
+A retro game can run at 320×240, 2 bits per pixel, width 2, with each
+`background_color` pointer repeated for two lines: 160 bytes × 240 lines =
+19,200 bytes.
+
+### Unpacking
+
+Pixels are stored least significant bits first, so pixel 0 is the low bits of
+its word, matching the little-endian byte order of 8 bpp.
+
+```
+width counter   0 .. w-1       steps every pixel clock
+pixel counter   0 .. ppw-1     steps when the width counter wraps
+shift register  16 bits        shifts right by bpp when the pixel counter
+                               steps, loads the next word when it wraps
+pixel           the low bpp bits of the shift register
+```
+
+3 bpp is not a special case: 5 pixels per word, and bit 15 is dropped when
+the next word loads. The costly part is the 5-way shift, 2 to 3 LUT4s per
+bit; the whole unpacker should be 60–80 LUTs, about 1.5% of a UP5K.
+
+### Pixel path
+
+```
+glyph bit ? foreground byte : background byte
+  → palette, if the top three bits are 000
+  → decode to the red, green and blue pin encodings
+  → IO flops → DACs
+```
+
+Foreground and background are chosen before the palette, so there is one
+palette read per pixel: the EBR's read port serves the display and its write
+port stays free for the CPU, which can change entries mid-frame.
+
+### Timing
+
+The GPU's reads are completely predictable, so it can fetch as far ahead as
+it likes. Adding more pipeline registers between a fetch and the pixel it
+produces costs nothing, and there is no timing pressure on the table reads,
+the `font_base + c` add or the glyph fetch.
+
+The worst case is 80-column text over an 8 bpp, width 1 background. Every 16
+pixels need 8 background words, 1 word of two character codes, 1 word of two
+foreground colours and 2 glyph bytes: 12 reads in 16 pixel clocks. The four
+table reads at the start of a line fall in the 160 clocks of horizontal
+blanking.
+
 ## 8-bit pixel format
 
 ```
