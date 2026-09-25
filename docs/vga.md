@@ -1,5 +1,62 @@
 # VGA output
 
+## Frame buffers
+
+Two 32 KB buffers, A and B, enough for a VT100 or teletext display. At any
+moment each buffer has one owner, so the video never stalls the CPU:
+
+- one buffer serves the display, and
+- the other is either attached to the CPU or in **write-through** mode.
+
+In write-through, the two buffers share an address bus. Every word the
+display reads from its buffer is also written, at the same address, into the
+write-through buffer.
+
+### Double buffering
+
+The CPU owns A and the display shows B. To publish a new image:
+
+1. The CPU finishes drawing in A.
+2. For one frame (16 ms, vsync to vsync) the display shows A, and B is in
+   write-through. A is complete, so what is shown is correct.
+3. The display goes back to B, which now shows the same image. The CPU owns
+   A again.
+
+A always holds the latest image, so the CPU draws incrementally (scroll a
+line, change a character). A plain page flip would hand back an image two
+frames old.
+
+The CPU cannot use A during the copy frame.
+
+### Why one frame's reads are enough
+
+The copy writes only the addresses the display fetched. Unused glyphs,
+off-screen memory and the CPU's own data in B are left stale. That is enough
+because B is only ever read by the display. Showing the same bytes, it
+fetches the same addresses it fetched during the copy.
+
+This holds only if **the set of addresses fetched depends on the buffer
+contents and nothing else.** Anything else that changes the fetch pattern
+while B is on screen reads addresses that were never copied:
+
+| feature | rule |
+|---|---|
+| blink (VT100 blink, teletext flash) | always fetch the glyph; blank it after the fetch |
+| teletext conceal/reveal | always fetch; hide on output |
+| cursor | an overlay after the fetch, never a substituted character code |
+| scroll offset, start address, mode | change only while A is shown, then copy again |
+
+Every visual effect is a mask applied after the fetch, never a change to what
+is fetched. Teletext double height is safe: it depends only on control codes
+in the buffer.
+
+### On an iCE40 UP5K
+
+Each buffer can be one SPRAM block (16K × 16 = 32 KB, single ported); the
+UP5K has four. SPRAM reads are registered, so the data comes a cycle after
+its address: the write-through address into B is the display's read address
+delayed one clock.
+
 ## 8-bit pixel format
 
 ```
