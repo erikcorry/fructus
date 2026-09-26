@@ -11,8 +11,9 @@
 // anything the circuit does, so agreement means the circuit implements the
 // layout.
 //
-// WHAT IS SWEPT.  Every depth and every width from 1 to 8 - but only the even
-// widths at 3 bpp, the ones docs/vga.md supports - twice each, over
+// WHAT IS SWEPT.  Every depth code, the spare included, and every width from 1
+// to 8 - but only the even widths at 3 bpp, the ones docs/vga.md supports -
+// twice each, over
 // random memory at a random even pointer.  The testbench counts x from column
 // 0 and fails a read on an even x, which belongs to the text generator.  Run at
 // LATENCY 4, the least, and 6.
@@ -45,9 +46,12 @@ const WORDS = 16384;
 const mem = Array.from({ length: WORDS }, () => rand(0x10000));
 
 // --- the reference ----------------------------------------------------------
-const PREFIX = { 1: 0x1c, 2: 0x18, 3: 0x10, 4: 0x00 };
+// The mode word's depth codes: bits per pixel, and the value a smaller pixel is
+// ORed into to make its palette index.  111 is spare and runs as 8 bpp.
+const DEPTH = [[1, 0x1c], [1, 0x1e], [2, 0x18], [2, 0x08], [3, 0x10], [4, 0x00], [8, 0], [8, 0]];
 
-const expected = (ptr, bpp, width) => {
+const expected = (ptr, code, width) => {
+  const [bpp, base] = DEPTH[code];
   const out = [];
   for (let x = 0; x < 640; x++) {
     const p = Math.floor(x / width);
@@ -61,19 +65,19 @@ const expected = (ptr, bpp, width) => {
       const w = mem[(bit >> 4) % WORDS];
       v = (w >> (bit & 15)) & ((1 << bpp) - 1);
     }
-    out.push(bpp === 8 ? v : PREFIX[bpp] | v);
+    out.push(bpp === 8 ? v : base | v);
   }
   return out;
 };
 
 // --- the lines --------------------------------------------------------------
 const lines = [];
-for (const bpp of [1, 2, 3, 4, 8])
+for (let code = 0; code < 8; code++)
   for (let width = 1; width <= 8; width++)
-    for (let n = 0; n < 2 && !(bpp === 3 && width % 2); n++) {
+    for (let n = 0; n < 2 && !(DEPTH[code][0] === 3 && width % 2); n++) {
       const ptr = rand(32768 - 1024) & ~1;
       const gap = 2 + rand(159);           // line_start to column 0
-      lines.push({ ptr, bpp, width, gap, extra: n });
+      lines.push({ ptr, code, width, gap, extra: n });
     }
 
 const dir = 'build/background-check';
@@ -81,7 +85,7 @@ mkdirSync(dir, { recursive: true });
 const hex = (v, n) => v.toString(16).padStart(n, '0');
 writeFileSync(`${dir}/mem.hex`, mem.map((w) => hex(w, 4)).join('\n') + '\n');
 writeFileSync(`${dir}/cfg.hex`, lines.map((l) =>
-  hex((l.extra << 31 | l.gap << 23 | l.width << 19 | l.bpp << 15 | l.ptr) >>> 0, 8)).join('\n') + '\n');
+  hex((l.extra << 31 | l.gap << 23 | l.width << 19 | l.code << 15 | l.ptr) >>> 0, 8)).join('\n') + '\n');
 
 const tb = (latency) => `
 module tb;
@@ -90,7 +94,8 @@ module tb;
 
     reg         line_start = 0, active = 0;
     reg  [14:0] ptr;
-    reg  [3:0]  bpp, width;
+    reg  [2:0]  depth;
+    reg  [3:0]  width;
     wire        mem_rd;
     wire [13:0] mem_addr;
     reg  [15:0] mem_rdata;
@@ -100,7 +105,7 @@ module tb;
     reg [31:0] cfg [0:${lines.length - 1}];
 
     background #(.LATENCY(${latency})) dut (
-        .clk, .line_start, .ptr, .bpp, .width, .active,
+        .clk, .line_start, .ptr, .depth, .width, .active,
         .mem_rd, .mem_addr, .mem_rdata, .pixel);
 
     integer x = 0;
@@ -129,7 +134,7 @@ module tb;
         f = $fopen("${dir}/out.txt", "w");
         for (i = 0; i < ${lines.length}; i = i + 1) begin
             @(negedge clk);
-            ptr = cfg[i][14:0]; bpp = cfg[i][18:15]; width = cfg[i][22:19];
+            ptr = cfg[i][14:0]; depth = cfg[i][17:15]; width = cfg[i][22:19];
             line_start = 1;
             @(negedge clk);
             line_start = 0;
@@ -158,11 +163,11 @@ for (const latency of [4, 6]) {
   const got = readFileSync(`${dir}/out.txt`, 'utf8').split('\n');
   lines.forEach((l, i) => {
     const g = got[i].trim().split(/\s+/);
-    const e = expected(l.ptr, l.bpp, l.width);
+    const e = expected(l.ptr, l.code, l.width);
     const x = e.findIndex((v, j) => parseInt(g[j], 16) !== v);
     if (g.length !== 640 || x >= 0) {
       if (fail++ < 10)
-        console.log(`FAIL latency ${latency} bpp ${l.bpp} width ${l.width} ptr 0x${hex(l.ptr, 4)}` +
+        console.log(`FAIL latency ${latency} depth ${l.code} width ${l.width} ptr 0x${hex(l.ptr, 4)}` +
           ` gap ${l.gap}: column ${x}, got ${g[x]}, want ${hex(e[x] ?? 0, 2)} (${g.length} columns)`);
     }
   });

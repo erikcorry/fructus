@@ -70,7 +70,7 @@ one entry per scan line:
 | address | array | entry |
 |---|---|---|
 | 0x0000 | `background_color` | pointer to the line's background pixels |
-| 0x0400 | `graphics_mode` | mode byte and `font_line` byte |
+| 0x0400 | `graphics_mode` | the line's [mode word](#mode-word) |
 | 0x0800 | `character_data` | pointer to the line's character codes |
 | 0x0c00 | `character_color` | pointer to the line's foreground colours |
 
@@ -99,6 +99,24 @@ fit.
 For VT100, 30 text rows of 16 lines: `character_data` holds 16 copies of a
 pointer to the first row's 80 bytes, then 16 copies of a pointer to the
 second row's, and so on.
+
+### Mode word
+
+Each `graphics_mode` entry is 16 bits, all of them spoken for:
+
+| bits | field | |
+|---|---|---|
+| 7–0 | `font_line` | the font window, see [Fonts](#fonts) |
+| 10–8 | depth | the background's depth and palette range, see [Background](#background) |
+| 13–11 | pixel width − 1 | background pixels 1 to 8 columns wide |
+| 14 | text doubling | 40 columns of 16-pixel cells |
+| 15 | text disable | the fg/bg mux always takes the background |
+
+`font_line` is the low byte, so the CPU can change it with a byte store.
+
+One depth code, `111`, is spare. No "no background" mode is needed: 1 bpp at
+width 8 is 80 pixels, so one 10-byte line of zeros serves every line that
+wants a plain background, in palette entry 28 (or 30).
 
 ### Fonts
 
@@ -151,16 +169,27 @@ An 8-bit pixel is a byte in the [8-bit pixel format](#8-bit-pixel-format).
 Fewer bits select a palette entry, with a fixed prefix per depth so that no
 two depths overlap and no addition is needed:
 
-| bpp | palette index | entries | pixels per word | bytes per line (width 1) |
-|---|---|---|---|---|
-| 1 | `1110p` | 28–29 | 16 | 80 |
-| 2 | `110pp` | 24–27 | 8 | 160 |
-| 3 | `10ppp` | 16–23 | 5, bit 15 unused | 256 |
-| 4 | `0pppp` | 0–15 | 4 | 320 |
-| 8 | the byte itself | any | 2 | 640 |
+| code | bpp | palette index | entries | pixels per word | bytes per line (width 1) |
+|---|---|---|---|---|---|
+| `000` | 1 | `1110p` | 28–29 | 16 | 80 |
+| `001` | 1 | `1111p` | 30–31 | 16 | 80 |
+| `010` | 2 | `110pp` | 24–27 | 8 | 160 |
+| `011` | 2 | `010pp` | 8–11 | 8 | 160 |
+| `100` | 3 | `10ppp` | 16–23 | 5, bit 15 unused | 256 |
+| `101` | 4 | `0pppp` | 0–15 | 4 | 320 |
+| `110` | 8 | the byte itself | any | 2 | 640 |
+| `111` | spare | | | | |
 
-Palette entries 30 and 31 are not reachable from the background at under 8
-bits.
+Code bit 0 picks the variant at 1 and 2 bpp. The index is the pixel ORed
+into a fixed value per code, so no addition is needed.
+
+**The two variants double-buffer the palette.** A band of lines at 1 or 2
+bpp can use one set of entries while the CPU rewrites the other, and the
+line table switches sets at an exact line. The CPU's deadline is the height
+of the band, not one line's horizontal blanking. The status register's
+current line is enough to know when a band has begun. 2 bpp's second set,
+8–11, is also the top half of 4 bpp's entries, which lets a 4 bpp picture
+share four colours with a 2 bpp band.
 
 A low-depth pixel so becomes the pixel-format byte `000xxxxx`, and every
 depth goes down one path from there. Wider pixels divide the byte count: a
@@ -194,12 +223,12 @@ pixel           the low bpp bits of the shift register
 3 bpp is not a special case: 5 pixels per word, and bit 15 is dropped when
 the next word loads.
 
-`rtl/video/background.sv` implements this: 133 LUT4s and 58 flops by yosys,
-about 2.5% of a UP5K. Its output reaches `pixel` a parameter `LATENCY`
+`rtl/video/background.sv` implements this: 147 LUT4s and 62 flops by yosys,
+about 3% of a UP5K. Its output reaches `pixel` a parameter `LATENCY`
 cycles after the column, at least 4; the font/foreground and sync pipelines
 are padded to the same depth (see [Timing](#timing)).
-`tests/background-check.mjs` checks every column of every supported depth
-and width against a reference built from this section.
+`tests/background-check.mjs` checks every column of every depth code and
+supported width against a reference built from this section.
 
 ### Memory cycles
 

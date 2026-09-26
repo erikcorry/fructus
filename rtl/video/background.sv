@@ -5,16 +5,20 @@
 // Hand written; see docs/vga.md, "Background", for the design this implements.
 //
 // One scan line of background: 640 columns from the line's `background_color`
-// pointer, at 1, 2, 3, 4 or 8 bits per pixel, each pixel 1 to 8 columns wide
-// (3 bpp at even widths only).
-// The output is a byte in the 8-bit pixel format, ready for the fg/bg mux: an
-// 8 bpp pixel is its byte, and a smaller one is a palette index with a fixed
-// prefix per depth -
+// pointer, each pixel 1 to 8 columns wide, at the depth given by the mode
+// word's 3-bit code.  The output is a byte in the 8-bit pixel format, ready
+// for the fg/bg mux: an 8 bpp pixel is its byte, and a smaller one is a palette
+// index, the pixel ORed into a fixed value per code -
 //
-//     4 bpp  000 0pppp   entries  0-15
-//     3 bpp  000 10ppp   entries 16-23
-//     2 bpp  000 110pp   entries 24-27
-//     1 bpp  000 1110p   entries 28-29
+//     code  bpp  index   entries
+//     000    1   1110p   28-29
+//     001    1   1111p   30-31
+//     010    2   110pp   24-27
+//     011    2   010pp    8-11
+//     100    3   10ppp   16-23    even widths only
+//     101    4   0pppp    0-15
+//     110    8   the byte itself
+//     111        spare; runs as 8 bpp
 //
 // NO FIFO: THE READS ARE A FIXED SCHEDULE.  Words are 16 bits, pixels least
 // significant bits first, and the pointer is even.  Counting x from column 0,
@@ -45,7 +49,7 @@ module background #(
     /* verilator lint_off UNUSEDSIGNAL */
     input  logic [14:0] ptr,         // byte address of the line's first pixel; bit 0 is ignored
     /* verilator lint_on UNUSEDSIGNAL */
-    input  logic [3:0]  bpp,         // 1, 2, 3, 4 or 8
+    input  logic [2:0]  depth,       // the mode word's depth code
     input  logic [3:0]  width,       // 1 to 8 columns per pixel
     input  logic        active,      // one cycle per visible column
 
@@ -57,7 +61,20 @@ module background #(
 );
 
     // --- the line's mode, latched at line_start ---------------------------------
+    logic [3:0] bpp;
+    logic [4:0] base;                // ORed into a palette index
+    always_comb case (depth)
+        3'b000:  begin bpp = 4'd1; base = 5'b11100; end
+        3'b001:  begin bpp = 4'd1; base = 5'b11110; end
+        3'b010:  begin bpp = 4'd2; base = 5'b11000; end
+        3'b011:  begin bpp = 4'd2; base = 5'b01000; end
+        3'b100:  begin bpp = 4'd3; base = 5'b10000; end
+        3'b101:  begin bpp = 4'd4; base = 5'b00000; end
+        default: begin bpp = 4'd8; base = 5'b00000; end
+    endcase
+
     logic [3:0] bpp_q;
+    logic [4:0] base_q;
     logic [2:0] wmax;                // width - 1; width 8 wraps to 7
 
     wire [4:0] full = bpp_q == 4'd3 ? 5'd15 : 5'd16;
@@ -102,6 +119,7 @@ module background #(
 
         if (line_start) begin
             bpp_q    <= bpp;
+            base_q   <= base;
             wmax     <= 3'(width - 4'd1);
             mem_addr <= ptr[14:1];
         end else if (mem_rd)
@@ -122,11 +140,11 @@ module background #(
     end
 
     // --- format and delay ----------------------------------------------------
-    wire [7:0] fmt = bpp_q == 4'd1 ? {7'b0001110, sr[0]}
-                   : bpp_q == 4'd2 ? {6'b000110,  sr[1:0]}
-                   : bpp_q == 4'd3 ? {5'b00010,   sr[2:0]}
-                   : bpp_q == 4'd4 ? {4'b0000,    sr[3:0]}
-                   :                  sr[7:0];
+    wire [4:0] mask = bpp_q == 4'd1 ? 5'b00001
+                    : bpp_q == 4'd2 ? 5'b00011
+                    : bpp_q == 4'd3 ? 5'b00111
+                    :                  5'b01111;
+    wire [7:0] fmt  = bpp_q == 4'd8 ? sr[7:0] : {3'b000, base_q | sr[4:0] & mask};
 
     localparam int D = LATENCY - 3;
     logic [8 * D - 1:0] pipe;
