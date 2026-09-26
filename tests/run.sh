@@ -126,6 +126,7 @@ for f in insn immgen rhs unary lhs dest cond alu compare predecode ucode cpu; do
 done
 if node tests/rtl-check.mjs; then :; else fail=1; fi
 if node tests/background-check.mjs; then :; else fail=1; fi
+if node tests/foreground-check.mjs; then :; else fail=1; fi
 
 # --- the binutils opcode table, if the submodule is checked out --------------
 # opcodes/ is what gas and the disassembler SHARE, so a stale table would make

@@ -259,6 +259,33 @@ A `background_color` pointer must be even. (An odd one was supported for a
 while by dropping the first word's low byte as it loaded; it and a FIFO
 were taken out as more hardware than they were worth.)
 
+### Text generator
+
+`rtl/video/foreground.sv` makes the glyph bit and foreground colour for each
+column, from three byte reads per cell on the even cycles. At the cell's
+phase, x mod 8 (x mod 16 with text doubling):
+
+| phase | |
+|---|---|
+| 0 | read the character code, `character_data`++ |
+| 1 | the glyph address, 0x1000 + (`font_line` << 5) + code |
+| 2 | read the glyph byte |
+| 4 | read the foreground colour, `character_color`++ |
+| 7 | glyph and colour move to the output stage |
+
+Phase 6 is spare. A glyph byte's bit 7 is its leftmost pixel.
+
+**Both cell widths move at phase 7**, so a cell is shown from 8 cycles after
+its first column either way and the latency does not depend on the mode: a
+doubled cell is still showing its last 8 columns while the next cell's reads
+happen, so the next glyph and colour wait in their own registers. With the
+output register the text generator's latency is 9, and the background, whose
+own minimum is 4, runs at the same `LATENCY`.
+
+151 LUT4s, 37 carry cells and 110 flops by yosys. `tests/foreground-check.mjs`
+checks every column at both widths, with text on and off and pointers of
+either parity, against a reference built from this section.
+
 ### Pixel path
 
 ```
