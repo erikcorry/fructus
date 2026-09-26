@@ -180,8 +180,40 @@ pixel           the low bpp bits of the shift register
 ```
 
 3 bpp is not a special case: 5 pixels per word, and bit 15 is dropped when
-the next word loads. The costly part is the 5-way shift, 2 to 3 LUT4s per
-bit; the whole unpacker should be 60–80 LUTs, about 1.5% of a UP5K.
+the next word loads.
+
+`rtl/video/background.sv` implements this, with the fetch and a two-word
+FIFO ahead of the shift register: 183 LUT4s and 90 flops by yosys, about
+3.5% of a UP5K. Its output reaches `pixel` a parameter `LATENCY` cycles
+after the column; the font/foreground and sync pipelines are padded to the
+same depth (see [Timing](#timing)). `tests/background-check.mjs`
+checks every column of every depth, width and start parity against a
+reference built from this section.
+
+### Memory cycles and odd start addresses
+
+Memory cycles alternate: even cycles belong to the text generator, odd
+cycles to the background generator.
+
+The text generator reads bytes: a character code, a foreground colour and a
+glyph byte per 8-pixel cell, 3 of its 4 cycles. So `character_data` and
+`character_color` may start at any address, odd or even.
+
+The background generator reads 16-bit words. It has to: 8 bpp at width 1 is
+one word every two pixels, all of the odd cycles. A `background_color`
+pointer may still be odd. The first word is fetched from `address & ~1`, and
+the pixels in its low byte are discarded **as the word is loaded**:
+
+```
+odd start, first word:   shift register ← word >> 8     (>> 9 when bpp = 3)
+                         pixel counter  ← 8/bpp         (3 when bpp = 3)
+```
+
+At 3 bpp this drops pixels 0, 1 and 2, since pixel 2 (bits 6–8) straddles
+the byte, and the line starts at pixel 3. The unpacker then starts at column
+0 as for any line, so the offset never touches the timing: an alternative
+that ran the unpacker early through the back porch would need up to 64
+clocks at 1 bpp, width 8, more than the 48-clock back porch.
 
 ### Pixel path
 
@@ -199,9 +231,20 @@ port stays free for the CPU, which can change entries mid-frame.
 ### Timing
 
 The GPU's reads are completely predictable, so it can fetch as far ahead as
-it likes. Adding more pipeline registers between a fetch and the pixel it
-produces costs nothing, and there is no timing pressure on the table reads,
-the `font_base + c` add or the glyph fetch.
+it likes, and there is no timing pressure on the table reads, the
+`font_base + c` add or the glyph fetch. The pipelines are padded so that the
+background, the font/foreground and the syncs reach the fg/bg mux and the
+pins in the same cycle.
+
+PADDING IS NOT FREE ON AN iCE40. A logic cell's flop takes its D input only
+from the cell's own LUT, so a flop that registers real logic shares that
+cell for nothing, but a flop that only delays another flop takes a whole
+cell, its LUT passing the bit through. There is no shift-register
+primitive like Xilinx's SRL16. A stage costs a cell per bit: 8 for the
+pixel byte, about 3 for HSYNC, VSYNC and `visible`. Cheap - ten stages are
+about 2% of a UP5K - and cheaper still because the last stage goes in the
+`SB_IO` output flops, which are not logic cells, and because a pipeline can
+start its fetch earlier instead of delaying its result.
 
 The worst case is 80-column text over an 8 bpp, width 1 background. Every 16
 pixels need 8 background words, 1 word of two character codes, 1 word of two
@@ -377,18 +420,33 @@ struct timing {
 
 One module, instantiated twice: the horizontal copy steps every pixel clock,
 the vertical copy once per line. It never adds the lengths up, so no total
-appears in the hardware:
+appears in the hardware. Each copy is a 2-bit `state` and a 10-bit
+`countdown`:
 
 ```
-phase    2 bits      FP → SYNC → BP → VISIBLE → FP ...
-count    10 bits     down counter, loaded with timing[phase] on entering a phase;
-                     the phase advances when it reaches 1
-sync_n = !(phase == SYNC)
-active =  (phase == VISIBLE)
+state      0 FP → 1 SYNC → 2 BP → 3 VISIBLE → 0 FP ...
+step:      if countdown == 0:  countdown = timing[state + 1] - 1,  state = state + 1
+           else:               countdown--
+sync_n  =  !(state == SYNC)
+active  =   (state == VISIBLE)
 ```
 
-Every length must be at least 1: a 0 wraps to 1023. Ten bits cover
-everything at this pixel clock.
+- The load goes through the counter's own decrementer,
+  `next = (countdown == 0 ? timing[state + 1] : countdown) - 1`, so there is
+  one 10-bit decrementer and no separate subtract. `timing[state + 1]` is a
+  4-to-1 mux with its inputs wired one place round, not an adder.
+- **The vertical copy steps when the horizontal state goes from VISIBLE
+  back to FP.** Every vertical edge, VSYNC's included, therefore falls at
+  the start of a horizontal front porch. The vertical VISIBLE phase starts
+  with line 0's horizontal blanking, which is where line 0's four table
+  reads happen.
+- Every length must be at least 1: a 0 loads 0 − 1 = 1023.
+- A timing register written mid-frame takes effect the next time its phase
+  is entered.
+
+HSYNC never stops. Each of the 525 lines, blank or not and including the two
+VSYNC lines, has its own pulse; vertical blanking is just lines without
+pixels.
 
 A line counter, cleared as the vertical VISIBLE phase begins, gives the
 line number n that indexes the line tables.
