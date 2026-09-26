@@ -7,17 +7,15 @@
 //
 // The reference here computes every column's byte straight from the documented
 // layout - little-endian words, pixels least significant bits first, five to a
-// word at 3 bpp, an odd pointer dropping its low byte's pixels - and not from
+// word at 3 bpp - and not from
 // anything the circuit does, so agreement means the circuit implements the
 // layout.
 //
-// WHAT IS SWEPT.  Every depth, every width from 1 to 8, odd and even pointers,
-// and both parities of the memory slot against column 0, each over random
-// memory at a random pointer.  Half the lines put column 0 at the documented
-// minimum of 6 cycles after line_start, the rest further out at random.
-// A line follows the last one's final column by at most one cycle, so a read
-// still in flight when line_start arrives is exercised.  The testbench fails a
-// read outside the generator's slot.  Run at LATENCY 1 and 3.
+// WHAT IS SWEPT.  Every depth and every width from 1 to 8 - but only the even
+// widths at 3 bpp, the ones docs/vga.md supports - twice each, over
+// random memory at a random even pointer.  The testbench counts x from column
+// 0 and fails a read on an even x, which belongs to the text generator.  Run at
+// LATENCY 4, the least, and 6.
 //
 // Needs iverilog.  Skips with a message rather than failing when it is absent.
 // =============================================================================
@@ -72,12 +70,11 @@ const expected = (ptr, bpp, width) => {
 const lines = [];
 for (const bpp of [1, 2, 3, 4, 8])
   for (let width = 1; width <= 8; width++)
-    for (const odd of [0, 1])
-      for (const extra of [0, 1]) {
-        const ptr = (rand(32768 - 1024) & ~1) | odd;
-        const gap = extra ? 6 : 6 + rand(155);   // line_start to column 0; 6 is the minimum
-        lines.push({ ptr, bpp, width, gap, extra });
-      }
+    for (let n = 0; n < 2 && !(bpp === 3 && width % 2); n++) {
+      const ptr = rand(32768 - 1024) & ~1;
+      const gap = 2 + rand(159);           // line_start to column 0
+      lines.push({ ptr, bpp, width, gap, extra: n });
+    }
 
 const dir = 'build/background-check';
 mkdirSync(dir, { recursive: true });
@@ -91,7 +88,7 @@ module tb;
     reg clk = 0;
     always #5 clk = ~clk;
 
-    reg         line_start = 0, active = 0, slot = 0;
+    reg         line_start = 0, active = 0;
     reg  [14:0] ptr;
     reg  [3:0]  bpp, width;
     wire        mem_rd;
@@ -104,11 +101,15 @@ module tb;
 
     background #(.LATENCY(${latency})) dut (
         .clk, .line_start, .ptr, .bpp, .width, .active,
-        .slot, .mem_rd, .mem_addr, .mem_rdata, .pixel);
+        .mem_rd, .mem_addr, .mem_rdata, .pixel);
 
+    integer x = 0;
+    reg act_prev = 0;
     always @(posedge clk) begin
-        if (mem_rd === 1'b1 && slot !== 1'b1) begin
-            $display("FAIL read outside the slot");
+        x = active && !act_prev ? 0 : x + 1;
+        act_prev = active;
+        if (mem_rd === 1'b1 && x % 2 == 0) begin
+            $display("FAIL read on even x %0d, line %0d", x, i);
             $finish;
         end
         mem_rdata <= mem_rd === 1'b1 ? mem[mem_addr] : 16'hxxxx;
@@ -119,7 +120,6 @@ module tb;
 
     integer f, i, k;
     always @(negedge clk) begin
-        slot <= ~slot;
         if (act[${latency - 1}]) $fwrite(f, "%h ", pixel);
     end
 
@@ -139,7 +139,7 @@ module tb;
             active = 0;
             repeat (${latency}) @(negedge clk);
             $fwrite(f, "\\n");
-            if (cfg[i][31]) @(negedge clk);
+            repeat (4) @(negedge clk);
         end
         $fclose(f);
         $finish;
@@ -148,7 +148,7 @@ endmodule
 `;
 
 let fail = 0;
-for (const latency of [1, 3]) {
+for (const latency of [4, 6]) {
   writeFileSync(`${dir}/tb.sv`, tb(latency));
   const log = execFileSync('sh', ['-c',
     `iverilog -g2012 -o ${dir}/sim ${dir}/tb.sv rtl/video/background.sv && vvp -n ${dir}/sim`],

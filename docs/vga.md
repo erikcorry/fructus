@@ -87,9 +87,14 @@ format](#8-bit-pixel-format): 0x00–0x1F select a palette entry, and
 Under consideration: a mode bit that **doubles pixels horizontally** for the
 text generator, giving 40 columns of 16-pixel cells, so each line is 40 codes
 and 40 colours. That is native teletext (640 / 40 = 16 = 8 doubled) and a
-320-wide tile mode for games. There is no bit to disable the text generator:
-pointing `character_data` at a line of spaces does the same, as long as glyph
-32 is blank in the rows used.
+320-wide tile mode for games.
+
+Also under consideration: a mode bit that **disables the text generator**,
+so the fg/bg mux always takes the background. Pointing `character_data` at
+a line of spaces shows the same picture, as long as glyph 32 is blank in
+the rows used, but it needs the font and the character tables in memory.
+With the bit they are free for pixels, which is what lets 320×240 at 3 bpp
+fit.
 
 For VT100, 30 text rows of 16 lines: `character_data` holds 16 copies of a
 pointer to the first row's 80 bytes, then 16 copies of a pointer to the
@@ -138,8 +143,9 @@ Because the row comes from the table, some effects are just table contents:
 
 A glyph bit of 1 shows the cell's foreground colour; a 0 shows the
 background pixel from the line's `background_color` data: 640 screen pixels
-at 1, 2, 3, 4 or 8 bits per pixel, each pixel 1, 2, 3, 4 or 8 screen pixels
-wide.
+at 1, 2, 3, 4 or 8 bits per pixel, each pixel 1 to 8 screen pixels wide, but
+**3 bpp only at even widths** (see [Memory cycles](#memory-cycles)). The
+pointer is even.
 
 An 8-bit pixel is a byte in the [8-bit pixel format](#8-bit-pixel-format).
 Fewer bits select a palette entry, with a fixed prefix per depth so that no
@@ -166,6 +172,12 @@ A retro game can run at 320×240, 2 bits per pixel, width 2, with each
 `background_color` pointer repeated for two lines: 160 bytes × 240 lines =
 19,200 bytes.
 
+At 3 bpp, width 2, a line is 64 words, 128 bytes, and 240 lines are 30,720.
+With the text generator running that leaves room for 224 lines (28 KB after
+the 4 KB of tables). Without it, `character_data`, `character_color` and the
+font are not needed, and 0x0800 to the end is exactly 30,720 bytes: 320×240
+in 8 colours. A full 640×480 in 8 colours would be 120 KB.
+
 ### Unpacking
 
 Pixels are stored least significant bits first, so pixel 0 is the low bits of
@@ -182,17 +194,16 @@ pixel           the low bpp bits of the shift register
 3 bpp is not a special case: 5 pixels per word, and bit 15 is dropped when
 the next word loads.
 
-`rtl/video/background.sv` implements this, with the fetch and a two-word
-FIFO ahead of the shift register: 183 LUT4s and 90 flops by yosys, about
-3.5% of a UP5K. Its output reaches `pixel` a parameter `LATENCY` cycles
-after the column; the font/foreground and sync pipelines are padded to the
-same depth (see [Timing](#timing)). `tests/background-check.mjs`
-checks every column of every depth, width and start parity against a
-reference built from this section.
+`rtl/video/background.sv` implements this: 133 LUT4s and 58 flops by yosys,
+about 2.5% of a UP5K. Its output reaches `pixel` a parameter `LATENCY`
+cycles after the column, at least 4; the font/foreground and sync pipelines
+are padded to the same depth (see [Timing](#timing)).
+`tests/background-check.mjs` checks every column of every supported depth
+and width against a reference built from this section.
 
-### Memory cycles and odd start addresses
+### Memory cycles
 
-Memory cycles alternate: even cycles belong to the text generator, odd
+Counting x from column 0, even cycles belong to the text generator and odd
 cycles to the background generator.
 
 The text generator reads bytes: a character code, a foreground colour and a
@@ -200,20 +211,24 @@ glyph byte per 8-pixel cell, 3 of its 4 cycles. So `character_data` and
 `character_color` may start at any address, odd or even.
 
 The background generator reads 16-bit words. It has to: 8 bpp at width 1 is
-one word every two pixels, all of the odd cycles. A `background_color`
-pointer may still be odd. The first word is fetched from `address & ~1`, and
-the pixels in its low byte are discarded **as the word is loaded**:
+one word every two pixels, all of the odd cycles. Its reads are **a fixed
+schedule, with no FIFO**. A word arrives the cycle after its read, as from
+an SPRAM:
 
-```
-odd start, first word:   shift register ← word >> 8     (>> 9 when bpp = 3)
-                         pixel counter  ← 8/bpp         (3 when bpp = 3)
-```
+- word 0 is read at x = 1 and goes into the shift register at the end of
+  x = 2, so the shift register runs three cycles behind the columns;
+- every later word is read two shift-register cycles before its first pixel,
+  and lands in the shift register just as the last word's last pixel ends.
 
-At 3 bpp this drops pixels 0, 1 and 2, since pixel 2 (bits 6–8) straddles
-the byte, and the line starts at pixel 3. The unpacker then starts at column
-0 as for any line, so the offset never touches the timing: an alternative
-that ran the unpacker early through the back porch would need up to 64
-clocks at 1 bpp, width 8, more than the 48-clock back porch.
+That read falls on an odd cycle only if a word lasts an even number of
+cycles, pixels per word × width. 16, 8, 4 and 2 pixels always do; 5 pixels,
+at 3 bpp, do only at even widths, which is why 3 bpp is restricted to them.
+Holding a word for a cycle would lift the restriction for about 35 logic
+cells, but no BBC mode or terminal needs 3 bpp at an odd width.
+
+A `background_color` pointer must be even. (An odd one was supported for a
+while by dropping the first word's low byte as it loaded; it and a FIFO
+were taken out as more hardware than they were worth.)
 
 ### Pixel path
 
