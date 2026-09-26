@@ -13,10 +13,12 @@
 // the first visible line - the four entries are the words at n, 0x200 + n,
 // 0x400 + n and 0x600 + n: background_color, graphics_mode, character_data and
 // character_color.  They are read on the first four cycles after the front
-// porch, and line_start follows once the last has arrived, so SYNC and
-// back porch together must be at least 6 cycles.  The background's last reads
-// run up to 3 cycles past the last column, so the front porch must be at least
-// 2.  Standard timings are far longer.
+// porch, and each generator takes its fields from a word the cycle it arrives
+// - there is no copy of the table here.  So SYNC and back porch together must
+// be at least 5 cycles, for the last word to arrive before column 0; and the
+// front porch must be long enough for the background, which runs 4 cycles
+// late, to finish the last line before the table reads begin (see
+// docs/vga.md, "Top level").  Standard timings are far longer.
 //
 // MEMORY.  One read port, shared on a fixed schedule: counting x from column
 // 0, the text generator reads on even cycles and the background on odd, and
@@ -45,7 +47,7 @@
 // =============================================================================
 
 module video #(
-    parameter int LATENCY = 9
+    parameter int LATENCY = 8
 ) (
     input  logic        clk,
 
@@ -96,10 +98,9 @@ module video #(
     assign vblank = !v_vis;
 
     // --- the line tables ---------------------------------------------------------
-    // tc counts the cycles since the front porch ended.
+    // tc counts the cycles since the front porch ended.  Each word arrives the
+    // cycle after its read, and the generators take their fields from it then.
     logic [2:0]  tc = 3'd7;
-    logic [14:0] t_bg, t_char, t_color;    // byte addresses: bit 15 unused
-    logic [15:0] t_mode;
 
     always_ff @(posedge clk)
         tc <= h_state == 2'd0 ? 3'd0 : tc == 3'd7 ? 3'd7 : tc + 3'd1;
@@ -107,17 +108,10 @@ module video #(
     wire        in_tables = v_vis && h_state != 2'd0 && h_state != 2'd3;
     wire        t_rd      = in_tables && tc < 3'd4;
     wire [13:0] t_addr    = {3'b000, tc[1:0], n[8:0]};
-    wire        line_start = in_tables && tc == 3'd5;
-
-    always_ff @(posedge clk)
-        if (in_tables)
-            case (tc)
-                3'd1: t_bg    <= mem_rdata[14:0];
-                3'd2: t_mode  <= mem_rdata;
-                3'd3: t_char  <= mem_rdata[14:0];
-                3'd4: t_color <= mem_rdata[14:0];
-                default: ;
-            endcase
+    wire        ld_bg     = in_tables && tc == 3'd1;
+    wire        ld_mode   = in_tables && tc == 3'd2;
+    wire        ld_char   = in_tables && tc == 3'd3;
+    wire        ld_color  = in_tables && tc == 3'd4;
 
     // --- the generators ------------------------------------------------------
     logic        bg_rd, fg_rd;
@@ -126,13 +120,11 @@ module video #(
     logic        fg_on;
 
     background #(.LATENCY(LATENCY)) bg (
-        .clk, .line_start, .ptr(t_bg), .depth(t_mode[10:8]),
-        .width({1'b0, t_mode[13:11]} + 4'd1), .active,
+        .clk, .ld_ptr(ld_bg), .ld_mode, .word(mem_rdata), .active,
         .mem_rd(bg_rd), .mem_addr(bg_addr), .mem_rdata, .pixel(bg_pixel));
 
     foreground #(.LATENCY(LATENCY)) fg (
-        .clk, .line_start, .char_ptr(t_char), .color_ptr(t_color),
-        .font_line(t_mode[7:0]), .dbl(t_mode[14]), .off(t_mode[15]), .active,
+        .clk, .ld_mode, .ld_char, .ld_color, .word(mem_rdata), .active,
         .mem_rd(fg_rd), .mem_addr(fg_addr), .mem_rdata, .fg_on, .fg_color);
 
     assign mem_rd   = fg_rd || bg_rd || t_rd;
@@ -151,7 +143,10 @@ module video #(
                    : fg_on            ? fg_color
                    :                    bg_pixel;
 
-    logic [7:0] palette [32];
+    // no_rw_check: a CPU write in the cycle the display reads the same entry
+    // gives that one pixel undefined data, as the block RAM does, rather than
+    // spending registers and comparators to make it the old value.
+    (* no_rw_check *) logic [7:0] palette [32];
     logic [7:0] pal_q, sel_q;
     always_ff @(posedge clk) begin
         if (pal_we)

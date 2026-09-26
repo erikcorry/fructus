@@ -14,8 +14,8 @@
 // WHAT IS SWEPT.  8- and 16-column cells, text on and off, over random memory
 // with random pointers of either parity and a random font_line, 24 lines of
 // each.  The testbench counts x from column 0 and fails a read on an odd x,
-// which belongs to the background generator.  Run at LATENCY 9, the least, and
-// 11.
+// which belongs to the background generator.  Run at LATENCY 8, the least, and
+// 10.
 //
 // Needs iverilog.  Skips with a message rather than failing when it is absent.
 // =============================================================================
@@ -64,7 +64,7 @@ for (const dbl of [0, 1])
   for (const off of [0, 1])
     for (let n = 0; n < 24; n++)
       lines.push({ cp: rand(32768 - 128), kp: rand(32768 - 128), fl: rand(256),
-                   dbl, off, gap: 2 + rand(159) });
+                   dbl, off, gap: 3 + rand(158) });
 
 const dir = 'build/foreground-check';
 mkdirSync(dir, { recursive: true });
@@ -80,10 +80,8 @@ module tb;
     reg clk = 0;
     always #5 clk = ~clk;
 
-    reg         line_start = 0, active = 0;
-    reg  [14:0] char_ptr, color_ptr;
-    reg  [7:0]  font_line;
-    reg         dbl, off;
+    reg         ld_mode = 0, ld_char = 0, ld_color = 0, active = 0;
+    reg  [15:0] word;
     wire        mem_rd;
     wire [13:0] mem_addr;
     reg  [15:0] mem_rdata;
@@ -94,7 +92,7 @@ module tb;
     reg [55:0] cfg [0:${lines.length - 1}];
 
     foreground #(.LATENCY(${latency})) dut (
-        .clk, .line_start, .char_ptr, .color_ptr, .font_line, .dbl, .off, .active,
+        .clk, .ld_mode, .ld_char, .ld_color, .word, .active,
         .mem_rd, .mem_addr, .mem_rdata, .fg_on, .fg_color);
 
     integer x = 0;
@@ -122,12 +120,17 @@ module tb;
         f = $fopen("${dir}/out.txt", "w");
         for (i = 0; i < ${lines.length}; i = i + 1) begin
             @(negedge clk);
-            char_ptr = cfg[i][14:0]; color_ptr = cfg[i][29:15];
-            font_line = cfg[i][37:30]; dbl = cfg[i][40]; off = cfg[i][41];
-            line_start = 1;
+            // graphics_mode, character_data, character_color, in the order
+            // the top level reads them.
+            word = {cfg[i][41], cfg[i][40], 6'b0, cfg[i][37:30]};
+            ld_mode = 1;
             @(negedge clk);
-            line_start = 0;
-            repeat (cfg[i][55:48] - 1) @(negedge clk);
+            ld_mode = 0; word = {1'b0, cfg[i][14:0]}; ld_char = 1;
+            @(negedge clk);
+            ld_char = 0; word = {1'b0, cfg[i][29:15]}; ld_color = 1;
+            @(negedge clk);
+            ld_color = 0;
+            repeat (cfg[i][55:48] - 3) @(negedge clk);
             active = 1;
             repeat (640) @(negedge clk);
             active = 0;
@@ -142,7 +145,7 @@ endmodule
 `;
 
 let fail = 0;
-for (const latency of [9, 11]) {
+for (const latency of [8, 10]) {
   writeFileSync(`${dir}/tb.sv`, tb(latency));
   const log = execFileSync('sh', ['-c',
     `iverilog -g2012 -o ${dir}/sim ${dir}/tb.sv rtl/video/foreground.sv && vvp -n ${dir}/sim`],

@@ -60,7 +60,7 @@
 // =============================================================================
 
 module sprites #(
-    parameter int LATENCY = 9
+    parameter int LATENCY = 8
 ) (
     input  logic        clk,
 
@@ -79,9 +79,16 @@ module sprites #(
 );
 
     // --- the RAMs ------------------------------------------------------------------
-    (* ram_style = "block" *) logic [15:0] attrs [256];
-    logic [15:0] pattern [1024];
-    logic [15:0] lb0 [256], lb1 [256];
+    // no_rw_check: a read and a write of the same word in one cycle give
+    // undefined data, as the block RAM does, rather than spending registers
+    // and comparators to make it the old value.  The line buffers never meet
+    // that way - the engine and the display use different buffers - and a CPU
+    // write to an attribute or pattern word in the cycle the engine reads it
+    // draws that sprite wrong for one line; software avoids both.
+    (* ram_style = "block", no_rw_check *) logic [15:0] attrs [256];
+    (* no_rw_check *) logic [15:0] pattern [1024];
+    (* no_rw_check *) logic [15:0] lb0 [256];
+    (* no_rw_check *) logic [15:0] lb1 [256];
 
     // --- the engine ----------------------------------------------------------------
     logic       bsel = 1'b0;         // the buffer being built

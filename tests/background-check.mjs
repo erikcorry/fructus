@@ -16,7 +16,8 @@
 // twice each, over
 // random memory at a random even pointer.  The testbench counts x from column
 // 0 and fails a read on an even x, which belongs to the text generator.  Run at
-// LATENCY 4, the least, and 6.
+// LATENCY 4, the least, 5, whose odd remainder is an extra output register,
+// and 8, the display's, where the generator runs 4 cycles late.
 //
 // Needs iverilog.  Skips with a message rather than failing when it is absent.
 // =============================================================================
@@ -76,7 +77,7 @@ for (let code = 0; code < 8; code++)
   for (let width = 1; width <= 8; width++)
     for (let n = 0; n < 2 && !(DEPTH[code][0] === 3 && width % 2); n++) {
       const ptr = rand(32768 - 1024) & ~1;
-      const gap = 2 + rand(159);           // line_start to column 0
+      const gap = 2 + rand(159);           // the pointer's load to column 0
       lines.push({ ptr, code, width, gap, extra: n });
     }
 
@@ -92,10 +93,8 @@ module tb;
     reg clk = 0;
     always #5 clk = ~clk;
 
-    reg         line_start = 0, active = 0;
-    reg  [14:0] ptr;
-    reg  [2:0]  depth;
-    reg  [3:0]  width;
+    reg         ld_ptr = 0, ld_mode = 0, active = 0;
+    reg  [15:0] word;
     wire        mem_rd;
     wire [13:0] mem_addr;
     reg  [15:0] mem_rdata;
@@ -105,7 +104,7 @@ module tb;
     reg [31:0] cfg [0:${lines.length - 1}];
 
     background #(.LATENCY(${latency})) dut (
-        .clk, .line_start, .ptr, .depth, .width, .active,
+        .clk, .ld_ptr, .ld_mode, .word, .active,
         .mem_rd, .mem_addr, .mem_rdata, .pixel);
 
     integer x = 0;
@@ -134,11 +133,15 @@ module tb;
         f = $fopen("${dir}/out.txt", "w");
         for (i = 0; i < ${lines.length}; i = i + 1) begin
             @(negedge clk);
-            ptr = cfg[i][14:0]; depth = cfg[i][17:15]; width = cfg[i][22:19];
-            line_start = 1;
+            word = {1'b0, cfg[i][14:0]};                  // background_color
+            ld_ptr = 1;
             @(negedge clk);
-            line_start = 0;
-            repeat (cfg[i][30:23] - 1) @(negedge clk);
+            ld_ptr = 0;
+            word = {2'b00, 3'(cfg[i][22:19] - 1), cfg[i][17:15], 8'h00};  // graphics_mode
+            ld_mode = 1;
+            @(negedge clk);
+            ld_mode = 0;
+            repeat (cfg[i][30:23] - 2) @(negedge clk);
             active = 1;
             repeat (640) @(negedge clk);
             active = 0;
@@ -153,7 +156,7 @@ endmodule
 `;
 
 let fail = 0;
-for (const latency of [4, 6]) {
+for (const latency of [4, 5, 8]) {
   writeFileSync(`${dir}/tb.sv`, tb(latency));
   const log = execFileSync('sh', ['-c',
     `iverilog -g2012 -o ${dir}/sim ${dir}/tb.sv rtl/video/background.sv && vvp -n ${dir}/sim`],
@@ -174,4 +177,4 @@ for (const latency of [4, 6]) {
 }
 
 if (fail) { console.log(`background-check: ${fail} failures`); process.exit(1); }
-console.log(`ok    tests/background-check.mjs: ${lines.length} lines × 2 latencies, every column`);
+console.log(`ok    tests/background-check.mjs: ${lines.length} lines × 3 latencies, every column`);

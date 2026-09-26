@@ -14,9 +14,9 @@
 // decode to pin encodings.  The whole frame is compared - syncs, blanking and
 // all nine pins - from one falling edge of vsync to the next.
 //
-// Run with the smallest porches the design allows (front porch 2, sync and
-// back porch 6 together) and with standard VGA's, and fails if two readers
-// ever share a cycle of the memory port.
+// Run with the smallest porches the design allows - front porch 6, sync and
+// back porch 5 together; 5 and 4 fail - and with standard VGA's, and fails if
+// two readers ever share a cycle of the memory port.
 //
 // Needs iverilog.  Skips with a message rather than failing when it is absent.
 // =============================================================================
@@ -41,7 +41,7 @@ const rand = (n) => {
   return seed % n;
 };
 
-const LATENCY = 9;
+const LATENCY = 8;
 const WORDS = 16384;
 const LINES = 24;
 
@@ -319,7 +319,7 @@ endmodule
 // A line must be at least 705 cycles for the sprite engine, so the smallest
 // porches go with a wider picture.
 const TIMINGS = [
-  ['minimum porches', [2, 3, 3, 704], [2, 2, 3, LINES]],
+  ['minimum porches', [6, 3, 2, 704], [2, 2, 3, LINES]],
   ['standard porches', [16, 96, 48, 640], [10, 2, 33, LINES]],
 ];
 

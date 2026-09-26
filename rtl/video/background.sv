@@ -33,24 +33,29 @@
 // bpp, whose bit 15 is unused) by bpp per pixel; the pixel with
 // bits_left == bpp is the word's last.
 //
-// TIMING.  `line_start` latches the pointer and mode at any time before the
-// line.  `active` is high for the 640 visible columns.  The byte for column x
-// is on `pixel` LATENCY cycles after the cycle in which `active` was high for
-// x; LATENCY is at least 4, three for the fetch and one for the output
-// register, and the font/fg and sync pipelines are padded to the same depth.
+// THE LINE'S FIELDS COME STRAIGHT FROM ITS TABLE WORDS as they arrive: the
+// pointer on the cycle `ld_ptr` is set, the depth and width on the cycle
+// `ld_mode` is, both from `word`.
+//
+// TIMING.  `active` is high for the 640 visible columns.  The byte for column
+// x is on `pixel` LATENCY cycles after the cycle in which `active` was high
+// for x; LATENCY is at least 4, three for the fetch and one for the output
+// register.  A larger LATENCY is made up mostly by running the whole
+// generator later - delaying `active`, SHIFT flops, instead of the byte, 8 a
+// cycle - by an even number of cycles, so its reads stay on odd x.  What
+// SHIFT leaves over, one cycle at most, is an extra output register.
 // =============================================================================
 
 module background #(
-    parameter int LATENCY = 4
+    parameter int LATENCY = 8
 ) (
     input  logic        clk,
 
-    input  logic        line_start,  // latch ptr, bpp and width
+    input  logic        ld_ptr,      // `word` is the line's background_color entry
+    input  logic        ld_mode,     // `word` is the line's graphics_mode entry
     /* verilator lint_off UNUSEDSIGNAL */
-    input  logic [14:0] ptr,         // byte address of the line's first pixel; bit 0 is ignored
+    input  logic [15:0] word,        // the pointer's bits 0 and 15 are ignored
     /* verilator lint_on UNUSEDSIGNAL */
-    input  logic [2:0]  depth,       // the mode word's depth code
-    input  logic [3:0]  width,       // 1 to 8 columns per pixel
     input  logic        active,      // one cycle per visible column
 
     output logic        mem_rd,      // read mem_addr this cycle
@@ -63,7 +68,7 @@ module background #(
     // --- the line's mode, latched at line_start ---------------------------------
     logic [3:0] bpp;
     logic [4:0] base;                // ORed into a palette index
-    always_comb case (depth)
+    always @* case (word[10:8])      // not always_comb: iverilog rejects its part select
         3'b000:  begin bpp = 4'd1; base = 5'b11100; end
         3'b001:  begin bpp = 4'd1; base = 5'b11110; end
         3'b010:  begin bpp = 4'd2; base = 5'b11000; end
@@ -79,13 +84,25 @@ module background #(
 
     wire [4:0] full = bpp_q == 4'd3 ? 5'd15 : 5'd16;
 
+    // --- running late ---------------------------------------------------------------
+    localparam int SHIFT = (LATENCY - 4) / 2 * 2;
+    localparam int D     = LATENCY - 3 - SHIFT;   // output registers, 1 or 2
+    logic act_in;                    // `active`, SHIFT cycles late
+    if (SHIFT == 0) begin : g_now
+        assign act_in = active;
+    end else begin : g_late
+        logic [SHIFT - 1:0] late;
+        always_ff @(posedge clk) late <= SHIFT'({late, active});
+        assign act_in = late[SHIFT - 1];
+    end
+
     // --- where the shifter is --------------------------------------------------
-    // x counts from column 0; `run` is `active` three cycles late, the columns
-    // as the shifter sees them.
-    logic [2:0] act_d;               // active, one to three cycles ago
+    // x counts from the late column 0; `run` is `act_in` three cycles later,
+    // the columns as the shifter sees them.
+    logic [2:0] act_d;               // act_in, one to three cycles ago
     logic       odd;                 // x is odd: our cycle
     wire        run   = act_d[2];
-    wire        first = active && !act_d[0];      // x = 0
+    wire        first = act_in && !act_d[0];      // x = 0
 
     logic [15:0] sr;
     logic [4:0]  bits_left;
@@ -113,16 +130,18 @@ module background #(
     endcase
 
     always_ff @(posedge clk) begin
-        act_d   <= {act_d[1:0], active};
+        act_d   <= {act_d[1:0], act_in};
         odd     <= first ? 1'b1 : !odd;
         pending <= mem_rd;
 
-        if (line_start) begin
+        if (ld_mode) begin
             bpp_q    <= bpp;
             base_q   <= base;
-            wmax     <= 3'(width - 4'd1);
-            mem_addr <= ptr[14:1];
-        end else if (mem_rd)
+            wmax     <= word[13:11];
+        end
+        if (ld_ptr)
+            mem_addr <= word[14:1];
+        else if (mem_rd)
             mem_addr <= mem_addr + 14'd1;
 
         if (run)
@@ -146,7 +165,6 @@ module background #(
                     :                  5'b01111;
     wire [7:0] fmt  = bpp_q == 4'd8 ? sr[7:0] : {3'b000, base_q | sr[4:0] & mask};
 
-    localparam int D = LATENCY - 3;
     logic [8 * D - 1:0] pipe;
     always_ff @(posedge clk)
         pipe <= (8 * D)'({pipe, fmt});

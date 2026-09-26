@@ -223,10 +223,14 @@ pixel           the low bpp bits of the shift register
 3 bpp is not a special case: 5 pixels per word, and bit 15 is dropped when
 the next word loads.
 
-`rtl/video/background.sv` implements this: 147 LUT4s and 62 flops by yosys,
+`rtl/video/background.sv` implements this: 143 LUT4s and 66 flops by yosys,
 about 3% of a UP5K. Its output reaches `pixel` a parameter `LATENCY`
-cycles after the column, at least 4; the font/foreground and sync pipelines
-are padded to the same depth (see [Timing](#timing)).
+cycles after the column, at least 4. The display's `LATENCY` is 8, and the
+background makes up the difference by **running late** - delaying `active`
+by 4 cycles, 4 flops, instead of delaying its byte, 8 flops a cycle. The
+shift must be even so its reads stay on odd cycles, which is why the text
+generator was made to take 8 cycles rather than 9. The line's pointer, depth
+and width come straight from the table words as they arrive.
 `tests/background-check.mjs` checks every column of every depth code and
 supported width against a reference built from this section.
 
@@ -271,18 +275,25 @@ phase, x mod 8 (x mod 16 with text doubling):
 | 1 | the glyph address, 0x1000 + (`font_line` << 5) + code |
 | 2 | read the glyph byte |
 | 4 | read the foreground colour, `character_color`++ |
-| 7 | glyph and colour move to the output stage |
+| 6 | glyph and colour move to the output stage |
 
-Phase 6 is spare. A glyph byte's bit 7 is its leftmost pixel.
+Phase 6's memory cycle is spare. A glyph byte's bit 7 is its leftmost pixel.
 
-**Both cell widths move at phase 7**, so a cell is shown from 8 cycles after
-its first column either way and the latency does not depend on the mode: a
-doubled cell is still showing its last 8 columns while the next cell's reads
-happen, so the next glyph and colour wait in their own registers. With the
-output register the text generator's latency is 9, and the background, whose
-own minimum is 4, runs at the same `LATENCY`.
+**Both cell widths move at phase 6**, the first cycle after the colour
+arrives, so a cell is shown from 7 cycles after its first column either way
+and the latency does not depend on the mode: a doubled cell is still showing
+its last columns while the next cell's reads happen, so the next glyph and
+colour wait in their own registers. With the output register the text
+generator's latency is 8, and the display's `LATENCY` is 8.
 
-151 LUT4s, 37 carry cells and 110 flops by yosys. `tests/foreground-check.mjs`
+The glyph address is added in the one cycle between the code arriving and
+the glyph read, from the memory's output. That is not the slowest path:
+nextpnr puts the text generator behind a real SPRAM at about 50 MHz, twice
+the pixel clock, limited by the read-address mux into the SPRAM. Reading the
+colour before the glyph would give the add more time but gain nothing, and
+adding into the address mux instead would lengthen that slowest path.
+
+135 LUT4s, 37 carry cells and 109 flops by yosys. `tests/foreground-check.mjs`
 checks every column at both widths, with text on and off and pointers of
 either parity, against a reference built from this section.
 
@@ -306,10 +317,12 @@ palette and the decode:
 
 - **The line tables are read as the front porch ends**: line n's four
   entries are the words at n, 0x200 + n, 0x400 + n and 0x600 + n, on the
-  first four cycles after the front porch, and `line_start` follows once the
-  last has arrived. So SYNC and back porch together must be at least 6
-  cycles, and the front porch at least 2, for the background's last reads
-  just past the last column.
+  first four cycles after the front porch, and **each generator takes its
+  fields from a word the cycle it arrives** - there is no copy of the
+  tables. So SYNC and back porch together must be at least 5 cycles, and
+  the front porch at least 6, for the background, running 4 cycles late,
+  to finish its reads before the table reads begin. Both were found by
+  testing: 4 and 5 fail.
 - **The pins show column x at LATENCY + 2**: one cycle for the palette read,
   with the direct byte delayed alongside it, and one for the output
   register. HSYNC, VSYNC and visible are delayed to match, and the pins are
@@ -317,9 +330,28 @@ palette and the decode:
 - **The unused direct codes**, `c[3:0] = 1111`, decode to black, as does a
   palette entry whose own top bits are 000.
 
-The whole display, sprites included, is 822 LUT4s and 8 block RAMs (the
-palette, and the sprites' seven) by yosys. With the sprite engine a line must
-be at least 705 cycles. `tests/video-check.mjs` runs whole frames from random
+**The CPU and the display share one clock**, the 25.175 MHz pixel clock
+(25.125 from the PLL); the CPU's own limit is about 30 MHz. So a register the
+CPU writes is read by the display with no synchroniser, and a block RAM's
+separate read and write clocks are not needed. The display itself runs at
+about 50 MHz behind a real SPRAM. An 800×600 mode would want a 40 MHz pixel
+clock - within the display's reach, with 1,056-cycle lines for the sprites
+and 800 columns inside the line buffer - but past the CPU's, which would
+then need a clock of its own, and only 512 of its lines could have table
+entries.
+
+The whole display, sprites included, is 711 LUT4s and 8 block RAMs (the
+palette, and the sprites' seven) by yosys; by module, 676 LUT4s and 345
+flops. With the sprite engine a line must be at least 705 cycles.
+
+**No RAM pays for read-during-write.** A read and a write of one word in
+the same cycle give the block RAM undefined data. Written plainly, the RTL
+promises the old value, and yosys keeps that promise with registers and
+comparators on every RAM the CPU writes - 111 LUT4s and 138 flops for the
+palette and the sprites' RAMs. `(* no_rw_check *)` drops the promise: a CPU
+write in the cycle the display reads the same entry gives one wrong pixel,
+or one sprite drawn wrong for a line. Software already avoids writing those
+at the wrong moment, since that tears. `tests/video-check.mjs` runs whole frames from random
 line tables, a random palette and sixteen random sprites, at the minimum
 porches (with a 704-column picture, for the sprites' 705-cycle line) and at
 standard VGA's, and compares every cycle's syncs and pins with a reference
@@ -392,7 +424,7 @@ images: value 1 is the first image, value 2 the second, value 3 both. The
 colours (c₁, 0, c₃) show the first and (0, c₂, c₃) the second, one attribute
 write apart.
 
-306 LUT4s, about 200 flops and 7 block RAMs: attributes 1, patterns 4, line
+211 LUT4s, 87 flops and 7 block RAMs: attributes 1, patterns 4, line
 buffers 2. None of it is in a frame buffer, so sprites move without reading
 buffer memory and the write-through copy is unaffected.
 
