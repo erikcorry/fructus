@@ -7,8 +7,8 @@
 //
 // A frame buffer with random line tables - every depth code, width, text
 // doubling and text disable, mixed line by line - over random memory, a
-// random palette, and a random cursor, half transparent, partly off the
-// screen's edges.  The reference computes every cycle of a frame from
+// random palette, and sixteen random sprites, half transparent, overlapping and
+// partly off the screen's edges.  The reference computes every cycle of a frame from
 // docs/vga.md: the syncs from the timing, and for each visible column the
 // background pixel, the glyph bit and foreground colour, the palette, and the
 // decode to pin encodings.  The whole frame is compared - syncs, blanking and
@@ -60,10 +60,45 @@ for (let n = 0; n < LINES; n++) {
 }
 const palette = Array.from({ length: 32 }, () => rand(256));
 
-// The cursor: 512 bytes, 16 to a row, left pixel in the low nibble, and about
-// half its pixels transparent so every layer shows through somewhere.
-const nib = () => rand(2) ? 0 : 1 + rand(15);
-const bitmap = Array.from({ length: 512 }, () => nib() | nib() << 4);
+// Sixteen sprite patterns of 64 words, eight 2-bit pixels to a word, about
+// half the pixels transparent.
+const px2 = () => rand(2) ? 0 : 1 + rand(3);
+const patterns = Array.from({ length: 1024 }, () => {
+  let w = 0;
+  for (let i = 0; i < 8; i++) w |= px2() << (2 * i);
+  return w;
+});
+
+// A sprite's attributes, as the engine's four words; x and y are screen
+// coordinates + 48 and + 42.
+const attrWords = (a) => [a.x | a.dh << 10 | a.p << 11, a.y,
+                          a.c[0] | a.c[1] << 4 | a.c[2] << 8, 0];
+
+// Sixteen sprites for a screen W columns wide: two overlapping, the front one
+// with a transparent colour, one off the
+// top-left at double height, one across the right edge at double height, one
+// wrapped round the end of the line buffer into the invisible margin, one
+// below the screen, and the rest anywhere.
+const spriteSet = (W) => {
+  const colours = () => [rand(16), rand(16), rand(16)];
+  const set = [
+    { x: 48 + 100, y: 42 + 2, dh: 0 },
+    { x: 48 + 110, y: 42 + 5, dh: 0 },
+    { x: 48 - 10, y: 42 - 10, dh: 1 },
+    { x: 48 + W - 10, y: 42 + 12, dh: 1 },
+    { x: 1020, y: 42 + 3, dh: 0 },
+    { x: 48 + 300, y: 42 + 100, dh: 1 },
+  ];
+  while (set.length < 16)
+    set.push({ x: rand(1024), y: 42 - 45 + rand(80), dh: rand(2) });
+  const sprites = set.map((a) => ({ ...a, p: rand(16), c: colours() }));
+  // Sprite 0's value 2 is transparent, over sprite 1: the transparency test
+  // must come after the 2-bit value becomes a colour, or sprite 0 punches
+  // holes in sprite 1.
+  sprites[0].c = [1 + rand(15), 0, 1 + rand(15)];
+  sprites[1].c = [1 + rand(15), 1 + rand(15), 1 + rand(15)];
+  return sprites;
+};
 
 const byte = (a) => (mem[(a & 0x7fff) >> 1] >> ((a & 1) * 8)) & 0xff;
 
@@ -94,18 +129,59 @@ const G = [0, 0b000, 0b001, 0b010, 0b100, 0b101, 0b110, 0b111];   // by t
 const R = [0b000, 0b001, 0b010, 0b011, 0b110, 0b111];
 const B = [0b000, 0b001, 0b100, 0b101, 0b111];
 
-// The cursor's pixel at (x, n), 0 where it is transparent or absent; its
-// position is the top-left corner + 32.
-const cursorPixel = (cur, n, x) => {
-  const dx = x + 32 - cur.x, dy = n + 32 - cur.y;
-  if (dx < 0 || dx >= 32 || dy < 0 || dy >= 32) return 0;
-  return (bitmap[dy * 16 + (dx >> 1)] >> ((dx & 1) * 4)) & 15;
+// Attribute writes during the compared frame, each on visible line `line` at
+// cycle `k` after that line's horizontal wrap.  Sprite s's word w is read at
+// cycle readAt(s, w) = 257 + 28·(15 - s) + w after the wrap of the line before the one it
+// draws, so a write during line n is drawn from line n + 1 if k < readAt(s, w) and from
+// line n + 2 otherwise.  Each is one cycle either side of its read.
+const readAt = (s, w) => 257 + 28 * (15 - s) + w;
+const EVENTS = [
+  { line: 5,  s: 3, w: 1, k: readAt(3, 1) - 1, patch: { y: 42 + 4 } },
+  { line: 9,  s: 3, w: 0, k: readAt(3, 0) + 1, patch: { x: 48 + 300 } },
+  { line: 12, s: 0, w: 2, k: readAt(0, 2) - 1, patch: { c: [7, 0, 9] } },
+  { line: 14, s: 5, w: 1, k: readAt(5, 1) + 1, patch: { y: 42 + 10 } },
+];
+
+// The attributes line L is drawn with: the frame's starting set, with every
+// write that lands before its read in the build of L, during line L - 1.
+const attrsFor = (set, L) => {
+  const out = set.map((a) => ({ ...a }));
+  for (const e of EVENTS)
+    if (e.line < L - 1 || (e.line === L - 1 && e.k < readAt(e.s, e.w)))
+      Object.assign(out[e.s], e.patch);
+  return out;
 };
 
-const pins = (cur, n, x) => {
+// Each write's word, from the attributes as they stand after the writes
+// before it.
+const eventWords = (set) => {
+  const cur = set.map((a) => ({ ...a }));
+  return EVENTS.map((e) => {
+    Object.assign(cur[e.s], e.patch);
+    return { ...e, addr: 4 * e.s + e.w, data: attrWords(cur[e.s])[e.w] };
+  });
+};
+
+// The sprites' pixel at (x, n): the lowest-numbered sprite with a colour that
+// is not 0 there, or 0.  Positions wrap round the 1024-pixel line buffer.
+const spritePixel = (set0, n, x) => {
+  const set = attrsFor(set0, n);
+  for (const a of set) {
+    const dy = n + 42 - a.y;
+    if (dy < 0 || dy >= (a.dh ? 42 : 21)) continue;
+    const row = a.dh ? dy >> 1 : dy;
+    const dx = (x + 48 - a.x) & 1023;
+    if (dx >= 24) continue;
+    const v = (patterns[a.p * 64 + row * 3 + (dx >> 3)] >> ((dx & 7) * 2)) & 3;
+    if (v && a.c[v - 1]) return a.c[v - 1];
+  }
+  return 0;
+};
+
+const pins = (set, n, x) => {
   const t = table[n];
   const fg = fgPixel(t, x);
-  const cp = cursorPixel(cur, n, x);
+  const cp = spritePixel(set, n, x);
   const sel = cp ? cp : fg.on ? fg.color : bgPixel(t, x);
   const px = sel >> 5 ? sel : palette[sel & 31];
   const top = px >> 5, c = px & 15;
@@ -115,7 +191,7 @@ const pins = (cur, n, x) => {
 };
 
 // One frame from vsync falling, as [hsync_n, vsync_n, pins] per cycle.
-const frame = (h, v, cur) => {
+const frame = (h, v, set) => {
   const htot = h.reduce((a, b) => a + b), vtot = v.reduce((a, b) => a + b);
   const out = [];
   for (let l = 0; l < vtot; l++) {
@@ -127,7 +203,7 @@ const frame = (h, v, cur) => {
       const hs = hx >= h[0] && hx < h[0] + h[1];
       const x = hx - h[0] - h[1] - h[2];
       const on = vvis && x >= 0;
-      out.push((hs ? 0 : 1) << 10 | (vs ? 0 : 1) << 9 | (on ? pins(cur, n, x) : 0));
+      out.push((hs ? 0 : 1) << 10 | (vs ? 0 : 1) << 9 | (on ? pins(set, n, x) : 0));
     }
   }
   return out;
@@ -139,9 +215,9 @@ mkdirSync(dir, { recursive: true });
 const hex = (v, n) => v.toString(16).padStart(n, '0');
 writeFileSync(`${dir}/mem.hex`, mem.map((w) => hex(w, 4)).join('\n') + '\n');
 writeFileSync(`${dir}/pal.hex`, palette.map((b) => hex(b, 2)).join('\n') + '\n');
-writeFileSync(`${dir}/cur.hex`, bitmap.map((b) => hex(b, 2)).join('\n') + '\n');
+writeFileSync(`${dir}/pat.hex`, patterns.map((w) => hex(w, 4)).join('\n') + '\n');
 
-const tb = (h, v, cur) => `
+const tb = (h, v, set) => `
 module tb;
     reg clk = 0;
     always #5 clk = ~clk;
@@ -151,10 +227,10 @@ module tb;
     reg         pal_we = 0;
     reg  [4:0]  pal_addr;
     reg  [7:0]  pal_data;
-    reg         cur_we = 0;
-    reg  [8:0]  cur_addr;
-    reg  [7:0]  cur_data;
-    reg  [9:0]  cur_x = ${cur.x}, cur_y = ${cur.y};
+    reg         spr_pat_we = 0, spr_attr_we = 0;
+    reg  [9:0]  spr_pat_addr;
+    reg  [5:0]  spr_attr_addr;
+    reg  [15:0] spr_pat_data, spr_attr_data;
     wire        mem_rd;
     wire [13:0] mem_addr;
     reg  [15:0] mem_rdata;
@@ -165,11 +241,31 @@ module tb;
 
     reg [15:0] mem [0:${WORDS - 1}];
     reg [7:0]  pal [0:31];
-    reg [7:0]  bmp [0:511];
+    reg [15:0] pat [0:1023];
+
+    integer f, i, falls = 0;
+
+    // The attribute writes during the compared frame, at cycle kc after a
+    // horizontal wrap on the given visible line.
+    integer kc = 0, e;
+    reg         ev_we = 0;
+    reg  [5:0]  ev_a;
+    reg  [15:0] ev_d;
+    always @(negedge clk) begin
+        kc = dut.h_wrap ? 0 : kc + 1;
+        ev_we = 0;
+        if (falls == 2 && dut.v_state == 2'd3) begin
+${eventWords(set).map((e) => `            if (dut.n == ${e.line} && kc == ${e.k}) begin ev_we = 1; ev_a = ${e.addr}; ev_d = 16'h${hex(e.data, 4)}; end`).join('\n')}
+        end
+    end
+    reg [15:0] attr [0:63];
 
     video #(.LATENCY(${LATENCY})) dut (
         .clk, .h_len, .v_len, .pal_we, .pal_addr, .pal_data,
-        .cur_we, .cur_addr, .cur_data, .cur_x, .cur_y,
+        .spr_pat_we, .spr_pat_addr, .spr_pat_data,
+        .spr_attr_we(spr_attr_we || ev_we),
+        .spr_attr_addr(ev_we ? ev_a : spr_attr_addr),
+        .spr_attr_data(ev_we ? ev_d : spr_attr_data),
         .mem_rd, .mem_addr, .mem_rdata,
         .hsync_n, .vsync_n, .red, .green, .blue, .line, .vblank);
 
@@ -181,7 +277,6 @@ module tb;
         mem_rdata <= mem_rd ? mem[mem_addr] : 16'hxxxx;
     end
 
-    integer f, i, falls = 0;
     reg vs_prev = 1;
     always @(negedge clk) begin
         if (vs_prev && !vsync_n) falls = falls + 1;
@@ -195,7 +290,8 @@ module tb;
         v_len[0] = ${v[0]}; v_len[1] = ${v[1]}; v_len[2] = ${v[2]}; v_len[3] = ${v[3]};
         $readmemh("${dir}/mem.hex", mem);
         $readmemh("${dir}/pal.hex", pal);
-        $readmemh("${dir}/cur.hex", bmp);
+        $readmemh("${dir}/pat.hex", pat);
+${set.flatMap(attrWords).map((w, i) => `        attr[${i}] = 16'h${hex(w, 4)};`).join('\n')}
         f = $fopen("${dir}/out.txt", "w");
         for (i = 0; i < 32; i = i + 1) begin
             @(negedge clk);
@@ -203,11 +299,16 @@ module tb;
         end
         @(negedge clk);
         pal_we = 0;
-        for (i = 0; i < 512; i = i + 1) begin
-            cur_we = 1; cur_addr = i; cur_data = bmp[i];
+        for (i = 0; i < 1024; i = i + 1) begin
+            spr_pat_we = 1; spr_pat_addr = i; spr_pat_data = pat[i];
             @(negedge clk);
         end
-        cur_we = 0;
+        spr_pat_we = 0;
+        for (i = 0; i < 64; i = i + 1) begin
+            spr_attr_we = 1; spr_attr_addr = i; spr_attr_data = attr[i];
+            @(negedge clk);
+        end
+        spr_attr_we = 0;
         #10000000;
         $display("FAIL no third vsync");
         $finish;
@@ -215,26 +316,25 @@ module tb;
 endmodule
 `;
 
-// The cursor partly off the top-left corner, mid-screen and cut off by the
-// bottom of the 24 lines, and across the right edge - where the cursor works
-// on the last columns after the line counter has moved on to the next line.
+// A line must be at least 705 cycles for the sprite engine, so the smallest
+// porches go with a wider picture.
 const TIMINGS = [
-  ['minimum porches', [2, 3, 3, 640], [2, 2, 3, LINES], { x: 20, y: 11 }],
-  ['standard porches', [16, 96, 48, 640], [10, 2, 33, LINES], { x: 400, y: 40 }],
-  ['cursor on the right edge', [16, 96, 48, 640], [10, 2, 33, LINES], { x: 652, y: 20 }],
+  ['minimum porches', [2, 3, 3, 704], [2, 2, 3, LINES]],
+  ['standard porches', [16, 96, 48, 640], [10, 2, 33, LINES]],
 ];
 
 let fail = 0;
-for (const [name, h, v, cur] of TIMINGS) {
-  writeFileSync(`${dir}/tb.sv`, tb(h, v, cur));
+for (const [name, h, v] of TIMINGS) {
+  const set = spriteSet(h[3]);
+  writeFileSync(`${dir}/tb.sv`, tb(h, v, set));
   const log = execFileSync('sh', ['-c',
     `iverilog -g2012 -o ${dir}/sim ${dir}/tb.sv rtl/video/video.sv rtl/video/timing.sv ` +
-    `rtl/video/background.sv rtl/video/foreground.sv rtl/video/cursor.sv && vvp -n ${dir}/sim`],
+    `rtl/video/background.sv rtl/video/foreground.sv rtl/video/sprites.sv && vvp -n ${dir}/sim`],
     { encoding: 'utf8' });
   if (/FAIL/.test(log)) { console.log(`${name}: ${log.trim()}`); fail++; continue; }
 
   const got = readFileSync(`${dir}/out.txt`, 'utf8').trim().split('\n').map((s) => parseInt(s, 16));
-  const want = frame(h, v, cur);
+  const want = frame(h, v, set);
   const htot = h.reduce((a, b) => a + b);
   const k = want.findIndex((w, j) => got[j] !== w);
   if (got.length !== want.length || k >= 0) {

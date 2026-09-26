@@ -6,7 +6,7 @@
 //
 //     timing ─┬─ line tables ─┬─ background ─┐
 //             │               └─ foreground ─┤
-//             ├─ cursor ──────────────────────┴─ select ─ palette ─ decode ─ pins
+//             ├─ sprites ─────────────────────┴─ select ─ palette ─ decode ─ pins
 //             └─ hsync, vsync, visible, delayed to match ─────────────────────┘
 //
 // THE LINE TABLES ARE READ AS THE FRONT PORCH ENDS.  For line n - counted from
@@ -24,7 +24,7 @@
 // `mem_rdata` the cycle after its read.
 //
 // THE PIXEL PATH.  The generators' outputs for column x arrive LATENCY cycles
-// after it.  A cursor pixel that is not 0 is palette entry 1-15, in front of
+// after it.  A sprite pixel that is not 0 is palette entry 1-15, in front of
 // everything; otherwise the glyph bit picks the foreground colour or the
 // background.  The
 // byte goes to the palette, whose read is registered, and alongside it one
@@ -56,11 +56,12 @@ module video #(
     input  logic [4:0]  pal_addr,
     input  logic [7:0]  pal_data,
 
-    input  logic        cur_we,      // the CPU's write port to the cursor bitmap
-    input  logic [8:0]  cur_addr,
-    input  logic [7:0]  cur_data,
-    input  logic [9:0]  cur_x,       // the cursor's top-left corner + 32
-    input  logic [9:0]  cur_y,
+    input  logic        spr_pat_we,  // the CPU's write ports to the sprites
+    input  logic [9:0]  spr_pat_addr,
+    input  logic [15:0] spr_pat_data,
+    input  logic        spr_attr_we,
+    input  logic [5:0]  spr_attr_addr,
+    input  logic [15:0] spr_attr_data,
 
     output logic        mem_rd,
     output logic [13:0] mem_addr,    // word address
@@ -78,10 +79,10 @@ module video #(
 
     // --- timing ----------------------------------------------------------------
     logic [1:0] h_state, v_state;
-    logic       h_wrap, v_wrap;
+    logic       h_wrap, v_wrap_unused;
 
     timing h (.clk, .step(1'b1),   .len(h_len), .state(h_state), .wrap(h_wrap));
-    timing v (.clk, .step(h_wrap), .len(v_len), .state(v_state), .wrap(v_wrap));
+    timing v (.clk, .step(h_wrap), .len(v_len), .state(v_state), .wrap(v_wrap_unused));
 
     wire v_vis  = v_state == 2'd3;
     wire active = h_state == 2'd3 && v_vis;
@@ -137,13 +138,16 @@ module video #(
     assign mem_rd   = fg_rd || bg_rd || t_rd;
     assign mem_addr = fg_rd ? fg_addr : bg_rd ? bg_addr : t_addr;
 
-    logic [3:0] cur_pixel;
-    cursor #(.LATENCY(LATENCY)) cur (
-        .clk, .we(cur_we), .waddr(cur_addr), .wdata(cur_data),
-        .x(cur_x), .y(cur_y), .frame(v_wrap), .line(n), .active, .pixel(cur_pixel));
+    // The sprites build the next line during this one: line n + 1, or line 0
+    // during the vertical blanking before it.
+    logic [3:0] spr_pixel;
+    sprites #(.LATENCY(LATENCY)) spr (
+        .clk, .pat_we(spr_pat_we), .pat_addr(spr_pat_addr), .pat_data(spr_pat_data),
+        .attr_we(spr_attr_we), .attr_addr(spr_attr_addr), .attr_data(spr_attr_data),
+        .wrap(h_wrap), .target(v_vis ? n + 10'd1 : 10'd0), .active, .pixel(spr_pixel));
 
-    // --- cursor, fg/bg, then the palette -------------------------------------------
-    wire [7:0] sel = cur_pixel != 4'd0 ? {4'b0000, cur_pixel}
+    // --- sprites, fg/bg, then the palette ------------------------------------------
+    wire [7:0] sel = spr_pixel != 4'd0 ? {4'b0000, spr_pixel}
                    : fg_on            ? fg_color
                    :                    bg_pixel;
 

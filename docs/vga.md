@@ -317,45 +317,88 @@ palette and the decode:
 - **The unused direct codes**, `c[3:0] = 1111`, decode to black, as does a
   palette entry whose own top bits are 000.
 
-The whole display, cursor included, is 626 LUT4s, 120 carry cells, 447 flops
-and two block RAMs (the palette and the cursor) by yosys. `tests/video-check.mjs` runs whole frames from random
-line tables, a random palette and a random cursor, at the minimum porches and
-at standard VGA's, and compares every cycle's syncs and pins with a reference
+The whole display, sprites included, is 822 LUT4s and 8 block RAMs (the
+palette, and the sprites' seven) by yosys. With the sprite engine a line must
+be at least 705 cycles. `tests/video-check.mjs` runs whole frames from random
+line tables, a random palette and sixteen random sprites, at the minimum
+porches (with a 704-column picture, for the sprites' 705-cycle line) and at
+standard VGA's, and compares every cycle's syncs and pins with a reference
 built from this document.
 
-### Cursor
+### Sprites
 
-`rtl/video/cursor.sv`: one 32×32 sprite at 4 bits per pixel, for a mouse
-pointer. 0 is transparent and 1–15 are palette entries, so a cursor pixel
-becomes the byte `0000pppp` and is chosen in front of text and background,
-before the palette:
+`rtl/video/sprites.sv`: sixteen 24×21 sprites at 2 bits per pixel, in the
+manner of the VIC-II but twice as many and at full horizontal resolution.
+Pixel value 0 is transparent and 1–3 take the sprite's three colours, each a
+palette entry (a colour of 0 is transparent too). A sprite pixel becomes the
+byte `0000pppp`, chosen in front of text and background, before the palette:
 
 ```
-cursor pixel ≠ 0 ? 0000pppp : glyph bit ? foreground : background
+sprite pixel ≠ 0 ? 0000pppp : glyph bit ? foreground : background
 ```
 
-- **The bitmap is its own block RAM**, read every pixel. 32 × 32 × 4 bits is
-  4,096, exactly one `SB_RAM40_4K`, and its read port serves nothing else,
-  so no row buffer is needed. It is 512 bytes, 16 to a row, the left pixel
-  of each pair in the low nibble. Kept in flops, the bitmap and its row mux
-  would have been bigger than the rest of the display.
-- **It is not in a frame buffer**, so moving it reads no buffer memory and
-  the write-through copy is unaffected.
-- **The position is the top-left corner + 32**, so 0 is wholly off the left
-  or top edge and the cursor slides off any edge. x and y are copied to
-  shadow registers as the visible lines end, so a move never draws half the
-  cursor in each place. Setting either to 0 hides it; there is no enable bit.
-- **Its work is done LATENCY − 2 cycles late**, delaying `active` rather than
-  the pixel, and one cycle for the read and one for the output register
-  bring it out on time. Done late, the last columns are drawn after the line
-  counter has moved on, so the cursor's row is latched as its late line
-  begins.
+Sprite 0 is in front of sprite 1 and so on. **Sprite 0 is the mouse
+pointer**; a mouse driver keeps its own x and y and copies them to sprite 0
+in a vertical-sync interrupt, so the pointer never tears.
 
-108 LUT4s, 36 carry cells, 77 flops and one block RAM.
+- **Two line buffers.** During each line the engine builds the next line's
+  sprites in one while the display reads the other, and they swap at the
+  horizontal wrap. A buffer is 1024 4-bit pixels in one block RAM, written 16
+  bits at a time with a nibble mask and read a word at a time. Screen column
+  c is buffer pixel c + 48, so a sprite slides off either edge.
+- **The whole building buffer is cleared** at the start of each line, 4
+  pixels a write, not just the part the display reads, so no sprite pixel
+  outlives its line whatever the visible area does.
+- **Sprites are drawn 15 first and 0 last**, writing only colours that are
+  not 0, which puts the lower numbers in front without reading the buffer.
+- **Every sprite has a fixed 28-cycle slot**, shown or not, so its
+  attributes are read on fixed cycles: sprite s's words 0, 1 and 2 at
+  257 + 28·(15 − s) + {0, 1, 2} cycles after the horizontal wrap of the line
+  before the one they draw. A sprite is drawn at most once on a line, so it
+  can be reused only lower down the screen, as on the VIC-II: during line
+  n, a write before sprite s's slot is drawn on line n + 1, and one after it
+  from line n + 2. A multiplexer moves a sprite as soon as the slot for its
+  last line has passed.
+- **Double height, not double width.** Doubling vertically halves the row
+  and costs no time. Doubling horizontally would double the pixel writes, and
+  sixteen doubled sprites don't fit in a line.
 
-The bitmap's 512 bytes are more than the 256-byte I/O page the registers were
-to fit in. Either the page grows, or the CPU reaches the bitmap through an
-address register and a data register.
+The engine's line, from the cycle after the horizontal wrap: 256 cycles of
+clearing, then sixteen slots of 28, **704 cycles, so a line must be at least
+705** (standard lines are 800). In a slot, attribute words are read at 0, 1
+and 2, pattern words at 3, 11 and 19, each on the cycle of the last word's
+last pixel, and pixel j of word w is written at 4 + 8w + j.
+
+Attributes, four 16-bit words per sprite at 4s:
+
+| word | bits |
+|---|---|
+| 0 | x + 48 [9:0], double height [10], pattern [14:11] |
+| 1 | y + 42 [9:0] |
+| 2 | colour 1 [3:0], colour 2 [7:4], colour 3 [11:8] |
+| 3 | unused |
+
+Sixteen patterns of 64 words: row r is words 3r to 3r + 2, eight pixels to
+a word, pixel 0 in the low two bits; word 63 is unused. The pattern index is
+the VIC-II's sprite pointer: sprites can share a pattern in different
+colours, a sprite animates by changing one field, and a sprite reused lower
+down the screen changes its image with one write where rewriting the bitmap
+would take 63.
+
+**A colour of 0 is transparent, and the test for it comes after the 2-bit
+value becomes a colour**, so a pixel whose colour is 0 is not written and
+whatever is beneath it stays. One bitmap therefore holds two monochrome
+images: value 1 is the first image, value 2 the second, value 3 both. The
+colours (c₁, 0, c₃) show the first and (0, c₂, c₃) the second, one attribute
+write apart.
+
+306 LUT4s, about 200 flops and 7 block RAMs: attributes 1, patterns 4, line
+buffers 2. None of it is in a frame buffer, so sprites move without reading
+buffer memory and the write-through copy is unaffected.
+
+The CPU reaches 2 KB of patterns and 128 bytes of attributes, more than the
+256-byte I/O page. An address register and an auto-incrementing data
+register look like the way in.
 
 ### Timing
 
@@ -676,7 +719,8 @@ columns.
 ## Registers
 
 Under 64 bytes of registers, in an I/O page whose place in the memory map is
-not yet chosen, plus the cursor's 512-byte bitmap (see [Cursor](#cursor)).
+not yet chosen, plus the sprites' 2 KB of patterns and attributes (see
+[Sprites](#sprites)).
 
 | register | contents | access |
 |---|---|---|
@@ -685,8 +729,8 @@ not yet chosen, plus the cursor's 512-byte bitmap (see [Cursor](#cursor)).
 | control | display enable, which buffer is shown, write-through request | write |
 | status | current line (10 bits), vertical blank, write-through in progress | read |
 | palette | 32 × 8 bits | write, through the EBR's second port |
-| cursor x, y | 2 × 10 bits, the top-left corner + 32 | write |
-| cursor bitmap | 512 bytes | write, through its block RAM's second port |
+| sprite attributes | 16 × 4 words | write, through its block RAM's second port |
+| sprite patterns | 16 × 64 words | write, through their block RAMs' second ports |
 
 The timing registers are write only because reading them back would need a
 16-bit 8-to-1 mux onto the data bus, about 50 LUTs, for values the CPU wrote
