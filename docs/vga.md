@@ -317,11 +317,45 @@ palette and the decode:
 - **The unused direct codes**, `c[3:0] = 1111`, decode to black, as does a
   palette entry whose own top bits are 000.
 
-The whole display is 514 LUT4s, 85 carry cells, 378 flops and one block RAM
-(the palette) by yosys. `tests/video-check.mjs` runs whole frames from random
-line tables and a random palette, at the minimum porches and at standard
-VGA's, and compares every cycle's syncs and pins with a reference built from
-this document.
+The whole display, cursor included, is 626 LUT4s, 120 carry cells, 447 flops
+and two block RAMs (the palette and the cursor) by yosys. `tests/video-check.mjs` runs whole frames from random
+line tables, a random palette and a random cursor, at the minimum porches and
+at standard VGA's, and compares every cycle's syncs and pins with a reference
+built from this document.
+
+### Cursor
+
+`rtl/video/cursor.sv`: one 32×32 sprite at 4 bits per pixel, for a mouse
+pointer. 0 is transparent and 1–15 are palette entries, so a cursor pixel
+becomes the byte `0000pppp` and is chosen in front of text and background,
+before the palette:
+
+```
+cursor pixel ≠ 0 ? 0000pppp : glyph bit ? foreground : background
+```
+
+- **The bitmap is its own block RAM**, read every pixel. 32 × 32 × 4 bits is
+  4,096, exactly one `SB_RAM40_4K`, and its read port serves nothing else,
+  so no row buffer is needed. It is 512 bytes, 16 to a row, the left pixel
+  of each pair in the low nibble. Kept in flops, the bitmap and its row mux
+  would have been bigger than the rest of the display.
+- **It is not in a frame buffer**, so moving it reads no buffer memory and
+  the write-through copy is unaffected.
+- **The position is the top-left corner + 32**, so 0 is wholly off the left
+  or top edge and the cursor slides off any edge. x and y are copied to
+  shadow registers as the visible lines end, so a move never draws half the
+  cursor in each place. Setting either to 0 hides it; there is no enable bit.
+- **Its work is done LATENCY − 2 cycles late**, delaying `active` rather than
+  the pixel, and one cycle for the read and one for the output register
+  bring it out on time. Done late, the last columns are drawn after the line
+  counter has moved on, so the cursor's row is latched as its late line
+  begins.
+
+108 LUT4s, 36 carry cells, 77 flops and one block RAM.
+
+The bitmap's 512 bytes are more than the 256-byte I/O page the registers were
+to fit in. Either the page grows, or the CPU reaches the bitmap through an
+address register and a data register.
 
 ### Timing
 
@@ -641,8 +675,8 @@ columns.
 
 ## Registers
 
-Under 64 bytes, in an I/O page whose place in the memory map is not yet
-chosen.
+Under 64 bytes of registers, in an I/O page whose place in the memory map is
+not yet chosen, plus the cursor's 512-byte bitmap (see [Cursor](#cursor)).
 
 | register | contents | access |
 |---|---|---|
@@ -651,6 +685,8 @@ chosen.
 | control | display enable, which buffer is shown, write-through request | write |
 | status | current line (10 bits), vertical blank, write-through in progress | read |
 | palette | 32 × 8 bits | write, through the EBR's second port |
+| cursor x, y | 2 × 10 bits, the top-left corner + 32 | write |
+| cursor bitmap | 512 bytes | write, through its block RAM's second port |
 
 The timing registers are write only because reading them back would need a
 16-bit 8-to-1 mux onto the data bus, about 50 LUTs, for values the CPU wrote

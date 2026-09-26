@@ -6,8 +6,9 @@
 //   node tests/video-check.mjs
 //
 // A frame buffer with random line tables - every depth code, width, text
-// doubling and text disable, mixed line by line - over random memory, and a
-// random palette.  The reference computes every cycle of a frame from
+// doubling and text disable, mixed line by line - over random memory, a
+// random palette, and a random cursor, half transparent, partly off the
+// screen's edges.  The reference computes every cycle of a frame from
 // docs/vga.md: the syncs from the timing, and for each visible column the
 // background pixel, the glyph bit and foreground colour, the palette, and the
 // decode to pin encodings.  The whole frame is compared - syncs, blanking and
@@ -59,6 +60,11 @@ for (let n = 0; n < LINES; n++) {
 }
 const palette = Array.from({ length: 32 }, () => rand(256));
 
+// The cursor: 512 bytes, 16 to a row, left pixel in the low nibble, and about
+// half its pixels transparent so every layer shows through somewhere.
+const nib = () => rand(2) ? 0 : 1 + rand(15);
+const bitmap = Array.from({ length: 512 }, () => nib() | nib() << 4);
+
 const byte = (a) => (mem[(a & 0x7fff) >> 1] >> ((a & 1) * 8)) & 0xff;
 
 // --- the reference ----------------------------------------------------------
@@ -88,10 +94,19 @@ const G = [0, 0b000, 0b001, 0b010, 0b100, 0b101, 0b110, 0b111];   // by t
 const R = [0b000, 0b001, 0b010, 0b011, 0b110, 0b111];
 const B = [0b000, 0b001, 0b100, 0b101, 0b111];
 
-const pins = (n, x) => {
+// The cursor's pixel at (x, n), 0 where it is transparent or absent; its
+// position is the top-left corner + 32.
+const cursorPixel = (cur, n, x) => {
+  const dx = x + 32 - cur.x, dy = n + 32 - cur.y;
+  if (dx < 0 || dx >= 32 || dy < 0 || dy >= 32) return 0;
+  return (bitmap[dy * 16 + (dx >> 1)] >> ((dx & 1) * 4)) & 15;
+};
+
+const pins = (cur, n, x) => {
   const t = table[n];
   const fg = fgPixel(t, x);
-  const sel = fg.on ? fg.color : bgPixel(t, x);
+  const cp = cursorPixel(cur, n, x);
+  const sel = cp ? cp : fg.on ? fg.color : bgPixel(t, x);
   const px = sel >> 5 ? sel : palette[sel & 31];
   const top = px >> 5, c = px & 15;
   if (top === 0 || c === 15) return 0;
@@ -100,7 +115,7 @@ const pins = (n, x) => {
 };
 
 // One frame from vsync falling, as [hsync_n, vsync_n, pins] per cycle.
-const frame = (h, v) => {
+const frame = (h, v, cur) => {
   const htot = h.reduce((a, b) => a + b), vtot = v.reduce((a, b) => a + b);
   const out = [];
   for (let l = 0; l < vtot; l++) {
@@ -112,7 +127,7 @@ const frame = (h, v) => {
       const hs = hx >= h[0] && hx < h[0] + h[1];
       const x = hx - h[0] - h[1] - h[2];
       const on = vvis && x >= 0;
-      out.push((hs ? 0 : 1) << 10 | (vs ? 0 : 1) << 9 | (on ? pins(n, x) : 0));
+      out.push((hs ? 0 : 1) << 10 | (vs ? 0 : 1) << 9 | (on ? pins(cur, n, x) : 0));
     }
   }
   return out;
@@ -124,8 +139,9 @@ mkdirSync(dir, { recursive: true });
 const hex = (v, n) => v.toString(16).padStart(n, '0');
 writeFileSync(`${dir}/mem.hex`, mem.map((w) => hex(w, 4)).join('\n') + '\n');
 writeFileSync(`${dir}/pal.hex`, palette.map((b) => hex(b, 2)).join('\n') + '\n');
+writeFileSync(`${dir}/cur.hex`, bitmap.map((b) => hex(b, 2)).join('\n') + '\n');
 
-const tb = (h, v) => `
+const tb = (h, v, cur) => `
 module tb;
     reg clk = 0;
     always #5 clk = ~clk;
@@ -135,6 +151,10 @@ module tb;
     reg         pal_we = 0;
     reg  [4:0]  pal_addr;
     reg  [7:0]  pal_data;
+    reg         cur_we = 0;
+    reg  [8:0]  cur_addr;
+    reg  [7:0]  cur_data;
+    reg  [9:0]  cur_x = ${cur.x}, cur_y = ${cur.y};
     wire        mem_rd;
     wire [13:0] mem_addr;
     reg  [15:0] mem_rdata;
@@ -145,9 +165,11 @@ module tb;
 
     reg [15:0] mem [0:${WORDS - 1}];
     reg [7:0]  pal [0:31];
+    reg [7:0]  bmp [0:511];
 
     video #(.LATENCY(${LATENCY})) dut (
         .clk, .h_len, .v_len, .pal_we, .pal_addr, .pal_data,
+        .cur_we, .cur_addr, .cur_data, .cur_x, .cur_y,
         .mem_rd, .mem_addr, .mem_rdata,
         .hsync_n, .vsync_n, .red, .green, .blue, .line, .vblank);
 
@@ -173,6 +195,7 @@ module tb;
         v_len[0] = ${v[0]}; v_len[1] = ${v[1]}; v_len[2] = ${v[2]}; v_len[3] = ${v[3]};
         $readmemh("${dir}/mem.hex", mem);
         $readmemh("${dir}/pal.hex", pal);
+        $readmemh("${dir}/cur.hex", bmp);
         f = $fopen("${dir}/out.txt", "w");
         for (i = 0; i < 32; i = i + 1) begin
             @(negedge clk);
@@ -180,6 +203,11 @@ module tb;
         end
         @(negedge clk);
         pal_we = 0;
+        for (i = 0; i < 512; i = i + 1) begin
+            cur_we = 1; cur_addr = i; cur_data = bmp[i];
+            @(negedge clk);
+        end
+        cur_we = 0;
         #10000000;
         $display("FAIL no third vsync");
         $finish;
@@ -187,22 +215,26 @@ module tb;
 endmodule
 `;
 
+// The cursor partly off the top-left corner, mid-screen and cut off by the
+// bottom of the 24 lines, and across the right edge - where the cursor works
+// on the last columns after the line counter has moved on to the next line.
 const TIMINGS = [
-  ['minimum porches', [2, 3, 3, 640], [2, 2, 3, LINES]],
-  ['standard porches', [16, 96, 48, 640], [10, 2, 33, LINES]],
+  ['minimum porches', [2, 3, 3, 640], [2, 2, 3, LINES], { x: 20, y: 11 }],
+  ['standard porches', [16, 96, 48, 640], [10, 2, 33, LINES], { x: 400, y: 40 }],
+  ['cursor on the right edge', [16, 96, 48, 640], [10, 2, 33, LINES], { x: 652, y: 20 }],
 ];
 
 let fail = 0;
-for (const [name, h, v] of TIMINGS) {
-  writeFileSync(`${dir}/tb.sv`, tb(h, v));
+for (const [name, h, v, cur] of TIMINGS) {
+  writeFileSync(`${dir}/tb.sv`, tb(h, v, cur));
   const log = execFileSync('sh', ['-c',
     `iverilog -g2012 -o ${dir}/sim ${dir}/tb.sv rtl/video/video.sv rtl/video/timing.sv ` +
-    `rtl/video/background.sv rtl/video/foreground.sv && vvp -n ${dir}/sim`],
+    `rtl/video/background.sv rtl/video/foreground.sv rtl/video/cursor.sv && vvp -n ${dir}/sim`],
     { encoding: 'utf8' });
   if (/FAIL/.test(log)) { console.log(`${name}: ${log.trim()}`); fail++; continue; }
 
   const got = readFileSync(`${dir}/out.txt`, 'utf8').trim().split('\n').map((s) => parseInt(s, 16));
-  const want = frame(h, v);
+  const want = frame(h, v, cur);
   const htot = h.reduce((a, b) => a + b);
   const k = want.findIndex((w, j) => got[j] !== w);
   if (got.length !== want.length || k >= 0) {

@@ -5,8 +5,9 @@
 // Hand written; see docs/vga.md for the design.
 //
 //     timing ─┬─ line tables ─┬─ background ─┐
-//             │               └─ foreground ─┴─ fg/bg ─ palette ─ decode ─ pins
-//             └─ hsync, vsync, visible, delayed to match ──────────────────┘
+//             │               └─ foreground ─┤
+//             ├─ cursor ──────────────────────┴─ select ─ palette ─ decode ─ pins
+//             └─ hsync, vsync, visible, delayed to match ─────────────────────┘
 //
 // THE LINE TABLES ARE READ AS THE FRONT PORCH ENDS.  For line n - counted from
 // the first visible line - the four entries are the words at n, 0x200 + n,
@@ -23,7 +24,9 @@
 // `mem_rdata` the cycle after its read.
 //
 // THE PIXEL PATH.  The generators' outputs for column x arrive LATENCY cycles
-// after it.  The glyph bit picks the foreground colour or the background; the
+// after it.  A cursor pixel that is not 0 is palette entry 1-15, in front of
+// everything; otherwise the glyph bit picks the foreground colour or the
+// background.  The
 // byte goes to the palette, whose read is registered, and alongside it one
 // cycle to match; a byte whose top three bits are 000 takes the palette entry.
 // The decode to pin encodings is registered once more, so the pins show column
@@ -53,6 +56,12 @@ module video #(
     input  logic [4:0]  pal_addr,
     input  logic [7:0]  pal_data,
 
+    input  logic        cur_we,      // the CPU's write port to the cursor bitmap
+    input  logic [8:0]  cur_addr,
+    input  logic [7:0]  cur_data,
+    input  logic [9:0]  cur_x,       // the cursor's top-left corner + 32
+    input  logic [9:0]  cur_y,
+
     output logic        mem_rd,
     output logic [13:0] mem_addr,    // word address
     input  logic [15:0] mem_rdata,
@@ -69,10 +78,10 @@ module video #(
 
     // --- timing ----------------------------------------------------------------
     logic [1:0] h_state, v_state;
-    logic       h_wrap, v_wrap_unused;
+    logic       h_wrap, v_wrap;
 
     timing h (.clk, .step(1'b1),   .len(h_len), .state(h_state), .wrap(h_wrap));
-    timing v (.clk, .step(h_wrap), .len(v_len), .state(v_state), .wrap(v_wrap_unused));
+    timing v (.clk, .step(h_wrap), .len(v_len), .state(v_state), .wrap(v_wrap));
 
     wire v_vis  = v_state == 2'd3;
     wire active = h_state == 2'd3 && v_vis;
@@ -128,8 +137,15 @@ module video #(
     assign mem_rd   = fg_rd || bg_rd || t_rd;
     assign mem_addr = fg_rd ? fg_addr : bg_rd ? bg_addr : t_addr;
 
-    // --- fg/bg, then the palette ---------------------------------------------------
-    wire [7:0] sel = fg_on ? fg_color : bg_pixel;
+    logic [3:0] cur_pixel;
+    cursor #(.LATENCY(LATENCY)) cur (
+        .clk, .we(cur_we), .waddr(cur_addr), .wdata(cur_data),
+        .x(cur_x), .y(cur_y), .frame(v_wrap), .line(n), .active, .pixel(cur_pixel));
+
+    // --- cursor, fg/bg, then the palette -------------------------------------------
+    wire [7:0] sel = cur_pixel != 4'd0 ? {4'b0000, cur_pixel}
+                   : fg_on            ? fg_color
+                   :                    bg_pixel;
 
     logic [7:0] palette [32];
     logic [7:0] pal_q, sel_q;
