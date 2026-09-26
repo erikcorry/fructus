@@ -127,6 +127,7 @@ done
 if node tests/rtl-check.mjs; then :; else fail=1; fi
 if node tests/background-check.mjs; then :; else fail=1; fi
 if node tests/foreground-check.mjs; then :; else fail=1; fi
+if node tests/video-check.mjs; then :; else fail=1; fi
 
 # --- the binutils opcode table, if the submodule is checked out --------------
 # opcodes/ is what gas and the disassembler SHARE, so a stale table would make

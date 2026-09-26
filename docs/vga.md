@@ -299,6 +299,30 @@ Foreground and background are chosen before the palette, so there is one
 palette read per pixel: the EBR's read port serves the display and its write
 port stays free for the CPU, which can change entries mid-frame.
 
+### Top level
+
+`rtl/video/video.sv` joins the timing, the line tables, both generators, the
+palette and the decode:
+
+- **The line tables are read as the front porch ends**: line n's four
+  entries are the words at n, 0x200 + n, 0x400 + n and 0x600 + n, on the
+  first four cycles after the front porch, and `line_start` follows once the
+  last has arrived. So SYNC and back porch together must be at least 6
+  cycles, and the front porch at least 2, for the background's last reads
+  just past the last column.
+- **The pins show column x at LATENCY + 2**: one cycle for the palette read,
+  with the direct byte delayed alongside it, and one for the output
+  register. HSYNC, VSYNC and visible are delayed to match, and the pins are
+  0 when visible is not set.
+- **The unused direct codes**, `c[3:0] = 1111`, decode to black, as does a
+  palette entry whose own top bits are 000.
+
+The whole display is 514 LUT4s, 85 carry cells, 378 flops and one block RAM
+(the palette) by yosys. `tests/video-check.mjs` runs whole frames from random
+line tables and a random palette, at the minimum porches and at standard
+VGA's, and compares every cycle's syncs and pins with a reference built from
+this document.
+
 ### Timing
 
 The GPU's reads are completely predictable, so it can fetch as far ahead as
