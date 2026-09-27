@@ -755,10 +755,10 @@ ${blitInits}
     // anywhere has to be unwound.
     //
     // A HALT STEP IS THE OTHER PLACE, because a halted machine never dispatches
-    // and would otherwise be unreachable.  The pc stands still there, so \`lr\`
-    // gets the halt's own address and an \`rti\` returns to it and waits again -
-    // which is what an idle loop wants.  A handler that means to go on adds one
-    // to lr before returning.
+    // and would otherwise be unreachable.  Dispatching the halt stepped the pc
+    // past it, so \`lr\` gets the address after the halt and an \`rti\` goes on
+    // from there, like the 65C02's WAI; an idle loop that means to sleep again
+    // branches back to its halt.  See isa/fructus.toml.
     wire take = irq & ie & (halt | (taking & ~defer));
 
     // THE EXCEPTION ROUTINE'S FIRST STEP, for rtl/predecode.sv: the only step

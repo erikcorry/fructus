@@ -1222,10 +1222,10 @@ endmodule
   // level-sensitive line would on the part.  tools/sim.js has no interrupt
   // line, and needs none for this.
   //
-  // NOT YET AT THE HALT, the other place one is taken.  isa/fructus.toml says
-  // an interrupt there saves the halt's own address, so that rti waits again;
-  // rtl/cpu.sv saves the address after it, since the dispatch of halt has
-  // already stepped the pc past it, and so resumes after the halt instead.
+  // AND ONCE AT THE HALT, the other place one is taken.  The machine must go
+  // on AFTER the halt, as isa/fructus.toml says, so a second halt is put
+  // there: the pc must end a byte further on than it waited at.  Returning to
+  // the first halt instead would leave it where it was.
   //
   // This is what brk alone never reached: an interrupt taken where no
   // instruction is dispatched, which rtl/predecode.sv therefore never decoded.
@@ -1237,6 +1237,7 @@ endmodule
       m.mem[VECTOR] = RTI;
       reg.forEach((v, k) => { m.R[k] = v; });
       for (let guard = 0; !m.halted && guard < 1000; guard++) m.step();
+      m.mem[m.pc] = HALT;                    // as the test bench puts after the halt
       let hash = 0;
       for (let k = 0; k < 65536; k++) hash = (Math.imul(hash, 31) + m.mem[k]) & 0x7fffffff;
       return { R: Array.from(m.R), hash };
@@ -1257,7 +1258,7 @@ endmodule
         rdata <= mem[addr];
         if (we) mem[addr] <= wdata;
     end
-    integer p, k, cyc, takes, h;
+    integer p, k, cyc, takes, h, pc1;
     reg [8*64:1] name;
     // One cycle.  With \`raise\`, the line goes up at \`next\`; it drops after a
     // take, and \`next\` is then 17 to 39 cycles on.
@@ -1288,10 +1289,17 @@ endmodule
             rst = 0; cyc = 0; takes = 0; next = 5 + p % 7; lfsr = p + 1;
             u.u.ie = 1'b1;                     // as sei would
             while (!halted && !trapped && cyc < 50000) tick(1);
+            // At the halt: a second one after it, and the line once more.
+            pc1 = u.pc;
+            mem[pc1] = 8'h${HALT.toString(16).padStart(2, '0')};
+            irq = 1;
+            k = cyc;
+            while (irq && cyc < k + 50) tick(0);
+            repeat (40) tick(0);
             h = 0;
             for (k = 0; k < 65536; k = k + 1) h = (h * 31 + mem[k]) & 32'h7fffffff;
-            $display("IRQ %0d %0d %0d %0d %0d %h %h %h %h %h %h %h %h", p, halted, trapped, takes, h,
-                     u.R[0], u.R[1], u.R[2], u.R[3], u.R[4], u.R[5], u.R[6], u.R[7]);
+            $display("IRQ %0d %0d %0d %0d %0d %h %h %h %h %h %h %h %h %0d %0d", p, halted, trapped, takes, h,
+                     u.R[0], u.R[1], u.R[2], u.R[3], u.R[4], u.R[5], u.R[6], u.R[7], pc1, u.pc);
         end
         $finish;
     end
@@ -1314,11 +1322,13 @@ endmodule
       if (f[2] !== '1' || f[3] !== '0') complain(`program ${p}: ${f[3] === '1' ? 'trapped' : 'did not halt'} under interrupts`);
       if (+f[4] < 1) complain(`program ${p}: no interrupt taken`);
       if (+f[5] !== finals[p].hash) complain(`program ${p}: memory folds to ${f[5]} under interrupts and ${finals[p].hash} without`);
+      if (+f[15] !== +f[14] + 1)
+        complain(`program ${p}: waited at 0x${(+f[14]).toString(16)} and ended at 0x${(+f[15]).toString(16)}, not a byte on, after the interrupt at the halt`);
       if (R.some((v, k) => v !== finals[p].R[k]))
         complain(`program ${p}: r=${R.map(hex4).join(' ')} under interrupts, sim r=${finals[p].R.map(hex4).join(' ')}`);
     }
     if (seen.size !== PROGRAMS) complain(`${PROGRAMS - seen.size} programs printed nothing`);
-    if (bad === 0) console.log(`ok    rtl/cpu.sv, interrupted: ${PROGRAMS} programs under ${takes} interrupts end as tools/sim.js does without them`);
+    if (bad === 0) console.log(`ok    rtl/cpu.sv, interrupted: ${PROGRAMS} programs under ${takes} interrupts, the last at each halt, end as tools/sim.js does without them`);
     else { console.log(`FAIL  rtl/cpu.sv, interrupted: ${bad} disagreements`); failed = true; }
     for (const f of ['build/cpu-irq-tb.vvp', 'build/cpu-irq-tb.sv']) rmSync(f, { force: true });
   }

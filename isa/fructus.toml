@@ -3066,15 +3066,18 @@ semantics = "shadow_lr = lr; lr = pc; shadow_sp = sp; sp = shadow_isp; ie = 0; p
 # which is the old halt, unchanged, and is what a wild jump still finds.  The
 # two behaviours are one instruction because `ie` already distinguishes them.
 #
-# IT RESUMES ON ITSELF AND HALTS AGAIN.  The halt step consumes nothing, so the
-# pc stands still on the halt opcode, and the interrupt therefore saves the
-# halt's OWN address in lr.  An `rti` returns to the halt and the machine waits
-# again, which is what an idle loop wants and costs no hardware to arrange.
+# IT RESUMES AFTER ITSELF, like the 65C02's WAI.  Dispatching the halt consumes
+# its opcode, so the pc is already past it while the machine waits, and the
+# interrupt saves the address FOLLOWING the halt in lr - as brk does, and for
+# the same reason: `pc` is advanced before the semantics run.  An `rti` goes on
+# from there.
 #
-# A HANDLER THAT WANTS TO GO ON SAYS SO, in two bytes: `add lr, lr, #1` before
-# the `rti` steps past the halt.  That puts the policy in the handler, where it
-# belongs - one idle loop may want to keep sleeping through a timer tick and
-# another may want to wake on it, and the hardware should not have to guess.
+# SO THE POLICY IS THE IDLE LOOP'S.  One that wants to keep sleeping through
+# an interrupt says so, in two bytes: `idle: halt` and then `br idle`, or a
+# test of whatever the handler left behind before branching back.  Making the
+# interrupt save the halt's own address instead, so that rti waited again,
+# would need the pc less one on the path that saves it: a decrementer, a mux
+# and a flop to say the entry came from a halt.
 [[insn]]
 mnemonic = "halt"
 summary  = "stop the machine until an interrupt"
