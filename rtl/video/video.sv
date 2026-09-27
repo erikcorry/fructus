@@ -55,7 +55,7 @@ module video #(
 
     input  logic [3:0][9:0] h_len,  // struct timing: [0] front porch, [1] pulse,
     input  logic [3:0][9:0] v_len,  // [2] back porch, [3] pixels
-    input  logic [9:0]  font,        // where the font starts, in 32-byte units
+    input  logic [14:0] font,        // the font's address; even for a 16-pixel font
 
     input  logic        pal_we,      // the CPU's palette write port
     input  logic [4:0]  pal_addr,

@@ -6,7 +6,7 @@
 //   node tests/video-check.mjs
 //
 // A frame buffer with random line tables - every depth code, width, text
-// doubling and text disable, mixed line by line - over random memory, a
+// 16-pixel fonts and text disable, mixed line by line - over random memory, a
 // random palette, and sixteen random sprites, half transparent, overlapping and
 // partly off the screen's edges.  The reference computes every cycle of a frame from
 // docs/vga.md: the syncs from the timing, and for each visible column the
@@ -49,8 +49,8 @@ const LINES = 24;
 const mem = Array.from({ length: WORDS }, () => rand(0x10000));
 const DEPTH = [[1, 0x1c], [1, 0x1e], [2, 0x18], [2, 0x08], [3, 0x10], [4, 0x00], [8, 0], [8, 0]];
 const table = [];
-// The font register, in 32-byte units, at random.
-const FONT = rand(1024);
+// The font register, the font's address, at random but even.
+const FONT = rand(16384) * 2;
 for (let n = 0; n < LINES; n++) {
   const code = rand(8);
   let wm1 = rand(8);
@@ -123,11 +123,12 @@ const bgPixel = (t, x) => {
 };
 
 const fgPixel = (t, x) => {
-  const dbl = (t.mode >> 14) & 1, off = t.mode >> 15;
-  const cell = dbl ? x >> 4 : x >> 3;
-  const bit = dbl ? (x >> 1) & 7 : x & 7;
-  const glyph = byte((((FONT + (t.mode & 0xff)) & 0x3ff) << 5) + byte(t.ch + cell));
-  return { on: !off && (glyph >> (7 - bit)) & 1, color: byte(t.co + cell) };
+  const wide = (t.mode >> 14) & 1, off = t.mode >> 15;
+  const cell = wide ? x >> 4 : x >> 3;
+  const bit = wide ? x & 15 : x & 7;
+  const base = FONT + ((t.mode & 0xff) << (wide ? 7 : 6)), code = byte(t.ch + cell);
+  const row = wide ? byte(base + 2 * code) | byte(base + 2 * code + 1) << 8 : byte(base + code) << 8;
+  return { on: !off && (row >> (15 - bit)) & 1, color: byte(t.co + cell) };
 };
 
 const G = [0, 0b000, 0b001, 0b010, 0b100, 0b101, 0b110, 0b111];   // by t
@@ -266,7 +267,7 @@ ${eventWords(set).map((e) => `            if (dut.n == ${e.line} && kc == ${e.k}
     reg [15:0] attr [0:63];
 
     video #(.LATENCY(${LATENCY})) dut (
-        .clk, .h_len, .v_len, .font(10'd${FONT}), .pal_we, .pal_addr, .pal_data,
+        .clk, .h_len, .v_len, .font(15'd${FONT}), .pal_we, .pal_addr, .pal_data,
         .spr_pat_we, .spr_pat_addr, .spr_pat_data,
         .spr_attr_we(spr_attr_we || ev_we),
         .spr_attr_addr(ev_we ? ev_a : spr_attr_addr),

@@ -7,7 +7,9 @@
 //
 // The reference computes every column's glyph bit and foreground colour
 // straight from the documented layout - a cell's code at char_ptr + cell, its
-// glyph byte at (font + font_line << 5) + code, bit 7 leftmost, its colour at
+// glyph row at font + (font_line << 6) + code - a byte, bit 7 leftmost - or in
+// the wide mode font + (font_line << 7) + 2 code - a little-endian word, bit
+// 15 leftmost - its colour at
 // color_ptr + cell, all little-endian bytes of 16-bit words - and not from
 // anything the circuit does.
 //
@@ -46,19 +48,23 @@ const rand = (n) => {
 const WORDS = 16384;
 const mem = Array.from({ length: WORDS }, () => rand(0x10000));
 const byte = (a) => (mem[(a & 0x7fff) >> 1] >> ((a & 1) * 8)) & 0xff;
-// The font register, in 32-byte units, at random: font + font_line wraps at
-// ten bits, as the address does at fifteen.
-const FONT = rand(1024);
-const glyphAt = (fl, code) => byte((((FONT + fl) & 0x3ff) << 5) + code);
+// The font register, the font's address, at random but even, as a 16-pixel
+// font's must be; the address wraps at fifteen bits.  A glyph row, leftmost
+// pixel in bit 15: a byte-wide row in the top half, a wide one a whole word.
+const FONT = rand(16384) * 2;
+const rowAt = (fl, code, wide) => {
+  const base = FONT + (fl << (wide ? 7 : 6));
+  return wide ? byte(base + 2 * code) | byte(base + 2 * code + 1) << 8 : byte(base + code) << 8;
+};
 
 // --- the reference ----------------------------------------------------------
-const expected = ({ cp, kp, fl, dbl, off }) => {
+const expected = ({ cp, kp, fl, wide, off }) => {
   const out = [];
   for (let x = 0; x < 640; x++) {
-    const cell = dbl ? x >> 4 : x >> 3;
-    const bit  = dbl ? (x >> 1) & 7 : x & 7;
-    const glyph = glyphAt(fl, byte(cp + cell));
-    const on = off ? 0 : (glyph >> (7 - bit)) & 1;
+    const cell = wide ? x >> 4 : x >> 3;
+    const bit  = wide ? x & 15 : x & 7;
+    const row = rowAt(fl, byte(cp + cell), wide);
+    const on = off ? 0 : (row >> (15 - bit)) & 1;
     out.push(on << 8 | byte(kp + cell));
   }
   return out;
@@ -66,20 +72,20 @@ const expected = ({ cp, kp, fl, dbl, off }) => {
 
 // --- the lines --------------------------------------------------------------
 const lines = [];
-for (const dbl of [0, 1])
+for (const wide of [0, 1])
   for (const off of [0, 1])
     for (let n = 0; n < 24; n++)
       lines.push({ cp: rand(32768 - 128), kp: rand(32768 - 128), fl: rand(256),
-                   cp15: rand(2), kp15: rand(2), dbl, off, gap: 3 + rand(158) });
+                   cp15: rand(2), kp15: rand(2), wide, off, gap: 3 + rand(158) });
 
 const dir = 'build/foreground-check';
 mkdirSync(dir, { recursive: true });
 const hex = (v, n) => v.toString(16).padStart(n, '0');
 writeFileSync(`${dir}/mem.hex`, mem.map((w) => hex(w, 4)).join('\n') + '\n');
-// Bits: 55-48 gap, 43 color_ptr's bit 15, 42 char_ptr's, 41 off, 40 dbl,
+// Bits: 55-48 gap, 43 color_ptr's bit 15, 42 char_ptr's, 41 off, 40 wide,
 // 37-30 font_line, 29-15 color_ptr, 14-0 char_ptr.
 const pack = (l) => BigInt(l.gap) << 48n | BigInt(l.kp15) << 43n | BigInt(l.cp15) << 42n |
-                    BigInt(l.off) << 41n | BigInt(l.dbl) << 40n |
+                    BigInt(l.off) << 41n | BigInt(l.wide) << 40n |
                     BigInt(l.fl) << 30n | BigInt(l.kp) << 15n | BigInt(l.cp);
 writeFileSync(`${dir}/cfg.hex`, lines.map((l) => pack(l).toString(16).padStart(14, '0')).join('\n') + '\n');
 
@@ -100,7 +106,7 @@ module tb;
     reg [55:0] cfg [0:${lines.length - 1}];
 
     foreground #(.LATENCY(${latency})) dut (
-        .clk, .ld_mode, .ld_char, .ld_color, .font(10'd${FONT}), .word, .active,
+        .clk, .ld_mode, .ld_char, .ld_color, .font(15'd${FONT}), .word, .active,
         .mem_rd, .mem_addr, .mem_rdata, .fg_on, .fg_color);
 
     integer x = 0;
@@ -167,7 +173,7 @@ for (const latency of [8, 10]) {
     const x = e.findIndex((v, j) => parseInt(g[j], 16) !== v);
     if (g.length !== 640 || x >= 0) {
       if (fail++ < 10)
-        console.log(`FAIL latency ${latency} dbl ${l.dbl} off ${l.off} char 0x${hex(l.cp, 4)}` +
+        console.log(`FAIL latency ${latency} wide ${l.wide} off ${l.off} char 0x${hex(l.cp, 4)}` +
           ` color 0x${hex(l.kp, 4)} font_line ${l.fl}: column ${x}, got ${g[x]},` +
           ` want ${hex(e[x] ?? 0, 3)} (${g.length} columns)`);
     }

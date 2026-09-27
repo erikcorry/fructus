@@ -98,10 +98,15 @@ A text line is 80 character codes and 80 foreground colours, one of each per
 format](#8-bit-pixel-format): 0x00–0x1F select a palette entry, and
 0x20–0xFF are direct colours, 0x20 being black.
 
-Under consideration: a mode bit that **doubles pixels horizontally** for the
-text generator, giving 40 columns of 16-pixel cells, so each line is 40 codes
-and 40 colours. That is native teletext (640 / 40 = 16 = 8 doubled) and a
-320-wide tile mode for games.
+**16-pixel fonts**: a mode bit gives the text generator 40 columns of
+16-pixel cells, each glyph row a 16-bit word, so each line is 40 codes and 40
+colours. That is teletext's 40 columns at twice its horizontal resolution,
+and a 320-wide tile mode for games. It replaces doubling 8-pixel glyphs,
+which it costs 24 LUTs and 15 flops more than, 25 logic cells in the whole
+system and no measurable clock (the `font` register's cost is separate, see
+[Fonts](#fonts)): a program that wants the
+coarser look stores its font 8 pixels wide and doubles it as it copies it
+into the buffer, which is not short of room when the screen is text.
 
 Also under consideration: a mode bit that **disables the text generator**,
 so the fg/bg mux always takes the background. Pointing `character_data` at
@@ -123,7 +128,7 @@ Each `graphics_mode` entry is 16 bits, all of them spoken for:
 | 7–0 | `font_line` | the font window, see [Fonts](#fonts) |
 | 10–8 | depth | the background's depth and palette range, see [Background](#background) |
 | 13–11 | pixel width − 1 | background pixels 1 to 8 columns wide |
-| 14 | text doubling | 40 columns of 16-pixel cells |
+| 14 | 16-pixel font | 40 columns of 16-pixel cells, a 16-bit word per glyph row |
 | 15 | text disable | the fg/bg mux always takes the background |
 
 `font_line` is the low byte, so the CPU can change it with a byte store.
@@ -134,33 +139,41 @@ wants a plain background, in palette entry 28 (or 30).
 
 ### Fonts
 
-Glyphs are always 8 pixels wide, one byte per glyph row. The font area
-starts where the `font` [register](#registers) says, in 32-byte units - the
-font's address shifted right 5, whose bits past the tenth are ignored, so the
-CPU's own address of the buffer works there too; its
-size depends on the glyph count and height, typically 4 KB. It comes up as
-0x6000, the 4 KB below the line tables. Call the start F.
+Glyphs are 8 pixels wide, one byte per glyph row, or with the mode word's
+16-pixel font 16 pixels wide, one aligned 16-bit word per glyph row. A row's
+top bit - bit 7 of a byte, bit 15 of a word - is its leftmost pixel, and a
+word is stored little-endian, as the CPU stores it. The font area starts at
+the address in the `font` [register](#registers), whose bit 15 is ignored
+like every pointer's, so the CPU's own address of the buffer works there too.
+A 16-pixel font must start at an even address, since its rows are aligned
+words. Its size depends on the glyph width, count and height, typically 4 KB
+for 8-pixel glyphs. It comes up as 0x6000, the 4 KB below the line tables.
+Call the start F.
 
 At the start of each line the GPU sets
 
 ```
-font_base = (font + font_line) << 5
+font_base = font + (font_line << 6)          8-pixel font
+font_base = font + (font_line << 7)          16-pixel font
 ```
 
-and each character code c then fetches its pixels from `font_base + c`. The
-font is stored row-major, row 0 of every glyph, then row 1 of every glyph, so
-`font_line` steps by the glyph count divided by 32 for each glyph row:
+and each character code c then fetches its row from `font_base + c`, or with
+the 16-pixel font from the word at `font_base + 2c`. So `font_line` counts
+64-byte steps for an 8-pixel font and 128-byte steps for a 16-pixel one,
+whose rows are twice as long, and the same `font_line` serves a font of
+either width. The font is stored row-major, row 0 of every glyph, then row 1
+of every glyph, so `font_line` steps by the glyph count divided by 64 for
+each glyph row:
 
-| font | `font_line` for glyph row r | size, 16 rows |
-|---|---|---|
-| 256 glyphs | 8r (up to 32 rows) | 4 KB |
-| 128 glyphs | 4r | 2 KB |
-| ASCII 32–127 | 3r | 1.5 KB |
-| 64 or 32 glyphs | 2r or r | 1 KB or 512 B |
+| font | `font_line` for glyph row r | 8 pixels, 16 rows | 16 pixels, 16 rows |
+|---|---|---|---|
+| 256 glyphs | 4r (up to 64 rows) | 4 KB | 8 KB |
+| 128 glyphs | 2r | 2 KB | 4 KB |
+| ASCII 32–127 | 2r, as 128 glyphs | 2 KB | 4 KB |
+| 64 glyphs | r | 1 KB | 2 KB |
 
-The ASCII font works because rows are 96 bytes apart and codes start at 32:
-row r covers F + 96r + 32 to F + 96r + 127, so consecutive rows touch
-without overlapping. Only the 32 bytes at F are unused.
+A 96-glyph ASCII row is not a whole number of steps, so ASCII takes a
+128-glyph font's room. The width costs one mux of nine bits on the add.
 
 Games can use the same mechanism for tiles: a 32×32 tile is 4 code points
 wide, and a 256-glyph font of 32 rows holds 64 of them.
@@ -171,10 +184,15 @@ Because the row comes from the table, some effects are just table contents:
 - **Smooth scroll:** start the top text row part-way into its glyph.
 - **Mixed fonts:** different areas of the screen point at different fonts.
 
-`font_line` is a byte, so the font area ends at most 255 × 32 + 255 bytes
-past F, just under 8 KB; addresses past the end of the buffer wrap to its
-start. The `font` register is one add of ten bits per line, 12 LUTs and 9
-carry cells, and no measurable clock.
+`font_line` is a byte, so an 8-pixel font area ends at most 255 × 64 + 255
+bytes past F, just under 16.6 KB, and a 16-pixel one reaches the whole
+buffer; addresses past its end wrap to its start. `font_line`'s low six bits
+are zero, so the per-line add is nine bits wide and `font`'s low six bits
+pass straight through it, with no adder. They are paid for one step later,
+in the glyph address: `font_base + c` must now add the code to them, carries
+and all, where a font on a 64-byte boundary left them zero and the code
+passed through. Letting the font start anywhere costs 12 LUTs, 6 carry cells
+and 12 flops, 24 logic cells in the whole system, and no measurable clock.
 
 ### Background
 
@@ -286,21 +304,27 @@ were taken out as more hardware than they were worth.)
 
 `rtl/video/foreground.sv` makes the glyph bit and foreground colour for each
 column, from three byte reads per cell on the even cycles. At the cell's
-phase, x mod 8 (x mod 16 with text doubling):
+phase, x mod 8 (x mod 16 with the 16-pixel font):
 
 | phase | |
 |---|---|
 | 0 | read the character code, `character_data`++ |
-| 1 | the glyph address, ((`font` + `font_line`) << 5) + code |
-| 2 | read the glyph byte |
+| 1 | the glyph row's address: `font` + (`font_line` << 6) + code, or `font` + (`font_line` << 7) + 2 code + 1 with the 16-pixel font |
+| 2 | read the glyph row |
 | 4 | read the foreground colour, `character_color`++ |
 | 6 | glyph and colour move to the output stage |
 
-Phase 6's memory cycle is spare. A glyph byte's bit 7 is its leftmost pixel.
+Phase 6's memory cycle is spare. A 16-pixel row is one aligned word, read in
+the same slot as a byte: its address is 2 code + 1 past the font base, which
+is the word at 2 code with the byte lane set to its high byte. The glyph
+registers are 16 bits and always take that byte above the word's low byte, so
+a 16-pixel row arrives whole and an 8-pixel one arrives as its byte and eight
+bits never shown. The one mux the 16-pixel font adds is the code's place in
+the address.
 
 **Both cell widths move at phase 6**, the first cycle after the colour
 arrives, so a cell is shown from 7 cycles after its first column either way
-and the latency does not depend on the mode: a doubled cell is still showing
+and the latency does not depend on the mode: a 16-pixel cell is still showing
 its last columns while the next cell's reads happen, so the next glyph and
 colour wait in their own registers. With the output register the text
 generator's latency is 8, and the display's `LATENCY` is 8.
@@ -315,7 +339,7 @@ adding into the address mux instead would lengthen that slowest path.
 That mux is now chosen by the schedule rather than by the reads: the pointer
 by the phase's bits 2:1, and the generator by an even column in the visible
 part, the tables in the blanking, and the background otherwise. Choosing it
-by which read was happening gave the same address, but it put the doubling
+by which read was happening gave the same address, but it put the width
 mux, the phase compares and the background's `bits_left` compares in front of
 the SPRAM, about ten LUTs from the timing counters. In the whole system, with
 the CPU's 64 KB and write-only frame buffers, that path sometimes set the
@@ -796,7 +820,7 @@ array exactly.
 | 0 | 640×256, 2 colours | 1 bpp, width 1, each line pointer twice | 20 KB |
 | 1 | 320×256, 4 colours | 2 bpp, width 2 | 20 KB |
 | 2 | 160×256, 16 colours | 4 bpp, width 4 | 20 KB |
-| 7 | teletext, 40×25 | text, doubled pixels, 20 lines per row | 1 KB + font |
+| 7 | teletext, 40×25 | text, 16-pixel font, 20 lines per row | 1 KB + font |
 
 The background palette ranges match the BBC's colour counts: mode 0 uses
 entries 28–29, mode 1 24–27, mode 2 0–15. VDU 19 and flashing colours are
@@ -822,9 +846,11 @@ From a double-height control code on, the CPU adds 96 to the codes. An upper
 row uses font rows 0–19 and the row below it rows 20–39, so the same codes
 show the bottom halves while normal characters look the same in both.
 
-192 glyphs is a stride of 6: `font_line = 6r`, and row r covers
-F + 192r + 32 to F + 192r + 223. A byte of `font_line` reaches row 42, so
-all 40 fit: 7,680 bytes from F.
+The glyphs are 16 pixels wide, so a row of 192 is 384 bytes, 3 of
+`font_line`'s 128-byte steps: `font_line = 3r`, and row r covers F + 384r + 64
+to F + 384r + 447, which touch without overlapping because codes start at 32.
+All 40 rows fit, in 15,360 bytes from F. A 16×20 font of 256 glyphs, without
+the double-height rows, is 10 KB.
 
 The 128 mosaic glyphs don't fit beside these in 256 codes. They may go in the
 background layer instead: a 16-pixel cell is two 8-wide background pixels,
@@ -853,7 +879,7 @@ them a cycle after the store.
 | `timing_v` | `struct timing`, 4 × 16 bits, 10 used | write only |
 | control | the buffer shown, and CPU, COPY, BLIT or WRITETHRU for the other | write |
 | status | current line (10 bits), vertical blank, write-through in progress | read |
-| font | where the font starts, in 32-byte units, 10 bits | write only |
+| font | the font's address, 15 bits; even for a 16-pixel font | write only |
 | palette | 32 × 8 bits | write, through the EBR's second port |
 | sprite attributes | 16 × 4 words | write, through its block RAM's second port |
 | sprite patterns | 16 × 64 words | write, through their block RAMs' second ports |
