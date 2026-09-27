@@ -354,6 +354,40 @@ The whole display, sprites included, is 711 LUT4s and 8 block RAMs (the
 palette, and the sprites' seven) by yosys; by module, 676 LUT4s and 345
 flops. With the sprite engine a line must be at least 705 cycles.
 
+### The whole system on a UP5K
+
+`tools/fpga-system.sv` puts the CPU, its 64 KB in two SPRAMs, the display and
+both frame buffers on one part: about 2,700 logic cells (51%), 13 of 30 block
+RAMs, all 4 SPRAMs, and 7 of 8 global buffers. The DSP multipliers are
+unused. It places at 27.9 MHz, medians of eight seeds, and every seed clears
+the 25.175 MHz pixel clock. The CPU alone with 64 KB places at 28.6, so the
+display costs it almost nothing. That result depends on three rules:
+
+- **Nothing combinational joins the CPU's address to the frame buffers.**
+  The UP5K's SPRAMs are two pairs at opposite corners of the die, so a CPU
+  that addresses or reads a frame buffer in the same cycle has its
+  read-to-address path cross the die twice. Wired that way, the first
+  harness placed at 23 MHz. That loss was the frame buffers, not the split
+  of the CPU's 64 KB over two SPRAMs, which costs about 1.4 MHz on its own.
+  So register and frame buffer writes land a cycle late, out of flops, and
+  the CPU reads a frame buffer only in blit mode, a cycle late (see
+  `rtl/cpu.sv`).
+- **The placement is pinned** by `tools/fpga-system.py`: the CPU's SPRAMs and
+  its read and bank selects on one side, the display's on the other. Left to
+  itself the placer put the CPU's read mux between the two pairs. Pinning is
+  worth about 1.4 MHz, and it lifts the slowest seed well clear of the
+  pixel clock.
+- **The display chooses its read address by schedule** (see
+  [Text generator](#text-generator)). Before that change, its own address
+  path sometimes set the clock of the whole system.
+
+**Blit mode** makes the CPU the blitter. Bit 1 of the control register sets
+it, and data above 0x8000 is then the back buffer: the loads and stores
+there, but not instruction fetches or `pop`. ld, ld8 and ldm cost a cycle more
+in this mode, and the CPU has separate microcode routines for them. Code
+running in blit mode keeps its data, constants and stack below 0x8000.
+Without `` `define FRUCTUS_BLIT `` the CPU is built exactly as before.
+
 **No RAM pays for read-during-write.** A read and a write of one word in
 the same cycle give the block RAM undefined data. Written plainly, the RTL
 promises the old value, and yosys keeps that promise with registers and
@@ -760,9 +794,11 @@ columns.
 
 ## Registers
 
-Under 64 bytes of registers, in an I/O page whose place in the memory map is
-not yet chosen, plus the sprites' 2 KB of patterns and attributes (see
-[Sprites](#sprites)).
+Under 64 bytes of registers in an I/O page, plus the sprites' 2 KB of
+patterns and attributes (see [Sprites](#sprites)). `tools/fpga-system.sv`
+puts the page at 0x7f00, just below the frame buffer window. There the
+registers are written through into RAM, so they read back as last written,
+and a CPU write reaches them a cycle after the store.
 
 | register | contents | access |
 |---|---|---|
