@@ -117,7 +117,7 @@ module video #(
     logic        bg_rd, fg_rd;
     logic [13:0] bg_addr, fg_addr;
     logic [7:0]  bg_pixel, fg_color;
-    logic        fg_on;
+    logic        fg_on, fg_turn;
 
     background #(.LATENCY(LATENCY)) bg (
         .clk, .ld_ptr(ld_bg), .ld_mode, .word(mem_rdata), .active,
@@ -125,10 +125,16 @@ module video #(
 
     foreground #(.LATENCY(LATENCY)) fg (
         .clk, .ld_mode, .ld_char, .ld_color, .word(mem_rdata), .active,
-        .mem_rd(fg_rd), .mem_addr(fg_addr), .mem_rdata, .fg_on, .fg_color);
+        .mem_rd(fg_rd), .mem_addr(fg_addr), .mem_turn(fg_turn), .mem_rdata,
+        .fg_on, .fg_color);
 
+    // THE ADDRESS FOLLOWS THE SCHEDULE, NOT THE READS: the text generator's on
+    // its even columns, the tables' in the blanking where they are read, and
+    // the background's otherwise.  Choosing by fg_rd and bg_rd gave the same
+    // address whenever anything was read, but put both generators' read logic
+    // in front of the SPRAM's address pins; these selects are flops and a gate.
     assign mem_rd   = fg_rd || bg_rd || t_rd;
-    assign mem_addr = fg_rd ? fg_addr : bg_rd ? bg_addr : t_addr;
+    assign mem_addr = fg_turn ? fg_addr : in_tables ? t_addr : bg_addr;
 
     // The sprites build the next line during this one: line n + 1, or line 0
     // during the vertical blanking before it.

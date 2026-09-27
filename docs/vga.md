@@ -293,6 +293,16 @@ the pixel clock, limited by the read-address mux into the SPRAM. Reading the
 colour before the glyph would give the add more time but gain nothing, and
 adding into the address mux instead would lengthen that slowest path.
 
+That mux is now chosen by the schedule rather than by the reads: the pointer
+by the phase's bits 2:1, and the generator by an even column in the visible
+part, the tables in the blanking, and the background otherwise. Choosing it
+by which read was happening gave the same address, but it put the doubling
+mux, the phase compares and the background's `bits_left` compares in front of
+the SPRAM, about ten LUTs from the timing counters. In the whole system, with
+the CPU's 64 KB and write-only frame buffers, that path sometimes set the
+clock. After the change, no seed out of eight put the display on the critical
+path.
+
 135 LUT4s, 37 carry cells and 109 flops by yosys. `tests/foreground-check.mjs`
 checks every column at both widths, with text on and off and pointers of
 either parity, against a reference built from this section.

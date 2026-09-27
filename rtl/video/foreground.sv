@@ -55,6 +55,7 @@ module foreground #(
 
     output logic        mem_rd,      // read mem_addr this cycle
     output logic [13:0] mem_addr,    // word address
+    output logic        mem_turn,    // an even column: mem_addr is ours if anyone's
     input  logic [15:0] mem_rdata,   // the word read in the previous cycle
 
     output logic        fg_on,
@@ -67,22 +68,33 @@ module foreground #(
     logic        dbl_q, off_q;
 
     // --- where the cell is ---------------------------------------------------
+    // `ph` IS HELD AT 0 WHILE THE GENERATOR IS IDLE - `active` low and the last
+    // cell shown - so it is 0 at column 0 without a test for the line's first
+    // column.  That needs 8 idle cycles between lines, which any legal timing
+    // has: the blanking is at least 11 (see rtl/video/video.sv).
     logic [3:0] ph;                  // x mod 16
     logic [6:0] act_d;               // active, one to seven cycles ago
-    wire        first = active && !act_d[0];      // x = 0
-    wire [3:0]  x16   = first ? 4'd0 : ph;
+    wire [3:0]  x16   = ph;
     wire [3:0]  phase = dbl_q ? x16 : {1'b0, x16[2:0]};
     wire        show  = act_d[6];                 // the column 7 cycles ago
 
     // --- reads ---------------------------------------------------------------
+    // THE ADDRESS IS CHOSEN BY THE COLUMN, NOT BY THE READ.  The reads fall at
+    // phases 0, 2 and 4, which are ph[2:1] = 0, 1 and 2 in either width, so the
+    // pointer is picked by two flops and nothing else; at any other phase it is
+    // not read and does not matter.  Picking it with rd_char and rd_glyph put
+    // the doubling mux and the phase compares in front of the SPRAM's address
+    // pins, the longest path in the display.  `mem_turn` is the same idea for
+    // rtl/video/video.sv's choice between the generators.
     logic [14:0] gaddr;              // the glyph byte's address
     wire rd_char  = active && phase == 4'd0;
     wire rd_glyph = active && phase == 4'd2;
     wire rd_color = active && phase == 4'd4;
-    wire [14:0] addr = rd_char ? cp : rd_glyph ? gaddr : kp;
+    wire [14:0] addr = ph[2:1] == 2'd0 ? cp : ph[2:1] == 2'd1 ? gaddr : kp;
 
     assign mem_rd   = rd_char || rd_glyph || rd_color;
     assign mem_addr = addr[14:1];
+    assign mem_turn = active && !ph[0];
 
     logic       lane;                // bit 0 of the last read's address
     wire [7:0]  byte_in = lane ? mem_rdata[15:8] : mem_rdata[7:0];
@@ -93,7 +105,7 @@ module foreground #(
 
     always_ff @(posedge clk) begin
         act_d <= {act_d[5:0], active};
-        ph    <= x16 + 4'd1;
+        ph    <= active || act_d != 7'd0 ? ph + 4'd1 : 4'd0;
         lane  <= addr[0];
 
         if (ld_mode) begin
