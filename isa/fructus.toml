@@ -944,7 +944,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   0010_1110 .. 0010_1111   -- free
 #
 #   0011_0000 .. 0011_0001   -- free
-#   0011_001s                unary ops, 4 in TWO opcodes 2 bytes
+#   0011_001s                unary ops, 5 in TWO opcodes 2 bytes
 #   0011_0100 .. 0011_0111   -- free
 #
 #   THE mov ROW IS AN ALU GROUP WITHOUT AN ALU OPERATION, and it is numbered as
@@ -977,8 +977,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #       byte 0 = 0011_0000, byte 1 = dddi_iiii
 #       -> 32 single-register unary operations
 #
-#   That is eight times the two-opcode form's four, out of ONE opcode, and +4
-#   and +5 could do the same again if it ever came to it.  So the four at
+#   That is more than five times the two-opcode form's six, out of ONE opcode,
+#   and +4 and +5 could do the same again if it ever came to it.  So the six at
 #   0011_001s are not a ceiling on unary operations; they are the ceiling on
 #   unary operations that want a separate destination.  Nothing occupies +0 yet
 #   because nothing needs it - it is written down so that "the unary encoding is
@@ -2131,16 +2131,18 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
 #     index  value  rhs[2:1]  mnemonic   byte 0  byte 1 high bits
 #       0     -1       11     -- free     0x32   00
 #       1      0       00     clz         0x33   00     TENTATIVE
-#       2      1       00     -- free     0x32   01
-#       3      2       01     -- free     0x33   01
+#       2      1       00     clmul       0x32   01     TENTATIVE, fast
+#       3      2       01     -- free     0x33   01     (clmul, slow)
 #       4      3       01     bitrev      0x32   10     TENTATIVE
 #       5      4       10     popcount    0x33   10     TENTATIVE
 #       6      6       11     sxt8        0x32   11
 #       7      8       00     -- free     0x33   11
 #
-# FOUR OPERATIONS, NOT EIGHT.  A free index reads as whichever operation shares
-# its rhs[2:1], so a fifth unary operation needs a wider select - one more line
-# into the unary block - and not merely a free slot.
+# SIX OPERATIONS, NOT EIGHT.  Each opcode's two free indices read rhs[2:1] codes
+# its operations already use, so each opcode holds three: a pair told apart by
+# rhs[2], and a third that alone has the other value of rhs[1].  Only the
+# opcode with a third operation pays for it, with one more select line into
+# the unary block and a three-way mux instead of a two-way one.
 #
 # THE SLOW PAIR HAS AN OPCODE OF ITS OWN.  clz and popcount are the two deep
 # operations: measured, taking both out of the single-cycle ALU was worth a
@@ -2221,6 +2223,42 @@ extra_cycles = 1
   [[insn.form]]
   name     = "reg_reg"
   encoding = "0011_0011  10aa_addd"
+
+# clmul: the carry-less product of ra's two bytes, as a polynomial over GF(2).
+# The operands are the low byte and the high byte of ONE register, which is
+# what makes it a unary operation and lets it fit the two-register shape: the
+# product of two bytes is 15 bits, so it fits the register the pair came from.
+# The operation is commutative, so which byte is which does not matter.
+#
+# IT IS FAST, BECAUSE SLOW BOUGHT NOTHING.  It can sit on either opcode: at
+# index 2 of 0x32 it is two LUT levels in the single-cycle ALU, at index 3 of
+# 0x33 with `extra_cycles = 1` its partial products are registered like
+# popcount's counts.  Measured both ways on the processor alone behind one
+# SPRAM, medians of sixteen seeds:
+#
+#                           LUT4    cells    MHz     spread
+#     without clmul         1292    1562    29.22   28.0 .. 30.3
+#     clmul fast, 0x32      1345    1615    29.80   28.6 .. 30.3
+#     clmul slow, 0x33      1344    1615    28.61   25.8 .. 29.8
+#
+# The same fifty-three cells either way - the slow form's flops sit in the
+# cells of the LUT level in front of them - and neither median moves by more
+# than the spread, so the extra cycle buys no clock.  Moving it back is the
+# encoding's first byte, 0011_0011, and `extra_cycles = 1` - byte 1 is
+# 01aa_addd at both, and tools/gen-unary.js builds either.
+[[insn]]
+mnemonic = "clmul"
+summary  = "rd = carry-less product of ra's low and high bytes"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+]
+syntax   = "{d}, {a}"
+semantics = "R[d] = clmul(R[a])"
+
+  [[insn.form]]
+  name     = "reg_reg"
+  encoding = "0011_0010  01aa_addd"
 
 
 # --- br ---------------------------------------------------------------------

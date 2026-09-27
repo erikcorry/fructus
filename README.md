@@ -325,14 +325,17 @@ cost model, confirmed rather than assumed. Measured behind a real SPRAM it runs
 at 21.9 MHz, limited by the execute step rather than the ROM, with routing two
 thirds of the critical path.
 
-`rtl/unary.sv` is the unary block, in two pairs. `sxt8` and `bitrev` are wiring
-and share opcode 0x32; `clz` and `popcount` are the deep ones and share 0x33,
+`rtl/unary.sv` is the unary block, in two pairs and a fifth. `sxt8` and `bitrev`
+are wiring and share opcode 0x32 with `clmul`, the carry-less product of a
+register's two bytes, which is two LUT levels and 53 cells and measured no
+slower than registering it; `clz` and `popcount` are the deep ones and share 0x33,
 where their result is registered and the instruction takes a cycle more than its
 length — `extra_cycles` in the spec, which the simulator counts. The microcode's
 entry points are per opcode, which is why the split falls on one. Measured, it
 took the processor from 21.9 to 23.7 MHz, nearly all of what removing the unary
-block altogether would buy, for 25 LUTs. The selector is one bit of the
-right-hand side the ALU already reads: the unary forms sit in the imm3 columns
+block altogether would buy, for 25 LUTs. The selector is bits of the
+right-hand side the ALU already reads — one per pair, and a second for the
+opcode that holds a third operation: the unary forms sit in the imm3 columns
 and immgen turns their index into a value, so no selector lines run from decode.
 There is no `zxt8`: `and rd, rd, #0x00ff` is two bytes through immask5, and
 between registers `and rd, ra, #255` is three through imm10. `popcount`'s adds

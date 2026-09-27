@@ -148,8 +148,8 @@ export const ALU_OPS = [
   { code: 8,  name: 'shl',   does: 'lhs << rhs[3:0]' },
   { code: 9,  name: 'lsr',   does: 'lhs >> rhs[3:0]' },
   { code: 11, name: 'asr',   does: 'lhs >>> rhs[3:0]' },
-  { code: 12, name: 'unary', does: "rtl/unary.sv's fast pair on lhs: sxt8 or bitrev" },
-  { code: 13, name: 'slow',  does: "rtl/unary.sv's slow pair, registered a cycle earlier: clz or popcount" },
+  { code: 12, name: 'unary', does: "rtl/unary.sv's fast operations on lhs" },
+  { code: 13, name: 'slow',  does: "rtl/unary.sv's slow operations, registered a cycle earlier" },
 ];
 
 // --- which operation each instruction needs, from its semantics ---------------
@@ -169,7 +169,7 @@ export const ALU_RULES = [
   [/^R\[d\] = R\[a\] & (R\[b\]|imm)$/,                     'and'],
   [/^R\[d\] = (shl|asr|lsr)\(R\[a\], (R\[b\]|imm) & 15\)$/, (m) => m[1]],
   // an operation that declares extra cycles is one whose result is registered
-  [/^R\[d\] = (sxt8|clz|bitrev|popcount)\(R\[a\]\)$/,       (m, insn) => (insn.extra_cycles ? 'slow' : 'unary')],
+  [/^R\[d\] = (sxt8|clz|bitrev|popcount|clmul)\(R\[a\]\)$/, (m, insn) => (insn.extra_cycles ? 'slow' : 'unary')],
   [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
   [/^R\[d\] = \(R\[a\] & mask\) != 0$/,                    'isset'],
   // A call's return address is not computed by the ALU: rtl/rhs.sv hands it the
@@ -262,6 +262,12 @@ export const COND_SRC = [
 // result registered.  So the fast operations must share an opcode, the slow
 // ones must share the other, and one bit of the value has to tell each pair's
 // two operations apart - the same bit for both, since it is one wire.
+//
+// AN OPCODE MAY HOLD A THIRD OPERATION, told apart from its pair by the OTHER
+// bit of rhs[2:1]: the pair shares one value of that bit and the third has the
+// other.  Then the block takes both bits, and that opcode's mux is three-way.
+// A layout with no third operation keeps the one-bit select, so adding one
+// costs only the opcode it lands on.
 export function unaryLayout() {
   const imm3 = spec.optype.imm3.values;
   const ops = [];
@@ -276,28 +282,41 @@ export function unaryLayout() {
                  code: ((value & 0xffff) >> 1) & 3, slow: (insn.extra_cycles ?? 0) > 0 });
     }
   if (!ops.length) throw new Error('no unary forms found in the spec');
-  if (new Set(ops.map((o) => o.code)).size !== ops.length) throw new Error('two unary operations read the same rhs[2:1]');
+  if (new Set(ops.map((o) => `${o.op}:${o.code}`)).size !== ops.length)
+    throw new Error('two unary operations on one opcode read the same rhs[2:1]');
   const groups = {};
   for (const [name, slow] of [['fast', false], ['slow', true]]) {
     const g = ops.filter((o) => o.slow === slow);
     if (!g.length) continue;
     if (new Set(g.map((o) => o.op)).size !== 1) throw new Error(`the ${name} unary operations are not on one opcode`);
-    if (g.length > 2) throw new Error(`more than two ${name} unary operations`);
+    if (g.length > 3) throw new Error(`more than three ${name} unary operations`);
     groups[name] = g;
   }
   if (groups.fast && groups.slow && groups.fast[0].op === groups.slow[0].op)
     throw new Error('the fast and slow unary operations share an opcode');
-  const bitOf = (g) => {
-    if (g.length < 2) return null;
-    const d = g[0].code ^ g[1].code;
-    if (d !== 1 && d !== 2) throw new Error(`${g[0].mnemonic} and ${g[1].mnemonic} differ in both bits of rhs[2:1]`);
-    return d === 1 ? 1 : 2;
+  // The pair is the two operations whose codes differ in one bit only; with
+  // three, the pair is the two that share the value of the bit the third does
+  // not - tried for each bit, since the pair's bit must match the other group's.
+  const split = (g, selBit) => {
+    if (g.length < 2) return { pair: g, third: null };
+    if (g.length === 2) {
+      const d = g[0].code ^ g[1].code;
+      if (d !== 1 && d !== 2) throw new Error(`${g[0].mnemonic} and ${g[1].mnemonic} differ in both bits of rhs[2:1]`);
+      return (d === 1 ? 1 : 2) === selBit ? { pair: g, third: null } : null;
+    }
+    const other = 3 - selBit, bit = (o, b) => (o.code >> (b - 1)) & 1;
+    const third = g.find((o) => g.filter((x) => bit(x, other) === bit(o, other)).length === 1);
+    if (!third) return null;
+    return { pair: g.filter((o) => o !== third), third };
   };
-  const bits = [...new Set(Object.values(groups).map(bitOf).filter((b) => b !== null))];
-  if (bits.length > 1) throw new Error('the two unary pairs are told apart by different bits of rhs');
-  const selBit = bits[0] ?? 1;
+  const selBit = [2, 1].find((b) => Object.values(groups).every((g) => split(g, b)));
+  if (!selBit) throw new Error('the unary operations cannot be told apart by one bit of rhs per pair and the other bit for a third');
   const level = (o) => ((o.code >> (selBit - 1)) & 1);
-  const pair = (g) => [0, 1].map((l) => g?.find((o) => level(o) === l)?.mnemonic ?? null);
-  return { ops, selBit, level, fast: pair(groups.fast), slow: pair(groups.slow),
+  const pair = (g) => [0, 1].map((l) => g?.pair.find((o) => level(o) === l)?.mnemonic ?? null);
+  const parts = Object.fromEntries(Object.entries(groups).map(([k, g]) => [k, split(g, selBit)]));
+  const third = (p) => (p?.third ? { mnemonic: p.third.mnemonic, level: (p.third.code >> (2 - selBit)) & 1 } : null);
+  return { ops, selBit, otherBit: 3 - selBit, level, fast: pair(parts.fast), slow: pair(parts.slow),
+           fastThird: third(parts.fast), slowThird: third(parts.slow),
+           wide: Boolean(parts.fast?.third || parts.slow?.third),
            fastOp: groups.fast?.[0].op, slowOp: groups.slow?.[0].op };
 }

@@ -36,9 +36,9 @@
 //            lsr
 //   11  asr    lhs >>> rhs[3:0]
 //            asr
-//   12  unary  rtl/unary.sv's fast pair on lhs: sxt8 or bitrev
-//            sxt8, bitrev
-//   13  slow   rtl/unary.sv's slow pair, registered a cycle earlier: clz or popcount
+//   12  unary  rtl/unary.sv's fast operations on lhs
+//            sxt8, bitrev, clmul
+//   13  slow   rtl/unary.sv's slow operations, registered a cycle earlier
 //            clz, popcount
 //
 //   10, 14, 15 are free.  Not yet: .
@@ -107,7 +107,7 @@ module alu (
     wire [15:0] andv = lhs & rhs;
     wire [3:0]  amt  = rhs[3:0];
     wire [15:0] unf, uns;
-    unary u (.clk(clk), .a(lhs), .sel(rhs[2]), .fast(unf), .slow(uns));   // a bit of the imm3 value
+    unary u (.clk(clk), .a(lhs), .sel(rhs[2:1]), .fast(unf), .slow(uns));   // two bits of the imm3 value
 
     always_comb case (op)
         4'd0, 4'd1: y = sum;

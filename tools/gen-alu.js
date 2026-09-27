@@ -134,7 +134,7 @@ module alu (
     wire [15:0] andv = lhs & rhs;
     wire [3:0]  amt  = rhs[3:0];
     wire [15:0] unf, uns;
-    unary u (.clk(clk), .a(lhs), .sel(rhs[${UNARY.selBit}]), .fast(unf), .slow(uns));   // a bit of the imm3 value
+    unary u (.clk(clk), .a(lhs), .sel(rhs[${UNARY.wide ? '2:1' : UNARY.selBit}]), .fast(unf), .slow(uns));   // ${UNARY.wide ? 'two bits' : 'a bit'} of the imm3 value
 
     always_comb case (op)
         4'd0, 4'd1: y = sum;

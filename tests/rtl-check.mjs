@@ -87,11 +87,15 @@ const unaryOps = () => {
       const index = ((b1 >> 6) << 1) | (op & 1);
       ops.push({ name: m[1], op, code: (u16(t.imm3.values[index]) >> 1) & 3, slow: (d.insn.extra_cycles ?? 0) > 0 });
     }
+  // An opcode with THREE operations needs both bits of rhs[2:1], and then the
+  // block's select is the code itself rather than one bit of it.
+  const wide = ops.some((o) => ops.filter((x) => x.op === o.op).length > 2);
   for (const o of ops) {
     const mate = ops.find((x) => x.op === o.op && x !== o);
     const diff = mate ? o.code ^ mate.code : 2;
     o.bit = diff === 1 ? 1 : 2;
     o.level = (o.code >> (o.bit - 1)) & 1;
+    o.sel = wide ? o.code : o.level;
   }
   return ops;
 };
@@ -309,7 +313,7 @@ endmodule
 // these functions, so agreeing with them is agreeing with what the ISA says the
 // instructions compute.
 //
-// Every operation is swept over its WHOLE input space - 65536 values each, four
+// Every operation is swept over its WHOLE input space - 65536 values each, all
 // operations - because these are cheap to enumerate completely and a sampled
 // sweep would miss precisely the interesting inputs: clz at 0 and 1, popcount
 // at 0xffff, bitrev's fixed points.
@@ -319,14 +323,15 @@ endmodule
   const rows = [];
   for (const o of unaryOps())
     for (let a = 0; a < 65536; a++)
-      rows.push(`${a.toString(16).padStart(4, '0')} ${o.level} ${o.slow ? 1 : 0} `
+      rows.push(`${a.toString(16).padStart(4, '0')} ${o.sel} ${o.slow ? 1 : 0} `
               + `${u16(BUILTIN[o.name](a)).toString(16).padStart(4, '0')}`);
   writeFileSync('build/unary-vectors.txt', rows.join('\n') + '\n');
   writeFileSync('build/unary-tb.sv', `module tb;
     logic clk = 0;
     logic [15:0] a, want_;
     wire  [15:0] fast, slow, y;
-    logic sel, isslow;
+    logic [1:0] sel;      // the low bit alone reaches a one-bit select
+    logic isslow;
     integer f, n = 0, bad = 0, r;
     unary u (.clk(clk), .a(a), .sel(sel), .fast(fast), .slow(slow));
     assign y = isslow ? slow : fast;

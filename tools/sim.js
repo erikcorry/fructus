@@ -193,6 +193,7 @@ export const BUILTIN = {
   clz:      (x) => { x &= MASK; if (!x) return W; let n = 0; while (!(x & HALF)) { x <<= 1; n++; } return n; },
   popcount: (x) => { x &= MASK; let n = 0; while (x) { n += x & 1; x >>>= 1; } return n; },
   bitrev:   (x) => { x &= MASK; let r = 0; for (let i = 0; i < W; i++) { r = (r << 1) | ((x >>> i) & 1); } return r; },
+  clmul:    (x) => { let r = 0; for (let i = 0; i < 8; i++) if ((x >>> i) & 1) r ^= ((x >>> 8) & 0xff) << i; return r; },
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };
 

@@ -108,7 +108,7 @@
 //     the operands are read in:
 //         add or mov xor
 //     two-byte ALU:
-//         mov bitrev sxt8 add rsb xor or and shl asr lsr iseq isset
+//         mov clmul bitrev sxt8 add rsb xor or and shl asr lsr iseq isset
 //     two-byte ALU with a registered result, one extra cycle through SLOW:
 //         clz popcount
 //     three-byte ALU:
