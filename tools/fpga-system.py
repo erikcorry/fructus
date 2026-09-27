@@ -12,8 +12,9 @@
 # mux and byte select halfway between the pairs, or the processor itself near
 # the frame buffers, and the processor's read-to-address path then crossed
 # the die twice a cycle: about 11 ns of logic and 32 of wire.  Pinned, the
-# whole system placed at 28.55 MHz against 27.0 unpinned, medians of eight
-# seeds, and the slowest seed moved from 25.3 to 27.1.
+# whole system places at 27.82 MHz against 26.17 unpinned, medians of eight
+# seeds, and the slowest seed moves from 25.37 to 27.20.  An earlier version
+# of the system, unpinned, had a seed at 24.63, below the pixel clock.
 #
 # The regions overlap by two columns, so neither side is squeezed at the seam.
 # =============================================================================
@@ -23,7 +24,7 @@ ctx.createRectangularRegion("cpu", 0, 0, SPLIT, 31)
 ctx.createRectangularRegion("vid", SPLIT - 2, 0, 25, 31)
 
 BELS = {"ram_lo_RAM": "X0/Y0/spram_1", "ram_hi_RAM": "X0/Y0/spram_2",
-        "fb0_RAM": "X25/Y0/spram_3", "fb1_RAM": "X25/Y0/spram_4"}
+        "fba_RAM": "X25/Y0/spram_3", "fbb_RAM": "X25/Y0/spram_4"}
 
 # The processor, and the top level's cells that sit between it and its own
 # two SPRAMs: the byte and bank selects, blit mode's late path, the write

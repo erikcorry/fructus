@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // =============================================================================
-// blit-check.mjs - tools/fpga-system.sv: blit mode, through the real memories
+// blit-check.mjs - tools/fpga-system.sv: its modes, through the real memories
 // =============================================================================
 //
 //   node tests/blit-check.mjs
@@ -23,8 +23,18 @@
 //   - a frame pushed above 0x8000 in processor mode, popped in blit mode: pop
 //     keeps its ordinary routine and reads ram_hi, not the buffer;
 //   - a copy loop inside the back buffer, and the sum of what it copied;
-//   - `show` flipped, so the other buffer becomes the back one;
-//   - blit mode off, and the loads above 0x8000 are ram_hi's again.
+//   - WRITETHRU: loads above 0x8000 are ram_hi's, and st and st8 there land
+//     in both ram_hi and A;
+//   - blit mode off, and the loads above 0x8000 are ram_hi's again;
+//   - COPY of A into B, held for about three frames of a short frame the
+//     program sets up: every word of B must afterwards be its old self or A's,
+//     and the line tables of every visible line - which the display must have
+//     fetched - must be A's;
+//   - then the other way about, A shown and B the processor's: a blit-mode
+//     store before the next vertical sync is dropped, since B is still being
+//     copied into; after it, a load from B finds the copy of A's word, and a
+//     store to B reads back; and a writethru store lands in ram_hi and B, not
+//     A.
 //
 // Every buffer and ram_hi start filled with a different pattern, so a load
 // from the wrong one, or a store that lands in two places, shows.
@@ -55,13 +65,24 @@ mkdirSync('build', { recursive: true });
 
 // --- the starting contents, a word per 16-bit location ----------------------------
 const WORDS = 16384;
-const fbA = (w) => (0xa000 + w * 7) & 0xffff;   // fb1: the back buffer while show = 0
-const fbB = (w) => (0xb000 + w * 5) & 0xffff;   // fb0: the back buffer while show = 1
+const fbA = (w) => (0xa000 + w * 7) & 0xffff;   // A: the processor's buffer
+const fbB = (w) => (0xb000 + w * 5) & 0xffff;   // B: the one shown
 const hiC = (w) => (0xc000 + w * 3) & 0xffff;   // ram_hi
 const hex = (f) => Array.from({ length: WORDS }, (_, w) => f(w).toString(16).padStart(4, '0')).join('\n') + '\n';
 
 const RESULT = 0x6000;
+const LINES = 8;          // the visible lines of the short frame
 const src = `
+        mov  r1, #0x208            ; vertical timing, while the first front porch
+        mov  r0, #2                ; still runs: porch 2, sync 2, back 3, and
+        st8  r0, [r1, #0]          ; ${LINES} lines - a frame of 15 lines
+        st8  r0, [r1, #2]
+        mov  r0, #3
+        st8  r0, [r1, #4]
+        mov  r0, #${LINES}
+        st8  r0, [r1, #6]
+        mov  r0, #0
+        st8  r0, [r1, #7]
         mov  sp, #0xf000
         mov  r0, #0x3141
         mov  r3, #0x5926
@@ -83,15 +104,15 @@ const src = `
         st   r0, [r1]              ; processor mode: ram_hi's word 0
         mov  r1, #0x241
         mov  r0, #2
-        st8  r0, [r1]              ; blit on, show 0: the back buffer is fb1
+        st8  r0, [r1]              ; blit on
         mov  r2, #0x8010
-        ld   r3, [r2]              ; at once: fb1 word 8
+        ld   r3, [r2]              ; at once: A's word 8
         mov  r4, #${RESULT}
         st   r3, [r4, #0]
         ld8  r3, [r2, #3]          ; 0x8013, the high byte of word 9
         st   r3, [r4, #2]
         mov  r0, #0x5a5a
-        st   r0, [r2, #4]          ; fb1 word 10
+        st   r0, [r2, #4]          ; A's word 10
         ld   r3, [r2, #4]          ; and straight back
         st   r3, [r4, #4]
         mov  r0, #0x77
@@ -126,18 +147,57 @@ loop:   ld   r4, [r1]
         st   r0, [r4, #18]
         mov  r1, #0x241
         mov  r0, #3
-        st8  r0, [r1]              ; show 1: the back buffer is fb0
-        mov  r2, #0x8000
-        ld   r3, [r2, #2]          ; fb0 word 1
+        st8  r0, [r1]              ; writethru
+        mov  r2, #0x8200
+        ld   r3, [r2, #2]          ; ram_hi's word 257, not A's
         st   r3, [r4, #20]
         mov  r0, #0x4242
-        st   r0, [r2, #0]          ; fb0 word 0
-        mov  r0, #0
-        st8  r0, [r1]              ; blit off
-        ld   r3, [r2, #0]          ; ram_hi's word 0 again
+        st   r0, [r2, #0]          ; word 256, in ram_hi and in A
+        ld   r3, [r2, #0]          ; and back, from ram_hi
         st   r3, [r4, #22]
-        ld   r3, [r2, #2]          ; and its word 1
+        mov  r0, #0x99
+        st8  r0, [r2, #3]          ; the high byte of word 257, in both
+        mov  r0, #0
+        st8  r0, [r1]              ; processor mode
+        mov  r2, #0x8000
+        ld   r3, [r2, #0]          ; ram_hi's word 0 again
         st   r3, [r4, #24]
+        ld   r3, [r2, #2]          ; and its word 1
+        st   r3, [r4, #30]
+        mov  r0, #5
+        st8  r0, [r1]              ; A shown, and copied into B
+        mov  r3, #6000             ; about three frames
+wait1:  add  r3, r3, #-1
+        br   ne, r3, #0, wait1
+        mov  r0, #6
+        st8  r0, [r1]              ; A shown, blit to B - from the next sync
+        mov  r2, #0x8800
+        mov  r0, #0x7777
+        st   r0, [r2]              ; B's word 0x400, line 0's colour pointer: dropped,
+                                   ; B is still being copied into
+        mov  r3, #3000             ; past a vertical sync
+wait2:  add  r3, r3, #-1
+        br   ne, r3, #0, wait2
+        mov  r2, #0x8000
+        ld   r3, [r2]              ; B's word 0: the copy of A's
+        st   r3, [r4, #32]
+        mov  r2, #0x8500
+        mov  r0, #0x6161
+        st   r0, [r2]              ; B's word 0x280, clear of the line tables
+        ld   r3, [r2]              ; and back
+        st   r3, [r4, #34]
+        mov  r0, #7
+        st8  r0, [r1]              ; A shown, writethru to B
+        mov  r2, #0x8600
+        mov  r0, #0x6262
+        st   r0, [r2]              ; word 768, in ram_hi and in B
+        ld   r3, [r2]              ; and back, from ram_hi
+        st   r3, [r4, #36]
+        mov  r0, #0
+        st8  r0, [r1]              ; processor mode: B shown again, at the next sync
+        mov  r3, #3000
+wait3:  add  r3, r3, #-1
+        br   ne, r3, #0, wait3
         halt
 `;
 writeFileSync('build/blit-prog.s', src.split('\n').map((l) => l.trim()).join('\n') + '\n');
@@ -147,8 +207,8 @@ const prog = Array.from({ length: WORDS }, (_, w) => (code[2 * w] ?? 0) | ((code
 
 writeFileSync('build/blit-lo.hex', hex((w) => prog[w]));
 writeFileSync('build/blit-hi.hex', hex(hiC));
-writeFileSync('build/blit-fb0.hex', hex(fbB));
-writeFileSync('build/blit-fb1.hex', hex(fbA));
+writeFileSync('build/blit-fba.hex', hex(fbA));
+writeFileSync('build/blit-fbb.hex', hex(fbB));
 
 // --- what should be where afterwards ---------------------------------------------------
 const sum = Array.from({ length: 16 }, (_, k) => fbA(32 + k)).reduce((a, b) => (a + b) & 0xffff, 0);
@@ -163,21 +223,33 @@ const results = [
   ['pop in blit mode, first',                                  0x1357],
   ['pop in blit mode, second',                                 0x2468],
   ['the copy loop\'s sum',                                     sum],
-  ['a load from fb0 once show is set',                         fbB(1)],
+  ['writethru: a load above 0x8000 is ram_hi\'s',             hiC(257)],
+  ['writethru: st, then ld of it at once',                     0x4242],
   ['blit off: ram_hi\'s word 0, stored in processor mode',     0x1111],
-  ['blit off: ram_hi\'s word 1, untouched',                    hiC(1)],
   ['a high frame popped in blit mode, first',                  0x5926],
   ['a high frame popped in blit mode, second',                 0x3141],
+  ['blit off: ram_hi\'s word 1, untouched',                    hiC(1)],
+  ['blit to B: its word 0 is the copy of A\'s',                fbA(0)],
+  ['blit to B: st, then ld of it at once',                     0x6161],
+  ['writethru to B: st, then ld of it, from ram_hi',           0x6262],
 ];
 const words = [
   ...results.map(([what, v], k) => ['lo', (RESULT >> 1) + k, v, what]),
-  ['fb1', 0, fbA(0), 'the processor-mode store did not reach the back buffer'],
-  ['fb1', 10, 0x5a5a, 'the st landed in fb1'],
-  ['fb1', 11, (fbA(11) & 0xff) | 0x7700, 'the st8 changed only its byte'],
-  ...Array.from({ length: 16 }, (_, k) => ['fb1', 64 + k, fbA(32 + k), `the copy loop's word ${k}`]),
-  ['fb1', 80, fbA(80), 'the copy loop stopped where it should'],
-  ['fb0', 0, 0x4242, 'the st landed in fb0 once show was set'],
-  ['fb0', 10, fbB(10), 'fb0 was not written while fb1 was the back buffer'],
+  ['fba', 0, fbA(0), 'the processor-mode store did not reach A'],
+  ['fba', 10, 0x5a5a, 'the st landed in A'],
+  ['fba', 11, (fbA(11) & 0xff) | 0x7700, 'the st8 changed only its byte'],
+  ...Array.from({ length: 16 }, (_, k) => ['fba', 64 + k, fbA(32 + k), `the copy loop's word ${k}`]),
+  ['fba', 80, fbA(80), 'the copy loop stopped where it should'],
+  ['fba', 256, 0x4242, 'the writethru st reached A'],
+  ['fba', 257, (fbA(257) & 0xff) | 0x9900, 'and so did the st8, to its byte'],
+  ['hi', 256, 0x4242, 'the writethru st reached ram_hi'],
+  ['hi', 257, (hiC(257) & 0xff) | 0x9900, 'and so did the st8'],
+  ['fbb', 0x280, 0x6161, 'the blit-mode st landed in B'],
+  ['fba', 0x280, fbA(0x280), 'and not in A'],
+  ['hi', 0x280, hiC(0x280), 'nor in ram_hi'],
+  ['fbb', 768, 0x6262, 'the writethru st reached B'],
+  ['hi', 768, 0x6262, 'and ram_hi'],
+  ['fba', 768, fbA(768), 'and not A'],
   ['hi', 0, 0x1111, 'the processor-mode store landed in ram_hi'],
   ['hi', 10, hiC(10), 'blit-mode stores did not reach ram_hi'],
   ...Array.from({ length: 16 }, (_, k) => ['hi', 64 + k, hiC(64 + k), `nor did the copy loop, word ${k}`]),
@@ -187,24 +259,25 @@ writeFileSync('build/blit-tb.sv', `module tb;
     logic clk = 0, din = 1;
     wire dout, hsync_n, vsync_n; wire [2:0] red, green, blue;
     top dut (.clk, .din, .irq(1'b0), .dout, .hsync_n, .vsync_n, .red, .green, .blue);
-    integer cyc;
+    integer cyc, k;
     initial begin
         $readmemh("build/blit-lo.hex",  dut.ram_lo.mem);
         $readmemh("build/blit-hi.hex",  dut.ram_hi.mem);
-        $readmemh("build/blit-fb0.hex", dut.fb0.mem);
-        $readmemh("build/blit-fb1.hex", dut.fb1.mem);
+        $readmemh("build/blit-fba.hex", dut.fba.mem);
+        $readmemh("build/blit-fbb.hex", dut.fbb.mem);
         repeat (4) begin #1 clk = 1; #1 clk = 0; end
         din = 0;
-        for (cyc = 0; cyc < 5000 && !dut.halted && !dut.trapped; cyc = cyc + 1) begin
+        for (cyc = 0; cyc < 200000 && !dut.halted && !dut.trapped; cyc = cyc + 1) begin
             #1 clk = 1; #1 clk = 0;
         end
         // Two more edges, so a store's late write has landed.
         repeat (2) begin #1 clk = 1; #1 clk = 0; end
         $display("END %0d %0d %0d", dut.halted, dut.trapped, cyc);
 ${words.map(([mem, w], k) => {
-  const inst = { lo: 'ram_lo', hi: 'ram_hi', fb0: 'fb0', fb1: 'fb1' }[mem];
+  const inst = { lo: 'ram_lo', hi: 'ram_hi', fba: 'fba', fbb: 'fbb' }[mem];
   return `        $display("W ${k} %h", dut.${inst}.mem[${w}]);`;
 }).join('\n')}
+        for (k = 0; k < ${WORDS}; k = k + 1) $display("AB %0d %h %h", k, dut.fba.mem[k], dut.fbb.mem[k]);
         $finish;
     end
 endmodule
@@ -217,7 +290,7 @@ const VIDEO = ['rtl/video/video.sv', 'rtl/video/timing.sv', 'rtl/video/backgroun
 execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', '-DNO_ICE40_DEFAULT_ASSIGNMENTS', '-o', 'build/blit-tb.vvp',
   ...RTL, ...VIDEO, CELLS, 'tools/fpga-system.sv', 'build/blit-tb.sv'], { stdio: ['ignore', 'ignore', 'inherit'] });
 const out = execFileSync('vvp', ['-n', 'build/blit-tb.vvp'], { encoding: 'utf8' });
-for (const f of ['blit-lo.hex', 'blit-hi.hex', 'blit-fb0.hex', 'blit-fb1.hex', 'blit-tb.sv', 'blit-tb.vvp'])
+for (const f of ['blit-lo.hex', 'blit-hi.hex', 'blit-fba.hex', 'blit-fbb.hex', 'blit-tb.sv', 'blit-tb.vvp'])
   rmSync(`build/${f}`, { force: true });
 
 let bad = 0;
@@ -232,5 +305,22 @@ for (const m of out.matchAll(/^W (\d+) ([0-9a-fx]+)/gm)) {
     if (bad++ < 8) console.log(`  MISMATCH ${what}: ${mem} word ${w} is ${m[2]}, want ${want.toString(16).padStart(4, '0')}`);
   }
 }
+// THE COPY.  Every word of B is its old self or A's, since B is written only
+// with what the display read from A; and the line tables of every visible
+// line are A's, since the display fetches those whatever they say.
+const A = [], B = [];
+for (const m of out.matchAll(/^AB (\d+) ([0-9a-fx]+) ([0-9a-fx]+)/gm)) { A[+m[1]] = parseInt(m[2], 16); B[+m[1]] = parseInt(m[3], 16); }
+let copied = 0;
+const WRITTEN = new Set([0x280, 768]);    // B's words the program wrote itself, checked above
+for (let w = 0; w < WORDS; w++) {
+  if (WRITTEN.has(w)) continue;
+  if (B[w] === A[w] && A[w] !== fbB(w)) copied++;
+  else if (B[w] !== fbB(w) && bad++ < 8)
+    console.log(`  MISMATCH B word ${w} is ${B[w]?.toString(16)}, neither its old ${fbB(w).toString(16)} nor A's ${A[w]?.toString(16)}`);
+}
+for (let n = 0; n < LINES; n++)
+  for (const t of [0, 0x200, 0x400, 0x600])
+    if (B[t + n] !== A[t + n] && bad++ < 8)
+      console.log(`  MISMATCH line ${n}'s table word ${(t + n).toString(16)} was not copied into B`);
 if (bad) { console.log(`FAIL  tests/blit-check.mjs: ${bad} wrong`); process.exit(1); }
-console.log(`ok    tests/blit-check.mjs: tools/fpga-system.sv in blit mode, ${results.length} results and ${words.length - results.length} memory words, in ${end[3]} cycles`);
+console.log(`ok    tests/blit-check.mjs: tools/fpga-system.sv's modes, ${results.length} results, ${words.length - results.length} memory words and ${copied} words copied into B, in ${end[3]} cycles`);

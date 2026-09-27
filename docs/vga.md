@@ -359,9 +359,9 @@ flops. With the sprite engine a line must be at least 705 cycles.
 `tools/fpga-system.sv` puts the CPU, its 64 KB in two SPRAMs, the display and
 both frame buffers on one part: about 2,700 logic cells (51%), 13 of 30 block
 RAMs, all 4 SPRAMs, and 7 of 8 global buffers. The DSP multipliers are
-unused. It places at 27.9 MHz, medians of eight seeds, and every seed clears
+unused. It places at 27.8 MHz, medians of eight seeds, and every seed clears
 the 25.175 MHz pixel clock. The CPU alone with 64 KB places at 28.6, so the
-display costs it almost nothing. That result depends on three rules:
+display costs it little. That result depends on three rules:
 
 - **Nothing combinational joins the CPU's address to the frame buffers.**
   The UP5K's SPRAMs are two pairs at opposite corners of the die, so a CPU
@@ -375,18 +375,41 @@ display costs it almost nothing. That result depends on three rules:
 - **The placement is pinned** by `tools/fpga-system.py`: the CPU's SPRAMs and
   its read and bank selects on one side, the display's on the other. Left to
   itself the placer put the CPU's read mux between the two pairs. Pinning is
-  worth about 1.4 MHz, and it lifts the slowest seed well clear of the
-  pixel clock.
+  worth about 1.7 MHz, and without it the slowest seed comes within a few
+  per cent of the pixel clock, or below it.
 - **The display chooses its read address by schedule** (see
   [Text generator](#text-generator)). Before that change, its own address
   path sometimes set the clock of the whole system.
 
-**Blit mode** makes the CPU the blitter. Bit 1 of the control register
-(0x0241) sets it, and data above 0x8000 is then the back buffer: the loads and stores
-there, but not instruction fetches or `pop`. ld, ld8 and ldm cost a cycle more
-in this mode, and the CPU has separate microcode routines for them. Code
-running in blit mode keeps its data, constants and stack below 0x8000.
-Without `` `define FRUCTUS_BLIT `` the CPU is built exactly as before.
+**The mode** is the control register at 0x0241. Bit 2 says which buffer the
+display shows, and bits 1:0 what happens to the other one:
+
+| bits 1:0 | the buffer not shown |
+|---|---|
+| 0 CPU | untouched: the CPU's data above 0x8000 is its own RAM |
+| 1 COPY | written with every word the display reads, only while A is shown |
+| 2 BLIT | the CPU's data above 0x8000 |
+| 3 WRITETHRU | written with every CPU write above 0x8000, which also goes to the CPU's own RAM |
+
+So A and B are used alike: a program may bring each up from its state two
+frames ago in software and never copy, or keep A as its latest image and
+copy it to B, as in [Double buffering](#double-buffering). COPY runs only
+from A to B, since either buffer can be the one kept latest; the other
+direction would cost 45 logic cells.
+
+- **COPY** publishes A to B. The shown buffer and the copy change only
+  during vertical sync, so the copy is always of whole frames; holding COPY
+  for two frame times is sure to cover one. CPU writes to a buffer being
+  shown or copied into are dropped, so after a change of buffer, or after
+  COPY, BLIT and WRITETHRU wait for the next vertical sync.
+- **BLIT** makes the CPU the blitter. Loads and stores above 0x8000 go to the
+  buffer not shown, but instruction fetches and `pop` do not. ld, ld8 and ldm cost a cycle
+  more, and the CPU has separate microcode routines for them. Code running in
+  this mode keeps its data, constants and stack below 0x8000. Without
+  `` `define FRUCTUS_BLIT `` the CPU is built exactly as before.
+- **WRITETHRU** suits text, where the screen is small. The CPU keeps its own
+  copy of the screen above 0x8000 and reads it at full speed, and the buffer
+  not shown follows every write.
 
 **No RAM pays for read-during-write.** A read and a write of one word in
 the same cycle give the block RAM undefined data. Written plainly, the RTL
@@ -805,7 +828,7 @@ them a cycle after the store.
 |---|---|---|
 | `timing_h` | `struct timing`, 4 × 16 bits, 10 used | write only |
 | `timing_v` | `struct timing`, 4 × 16 bits, 10 used | write only |
-| control | display enable, which buffer is shown, write-through request | write |
+| control | the buffer shown, and CPU, COPY, BLIT or WRITETHRU for the other | write |
 | status | current line (10 bits), vertical blank, write-through in progress | read |
 | palette | 32 × 8 bits | write, through the EBR's second port |
 | sprite attributes | 16 × 4 words | write, through its block RAM's second port |
