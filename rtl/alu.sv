@@ -34,6 +34,8 @@
 //            shl
 //    9  lsr    lhs >> rhs[3:0]
 //            lsr
+//   10  movhi  rhs[7:0] over lhs[7:0]
+//            movhi
 //   11  asr    lhs >>> rhs[3:0]
 //            asr
 //   12  unary  rtl/unary.sv's fast operations on lhs
@@ -41,7 +43,7 @@
 //   13  slow   rtl/unary.sv's slow operations, registered a cycle earlier
 //            clz, popcount
 //
-//   10, 14, 15 are free.  Not yet: .
+//   14, 15 are free.  Not yet: .
 //
 // BRANCHES ARE DECIDED BESIDE THE ALU, NOT IN IT.  rtl/compare.sv takes the
 // same two operands and answers one bit that never enters this block's result,
@@ -105,6 +107,7 @@ module alu (
     wire [15:0] sum  = rhs + (lhs ^ {16{sub}}) + {15'd0, sub};
     wire [15:0] xorv = lhs ^ rhs;
     wire [15:0] andv = lhs & rhs;
+    wire [15:0] hiv  = {rhs[7:0], lhs[7:0]};
     wire [3:0]  amt  = rhs[3:0];
     wire [15:0] unf, uns;
     unary u (.clk(clk), .a(lhs), .sel(rhs[2:1]), .fast(unf), .slow(uns));   // two bits of the imm3 value
@@ -119,6 +122,7 @@ module alu (
         4'd7:       y = rhs;
         4'd8:       y = lhs << amt;
         4'd9:       y = lhs >> amt;
+        4'd10:      y = hiv;
         4'd11:      y = $signed(lhs) >>> amt;
         4'd12:      y = unf;
         4'd13:      y = uns;

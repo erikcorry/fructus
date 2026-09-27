@@ -654,7 +654,7 @@ endmodule
     return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
   const NAMES = spec.optype.cond3.names;
   const UN = unaryOps();
-  const OP = { add: 0, rsb: 1, iseq: 2, isset: 3, xor: 4, or: 5, and: 6, rhs: 7, shl: 8, lsr: 9, asr: 11, unary: 12, slow: 13 };
+  const OP = { add: 0, rsb: 1, iseq: 2, isset: 3, xor: 4, or: 5, and: 6, rhs: 7, shl: 8, lsr: 9, movhi: 10, asr: 11, unary: 12, slow: 13 };
   const E = [0, 1, 2, 0x7ffe, 0x7fff, 0x8000, 0x8001, 0xfffe, 0xffff, 0x00ff, 0x0100, 0x5555];
   const pairs = [];
   for (const a of E) for (const b of E) pairs.push([a, b]);
@@ -679,6 +679,7 @@ endmodule
     rows.push(row(OP.or,  l, r, l | r));
     rows.push(row(OP.and, l, r, l & r));
     rows.push(row(OP.rhs, l, r, r));
+    rows.push(row(OP.movhi, l, r, ((r & 0xff) << 8) | (l & 0xff)));
     for (const nm of ['shl', 'lsr', 'asr']) rows.push(row(OP[nm], l, r, BUILTIN[nm](l, r & 15)));
     // the operation rides rhs[2:1]; every other bit of rhs is left random, and
     // the slow pair is read through its own operation code

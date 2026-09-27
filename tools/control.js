@@ -147,6 +147,7 @@ export const ALU_OPS = [
   { code: 7,  name: 'rhs',   does: 'rhs' },
   { code: 8,  name: 'shl',   does: 'lhs << rhs[3:0]' },
   { code: 9,  name: 'lsr',   does: 'lhs >> rhs[3:0]' },
+  { code: 10, name: 'movhi', does: 'rhs[7:0] over lhs[7:0]' },
   { code: 11, name: 'asr',   does: 'lhs >>> rhs[3:0]' },
   { code: 12, name: 'unary', does: "rtl/unary.sv's fast operations on lhs" },
   { code: 13, name: 'slow',  does: "rtl/unary.sv's slow operations, registered a cycle earlier" },
@@ -171,6 +172,7 @@ export const ALU_RULES = [
   // an operation that declares extra cycles is one whose result is registered
   [/^R\[d\] = (sxt8|clz|bitrev|popcount|clmul)\(R\[a\]\)$/, (m, insn) => (insn.extra_cycles ? 'slow' : 'unary')],
   [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
+  [/^R\[d\] = \(\((R\[b\]|imm) & 0xff\) << 8\) \| \(R\[a\] & 0xff\)$/, 'movhi'],
   [/^R\[d\] = \(R\[a\] & mask\) != 0$/,                    'isset'],
   // A call's return address is not computed by the ALU: rtl/rhs.sv hands it the
   // pc adder's sum and the pass-through carries it to the register file, which

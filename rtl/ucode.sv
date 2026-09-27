@@ -108,11 +108,12 @@
 //     the operands are read in:
 //         add or mov xor
 //     two-byte ALU:
-//         mov clmul bitrev sxt8 add rsb xor or and shl asr lsr iseq isset
+//         mov movhi clmul bitrev sxt8 add rsb xor or and shl asr lsr iseq
+//         isset
 //     two-byte ALU with a registered result, one extra cycle through SLOW:
 //         clz popcount
 //     three-byte ALU:
-//         add rsb xor or and iseq mov
+//         movhi add rsb xor or and iseq mov
 //     conditional branches - fetch both bytes, then take or dispatch:
 //         br brclr brset
 //     the short relative jump, a byte of displacement:
@@ -165,7 +166,7 @@
 //     nop - its entry dispatches at once, since the next opcode is already on
 //     the bus:
 //         nop
-//     trap - 114 opcodes, every one not yet implemented and every free one.
+//     trap - 111 opcodes, every one not yet implemented and every free one.
 //
 // BLIT MODE, when `FRUCTUS_BLIT is defined: every loaded byte arrives a cycle
 // late, and the load routines have copies that capture it then.  They are
@@ -273,13 +274,13 @@ module ucode (
         rom[38] = 40'b100010001_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
         rom[39] = 40'b100010001_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
         rom[40] = 40'b100000000_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
-        rom[41] = 40'b100000011_0_0_0_0_1_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
+        rom[41] = 40'b100000001_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
         rom[42] = 40'b100000011_0_0_0_0_1_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
         rom[43] = 40'b100000011_0_0_0_0_1_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
         rom[44] = 40'b100000000_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
         rom[45] = 40'b100000000_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
-        rom[46] = 40'b100000011_0_0_0_0_1_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
-        rom[47] = 40'b100000011_0_0_0_0_1_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
+        rom[46] = 40'b100000000_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
+        rom[47] = 40'b100000000_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
         rom[48] = 40'b100000011_0_0_0_0_1_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
         rom[49] = 40'b100000011_0_0_0_0_1_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
         rom[50] = 40'b100000000_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;

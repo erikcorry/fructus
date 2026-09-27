@@ -938,10 +938,11 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   --- constants and the unary operations, a row each -----------------------
 #
 #   0010_1000                mov  rd, #imm5             2 bytes
-#   0010_1001 .. 0010_1011   -- free
+#   0010_1001                movhi rd, ra, #imm10       3 bytes
+#   0010_1010 .. 0010_1011   -- free
 #   0010_1100                mov  rd, #immbit5          2 bytes
 #   0010_1101                mov  rd, #immask5          2 bytes
-#   0010_1110 .. 0010_1111   -- free
+#   0010_111b                movhi rd, ra, rb           2 bytes
 #
 #   0011_0000 .. 0011_0001   -- free
 #   0011_001s                unary ops, 5 in TWO opcodes 2 bytes
@@ -952,14 +953,17 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   the row lines its constant forms up on the same columns the six ALU groups
 #   below use: +0 imm5, +4 immbit5, +5 immask5.
 #
-#   That leaves 0x29 empty, which is the imm10 column and is deliberate: `mov
-#   rd, #imm10` would be a strictly worse `mov rd, #imm16` - three bytes either
-#   way, six fewer bits of range - so the slot has nothing to hold.  Putting
-#   immask5 there to close the gap would have cost more than it saved: a reader
-#   who knows +5 is the mask column in six groups would have to learn that the
-#   seventh spells it differently, and a decoder built from column arithmetic
-#   would need a special case for one opcode.  An empty slot in the right place
-#   is cheaper than a full one in the wrong place, and there are 137 free.
+#   The imm10 column, 0x29, never held a `mov rd, #imm10`: it would be a
+#   strictly worse `mov rd, #imm16` - three bytes either way, six fewer bits of
+#   range.  It holds movhi instead, which has a register to go with its
+#   immediate, and movhi's three-register form fills the row's .6/.7 pair.
+#   Before movhi the slot stayed empty rather than take immask5 to close the
+#   gap: a reader who knows +5 is the mask column in six groups would have had
+#   to learn that the seventh spells it differently, and a decoder built from
+#   column arithmetic would have needed a special case for one opcode.  An
+#   empty slot in the right place was cheaper than a full one in the wrong
+#   place - and it kept the imm10 column for an instruction whose byte 1 is
+#   `iiaa_addd`, which is what movhi's is.
 #
 #   THE UNARY OPERATIONS HAVE A ROW OF THEIR OWN, which they did not before -
 #   they shared mov's, three constants and eight operations in eight opcodes.
@@ -1585,6 +1589,74 @@ semantics = "R[d] = imm"
   name     = "reg_imm16"
   encoding = "1000_1ddd  iiii_iiii  jjjj_jjjj"
   fields   = { i = "imm:int16[7:0]", j = "imm:int16[15:8]" }
+
+
+# --- movhi -------------------------------------------------------------------
+# ra with its high byte replaced: rd = (x << 8) | (ra & 0xff), where x is the
+# low byte of rb or of the immediate.  One ALU operation - the result's high
+# byte is rhs[7:0] and its low byte lhs[7:0] - so the two forms share it, and
+# they sit in the mov row's imm10 and three-register columns, 0x29 and
+# 0x2e/0x2f, with exactly the byte-1 layouts those columns have everywhere
+# else.  No addressing mode is new: the immediate is imm10, and the operation
+# reads its low eight bits.
+#
+# WHAT IT IS FOR.  A register's low byte and something else's in one register:
+#
+#   - clmul's operands, which are the two bytes of one register.  clmul is
+#     commutative, so the variable can go low and the constant high, and
+#     `movhi r4, r3, #m` packs a CRC's Barrett constant with no register to
+#     hold it - three bytes, where `or r4, r3, #0xf600` is five through r5.
+#   - the 6502's page-indexed addressing: with a 256-byte table on a page
+#     boundary, `movhi r, idx, #page` then `ld8 r, [r]` is the lookup, and
+#     it cleans the index's high byte on the way.
+#   - the three-register form packs two variables, which is what an elliptic
+#     curve multiply's clmul inner loop does; measured, about 12% faster.
+#
+# THE IMMEDIATE GOES HIGH AND THE REGISTER LOW, and not the other way round.
+# For clmul the two orders are equal; beyond it, a constant under a shifted
+# register - `(ra << 8) | #k` - is rare, and `#0` would only repeat `shl rd,
+# ra, #8`.  This order is page indexing, and zero extension and setting the
+# high byte in one, where the alternative is `and`, `mov r5` and `add`.
+#
+# IT COSTS THREE CELLS: one more arm on the ALU's result mux, wiring into it.
+# Measured on the processor behind one SPRAM, medians of sixteen seeds, 1345
+# LUT4 at 29.80 MHz before and 1348 at 29.40 after - a move well inside the
+# spread of 27.7 .. 30.6, so no clock the seeds can see.
+#
+# It is not a `movhi` in the sense of a load-high-immediate: with the low
+# byte also constant that is `mov rd, #imm16`, which exists.  And `#0` is
+# zero extension, which `and rd, rd, #0xff` already is in two bytes.
+[[insn]]
+mnemonic = "movhi"
+summary  = "rd = (rb << 8) | (ra & 0xff)"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = ((R[b] & 0xff) << 8) | (R[a] & 0xff)"
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "0010_111b  ccaa_addd"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+[[insn]]
+mnemonic = "movhi"
+summary  = "rd = (immediate << 8) | (ra & 0xff)"
+operands = [
+  { name = "d",   type = "reg"   },
+  { name = "a",   type = "reg"   },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, {a}, #{imm}"
+semantics = "R[d] = ((imm & 0xff) << 8) | (R[a] & 0xff)"
+
+  [[insn.form]]
+  name     = "reg_reg_imm10"
+  encoding = "0010_1001  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
 # --- add ---------------------------------------------------------------------

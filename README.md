@@ -18,7 +18,7 @@ is fast enough to share the VGA's 25 MHz clock as a single clock domain. Most
 byte codes take two cycles. Full barrel shifter, but no cache, branch
 predictor, or mul instruction. Not very pipelined.
 
-![The Fructus opcode map: 142 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
+![The Fructus opcode map: 145 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
 
 The design is RISC-inspired:
 - The only memory operations are load, store, push, pop, store-multiple, load-multiple.
@@ -38,6 +38,9 @@ But we don't want to pay the typical code density penalty of RISC on a 64k machi
 - One-byte encodings for very popular ALU operations that hard code all three arguments.
 - The length of the instructions is 1-3 bytes and the first byte determines the length.
 - Still many free opcodes for experimentation eg. instructions for garbage collectors (we already have popcount and clz).
+- Byte packing for carry-less multiply: `clmul rd, ra` multiplies ra's two bytes, and `movhi rd, ra, rb`
+  or `movhi rd, ra, #imm` replaces ra's high byte, which packs its operands without a spare register.
+  With a page-aligned table, `movhi` is also the 6502's page-indexed addressing.
 - The intention is that the assembler programmer can code as if all three-register and two-register-imm16
   forms were available, but the tooling selects the shortest possible encoding. For C code, gcc is aware
   of the encoding tradeoffs and selects instructions to match.

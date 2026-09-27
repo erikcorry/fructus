@@ -132,6 +132,7 @@ module alu (
     wire [15:0] sum  = rhs + (lhs ^ {16{sub}}) + {15'd0, sub};
     wire [15:0] xorv = lhs ^ rhs;
     wire [15:0] andv = lhs & rhs;
+    wire [15:0] hiv  = {rhs[7:0], lhs[7:0]};
     wire [3:0]  amt  = rhs[3:0];
     wire [15:0] unf, uns;
     unary u (.clk(clk), .a(lhs), .sel(rhs[${UNARY.wide ? '2:1' : UNARY.selBit}]), .fast(unf), .slow(uns));   // ${UNARY.wide ? 'two bits' : 'a bit'} of the imm3 value
@@ -146,6 +147,7 @@ module alu (
         4'd7:       y = rhs;
         4'd8:       y = lhs << amt;
         4'd9:       y = lhs >> amt;
+        4'd10:      y = hiv;
         4'd11:      y = $signed(lhs) >>> amt;
         4'd12:      y = unf;
         4'd13:      y = uns;
