@@ -110,6 +110,19 @@ generate-gcc-sources:
 build-gcc: generate-gcc-sources
     @sh tools/build-gcc.sh
 
+# Install the compiler as fructus-elf-gcc and fructus-elf-g++ in
+# $HOME/fructus-tools/bin, or prefix=... .  They are links to tools/fcc, not
+# copies of GCC: the installed compiler is the build tree's, with crt/include,
+# the libc and the simulator's link that the tests use, so it cannot drift from
+# them.  It needs this checkout, as tools/fcc does.
+install-gcc: build-gcc
+    @mkdir -p {{prefix}}/bin
+    @ln -sf {{justfile_directory()}}/tools/fcc {{prefix}}/bin/{{target}}-gcc
+    @ln -sf {{justfile_directory()}}/tools/fcc {{prefix}}/bin/{{target}}-g++
+    @echo "linked into {{prefix}}/bin: {{target}}-gcc {{target}}-g++ -> tools/fcc"
+    @echo
+    @echo 'export PATH={{prefix}}/bin:$PATH'
+
 # Compile a C file for the simulator and run it; the exit status is main's.
 run-c file *flags='-O2':
     @tools/fcc {{flags}} {{file}} -o build/_c

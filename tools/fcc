@@ -8,6 +8,11 @@
 # Writes prog, an ELF executable, and prog.bin, the flat image that
 # tools/fcc-run.mjs loads.  With -c, -S or -E it is just the compiler.
 #
+# `just install-gcc' links this file into $HOME/fructus-tools/bin as
+# fructus-elf-gcc and fructus-elf-g++, so the installed compiler IS this one:
+# the build tree's gcc, crt/include, libc and the simulator's link.  Through
+# the link $0 is the link, so the repository is found from what it points at.
+#
 # The compiler is the one in build/gcc and the libgcc it built.  The program
 # is linked with crt/crt0.s, the assembly libc in libc/, and ld/fructus-sim.ld.
 #
@@ -16,7 +21,7 @@
 # is exported, which is what customasm's flat namespace amounts to.
 # =============================================================================
 set -e
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 B=$root/build
 X=$B/cross-bin
 # C OR C++, DECIDED BY THE SOURCE NAMES.  A C++ source switches the driver, the
@@ -43,7 +48,10 @@ X=$B/cross-bin
 # AND STATIC CONSTRUCTORS ARE NOT RUN.  crt0.s calls main directly and neither
 # linker script collects .init_array, so a global object with a constructor
 # comes up zero-filled from .bss.  It fails silently; see tools/build-gcc.sh.
+# Called as g++ it is always C++, as g++ is: a link of objects alone has no
+# source name to go by, and would otherwise leave out libsupc++.
 cxx=
+case $(basename "$0") in *g++) cxx=1 ;; esac
 for a in "$@"; do case $a in *.cc|*.cpp|*.cxx|*.C|*.c++) cxx=1 ;; esac; done
 
 L3=$B/gcc/fructus-elf/libstdc++-v3
