@@ -22,7 +22,7 @@ The design is RISC-inspired:
 - 8 16 bit registers, and all ALU instructions can use all 8.
 - Flat 16 bit address space.
 - All ALU operations have a regular three-register form, rd = ra * rb
-- There's also an immediate form with immediates +-1023: rd = ra * #imm
+- There's also an immediate form with immediates from -512 to 511: rd = ra * #imm
 - For larger immediates the assembler can transparently use a scratch register.
 - The stack pointer is a regular register, sp = r6
 - The return address is a regular register, lr = r7
