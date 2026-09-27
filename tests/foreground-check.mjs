@@ -7,12 +7,14 @@
 //
 // The reference computes every column's glyph bit and foreground colour
 // straight from the documented layout - a cell's code at char_ptr + cell, its
-// glyph byte at 0x1000 + (font_line << 5) + code, bit 7 leftmost, its colour at
+// glyph byte at (font + font_line << 5) + code, bit 7 leftmost, its colour at
 // color_ptr + cell, all little-endian bytes of 16-bit words - and not from
 // anything the circuit does.
 //
 // WHAT IS SWEPT.  8- and 16-column cells, text on and off, over random memory
-// with random pointers of either parity and a random font_line, 24 lines of
+// with random pointers of either parity - and a random bit 15, which the
+// generator must ignore, so that a pointer can be the processor's own address
+// of the buffer above 0x8000 - and a random font_line, 24 lines of
 // each.  The testbench counts x from column 0 and fails a read on an odd x,
 // which belongs to the background generator.  Run at LATENCY 8, the least, and
 // 10.
@@ -44,6 +46,10 @@ const rand = (n) => {
 const WORDS = 16384;
 const mem = Array.from({ length: WORDS }, () => rand(0x10000));
 const byte = (a) => (mem[(a & 0x7fff) >> 1] >> ((a & 1) * 8)) & 0xff;
+// The font register, in 32-byte units, at random: font + font_line wraps at
+// ten bits, as the address does at fifteen.
+const FONT = rand(1024);
+const glyphAt = (fl, code) => byte((((FONT + fl) & 0x3ff) << 5) + code);
 
 // --- the reference ----------------------------------------------------------
 const expected = ({ cp, kp, fl, dbl, off }) => {
@@ -51,7 +57,7 @@ const expected = ({ cp, kp, fl, dbl, off }) => {
   for (let x = 0; x < 640; x++) {
     const cell = dbl ? x >> 4 : x >> 3;
     const bit  = dbl ? (x >> 1) & 7 : x & 7;
-    const glyph = byte(0x1000 + fl * 32 + byte(cp + cell));
+    const glyph = glyphAt(fl, byte(cp + cell));
     const on = off ? 0 : (glyph >> (7 - bit)) & 1;
     out.push(on << 8 | byte(kp + cell));
   }
@@ -64,14 +70,16 @@ for (const dbl of [0, 1])
   for (const off of [0, 1])
     for (let n = 0; n < 24; n++)
       lines.push({ cp: rand(32768 - 128), kp: rand(32768 - 128), fl: rand(256),
-                   dbl, off, gap: 3 + rand(158) });
+                   cp15: rand(2), kp15: rand(2), dbl, off, gap: 3 + rand(158) });
 
 const dir = 'build/foreground-check';
 mkdirSync(dir, { recursive: true });
 const hex = (v, n) => v.toString(16).padStart(n, '0');
 writeFileSync(`${dir}/mem.hex`, mem.map((w) => hex(w, 4)).join('\n') + '\n');
-// Bits: 55-48 gap, 41 off, 40 dbl, 37-30 font_line, 29-15 color_ptr, 14-0 char_ptr.
-const pack = (l) => BigInt(l.gap) << 48n | BigInt(l.off) << 41n | BigInt(l.dbl) << 40n |
+// Bits: 55-48 gap, 43 color_ptr's bit 15, 42 char_ptr's, 41 off, 40 dbl,
+// 37-30 font_line, 29-15 color_ptr, 14-0 char_ptr.
+const pack = (l) => BigInt(l.gap) << 48n | BigInt(l.kp15) << 43n | BigInt(l.cp15) << 42n |
+                    BigInt(l.off) << 41n | BigInt(l.dbl) << 40n |
                     BigInt(l.fl) << 30n | BigInt(l.kp) << 15n | BigInt(l.cp);
 writeFileSync(`${dir}/cfg.hex`, lines.map((l) => pack(l).toString(16).padStart(14, '0')).join('\n') + '\n');
 
@@ -92,7 +100,7 @@ module tb;
     reg [55:0] cfg [0:${lines.length - 1}];
 
     foreground #(.LATENCY(${latency})) dut (
-        .clk, .ld_mode, .ld_char, .ld_color, .word, .active,
+        .clk, .ld_mode, .ld_char, .ld_color, .font(10'd${FONT}), .word, .active,
         .mem_rd, .mem_addr, .mem_rdata, .fg_on, .fg_color);
 
     integer x = 0;
@@ -125,9 +133,9 @@ module tb;
             word = {cfg[i][41], cfg[i][40], 6'b0, cfg[i][37:30]};
             ld_mode = 1;
             @(negedge clk);
-            ld_mode = 0; word = {1'b0, cfg[i][14:0]}; ld_char = 1;
+            ld_mode = 0; word = {cfg[i][42], cfg[i][14:0]}; ld_char = 1;
             @(negedge clk);
-            ld_char = 0; word = {1'b0, cfg[i][29:15]}; ld_color = 1;
+            ld_char = 0; word = {cfg[i][43], cfg[i][29:15]}; ld_color = 1;
             @(negedge clk);
             ld_color = 0;
             repeat (cfg[i][55:48] - 3) @(negedge clk);

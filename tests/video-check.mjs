@@ -49,14 +49,19 @@ const LINES = 24;
 const mem = Array.from({ length: WORDS }, () => rand(0x10000));
 const DEPTH = [[1, 0x1c], [1, 0x1e], [2, 0x18], [2, 0x08], [3, 0x10], [4, 0x00], [8, 0], [8, 0]];
 const table = [];
+// The font register, in 32-byte units, at random.
+const FONT = rand(1024);
 for (let n = 0; n < LINES; n++) {
   const code = rand(8);
   let wm1 = rand(8);
   if (DEPTH[code][0] === 3) wm1 |= 1;          // 3 bpp: even widths only
   const mode = rand(2) << 15 | rand(2) << 14 | wm1 << 11 | code << 8 | rand(256);
-  const t = { bg: rand(32768 - 1024) & ~1, mode, ch: rand(32768), co: rand(32768) };
+  // Every pointer with a random bit 15, which the display must ignore, so that
+  // a pointer can be the processor's own address of the buffer above 0x8000.
+  const t = { bg: (rand(32768 - 1024) & ~1) | rand(2) << 15, mode, ch: rand(65536), co: rand(65536) };
   table.push(t);
-  mem[n] = t.bg; mem[0x200 + n] = t.mode; mem[0x400 + n] = t.ch; mem[0x600 + n] = t.co;
+  // The tables are the top 4 KB of the buffer, the text generator's lowest.
+  mem[0x3c00 + n] = t.bg; mem[0x3e00 + n] = t.mode; mem[0x3800 + n] = t.ch; mem[0x3a00 + n] = t.co;
 }
 const palette = Array.from({ length: 32 }, () => rand(256));
 
@@ -121,7 +126,7 @@ const fgPixel = (t, x) => {
   const dbl = (t.mode >> 14) & 1, off = t.mode >> 15;
   const cell = dbl ? x >> 4 : x >> 3;
   const bit = dbl ? (x >> 1) & 7 : x & 7;
-  const glyph = byte(0x1000 + (t.mode & 0xff) * 32 + byte(t.ch + cell));
+  const glyph = byte((((FONT + (t.mode & 0xff)) & 0x3ff) << 5) + byte(t.ch + cell));
   return { on: !off && (glyph >> (7 - bit)) & 1, color: byte(t.co + cell) };
 };
 
@@ -261,7 +266,7 @@ ${eventWords(set).map((e) => `            if (dut.n == ${e.line} && kc == ${e.k}
     reg [15:0] attr [0:63];
 
     video #(.LATENCY(${LATENCY})) dut (
-        .clk, .h_len, .v_len, .pal_we, .pal_addr, .pal_data,
+        .clk, .h_len, .v_len, .font(10'd${FONT}), .pal_we, .pal_addr, .pal_data,
         .spr_pat_we, .spr_pat_addr, .spr_pat_data,
         .spr_attr_we(spr_attr_we || ev_we),
         .spr_attr_addr(ev_we ? ev_a : spr_attr_addr),

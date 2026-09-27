@@ -187,15 +187,15 @@ wait1:  add  r3, r3, #-1
         br   ne, r3, #0, wait1
         mov  r0, #6
         st8  r0, [r1]              ; A shown, blit to B - from the next sync
-        mov  r2, #0x8800
+        mov  r2, #0xf400
         mov  r0, #0x7777
-        st   r0, [r2]              ; B's word 0x400, line 0's colour pointer: dropped,
+        st   r0, [r2]              ; B's word 0x3a00, line 0's colour pointer: dropped,
                                    ; B is still being copied into
         mov  r3, #3000             ; past a vertical sync
 wait2:  add  r3, r3, #-1
         br   ne, r3, #0, wait2
-        mov  r2, #0x8000
-        ld   r3, [r2]              ; B's word 0: the copy of A's
+        mov  r2, #0xf000
+        ld   r3, [r2]              ; B's word 0x3800, line 0's character pointer: A's copy
         st   r3, [r4, #32]
         mov  r2, #0x8500
         mov  r0, #0x6161
@@ -266,7 +266,7 @@ const results = [
   ['a high frame popped in blit mode, first',                  0x5926],
   ['a high frame popped in blit mode, second',                 0x3141],
   ['blit off: ram_hi\'s word 1, untouched',                    hiC(1)],
-  ['blit to B: its word 0 is the copy of A\'s',                fbA(0)],
+  ['blit to B: a table word is the copy of A\'s',              fbA(0x3800)],
   ['blit to B: st, then ld of it at once',                     0x6161],
   ['writethru to B: st, then ld of it, from ram_hi',           0x6262],
   ['the handler, in blit mode, loaded A\'s word 8',             fbA(8)],
@@ -362,7 +362,7 @@ for (let w = 0; w < WORDS; w++) {
     console.log(`  MISMATCH B word ${w} is ${B[w]?.toString(16)}, neither its old ${fbB(w).toString(16)} nor A's ${A[w]?.toString(16)}`);
 }
 for (let n = 0; n < LINES; n++)
-  for (const t of [0, 0x200, 0x400, 0x600])
+  for (const t of [0x3800, 0x3a00, 0x3c00, 0x3e00])
     if (B[t + n] !== A[t + n] && bad++ < 8)
       console.log(`  MISMATCH line ${n}'s table word ${(t + n).toString(16)} was not copied into B`);
 if (bad) { console.log(`FAIL  tests/blit-check.mjs: ${bad} wrong`); process.exit(1); }

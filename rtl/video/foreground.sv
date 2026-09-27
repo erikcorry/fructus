@@ -18,7 +18,7 @@
 // (x mod 8, or x mod 16 with `dbl`) -
 //
 //     0  read the character code at char_ptr++
-//     1  its glyph byte's address:  0x1000 + (font_line << 5) + code
+//     1  its glyph byte's address:  (font + font_line << 5) + code
 //     2  read the glyph byte
 //     4  read the foreground colour at color_ptr++
 //     6  glyph and colour move to the output stage
@@ -50,6 +50,7 @@ module foreground #(
     input  logic        ld_mode,     // `word` is the line's graphics_mode entry
     input  logic        ld_char,     // `word` is its character_data entry
     input  logic        ld_color,    // `word` is its character_color entry
+    input  logic [9:0]  font,        // where the font starts, in 32-byte units
     input  logic [15:0] word,
     input  logic        active,      // one cycle per visible column
 
@@ -109,7 +110,9 @@ module foreground #(
         lane  <= addr[0];
 
         if (ld_mode) begin
-            font_base <= 15'h1000 + {2'b00, word[7:0], 5'b00000};
+            // THE FONT IS A REGISTER, in the units font_line counts in, so
+            // the line's base is one ten-bit add of the two and five zeros.
+            font_base <= {font + {2'b00, word[7:0]}, 5'b00000};
             dbl_q     <= word[14];
             off_q     <= word[15];
         end

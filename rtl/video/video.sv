@@ -10,9 +10,11 @@
 //             └─ hsync, vsync, visible, delayed to match ─────────────────────┘
 //
 // THE LINE TABLES ARE READ AS THE FRONT PORCH ENDS.  For line n - counted from
-// the first visible line - the four entries are the words at n, 0x200 + n,
-// 0x400 + n and 0x600 + n: background_color, graphics_mode, character_data and
-// character_color.  They are read on the first four cycles after the front
+// the first visible line - the four entries are background_color at word
+// 0x3c00 + n, graphics_mode at 0x3e00 + n, character_data at 0x3800 + n and
+// character_color at 0x3a00 + n: the top 4 KB of the buffer, with the text
+// generator's two lowest, so that without it everything below 0x7800 is one
+// linear area.  They are read on the first four cycles after the front
 // porch, and each generator takes its fields from a word the cycle it arrives
 // - there is no copy of the table here.  So SYNC and back porch together must
 // be at least 5 cycles, for the last word to arrive before column 0; and the
@@ -53,6 +55,7 @@ module video #(
 
     input  logic [3:0][9:0] h_len,  // struct timing: [0] front porch, [1] pulse,
     input  logic [3:0][9:0] v_len,  // [2] back porch, [3] pixels
+    input  logic [9:0]  font,        // where the font starts, in 32-byte units
 
     input  logic        pal_we,      // the CPU's palette write port
     input  logic [4:0]  pal_addr,
@@ -107,7 +110,7 @@ module video #(
 
     wire        in_tables = v_vis && h_state != 2'd0 && h_state != 2'd3;
     wire        t_rd      = in_tables && tc < 3'd4;
-    wire [13:0] t_addr    = {3'b000, tc[1:0], n[8:0]};
+    wire [13:0] t_addr    = {3'b111, ~tc[1], tc[0], n[8:0]};
     wire        ld_bg     = in_tables && tc == 3'd1;
     wire        ld_mode   = in_tables && tc == 3'd2;
     wire        ld_char   = in_tables && tc == 3'd3;
@@ -124,7 +127,7 @@ module video #(
         .mem_rd(bg_rd), .mem_addr(bg_addr), .mem_rdata, .pixel(bg_pixel));
 
     foreground #(.LATENCY(LATENCY)) fg (
-        .clk, .ld_mode, .ld_char, .ld_color, .word(mem_rdata), .active,
+        .clk, .ld_mode, .ld_char, .ld_color, .font, .word(mem_rdata), .active,
         .mem_rd(fg_rd), .mem_addr(fg_addr), .mem_turn(fg_turn), .mem_rdata,
         .fg_on, .fg_color);
 

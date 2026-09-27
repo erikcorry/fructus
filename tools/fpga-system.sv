@@ -162,6 +162,9 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     logic [3:0][9:0] v_len = {10'd480, 10'd33, 10'd2,  10'd10};
     logic [7:0] lo;                           // the low byte of a 16-bit write
     logic [9:0] pat_i; logic [5:0] attr_i;    // auto-incrementing indices
+    // Where the font starts, in 32-byte units: 0x6000, the 4 KB below the line
+    // tables, until software says otherwise - room for 256 glyphs of 16 rows.
+    logic [9:0] font = 10'h300;
     wire rw = we_w && addr_w[15:8] == 8'h02;
     // 0x00-0x0f: timing, a byte at a time - a block per length, since iverilog
     // refuses a variable index into a packed array on the left.
@@ -184,6 +187,8 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
         if (addr_w[7:0] == 8'h43) attr_i <= lo[5:0];
         if (addr_w[7:0] == 8'h44) pat_i  <= pat_i + 10'd1;
         if (addr_w[7:0] == 8'h45) attr_i <= attr_i + 6'd1;
+        if (addr_w[7:0] == 8'h46) font[7:0] <= wdata_w;
+        if (addr_w[7:0] == 8'h47) font[9:8] <= wdata_w[1:0];
     end
     wire pal_we  = rw && addr_w[7:5] == 3'b001; // 0x20-0x3f: palette
     wire pat_we  = rw && addr_w[7:0] == 8'h44;  // high byte; low byte from 0x40
@@ -231,7 +236,7 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     assign fb_cpu_word = to_a_2 ? fba_word : fbb_word;
 
     wire [9:0] line; wire vblank;
-    video vid (.clk, .h_len, .v_len,
+    video vid (.clk, .h_len, .v_len, .font,
                .pal_we, .pal_addr(addr_w[4:0]), .pal_data(wdata_w),
                .spr_pat_we(pat_we), .spr_pat_addr(pat_i), .spr_pat_data({wdata_w, lo}),
                .spr_attr_we(attr_we), .spr_attr_addr(attr_i), .spr_attr_data({wdata_w, lo}),
