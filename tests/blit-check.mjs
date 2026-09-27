@@ -23,6 +23,11 @@
 //   - a frame pushed above 0x8000 in processor mode, popped in blit mode: pop
 //     keeps its ordinary routine and reads ram_hi, not the buffer;
 //   - a copy loop inside the back buffer, and the sum of what it copied;
+//   - brk, and then the interrupt line, both in blit mode.  The vector at
+//     0xfff8 is a jump the processor fetches, so it comes from ram_hi however
+//     the mode is set - A holds a pattern there that would not run.  The
+//     handler inherits blit mode, so its load above 0x8000 reads A, and it
+//     counts its entries: exactly two, and each returns where it should;
 //   - WRITETHRU: loads above 0x8000 are ram_hi's, and st and st8 there land
 //     in both ram_hi and A;
 //   - blit mode off, and the loads above 0x8000 are ram_hi's again;
@@ -145,6 +150,17 @@ loop:   ld   r4, [r1]
         br   ne, r3, #0, loop
         mov  r4, #${RESULT}
         st   r0, [r4, #18]
+        mov  r2, #0x8010           ; still blit mode: the handler reads A through r2
+        brk                        ; the vector is fetched from ram_hi
+        mov  r0, #0x5e5e
+        st   r0, [r4, #42]         ; brk came back to the next instruction
+        mov  r0, #1
+        st   r0, [r4, #44]         ; the test bench raises irq when it sees this
+        sei
+irqw:   ld   r0, [r4, #40]         ; until the handler has run twice
+        add  r0, r0, #-2
+        br   ne, r0, #0, irqw
+        cli
         mov  r1, #0x241
         mov  r0, #3
         st8  r0, [r1]              ; writethru
@@ -199,14 +215,35 @@ wait2:  add  r3, r3, #-1
 wait3:  add  r3, r3, #-1
         br   ne, r3, #0, wait3
         halt
+
+handler:                           ; brk and the interrupt line, in blit mode
+        ld   r0, [r2]              ; A's word 8: the handler inherits the mode
+        st   r0, [r4, #38]
+        ld   r0, [r4, #40]
+        add  r0, r0, #1
+        st   r0, [r4, #40]         ; count the entry
+        rti
 `;
 writeFileSync('build/blit-prog.s', src.split('\n').map((l) => l.trim()).join('\n') + '\n');
-const { code } = assemble('build/blit-prog.s');
+const { code, syms } = assemble('build/blit-prog.s');
 rmSync('build/blit-prog.s', { force: true });
 const prog = Array.from({ length: WORDS }, (_, w) => (code[2 * w] ?? 0) | ((code[2 * w + 1] ?? 0) << 8));
 
+// THE VECTOR: a jump to the handler, in ram_hi at 0xfff8.  Assembled apart,
+// now that the handler's address is known; an absolute jump is the same bytes
+// wherever it sits.
+const VECTOR = 0xfff8;
+writeFileSync('build/blit-vec.s', `jmp 0x${syms.get('handler').toString(16)}\n`);
+const vec = [...assemble('build/blit-vec.s').code];
+rmSync('build/blit-vec.s', { force: true });
+const hiWords = Array.from({ length: WORDS }, (_, w) => hiC(w));
+vec.forEach((b, k) => {
+  const w = ((VECTOR + k) & 0x7fff) >> 1, hiByte = (VECTOR + k) & 1;
+  hiWords[w] = hiByte ? (hiWords[w] & 0x00ff) | (b << 8) : (hiWords[w] & 0xff00) | b;
+});
+
 writeFileSync('build/blit-lo.hex', hex((w) => prog[w]));
-writeFileSync('build/blit-hi.hex', hex(hiC));
+writeFileSync('build/blit-hi.hex', hex((w) => hiWords[w]));
 writeFileSync('build/blit-fba.hex', hex(fbA));
 writeFileSync('build/blit-fbb.hex', hex(fbB));
 
@@ -232,6 +269,9 @@ const results = [
   ['blit to B: its word 0 is the copy of A\'s',                fbA(0)],
   ['blit to B: st, then ld of it at once',                     0x6161],
   ['writethru to B: st, then ld of it, from ram_hi',           0x6262],
+  ['the handler, in blit mode, loaded A\'s word 8',             fbA(8)],
+  ['the handler ran twice: brk, then the interrupt line',      2],
+  ['brk returned to the instruction after it',                 0x5e5e],
 ];
 const words = [
   ...results.map(([what, v], k) => ['lo', (RESULT >> 1) + k, v, what]),
@@ -258,7 +298,10 @@ const words = [
 writeFileSync('build/blit-tb.sv', `module tb;
     logic clk = 0, din = 1;
     wire dout, hsync_n, vsync_n; wire [2:0] red, green, blue;
-    top dut (.clk, .din, .irq(1'b0), .dout, .hsync_n, .vsync_n, .red, .green, .blue);
+    // The interrupt line: raised once the program says it is waiting, and
+    // held until the handler has counted two entries - brk's and its own.
+    wire irq = dut.ram_lo.mem[${(RESULT + 44) >> 1}] == 16'd1 && dut.ram_lo.mem[${(RESULT + 40) >> 1}] < 16'd2;
+    top dut (.clk, .din, .irq, .dout, .hsync_n, .vsync_n, .red, .green, .blue);
     integer cyc, k;
     initial begin
         $readmemh("build/blit-lo.hex",  dut.ram_lo.mem);

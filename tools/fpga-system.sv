@@ -80,8 +80,15 @@
 // CHANGING MODE NEEDS NO PADDING on the processor's side: the register is
 // written a cycle after the store's last byte, and a following load's first
 // address, where its routine is chosen, is at least three cycles after that
-// byte.  The mode stays set through an interrupt; a handler that touches
-// memory above 0x8000 saves, clears and restores it itself.
+// byte.
+//
+// THE EXCEPTION VECTORS ARE THE PROCESSOR'S IN EVERY MODE.  Each, at the top
+// of memory, is a jump it fetches and executes rather than an address it
+// loads, and entering an exception reads no memory at all - the registers it
+// saves go to shadows.  So blit mode cannot redirect them.  The mode does
+// stay set through an interrupt: a handler that touches memory above 0x8000
+// saves, clears and restores it itself.  tests/blit-check.mjs takes both brk
+// and the interrupt line in blit mode.
 //
 // THE TIMING COMES UP AS 640x480 at 60 Hz, so the display runs sensibly
 // before software has written it.

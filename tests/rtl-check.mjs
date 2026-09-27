@@ -1209,6 +1209,120 @@ endmodule
   if (bad === 0) console.log(`ok    rtl/cpu.sv${v.label}: ${PROGRAMS} programs, ${instructions} instructions over ${all.length + loads.length + stores.length} forms, pc, registers, memory and cycles all agree with tools/sim.js`);
   else { console.log(`FAIL  rtl/cpu.sv${v.label}: ${bad} disagreements with tools/sim.js`); failed = true; }
   }
+
+  // --- the interrupt line ---------------------------------------------------------
+  // THE SAME PROGRAMS, INTERRUPTED EVERY FEW CYCLES.  The vector holds nothing
+  // but rti, so an interrupt entered and left must leave a program exactly as
+  // if it had never come: the same registers and the same memory at the halt
+  // as the simulator's run without one.  The line goes up 17 to 39 cycles
+  // after each take, at random, and down at the next, so the interrupts land
+  // after every kind of instruction.  NOT ON A FIXED PERIOD: an entry and its
+  // rti take about ten cycles, and a period that brings the line back just as
+  // the interrupted instruction is dispatched again starves it forever - as a
+  // level-sensitive line would on the part.  tools/sim.js has no interrupt
+  // line, and needs none for this.
+  //
+  // NOT YET AT THE HALT, the other place one is taken.  isa/fructus.toml says
+  // an interrupt there saves the halt's own address, so that rti waits again;
+  // rtl/cpu.sv saves the address after it, since the dispatch of halt has
+  // already stepped the pc past it, and so resumes after the halt instead.
+  //
+  // This is what brk alone never reached: an interrupt taken where no
+  // instruction is dispatched, which rtl/predecode.sv therefore never decoded.
+  {
+    const RTI = parseInt(spec.insn.find((i) => i.mnemonic === 'rti').form[0].encoding.replace(/[\s_]/g, ''), 2);
+    const VECTOR = spec.cpu.vectors.brk;
+    const finals = programs.map(({ bytes, reg }) => {
+      const m = new Machine(spec).load(bytes, 0);
+      m.mem[VECTOR] = RTI;
+      reg.forEach((v, k) => { m.R[k] = v; });
+      for (let guard = 0; !m.halted && guard < 1000; guard++) m.step();
+      let hash = 0;
+      for (let k = 0; k < 65536; k++) hash = (Math.imul(hash, 31) + m.mem[k]) & 0x7fffffff;
+      return { R: Array.from(m.R), hash };
+    });
+    writeFileSync('build/cpu-irq-tb.sv', `module tb;
+    logic clk = 0, rst = 1, irq = 0, drop;
+    integer next, lfsr;
+    logic [7:0] mem [0:65535];
+    logic [7:0] rdata;
+    logic [15:0] regs [0:7];
+    wire [15:0] addr;
+    wire [7:0] wdata;
+    wire we, halted, trapped;
+    cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
+           .mem_wdata(wdata), .mem_we(we), .irq(irq), .halted(halted), .trapped(trapped),
+           .result());
+    always @(posedge clk) begin
+        rdata <= mem[addr];
+        if (we) mem[addr] <= wdata;
+    end
+    integer p, k, cyc, takes, h;
+    reg [8*64:1] name;
+    // One cycle.  With \`raise\`, the line goes up at \`next\`; it drops after a
+    // take, and \`next\` is then 17 to 39 cycles on.
+    task tick(input integer raise);
+        begin
+            if (raise && cyc == next) irq = 1;
+            drop = u.u.take;
+            if (drop) takes = takes + 1;
+            #1 clk = 1; #1 clk = 0;
+            if (drop) begin
+                irq = 0;
+                lfsr = (lfsr * 1103515245 + 12345) & 32'h7fffffff;
+                next = cyc + 17 + (lfsr >> 8) % 23;
+            end
+            cyc = cyc + 1;
+        end
+    endtask
+    initial begin
+        for (p = 0; p < ${PROGRAMS}; p = p + 1) begin
+            for (k = 0; k < 65536; k = k + 1) mem[k] = 8'h00;
+            $sformat(name, "build/cpu-prog-%0d.hex", p); $readmemh(name, mem);
+            $sformat(name, "build/cpu-reg-%0d.hex", p);  $readmemh(name, regs);
+            mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
+            irq = 0;
+            rst = 1;
+            repeat (3) begin #1 clk = 1; #1 clk = 0; end
+            for (k = 0; k < 8; k = k + 1) u.R[k] = regs[k];
+            rst = 0; cyc = 0; takes = 0; next = 5 + p % 7; lfsr = p + 1;
+            u.u.ie = 1'b1;                     // as sei would
+            while (!halted && !trapped && cyc < 50000) tick(1);
+            h = 0;
+            for (k = 0; k < 65536; k = k + 1) h = (h * 31 + mem[k]) & 32'h7fffffff;
+            $display("IRQ %0d %0d %0d %0d %0d %h %h %h %h %h %h %h %h", p, halted, trapped, takes, h,
+                     u.R[0], u.R[1], u.R[2], u.R[3], u.R[4], u.R[5], u.R[6], u.R[7]);
+        end
+        $finish;
+    end
+endmodule
+`);
+    execFileSync('iverilog', ['-g2012', '-o', 'build/cpu-irq-tb.vvp',
+      'rtl/cpu.sv', 'rtl/ucode.sv', 'rtl/insn.sv', 'rtl/predecode.sv', 'rtl/lhs.sv', 'rtl/immgen.sv',
+      'rtl/rhs.sv', 'rtl/unary.sv', 'rtl/alu.sv', 'rtl/dest.sv', 'rtl/cond.sv', 'rtl/compare.sv',
+      'build/cpu-irq-tb.sv'], { stdio: 'inherit' });
+    const out = execFileSync('vvp', ['build/cpu-irq-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+    let bad = 0, takes = 0;
+    const complain = (msg) => { if (bad++ < 6) console.log(`  MISMATCH ${msg}`); };
+    const seen = new Set();
+    for (const line of out.split('\n')) {
+      const f = line.trim().split(/\s+/);
+      if (f[0] !== 'IRQ') continue;
+      const p = +f[1], R = f.slice(6, 14).map((x) => parseInt(x, 16));
+      seen.add(p);
+      takes += +f[4];
+      if (f[2] !== '1' || f[3] !== '0') complain(`program ${p}: ${f[3] === '1' ? 'trapped' : 'did not halt'} under interrupts`);
+      if (+f[4] < 1) complain(`program ${p}: no interrupt taken`);
+      if (+f[5] !== finals[p].hash) complain(`program ${p}: memory folds to ${f[5]} under interrupts and ${finals[p].hash} without`);
+      if (R.some((v, k) => v !== finals[p].R[k]))
+        complain(`program ${p}: r=${R.map(hex4).join(' ')} under interrupts, sim r=${finals[p].R.map(hex4).join(' ')}`);
+    }
+    if (seen.size !== PROGRAMS) complain(`${PROGRAMS - seen.size} programs printed nothing`);
+    if (bad === 0) console.log(`ok    rtl/cpu.sv, interrupted: ${PROGRAMS} programs under ${takes} interrupts end as tools/sim.js does without them`);
+    else { console.log(`FAIL  rtl/cpu.sv, interrupted: ${bad} disagreements`); failed = true; }
+    for (const f of ['build/cpu-irq-tb.vvp', 'build/cpu-irq-tb.sv']) rmSync(f, { force: true });
+  }
+
   for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/cpu-prog-${p}.hex`, `build/cpu-reg-${p}.hex`]) rmSync(f, { force: true });
   for (const f of ['build/cpu-tb.vvp', 'build/cpu-tb.sv']) rmSync(f, { force: true });
 }

@@ -403,7 +403,11 @@ direction would cost 45 logic cells.
   shown or copied into are dropped, so after a change of buffer, or after
   COPY, BLIT and WRITETHRU wait for the next vertical sync.
 - **BLIT** makes the CPU the blitter. Loads and stores above 0x8000 go to the
-  buffer not shown, but instruction fetches and `pop` do not. ld, ld8 and ldm cost a cycle
+  buffer not shown, but instruction fetches and `pop` do not. So the
+  exception vectors at the top of memory are safe in every mode: each is a
+  jump the CPU fetches and executes, not an address it loads, and entering an
+  exception reads no memory at all. A handler does inherit the mode, though,
+  so its own loads and stores above 0x8000 go to the buffer. ld, ld8 and ldm cost a cycle
   more, and the CPU has separate microcode routines for them. Code running in
   this mode keeps its data, constants and stack below 0x8000. Without
   `` `define FRUCTUS_BLIT `` the CPU is built exactly as before.

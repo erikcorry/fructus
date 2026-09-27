@@ -708,6 +708,8 @@ module ucode (
                                    //    capture takes mem_late
 \`endif
     input  logic        irq,       // <- the chip: an interrupt is pending
+    output logic        enter,     // -> rtl/predecode.sv: the exception routine's first
+                                   //    step, so its ALU operation must be set
     input  logic        defer      // rtl/cpu.sv: the pc is being loaded, so the
                                    // byte on the bus is not the next opcode
 );
@@ -758,6 +760,13 @@ ${blitInits}
     // which is what an idle loop wants.  A handler that means to go on adds one
     // to lr before returning.
     wire take = irq & ie & (halt | (taking & ~defer));
+
+    // THE EXCEPTION ROUTINE'S FIRST STEP, for rtl/predecode.sv: the only step
+    // that turns interrupts off without dispatching.  cli turns them off too,
+    // but dispatches, and a dispatch loads rtl/predecode.sv first.  It is a
+    // bit of the ROM's word, and deliberately not \`take\`, which comes from the
+    // interrupt line in the same cycle and is on paths the clock cares about.
+    assign enter = iesel == 2'd2;
 
     // A step that loads the pc says \`dispatch\` because the NEXT cycle's byte
     // is an opcode; it is this cycle's that is not, when the load actually

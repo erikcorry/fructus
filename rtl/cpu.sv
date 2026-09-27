@@ -245,7 +245,7 @@ module cpu (
     wire [1:0] akon, dcap, wsel, shwe, shsel;
     wire [2:0] dalt;
     wire [3:0] lalt;
-    wire defer;
+    wire defer, enter;
 `ifdef FRUCTUS_BLIT
     wire late;
 `endif
@@ -256,7 +256,7 @@ module cpu (
              .fetch(fetch), .dispatch(dispatch), .wen(wen), .pcload(pcload),
              .amem(amem), .abase(abase), .akon(akon), .we(we), .wsel(wsel),
              .dcap(dcap), .luse(luse), .lalt(lalt), .dalt(dalt),
-             .shwe(shwe), .shsel(shsel), .vec(vecload),
+             .shwe(shwe), .shsel(shsel), .vec(vecload), .enter(enter),
              .halt(halted), .trap(trapped));
 
     logic [15:0] pc;
@@ -269,7 +269,7 @@ module cpu (
     wire [3:0] alu_op, lhs_src, rhs_src, dest_src;
     wire [1:0] cond_src;
     wire [1:0] pc_src;
-    predecode p (.clk(clk), .bus(mem_rdata), .dispatch(dispatch), .alu_op(alu_op),
+    predecode p (.clk(clk), .bus(mem_rdata), .dispatch(dispatch), .enter(enter), .alu_op(alu_op),
                  .lhs_src(lhs_src), .rhs_src(rhs_src), .dest_src(dest_src),
                  .cond_src(cond_src), .pc_src(pc_src));
 

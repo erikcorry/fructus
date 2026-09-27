@@ -243,6 +243,7 @@ module predecode (
     input  logic        clk,
     input  logic [7:0]  bus,       // the byte on the data bus this cycle
     input  logic        dispatch,  // microcode: it is an opcode - rtl/insn.sv's line too
+    input  logic        enter,     // microcode: an exception is entered, with no dispatch
     output logic [3:0]  alu_op,    // -> rtl/alu.sv
     output logic [3:0]  lhs_src,   // -> rtl/lhs.sv
     output logic [3:0]  rhs_src,   // -> rtl/rhs.sv
@@ -266,8 +267,18 @@ ${cases}
         endcase
     end
 
+    // AN EXCEPTION ENTERED FROM THE PIN IS NOT DISPATCHED, so nothing above
+    // decodes it: the flops still hold the instruction before, and the entry
+    // routine's writes of sp and lr go through whatever ALU operation that one
+    // had - a branch's is a don't care.  brk's own row asks for the
+    // pass-through, and so \`enter\`, the routine's first step, loads it here,
+    // in time for the second step's write of sp; the routine names its
+    // registers itself, so the ALU operation is the only field it needs.
+    // Found by tests/blit-check.mjs, the first test to raise the pin: before,
+    // lr came back as garbage and rti returned to it.
     always_ff @(posedge clk)
         if (dispatch) {alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src} <= t;
+        else if (enter) alu_op <= 4'd${ALU_OPS.find((o) => o.name === 'rhs').code};
 
 endmodule
 `);
