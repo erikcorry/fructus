@@ -10,12 +10,15 @@ int-to-decimal.
 
 A simulator is available.
 
-A complete FPGA implementation including interrupts is written, but never
-tested on hardware. Simulation says it runs at about 30MHz on ICE40 and
-most byte codes take two cycles. Full barrel shifter, but no cache, branch
+A complete FPGA implementation including interrupts and VGA output is
+written, but never tested on hardware. Timing analysis puts it between about
+22 and 30 MHz on iCE40, depending on the configuration — the CPU alone or with
+the VGA frame buffers beside it, 32K or 64K of memory — and every configuration
+is fast enough to share the VGA's 25 MHz clock as a single clock domain. Most
+byte codes take two cycles. Full barrel shifter, but no cache, branch
 predictor, or mul instruction. Not very pipelined.
 
-![The Fructus opcode map: 128 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
+![The Fructus opcode map: 142 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
 
 The design is RISC-inspired:
 - The only memory operations are load, store, push, pop, store-multiple, load-multiple.
@@ -40,7 +43,9 @@ But we don't want to pay the typical code density penalty of RISC on a 64k machi
   of the encoding tradeoffs and selects instructions to match.
 - Up to three arbitrary registers can be pushed or popped in a single two-byte instruction for compact
   function prologs and epilogs. Store-multiple and load-multiple can write or read up to three registers
-  (repeats allowed) for memcpy, memset, strlen.
+  (repeats allowed) for memcpy, memset, strlen. Their pointer is fixed, as `sp` is for push and pop —
+  `stm` stores through `r1` and `ldm` loads through `r2`, each counting up — which leaves all of
+  byte 1 for the register list.
 
 It is conceived to run on the
 kind of machine a 6502 ran on — a narrow memory bus where every instruction byte
@@ -64,7 +69,7 @@ Current ALU instruction forms (those requiring 9 bits take up two opcodes):
 - reg, reg, imm3 - *2-byte* - Immediate is one of -1, 0, 1, 2, 3, 4, 6, 8
 - reg, imm5 - *2-byte* - Immediate between -16 and +15
 - reg, immbit5 - *2-byte* - Immediate is any value 1 << n or its bitwise complement
-- reg, immmask5 - *2-byte* - Immediate is one of the following or their complements: 
+- reg, immask5 - *2-byte* - Immediate is one of the following or their complements: 
   0xc000, 0x3000, 0x0c00, 0x0300, 0x00c0, 0x0030, 0x000c, 0x0003,
   0xf000, 0x0f00, 0x00f0, 0x000f, 0xff00, 0xf0f0, 0xcccc, 0xaaaa
 - reg, reg, imm10 - *3-byte* - Immediate is any value between -512 and 511
@@ -74,7 +79,7 @@ Current condition forms (all *2-byte*, but the branch instructions add a third b
 - reg, reg, cond - The usual 8 conditions including overflow. Their inverses are achieved by reversing the two registers
 - reg, imm5 - The imm5 selects common constant-condition pairs
 - reg, immbit5 - Immediate as above is and-ed with the register and tested for zero (brclr) or non-zero (brset, isset)
-- reg, immmask5 - Immediate as above is and-ed with the register and tested for zero (brclr) or non-zero (brset, isset)
+- reg, immask5 - Immediate as above is and-ed with the register and tested for zero (brclr) or non-zero (brset, isset)
 
 ## The implementation structure
 
@@ -138,7 +143,7 @@ the spec is what defines the language:
 
 The last one covers `ld`, `ld8`, `st` and `st8`. Rewriting happens *before*
 form selection, so the shorthand still reaches the shortest encoding —
-`ld r0, [r0]` is one byte, the pinned abbreviation at `0x02`.
+`ld r0, [r0]` is one byte, the pinned abbreviation at `0x03`.
 
 Disassembly prints the long form in every case except `mov`. A listing read
 beside a hex dump should show every field the bytes carry, and an offset field
@@ -203,10 +208,12 @@ the case against.
 
 ### rtl/
 
-This part is very tentative and subject to change.  This is my first (AI-assisted)
-foray into FPGA design. So far there is the instruction register, the choice of
-both ALU inputs including the immediate forms, and the unary section of the
-ALU, including popcount and clz.
+This is my first (AI-assisted) foray into FPGA design, and still subject to
+change. It is a complete CPU — every opcode in the spec, interrupts included —
+plus the VGA output in `rtl/video/` (see [docs/vga.md](docs/vga.md)). The
+clock speeds quoted below were each measured for one block or configuration at
+the time it was added; what the whole system reaches depends on whether the
+VGA is in the same FPGA and how much memory is attached.
 
 `rtl/insn.sv` holds the whole instruction in 24 bits, **each byte at its place**
 — byte 0 low, as in memory — rather than shifting the newest byte in. `dispatch`
@@ -305,9 +312,9 @@ addressed by the opcode on the bus when a step dispatches, and by the word's
 own `next` otherwise. Because predecode has already chosen every select, the
 ALU instructions need almost nothing from it — a two-byte one is an entry word
 that fetches byte 1 and a shared step that writes the result while dispatching
-the next opcode, so every ALU opcode shares its whole routine. What it runs so
-far is every instruction whose effect is one ALU result in one register, plus
-`halt` and `nop`; every other opcode goes to a trap word.
+the next opcode, so every ALU opcode shares its whole routine. It runs every
+instruction in the spec, `brk`, `rti` and hardware interrupts included; the free
+opcodes go to a trap word.
 
 `rtl/cpu.sv` joins the blocks into something that runs programs, with the
 memory outside behind a synchronous read. It is checked by running them:
@@ -423,15 +430,14 @@ make boot          # assemble tangerine/monitor.s and run it
 Interactive mode takes over the terminal; `--keys "..."` runs the same machine
 headless and dumps the screen, which is how the tests drive it.
 
-## A design principles:
+## Design principles
 
 **Instruction length comes from the first byte alone.** The decoder is a
 256-entry table and the fetch unit never looks ahead. `tools/decode.js` asserts
 it, which the assembler structurally cannot — it only ever goes the other way.
 
-**Pointers are tagged in the low bit**.  If a V8-style or SOM virtual machine is written for the ISA
-we need immediate displacements to count *bytes* and not be
-never scaled by access width. Field offsets come out odd (`ld rd, [rp, #-1]`),
+**Displacements count bytes and are never scaled by access width**, so that
+a V8-style or SOM virtual machine can tag pointers in the low bit. Field offsets come out odd (`ld rd, [rp, #-1]`),
 and a scaled displacement could not express them at all.
 
 **There is no carry flag.** The carry out of a 16-bit add is recoverable from the
@@ -456,8 +462,11 @@ what it costs — the suite pins the count at one.
 **Unaligned 16-bit access is free**, with no fault and no penalty visible to
 software, which is what lets the stack pack byte arguments without padding.
 
-**`halt` is opcode `0x00`,** so erased memory, an unwritten ROM and a wild jump
-into a zeroed page all stop where the mistake happened.
+**The exception instructions are the lowest opcodes** — `brk` at `0x00`, `halt`
+at `0x01`, `rti` at `0x02` — so erased memory, an unwritten ROM and a wild jump
+into a zeroed page all trap to the handler with the faulting address in `lr`,
+where a monitor can print it. `nop` is at `0x87`, as far from them as the
+one-byte region reaches.
 
 **Current assumption: A taken relative branch costs one cycle more than its length**, for the add
 that produces `pc + off`; an absolute `jmp`, `call` or `ret` costs nothing
@@ -471,89 +480,11 @@ therefore relative, `pc = target` does not.
 
 ## Possible enhancements
 
-The opcode map makes the gaps visible, and four of them are worth naming. None
+The opcode map makes the gaps visible, and two of them are worth naming. Neither
 is implemented; they are here so the space does not get spent on something else
-by accident.
-
-### A multi-register store through an ordinary register
-
-**The strongest case in this list, and it comes from measurement.** `push` moves
-three registers in one two-byte instruction; a `st` moves one. That factor of
-three is the whole difference between the two cores in `snippets/`:
-
-| | measured |
-|---|---|
-| `memset`, filling through `sp` with `push` | **1.3488** cycles/byte |
-| `memcpy`, reading through `sp` with `pop`, writing with `st` | **3.6000** cycles/byte |
-
-memcpy's source side already gets the cheap rate, because `sp` can be pointed at
-it. Its *destination* side cannot, because there is only one `sp` and `memset`
-has a prior claim on it. Give the destination the same rate and memcpy goes to a
-projected **2.6984** cycles/byte — one `pop` and one multi-store per six bytes,
-four instruction bytes and twelve bus bytes, 126 bytes per iteration in 87.
-
-**A multi-register STORE is worth more than a multi-register LOAD**, and the
-asymmetry is not close. memset writes and never reads, so a load form does
-nothing for it at all; memcpy needs both sides fast but already has a fast
-source. So the store form serves both routines and the load form serves one —
-and the one it serves is the one already covered.
-
-**It has to count UP.** `push` pre-decrements and `pop` post-increments, which
-is what makes them a stack pair and exactly what makes them useless as a
-*matched* pair: reading ascending while writing descending copies the bytes to
-the wrong end of the buffer. Pairing with the existing `pop` means the new
-instruction must post-increment, like `pop` does:
-
-```
-stm ra!, rb, rc, rd        ; store three registers, ra += 6
-```
-
-The alternative — a descending multi-load to pair with the existing `push` —
-gets memcpy to the same place and leaves memset where it is, needing `sp`.
-
-**It costs four opcodes**, mirroring the push family: one register, two, and
-three (which takes an aligned pair, because nine register bits do not fit in
-byte 1). The push and pop block has seven free — 0x83, 0x84, 0x85, 0x8b, 0x8c,
-0x8d, 0x9f — including the aligned pairs 0x84/0x85 and 0x8c/0x8d, so it fits
-where it belongs with three to spare.
-
-**And it would free `sp`.** Both cores today point `sp` at data, which means
-interrupts need their own stack pointer while a copy or a fill is running. That
-is a real constraint on the whole machine bought by two routines. With a
-multi-store through an ordinary register, `memset` gives `sp` back entirely and
-`memcpy` keeps it only for the source.
-
-This is a different thing from the indexed load and store below: that one adds
-an addressing *mode*, this one adds a transfer *width*. They do not compete for
-the same opcodes and neither substitutes for the other.
-
-### Three-register load and store — `ld rd, [ra, rb]`
-
-The obvious missing addressing mode: an index register instead of a constant
-displacement, for `p[i]` where `i` is not known at assembly time. Today that
-costs an `add` first, and a register to put the sum in.
-
-**The free space is exactly the right shape.** A three-register form needs nine
-register bits, so it spends one opcode bit on the third register and takes a
-*pair* of opcodes — which is what the ALU's three-register forms already do:
-
-```
-0100_011b  ddda_aacc      add rd, ra, rb
-```
-
-Columns `.6` and `.7` are free in all four memory rows, and `.6`/`.7` is the
-column where three-register forms live:
-
-```
-0001_111b  st   rs, [ra, rb]      0010_111b  ld   rd, [ra, rb]
-0010_011b  st8  rs, [ra, rb]      0011_011b  ld8  rd, [ra, rb]
-```
-
-Four instructions, two opcodes each, eight opcodes — and exactly eight are free,
-in exactly those columns. Nothing has to move.
-
-The hardware cost is a second read port on the address path, which the ALU's
-three-register forms already need.
+by accident. (Two earlier entries here, a multi-register store and an indexed
+`ld rd, [ra, rb]`, have since become `stm`/`ldm` and the `[ra, rb]` forms of
+`ld`, `ld8`, `st` and `st8`.)
 
 ### `rsb` with a `#1<<n` immediate
 
@@ -573,24 +504,23 @@ The other three free `+4` slots — `shl`, `asr` and `lsr` at 0x64, 0x6c and 0x7
 four bits, so `1<<4` and everything above it reads as a shift of zero. immbit5
 is meaningless there.
 
-### Four unused one-byte encodings
+### One unused one-byte encoding
 
-0x0c through 0x0f. The twelve that are spent buy `add r0, r0, #1`, `mov r0, r1`,
-`mov r0, #0` and their neighbours at one byte instead of two, which is why
-`leaf_example` in [isa/abi.s](isa/abi.s) is four bytes rather than six.
+0x86. The one-byte region is sixteen slots: `brk`, `halt` and `rti` at the
+bottom, `nop` at 0x87, and eleven pinned abbreviations — `add r0, r0, #1`,
+`mov r0, r1`, `mov r0, #0` and their neighbours at one byte instead of two.
 
-`mov r0, #0` at 0x0b was the most recent, and the argument for it is the 65C02's:
-`STZ` was one of that part's most valuable additions because clearing a location
-is the commonest thing a program does that the 6502 had no short way to say.
-Zeroing a register is the same observation one level in — loop counters,
-accumulators, null pointers, cleared flags — and `r0` is where a return value and
-a first argument live.
+`mov r0, #0` (0x83) is there for the 65C02's reason: `STZ` was one of that
+part's most valuable additions because clearing a location is the commonest
+thing a program does that the 6502 had no short way to say. Zeroing a register
+is the same observation one level in — loop counters, accumulators, null
+pointers, cleared flags — and `r0` is where a return value and a first argument
+live.
 
-**The rest should not be spent on a guess.** Each is worth exactly the frequency
-of the operand pattern it pins, and that is a question about real code rather
-than about the instruction set. The way to spend them is to write or compile a
-corpus, count, and pin the top four — which is also an argument for getting a
-compiler working before the map fills up.
+**The last slot should not be spent on a guess.** It is worth exactly the
+frequency of the operand pattern it pins, and that is a question about real
+code rather than about the instruction set. Now that gcc works, the way to spend
+it is to compile a corpus, count, and pin the winner.
 
 ### Not an opcode: a zero page, and a stack guard in the I/O page
 
@@ -620,8 +550,6 @@ snippets in `snippets/` are real code. Open:
 - Nothing checks that a call site and its callee agree about arity. The fix is
   a `.args` declaration the assembler and linker verify; `isa/abi.s` describes
   it and why it is not written yet.
-- No object format, so everything is one translation unit. A binutils/gas port
-  via CGEN is the intended answer, once the encodings stop moving.
 
 ## License
 
