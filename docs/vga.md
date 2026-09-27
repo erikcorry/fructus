@@ -381,8 +381,8 @@ display costs it almost nothing. That result depends on three rules:
   [Text generator](#text-generator)). Before that change, its own address
   path sometimes set the clock of the whole system.
 
-**Blit mode** makes the CPU the blitter. Bit 1 of the control register sets
-it, and data above 0x8000 is then the back buffer: the loads and stores
+**Blit mode** makes the CPU the blitter. Bit 1 of the control register
+(0x0241) sets it, and data above 0x8000 is then the back buffer: the loads and stores
 there, but not instruction fetches or `pop`. ld, ld8 and ldm cost a cycle more
 in this mode, and the CPU has separate microcode routines for them. Code
 running in blit mode keeps its data, constants and stack below 0x8000.
@@ -796,9 +796,10 @@ columns.
 
 Under 64 bytes of registers in an I/O page, plus the sprites' 2 KB of
 patterns and attributes (see [Sprites](#sprites)). `tools/fpga-system.sv`
-puts the page at 0x7f00, just below the frame buffer window. There the
-registers are written through into RAM, so they read back as last written,
-and a CPU write reaches them a cycle after the store.
+puts the page at 0x0200, above 512 bytes kept free for a zero page, so
+everything from 0x0300 up is one linear area. There the registers are written
+through into RAM, so they read back as last written, and a CPU write reaches
+them a cycle after the store.
 
 | register | contents | access |
 |---|---|---|

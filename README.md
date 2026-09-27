@@ -592,6 +592,24 @@ than about the instruction set. The way to spend them is to write or compile a
 corpus, count, and pin the top four — which is also an argument for getting a
 compiler working before the map fills up.
 
+### Not an opcode: a zero page, and a stack guard in the I/O page
+
+These two are about the memory map, and they are why `tools/fpga-system.sv`
+puts its I/O page at 0x0200.
+
+**A zero page.** A mode could pin a register at zero, so that `[rz, #imm10]`
+reaches low memory directly, with no base register to set up, as the 6502's
+zero page did. `imm10` is signed, so that is the first 512 bytes, and those
+are kept free for it; the I/O page starts just above them.
+
+**A stack guard.** The stack grows down towards the I/O page. If writing any
+of the page's top 16 registers, 0x02f0–0x02ff, raised an interrupt, a push
+past the bottom of the stack would trap. It is a debugging aid, not
+something to recover from: the handler can report the overflow, and it has
+a stack to do it on, since interrupt entry moves `sp` to `shadow_isp`. The
+guard is 16 bytes, so a frame larger than that could step over it with an
+`sp`-relative store and not trap.
+
 ## Status
 
 The instruction set is settled enough to write real code against, and the

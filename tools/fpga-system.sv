@@ -15,9 +15,14 @@
 // fetch.  Its data accesses do too, except in BLIT MODE, when the top 32 KB of
 // data - loads and stores, not fetches - is the back buffer instead:
 //
-//     0x0000 - 0x7eff   ram_lo
-//     0x7f00 - 0x7fff   the registers, written through into ram_lo as well
+//     0x0000 - 0x01ff   ram_lo, kept free for a zero page (README, "Possible
+//                       enhancements")
+//     0x0200 - 0x02ff   the registers, written through into ram_lo as well
+//     0x0300 - 0x7fff   ram_lo
 //     0x8000 - 0xffff   ram_hi; in blit mode, data is the back buffer
+//
+// So everything from 0x0300 up is one linear area for a program that never
+// uses blit mode.
 //
 // So a program in blit mode keeps its code anywhere, and its data, its
 // constants and its stack below 0x8000 - the stack because compiled code
@@ -44,7 +49,7 @@
 // Which one, and which byte, are flops too.  rtl/cpu.sv's own header has why
 // that byte goes to a port of its own.
 //
-// THE MODE BIT is bit 1 of 0x7f41 and `show` is bit 0.  Changing it needs no
+// THE MODE BIT is bit 1 of 0x0241 and `show` is bit 0.  Changing it needs no
 // padding: the register is written a cycle after the store's last byte, and a
 // following load's first address, where its routine is chosen, is at least
 // three cycles after that byte.
@@ -112,7 +117,7 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     logic [3:0][9:0] h_len, v_len;
     logic [7:0] lo;                           // the low byte of a 16-bit write
     logic [9:0] pat_i; logic [5:0] attr_i;    // auto-incrementing indices
-    wire rw = we_w && addr_w[15:8] == 8'h7f;
+    wire rw = we_w && addr_w[15:8] == 8'h02;
     // 0x00-0x0f: timing, a byte at a time - a block per length, since iverilog
     // refuses a variable index into a packed array on the left.
     for (genvar i = 0; i < 4; i++) begin : g_len

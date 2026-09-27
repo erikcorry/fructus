@@ -66,7 +66,7 @@ const src = `
         mov  r0, #0x3141
         mov  r3, #0x5926
         push r0, r3                ; processor mode: into ram_hi at 0xeffc
-        mov  r1, #0x7f41
+        mov  r1, #0x241
         mov  r0, #2
         st8  r0, [r1]              ; blit on
         mov  r0, #0
@@ -81,7 +81,7 @@ const src = `
         mov  r1, #0x8000
         mov  r0, #0x1111
         st   r0, [r1]              ; processor mode: ram_hi's word 0
-        mov  r1, #0x7f41
+        mov  r1, #0x241
         mov  r0, #2
         st8  r0, [r1]              ; blit on, show 0: the back buffer is fb1
         mov  r2, #0x8010
@@ -124,7 +124,7 @@ loop:   ld   r4, [r1]
         br   ne, r3, #0, loop
         mov  r4, #${RESULT}
         st   r0, [r4, #18]
-        mov  r1, #0x7f41
+        mov  r1, #0x241
         mov  r0, #3
         st8  r0, [r1]              ; show 1: the back buffer is fb0
         mov  r2, #0x8000
