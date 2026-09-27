@@ -183,6 +183,35 @@
 // predecode's rhs source and runs through the operand selects and the ALU to
 // the result, and routing is two thirds of it: 29 ns of wire against 13 of
 // logic.
+//
+// BLIT MODE, ONLY WHEN `FRUCTUS_BLIT IS DEFINED.  A system whose data can come
+// from memory at the far side of the die - the display's frame buffers - sets
+// `blit`, and then the bytes of ld, ld8 and ldm arrive a cycle later than
+// usual, on `mem_late` rather than `mem_rdata`: the address is presented as
+// always, and the byte is there two edges later instead of one.  Those three
+// slow down by one cycle each however many bytes they move, and rtl/ucode.sv
+// holds a second copy of their routines for it.  Instruction bytes, and pop's,
+// still come on `mem_rdata` at the usual time, from the processor's own
+// memory.  Without the define neither port exists and the processor is
+// exactly what it was.
+//
+// A SEPARATE PORT, AND NOT THE SAME ONE LATER, because `mem_rdata` feeds the
+// dispatch and the instruction register as well as the right-hand operand flop.
+// The late byte comes from across the chip, and on the shared port the timing
+// tool would see that wire in front of the decode even though no instruction
+// is ever fetched through it.  `mem_late` reaches the right-hand flop and
+// nothing else, which feeds nothing deep.  MEASURED in the whole system,
+// tools/fpga-system.sv floorplanned, medians of eight seeds: 27.85 MHz (27.24
+// to 29.03) with blit mode, against 28.55 (27.1 to 29.2) for the same system
+// with write-only frame buffers and neither.  That is inside what renaming a
+// wire was seen to move yosys's result by, and no seed's critical path runs
+// through anything blit mode added.
+//
+// WHICH BYTE A CAPTURE TAKES IS THE ROUTINE'S CHOICE, NOT THE MODE'S: rtl/
+// ucode.sv flags the steps of its late copies, and only those take
+// `mem_late`.  So pop keeps `mem_rdata` in blit mode, and a change of mode
+// cannot split a load between the two - the routine is chosen once, at the
+// load's first address.
 // =============================================================================
 
 module cpu (
@@ -192,6 +221,11 @@ module cpu (
     input  logic [7:0]  mem_rdata,   // <- the byte at the address sampled last edge
     output logic [7:0]  mem_wdata,   // -> memory: the byte to write there
     output logic        mem_we,      // -> memory: write it at that same edge
+`ifdef FRUCTUS_BLIT
+    input  logic        blit,        // <- the system: ld, ld8 and ldm's bytes come late
+    input  logic [7:0]  mem_late,    // <- the byte at the address sampled two edges ago;
+                                     //    feeds only those loads' capture
+`endif
     input  logic        irq,         // <- the chip: an interrupt is pending.  Level
                                      //    sensitive, and sampled only where an
                                      //    instruction would have been dispatched
@@ -212,7 +246,13 @@ module cpu (
     wire [2:0] dalt;
     wire [3:0] lalt;
     wire defer;
+`ifdef FRUCTUS_BLIT
+    wire late;
+`endif
     ucode u (.clk(clk), .rst(rst), .bus(mem_rdata), .defer(defer), .irq(irq),
+`ifdef FRUCTUS_BLIT
+             .blit(blit), .late(late),
+`endif
              .fetch(fetch), .dispatch(dispatch), .wen(wen), .pcload(pcload),
              .amem(amem), .abase(abase), .akon(akon), .we(we), .wsel(wsel),
              .dcap(dcap), .luse(luse), .lalt(lalt), .dalt(dalt),
@@ -342,12 +382,26 @@ module cpu (
     wire  [15:0] shv = (shsel == 2'd0) ? shadow_isp
                      : (shsel == 2'd1) ? pc
                      : (shsel == 2'd2) ? shadow_sp : shadow_lr;
+    // A late routine's captures under dcap 1 and 2 take the late byte; every
+    // other capture, pop's included, takes the bus.
+    // The ordinary build keeps its statement word for word, not through an
+    // alias: yosys was measured to map `wire rbyte = mem_rdata` differently -
+    // twelve more cells and a different clock, for the same logic.
+`ifdef FRUCTUS_BLIT
+    wire [7:0] rbyte = late ? mem_late : mem_rdata;
+`endif
     always_ff @(posedge clk) begin
         aq <= R[an];
         shv_q <= shv;
+`ifdef FRUCTUS_BLIT
+        bq <= (dcap == 2'd1) ? {rbyte, bq[15:8]}
+            : (dcap == 2'd2) ? {8'h00, rbyte}
+            : (dcap == 2'd3) ? shv_q : bval;
+`else
         bq <= (dcap == 2'd1) ? {mem_rdata, bq[15:8]}
             : (dcap == 2'd2) ? {8'h00, mem_rdata}
             : (dcap == 2'd3) ? shv_q : bval;
+`endif
         if (shwe == 2'd1) shadow_sp  <= aq;
         if (shwe == 2'd2) shadow_lr  <= aq;
         if (shwe == 2'd3) shadow_isp <= aq;

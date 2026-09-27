@@ -382,12 +382,14 @@ const ENTRY = {
 };
 const byClass   = Object.fromEntries(Object.keys(ENTRY).map((c) => [c, []]));
 const opcodesIn = Object.fromEntries(Object.keys(ENTRY).map((c) => [c, 0]));
+const walks = new Map();       // a pop-class opcode -> the pointer it walks: sp for pop, r2 for ldm
 for (let op = 0; op < 256; op++) {
   const classes = new Map();   // class -> the mnemonics this opcode carries in it
   for (let b1 = 0; b1 < 256; b1++) {
     const d = decode(dec, [op, b1, 0], 0);
     if (!d) continue;
     const c = classify(d);
+    if (c.startsWith('pop')) walks.set(op, /^base = (\w+)/.exec(d.insn.semantics)[1]);
     classes.set(c, new Set([...(classes.get(c) ?? []), d.insn.mnemonic]));
   }
   if (classes.size > 1)
@@ -398,9 +400,137 @@ for (let op = 0; op < 256; op++) {
   byClass[cls].push(...(classes.size ? [...classes.values()][0] : [`0x${op.toString(16).padStart(2, '0')}`]));
 }
 
+// --- blit mode --------------------------------------------------------------------
+// IN BLIT MODE A LOADED BYTE ARRIVES A CYCLE LATE, on rtl/cpu.sv's mem_late: the
+// address goes out as always and the byte is there two edges later rather than
+// one.  So the routines that load - ld, ld8, and ldm at each length - have a
+// second copy here, and the mode picks between them at the one step where
+// they part.
+//
+// POP IS NOT ONE OF THEM, and keeps its ordinary routine and speed in blit
+// mode: it reads on mem_rdata, from the processor's own memory, whatever the
+// address.  A stack is the processor's, not the display's, and a return
+// through pop is the commonest load a blitter's own code makes.  It does mean
+// the stack must stay below 0x8000 while blit mode is on - a push there, or
+// any sp-relative st, would go to the frame buffer - but compiled code reaches
+// its locals with ordinary loads and stores, which need that anyway.  A frame
+// pushed above 0x8000 before blit mode was set pops correctly inside it.
+//
+// SO ldm NEEDS ROUTINES OF ITS OWN in a blit build: in the ordinary processor
+// it shares pop's, since the two differ only in the pointer rtl/predecode.sv
+// names.  Its copies are made here, and its entry words pointed at them.
+//
+// THEY PART AT THE STEP AFTER THE FIRST ADDRESS, and only there.  The entry
+// words and the first address step are the same in both modes, and every step
+// names its successor, so the first address step's successor is the one word
+// whose address has to depend on the mode.  Those successors live in a region
+// of their own: the top 32 words, where \`next\` is 1111xxxxx and rtl/ucode.sv
+// replaces bit 4 with \`blit\`.  The ordinary routine's successor sits at
+// 480 + j, its blit copy at 496 + j, and a step pointing at 480 + j goes to
+// one or the other; everything after the successor is ordinary free words.
+// That costs a LUT on the ROM's \`next\` arm, which comes out of the ROM's own
+// register and is not the bus's arm, and no extra block RAM: the ROM had room.
+//
+// THE REST OF EACH COPY SITS AT 448 - 479, just below the region, and that is
+// what tells rtl/cpu.sv to take the late byte: rtl/ucode.sv flags a step
+// fetched from 448 - 479 or 496 - 511 as a copy's, a cycle before it runs.  So
+// the choice is the routine's own and not the mode's, and pop's captures, in
+// blit mode or out of it, stay on mem_rdata.
+//
+// THE COPIES ARE DERIVED, NOT WRITTEN.  A step's fields either PRODUCE the
+// access - the address it puts out, the byte it writes, the register it reads
+// for either - or CONSUME what came back - the capture, and the register write
+// that reads the flop the captures fill.  In blit mode the producers stay
+// where they are and the consumers move one step later, and one step is added
+// at the end for the last of them.  A step that does not drive the bus uses
+// its address unit only to hand rtl/rhs.sv the stepped pointer, which the
+// capture code 0 takes into the flop in that same step - so there \`abase\` and
+// \`akon\` are consumers and move with it.  A routine in which a moved field
+// would land on one that stays is refused rather than merged.
+// ONLY A BLIT BUILD SEES ANY OF IT.  The ROM as it stands here is the ordinary
+// processor's, and it is emitted as it is; what this section changes - the
+// successors it moves, the steps it points at them, and the copies - is
+// emitted apart, under \`ifdef FRUCTUS_BLIT, so that without the define the
+// ROM - and the whole netlist - is exactly the ordinary processor's.
+const base = rom.map((w) => w && { ...w }), baseStep = { ...STEP }, baseWhy = new Map(why);
+const MODE = 480, MODE_SLOTS = 16;
+if (MODE !== 0b1111 << 5 || ADDR !== 9) throw new Error('rtl/ucode.sv decodes the mode region as next[8:5] = 1111');
+const PRODUCER = ['amem', 'abase', 'akon', 'we', 'wsel', 'luse', 'lalt'];
+const CONSUMER = ['dcap', 'wen', 'dalt'];
+const OTHER = FIELDS.map(([n]) => n).filter((n) => n !== 'next' && !PRODUCER.includes(n) && !CONSUMER.includes(n));
+const moved = (w) => w.amem ? CONSUMER : [...CONSUMER, 'abase', 'akon'];
+const says = (w) => [w.amem && 'the next address out', w.dcap === 1 && 'a late byte shifted in',
+                     w.dcap === 2 && 'a late byte zero extended', w.wen && `register write (dalt ${w.dalt})`,
+                     !w.amem && (w.abase || w.akon) && 'the stepped pointer taken']
+                    .filter(Boolean).join(', ') || 'wait for the byte';
+const LDM = {};
+for (const n of [1, 2, 3]) {
+  const steps = [];
+  for (let a = CHAIN[`pop${n}`]; a !== STEP.EXEC; a = rom[a].next) steps.push(a);
+  let next = STEP.EXEC;
+  for (let i = steps.length - 1; i >= 0; i--)
+    next = alloc({ ...rom[steps[i]], next }, why.get(steps[i]).replace(/^pop:/, 'ldm:'));
+  LDM[n] = next;
+}
+for (const [op, reg] of walks)
+  if (reg !== 'sp') {
+    const n = [1, 2, 3].find((k) => rom[op].next === CHAIN[`pop${k}`]);
+    if (!n) throw new Error(`0x${op.toString(16)}: an ldm that does not enter a pop routine`);
+    rom[op] = { ...rom[op], next: LDM[n] };
+  }
+const LOADS = [['LD', STEP.LDA], ['LD8', STEP.LDA8],
+               ...[1, 2, 3].map((n) => [`LDM${n}`, LDM[n]])];
+const LATE = 448;
+let lateFree = MODE - 1;             // a copy's later steps, allocated downwards
+const allocLate = (w, note) => { const a = lateFree--; rom[a] = word(w); why.set(a, note); return a; };
+if (LOADS.length > MODE_SLOTS) throw new Error('more load routines than the mode region has slots');
+LOADS.forEach(([name, start], j) => {
+  // The ordinary routine, from the first address step to the step before EXEC.
+  const chain = [rom[start]];
+  for (let a = rom[start].next; a !== STEP.EXEC; a = rom[a].next) {
+    if (chain.length > 16) throw new Error(`${name}: no EXEC at the end`);
+    chain.push(rom[a]);
+  }
+  for (const w of chain)
+    for (const f of OTHER)
+      if (w[f]) throw new Error(`${name}: a load step sets ${f}, which blit mode does not know how to move`);
+  // Move its successor into the region, where the mode can redirect it.
+  const succ = rom[start].next, slot = MODE + j;
+  if (rom.some((w, a) => a !== start && w?.next === succ)) throw new Error(`${name}: its successor is shared`);
+  rom[slot] = rom[succ]; why.set(slot, why.get(succ)); rom[succ] = null; why.delete(succ);
+  rom[start].next = slot;
+  for (const k of Object.keys(STEP)) if (STEP[k] === succ) STEP[k] = slot;
+  // And its blit copy: producers in place, consumers a step later.
+  const m = chain.length - 1, copy = [];
+  for (let i = 1; i <= m + 1; i++) {
+    const b = {};
+    if (i <= m) for (const f of PRODUCER) if (chain[i][f] && !moved(chain[i]).includes(f)) b[f] = chain[i][f];
+    for (const f of moved(chain[i - 1]))
+      if (chain[i - 1][f]) {
+        if (b[f] !== undefined) throw new Error(`${name}: blit step ${i} would need ${f} twice`);
+        b[f] = chain[i - 1][f];
+      }
+    copy.push(b);
+  }
+  let next = STEP.EXEC;
+  for (let i = copy.length - 1; i >= 1; i--)
+    next = allocLate({ ...copy[i], next }, `${name.toLowerCase()} in blit mode: ${says(copy[i])}`);
+  rom[slot + MODE_SLOTS] = word({ ...copy[0], next });
+  why.set(slot + MODE_SLOTS, `${name.toLowerCase()} in blit mode: ${says(copy[0])}`);
+  STEP[`B${name}`] = slot + MODE_SLOTS;
+});
+if (lateFree < LATE - 1) throw new Error(`the blit copies run out of ${LATE} - ${MODE - 1}`);
+if (free > LATE) throw new Error(`the ROM's free words run into the blit copies at ${LATE}`);
+if (LATE !== 0b1110 << 5) throw new Error('rtl/ucode.sv decodes the copies as 1110xxxxx and 11111xxxx');
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const blitWords = rom.map((w, a) => (w && !same(w, base[a]) ? a : null)).filter((a) => a !== null);
+const blitStep = Object.fromEntries(Object.entries(STEP).filter(([n, a]) => baseStep[n] !== a));
+const blitWhy = new Map(why);
+
 // --- emitting ---------------------------------------------------------------------
 const pack = (w) => FIELDS.map(([n, width]) => (w[n] ?? 0).toString(2).padStart(width, '0')).join('_');
-const inits = rom.map((w, a) => (w ? `        rom[${a}] = ${W}'b${pack(w)};` : null)).filter(Boolean).join('\n');
+const inits = base.map((w, a) => (w ? `        rom[${a}] = ${W}'b${pack(w)};` : null)).filter(Boolean).join('\n');
+const blitInits = blitWords.map((a) => `        rom[${a}] = ${W}'b${pack(rom[a])};`).join('\n');
 const wrap = (words, first, indent, width = 79) => {
   const lines = []; let cur = first, fresh = true;
   for (const w of words) {
@@ -412,7 +542,8 @@ const wrap = (words, first, indent, width = 79) => {
 const uniq = (xs) => [...new Set(xs)];
 const listed = (cls) => wrap(uniq(byClass[cls]), '//         ', '//         ');
 const fieldText = FIELDS.map(([n, w, d]) => `//     ${n.padEnd(9)} ${String(w).padStart(2)}  ${d}`).join('\n');
-const stepText = Object.entries(STEP).map(([n, a]) => `//     ${String(a).padStart(3)}  ${n.padEnd(7)} ${pack(rom[a])}  ${why.get(a)}`).join('\n');
+const stepText = Object.entries(baseStep).map(([n, a]) => `//     ${String(a).padStart(3)}  ${n.padEnd(7)} ${pack(base[a])}  ${baseWhy.get(a)}`).join('\n');
+const blitText = Object.entries(blitStep).map(([n, a]) => `//     ${String(a).padStart(3)}  ${n.padEnd(7)} ${pack(rom[a])}  ${blitWhy.get(a)}`).join('\n');
 const unpack = FIELDS.map(([n]) => n).join(', ');
 
 process.stdout.write(`// =============================================================================
@@ -527,6 +658,18 @@ ${listed('halt')}
 ${listed('nop')}
 //     trap - ${opcodesIn.trap} opcodes, every one not yet implemented and every free one.
 //
+// BLIT MODE, when \`FRUCTUS_BLIT is defined: every loaded byte arrives a cycle
+// late, and the load routines have copies that capture it then.  They are
+// derived from the ordinary routines by tools/gen-ucode.js, and ${blitWords.length} words are
+// set only in that build: the successors of each load's first address step,
+// moved to the mode region at ${MODE} + j, the steps that name them, and the copies,
+// whose first steps sit at ${MODE + MODE_SLOTS} + j.  The named ones:
+//
+${blitText}
+//
+// Without the define the ROM is the ordinary processor's alone, and so is the
+// netlist.
+//
 // RESET forces the address to BOOT for as long as it is held, so the first
 // word after it dispatches the byte at address 0.  The ROM's output register
 // cannot be reset on the part; forcing the address instead needs no reset on
@@ -559,6 +702,11 @@ module ucode (
     output logic [1:0]  shwe,      // -> rtl/cpu.sv: latch port A into a shadow register
     output logic [1:0]  shsel,     //    and which shadow the operand flop takes
     output logic        vec,       //    load the pc from the exception vector
+\`ifdef FRUCTUS_BLIT
+    input  logic        blit,      // <- rtl/cpu.sv: loads take their late routines
+    output logic        late,      // -> rtl/cpu.sv: this step is a late routine's, so its
+                                   //    capture takes mem_late
+\`endif
     input  logic        irq,       // <- the chip: an interrupt is pending
     input  logic        defer      // rtl/cpu.sv: the pc is being loaded, so the
                                    // byte on the bus is not the next opcode
@@ -568,6 +716,9 @@ module ucode (
     logic [${W - 1}:0] rom [0:${(1 << ADDR) - 1}];
     initial begin
 ${inits}
+\`ifdef FRUCTUS_BLIT
+${blitInits}
+\`endif
     end
 
     logic [${W - 1}:0] word;
@@ -616,9 +767,24 @@ ${inits}
     // is not going to be executed yet.
     assign dispatch = taking & ~defer & ~take;
 
+    // THE MODE REGION: a successor at ${MODE} + j is the ordinary routine's, and
+    // in blit mode the one at ${MODE + MODE_SLOTS} + j instead.  On \`next\` only - never on the
+    // bus's arm, which is the one the clock cares about.
+\`ifdef FRUCTUS_BLIT
+    wire [${ADDR - 1}:0] succ = {next[8:5], next[4] | (&next[8:5] & blit), next[3:0]};
+    wire [${ADDR - 1}:0] addr = rst  ? ${ADDR}'d${STEP.BOOT}
+                              : take ? ${ADDR}'d${STEP.BRK0}
+                              : (dispatch ? {1'b0, bus} : succ);
+    // A late routine's steps are fetched from ${LATE} - ${MODE - 1} and ${MODE + MODE_SLOTS} - ${(1 << ADDR) - 1}, and
+    // the flag is registered with the word, from \`succ\` - an entry word, from
+    // the bus, is never one.
+    always_ff @(posedge clk)
+        late <= !(rst | take | dispatch) && (succ[8:5] == 4'b1110 || succ[8:4] == 5'b11111);
+\`else
     wire [${ADDR - 1}:0] addr = rst  ? ${ADDR}'d${STEP.BOOT}
                               : take ? ${ADDR}'d${STEP.BRK0}
                               : (dispatch ? {1'b0, bus} : next);
+\`endif
     always_ff @(posedge clk) word <= rom[addr];
 
 endmodule

@@ -167,6 +167,24 @@
 //         nop
 //     trap - 114 opcodes, every one not yet implemented and every free one.
 //
+// BLIT MODE, when `FRUCTUS_BLIT is defined: every loaded byte arrives a cycle
+// late, and the load routines have copies that capture it then.  They are
+// derived from the ordinary routines by tools/gen-ucode.js, and 49 words are
+// set only in that build: the successors of each load's first address step,
+// moved to the mode region at 480 + j, the steps that name them, and the copies,
+// whose first steps sit at 496 + j.  The named ones:
+//
+//     480  LDLO    100010000_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0  the low byte is on the bus: shift it in and ask for the next
+//     481  LD8     100000000_0_0_0_0_0_00_0_0_00_0_00_10_0_0000_000_00_00_00_0  the byte: zero extend it into the flop, and back to the pc
+//     496  BLD     111011110_0_0_0_0_0_00_1_1_10_0_00_00_0_0000_000_00_00_00_0  ld in blit mode: the next address out
+//     497  BLD8    111011101_0_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0  ld8 in blit mode: wait for the byte
+//     498  BLDM1   111011010_0_0_0_0_0_00_1_1_10_0_00_00_0_0000_000_00_00_00_0  ldm1 in blit mode: the next address out
+//     499  BLDM2   111010101_0_0_0_0_0_00_1_1_10_0_00_00_0_0000_000_00_00_00_0  ldm2 in blit mode: the next address out
+//     500  BLDM3   111001110_0_0_0_0_0_00_1_1_10_0_00_00_0_0000_000_00_00_00_0  ldm3 in blit mode: the next address out
+//
+// Without the define the ROM is the ordinary processor's alone, and so is the
+// netlist.
+//
 // RESET forces the address to BOOT for as long as it is held, so the first
 // word after it dispatches the byte at address 0.  The ROM's output register
 // cannot be reset on the part; forcing the address instead needs no reset on
@@ -199,6 +217,11 @@ module ucode (
     output logic [1:0]  shwe,      // -> rtl/cpu.sv: latch port A into a shadow register
     output logic [1:0]  shsel,     //    and which shadow the operand flop takes
     output logic        vec,       //    load the pc from the exception vector
+`ifdef FRUCTUS_BLIT
+    input  logic        blit,      // <- rtl/cpu.sv: loads take their late routines
+    output logic        late,      // -> rtl/cpu.sv: this step is a late routine's, so its
+                                   //    capture takes mem_late
+`endif
     input  logic        irq,       // <- the chip: an interrupt is pending
     input  logic        defer      // rtl/cpu.sv: the pc is being loaded, so the
                                    // byte on the bus is not the next opcode
@@ -550,6 +573,57 @@ module ucode (
         rom[340] = 40'b101010011_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
         rom[341] = 40'b101010100_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
         rom[342] = 40'b101010101_0_0_0_0_0_00_1_0_01_0_00_00_0_0000_000_00_00_00_0;
+`ifdef FRUCTUS_BLIT
+        rom[153] = 40'b101011010_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
+        rom[155] = 40'b101100000_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
+        rom[156] = 40'b101101000_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
+        rom[157] = 40'b101101000_1_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
+        rom[270] = 40'b111100000_0_0_0_0_0_00_1_0_00_0_00_00_0_0000_000_00_00_00_0;
+        rom[273] = 40'b111100001_0_0_0_0_0_00_1_0_00_0_00_00_0_0000_000_00_00_00_0;
+        rom[343] = 40'b100000000_0_0_1_0_0_00_0_1_10_0_00_00_0_0000_001_00_00_00_0;
+        rom[344] = 40'b101010111_0_0_0_0_0_00_0_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[346] = 40'b111100010_0_0_0_0_0_00_1_0_01_0_00_00_0_0000_000_00_00_00_0;
+        rom[347] = 40'b100000000_0_0_1_0_0_00_0_1_10_0_00_00_0_0000_010_00_00_00_0;
+        rom[348] = 40'b101011011_0_0_0_0_0_00_0_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[349] = 40'b101011100_0_0_1_0_0_00_1_1_10_0_00_01_0_0000_001_00_00_00_0;
+        rom[350] = 40'b101011101_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[352] = 40'b111100011_0_0_0_0_0_00_1_0_01_0_00_00_0_0000_000_00_00_00_0;
+        rom[353] = 40'b100000000_0_0_1_0_0_00_0_1_10_0_00_00_0_0000_011_00_00_00_0;
+        rom[354] = 40'b101100001_0_0_0_0_0_00_0_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[355] = 40'b101100010_0_0_1_0_0_00_1_1_10_0_00_01_0_0000_010_00_00_00_0;
+        rom[356] = 40'b101100011_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[357] = 40'b101100100_0_0_1_0_0_00_1_1_10_0_00_01_0_0000_001_00_00_00_0;
+        rom[358] = 40'b101100101_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[360] = 40'b111100100_0_0_0_0_0_00_1_0_01_0_00_00_0_0000_000_00_00_00_0;
+        rom[462] = 40'b111001111_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[463] = 40'b111010000_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[464] = 40'b111010001_0_0_1_0_0_00_1_1_10_0_00_01_0_0000_001_00_00_00_0;
+        rom[465] = 40'b111010010_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[466] = 40'b111010011_0_0_1_0_0_00_0_0_00_0_00_01_0_0000_010_00_00_00_0;
+        rom[467] = 40'b111010100_0_0_0_0_0_00_0_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[468] = 40'b100000000_0_0_1_0_0_00_0_1_10_0_00_00_0_0000_011_00_00_00_0;
+        rom[469] = 40'b111010110_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[470] = 40'b111010111_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[471] = 40'b111011000_0_0_1_0_0_00_0_0_00_0_00_01_0_0000_001_00_00_00_0;
+        rom[472] = 40'b111011001_0_0_0_0_0_00_0_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[473] = 40'b100000000_0_0_1_0_0_00_0_1_10_0_00_00_0_0000_010_00_00_00_0;
+        rom[474] = 40'b111011011_0_0_0_0_0_00_0_0_00_0_00_01_0_0000_000_00_00_00_0;
+        rom[475] = 40'b111011100_0_0_0_0_0_00_0_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[476] = 40'b100000000_0_0_1_0_0_00_0_1_10_0_00_00_0_0000_001_00_00_00_0;
+        rom[477] = 40'b100000000_0_0_0_0_0_00_0_0_00_0_00_10_0_0000_000_00_00_00_0;
+        rom[478] = 40'b111011111_0_0_0_0_0_00_0_0_00_0_00_01_0_0000_000_00_00_00_0;
+        rom[479] = 40'b100000000_0_0_0_0_0_00_0_0_00_0_00_01_0_0000_000_00_00_00_0;
+        rom[480] = 40'b100010000_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[481] = 40'b100000000_0_0_0_0_0_00_0_0_00_0_00_10_0_0000_000_00_00_00_0;
+        rom[482] = 40'b101011000_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[483] = 40'b101011110_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[484] = 40'b101100110_0_0_0_0_0_00_1_1_10_0_00_01_0_0000_000_00_00_00_0;
+        rom[496] = 40'b111011110_0_0_0_0_0_00_1_1_10_0_00_00_0_0000_000_00_00_00_0;
+        rom[497] = 40'b111011101_0_0_0_0_0_00_0_0_00_0_00_00_0_0000_000_00_00_00_0;
+        rom[498] = 40'b111011010_0_0_0_0_0_00_1_1_10_0_00_00_0_0000_000_00_00_00_0;
+        rom[499] = 40'b111010101_0_0_0_0_0_00_1_1_10_0_00_00_0_0000_000_00_00_00_0;
+        rom[500] = 40'b111001110_0_0_0_0_0_00_1_1_10_0_00_00_0_0000_000_00_00_00_0;
+`endif
     end
 
     logic [39:0] word;
@@ -598,9 +672,24 @@ module ucode (
     // is not going to be executed yet.
     assign dispatch = taking & ~defer & ~take;
 
+    // THE MODE REGION: a successor at 480 + j is the ordinary routine's, and
+    // in blit mode the one at 496 + j instead.  On `next` only - never on the
+    // bus's arm, which is the one the clock cares about.
+`ifdef FRUCTUS_BLIT
+    wire [8:0] succ = {next[8:5], next[4] | (&next[8:5] & blit), next[3:0]};
+    wire [8:0] addr = rst  ? 9'd260
+                              : take ? 9'd288
+                              : (dispatch ? {1'b0, bus} : succ);
+    // A late routine's steps are fetched from 448 - 479 and 496 - 511, and
+    // the flag is registered with the word, from `succ` - an entry word, from
+    // the bus, is never one.
+    always_ff @(posedge clk)
+        late <= !(rst | take | dispatch) && (succ[8:5] == 4'b1110 || succ[8:4] == 5'b11111);
+`else
     wire [8:0] addr = rst  ? 9'd260
                               : take ? 9'd288
                               : (dispatch ? {1'b0, bus} : next);
+`endif
     always_ff @(posedge clk) word <= rom[addr];
 
 endmodule

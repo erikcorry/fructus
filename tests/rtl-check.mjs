@@ -1075,7 +1075,12 @@ endmodule
     reg.forEach((v, k) => { m.R[k] = v; });
     const trace = [];
     for (let guard = 0; !m.halted && guard < 1000; guard++) {
-      const entry = { pc: m.pc, R: Array.from(m.R) }, before = m.cycles();
+      const d = decode(dec, [m.mem[m.pc], m.mem[(m.pc + 1) & 0xffff], m.mem[(m.pc + 2) & 0xffff]], 0);
+      // What blit mode charges a cycle: every load but pop, which keeps its
+      // ordinary routine and reads the processor's own memory.
+      const sem = d?.insn.semantics ?? '';
+      const entry = { pc: m.pc, R: Array.from(m.R), loads: /= M(8|16)\[/.test(sem) && !/^base = sp;/.test(sem) },
+            before = m.cycles();
       m.step();
       entry.len = m.cycles() - before;       // the simulator's cost model, extra cycles included
       trace.push(entry);
@@ -1091,6 +1096,19 @@ endmodule
     writeFileSync(`build/cpu-reg-${p}.hex`, reg.map(hex4).join('\n') + '\n');
   }
 
+  // THREE PASSES OVER THE SAME PROGRAMS.  The processor as it is; built with
+  // FRUCTUS_BLIT but with the mode off, which must be the same machine; and
+  // with the mode on, where the memory below hands every byte back a second
+  // time, on mem_late, one edge later than on mem_rdata - so ld, ld8 and ldm
+  // must take the late copy, and nothing else may: pop keeps mem_rdata.  Blit
+  // mode charges exactly one cycle more to each of those three, and nothing
+  // else.
+  const variants = [
+    { label: '', define: [], blit: null },
+    { label: ', built for blit mode with it off', define: ['-DFRUCTUS_BLIT'], blit: 0 },
+    { label: ', in blit mode, ld, ld8 and ldm a cycle late', define: ['-DFRUCTUS_BLIT'], blit: 1 },
+  ];
+  for (const v of variants) {
   writeFileSync('build/cpu-tb.sv', `module tb;
     logic clk = 0, rst = 1;
     logic [7:0] mem [0:65535];
@@ -1100,9 +1118,11 @@ endmodule
     wire [7:0] wdata;
     wire we;
     wire halted, trapped;
+    logic [15:0] addr_q;
+    logic [7:0] late;
     cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
            .mem_wdata(wdata), .mem_we(we), .irq(1'b0), .halted(halted), .trapped(trapped),
-           .result());
+           ${v.blit === null ? '' : `.blit(1'b${v.blit}), .mem_late(late), `}.result());
     // IRQ IS TIED LOW HERE AND THAT COSTS NOTHING, because this is functional
     // simulation rather than synthesis: there is no timing number to distort by
     // letting the take path fold away.  tools/fpga-top.sv must NOT do this -
@@ -1113,8 +1133,12 @@ endmodule
     // read appears after it, and a write lands at that same edge.  A read in a
     // writing cycle sees what was there before - which is what the microcode
     // expects, since the byte on the bus during a store is ignored.
+    // The late copy: the byte at the address sampled two edges ago, read at
+    // the second edge - so it sees a write made at the first.
     always @(posedge clk) begin
         rdata <= mem[addr];
+        addr_q <= addr;
+        late <= mem[addr_q];
         if (we) mem[addr] <= wdata;
     end
     integer p, k, cyc, lastcyc, pcnow, h;
@@ -1147,7 +1171,7 @@ endmodule
     end
 endmodule
 `);
-  execFileSync('iverilog', ['-g2012', '-o', 'build/cpu-tb.vvp',
+  execFileSync('iverilog', ['-g2012', ...v.define, '-o', 'build/cpu-tb.vvp',
     'rtl/cpu.sv', 'rtl/ucode.sv', 'rtl/insn.sv', 'rtl/predecode.sv', 'rtl/lhs.sv', 'rtl/immgen.sv',
     'rtl/rhs.sv', 'rtl/unary.sv', 'rtl/alu.sv', 'rtl/dest.sv', 'rtl/cond.sv', 'rtl/compare.sv',
     'build/cpu-tb.sv'], { stdio: 'inherit' });
@@ -1176,13 +1200,15 @@ endmodule
       const g = got[i], t = trace[i];
       if (g.pc !== t.pc || g.R.some((v, k) => v !== t.R[k]))
         complain(`program ${p} instruction ${i} at 0x${t.pc.toString(16)}: rtl pc ${g.pc.toString(16)} r=${g.R.map(hex4).join(' ')}, sim r=${t.R.map(hex4).join(' ')}`);
-      if (i > 0 && g.cyc - got[i - 1].cyc !== trace[i - 1].len)
-        complain(`program ${p} instruction ${i - 1}: ${g.cyc - got[i - 1].cyc} cycles where the simulator counts ${trace[i - 1].len}`);
+      const len = trace[i - 1]?.len + (v.blit && trace[i - 1]?.loads ? 1 : 0);
+      if (i > 0 && g.cyc - got[i - 1].cyc !== len)
+        complain(`program ${p} instruction ${i - 1}: ${g.cyc - got[i - 1].cyc} cycles where the simulator counts ${len}`);
       instructions++;
     }
   });
-  if (bad === 0) console.log(`ok    rtl/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over ${all.length + loads.length + stores.length} forms, pc, registers, memory and cycles all agree with tools/sim.js`);
-  else { console.log(`FAIL  rtl/cpu.sv: ${bad} disagreements with tools/sim.js`); failed = true; }
+  if (bad === 0) console.log(`ok    rtl/cpu.sv${v.label}: ${PROGRAMS} programs, ${instructions} instructions over ${all.length + loads.length + stores.length} forms, pc, registers, memory and cycles all agree with tools/sim.js`);
+  else { console.log(`FAIL  rtl/cpu.sv${v.label}: ${bad} disagreements with tools/sim.js`); failed = true; }
+  }
   for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/cpu-prog-${p}.hex`, `build/cpu-reg-${p}.hex`]) rmSync(f, { force: true });
   for (const f of ['build/cpu-tb.vvp', 'build/cpu-tb.sv']) rmSync(f, { force: true });
 }
