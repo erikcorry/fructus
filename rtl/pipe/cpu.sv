@@ -101,7 +101,9 @@
 // placement seeds - `just speed-pipe`:
 //
 //                                                   cells     MHz   spread
-//     WITH LOADS, STORES AND BLOCK MOVES             2050    31.35  29.9 .. 33.3
+//     A STORE'S DATA THROUGH DECODE'S LEFT PORT      1816    32.06  31.2 .. 32.8
+//     through a byte-wide port of its own            1937    31.22  28.9 .. 31.7
+//     with loads, stores and block moves             2050    31.35  29.9 .. 33.3
 //     the sequencer's controls from its counter      1933    30.99  29.9 .. 31.4
 //     empty opcodes' length left to the mapper       1371    33.59  32.8 .. 34.4
 //     with the jumps and calls                       1388    32.96  32.5 .. 33.7
@@ -381,6 +383,11 @@ module pipe_cpu (
     logic [7:0]  e_we;                // the destination in the ALU stage, one-hot
     wire  [15:0] y;
 
+    // DECODE'S LEFT PORT IS BORROWED for a store's data: decode is empty from
+    // a memory instruction's ALU cycle until the sequencer is done, and the
+    // choice is made by flops, so it did not lengthen decode's paths.
+    wire [2:0] kreg_b;
+    wire [2:0] an_rd = (e_mem | mact) ? kreg_b : an;
     wire fwd_a = e_we[an];
     wire fwd_b = use_reg & e_we[bn];
     wire [15:0] rb = use_reg ? R[bn] : bval;
@@ -404,7 +411,7 @@ module pipe_cpu (
     logic [15:0] e_pc;                // for the harness
     always_ff @(posedge clk) begin
         e_valid <= keep;
-        aq      <= fwd_a ? y : R[an];
+        aq      <= fwd_a ? y : R[an_rd];
         bq      <= fwd_b ? y : rb;
         e_usel  <= bval[2:1];
         e_we    <= (keep & d_wen) ? 8'd1 << wn : 8'd0;
@@ -536,10 +543,18 @@ module pipe_cpu (
     // e_op is 13 from the ALU cycle to the sequencer's last.
     assign mhold = mstart | (mact & ~mdone);
 
-    // A store's next byte: byte k, in the cycle before the one that writes it.
-    wire [2:0]  kreg  = (mt[2:1] == 2'd0) ? ml0 : (mt[2:1] == 2'd1) ? ml1 : ml2;
-    wire [15:0] kval  = R[kreg];
-    wire [15:0] k0val = R[e_l0];
+    // A store's next byte: byte k, in the cycle before the one that writes it -
+    // the first register's low byte in the ALU cycle, and after that register
+    // k / 2, half k % 2.  It is read through DECODE'S LEFT PORT, which has
+    // nothing to do from a memory instruction's ALU cycle until the sequencer
+    // releases dispatch.  Two ports of the sequencer's own - a word for the
+    // later bytes and one for byte 0 - were 186 of its 572 LUTs; one port of
+    // its own, a byte wide, still 114 more than borrowing.
+    wire [2:0] kreg  = mstart ? e_l0 : (mt[2:1] == 2'd0) ? ml0 : (mt[2:1] == 2'd1) ? ml1 : ml2;
+    assign kreg_b = kreg;
+    wire       khalf = ~mstart & mt[0];
+    wire [15:0] kword = R[an_rd];
+    wire [7:0]  kbyte = khalf ? kword[15:8] : kword[7:0];
 
     always_ff @(posedge clk) begin
         if (rst)         mact <= 1'b0;
@@ -552,13 +567,13 @@ module pipe_cpu (
             {mst, mw2, mblk} <= {e_mst, e_mw2, e_mblk};
             {ml0, ml1, ml2, mpr} <= {e_l0, e_l1, e_l2, e_ptr};
             mpc <= e_pc;
-            wq  <= k0val[7:0];
+            wq  <= kbyte;
             weq <= e_mst;
         end else begin
             mt  <= mt + 4'd1;
             if (aphase) begin mar <= mar + 16'd1; mlane <= mar[0]; end
             if (mcap)   ldq <= mw2 ? {mbyte, ldq[15:8]} : {8'h00, mbyte};
-            wq  <= mt[0] ? kval[15:8] : kval[7:0];
+            wq  <= kbyte;
             weq <= mst & sA[1];            // a store writes in every address step
         end
     end
