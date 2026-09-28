@@ -92,8 +92,15 @@ process.stdout.write(`// =======================================================
 //
 // ${rows.length} opcodes: ${counts[0]} ALU, ${counts[1]} microcoded, ${counts[2]} conditional branches,
 // ${counts[3]} jumps.
-// An opcode the spec leaves empty is microcoded and one byte long, so that the
-// experiment stops at it rather than running on into the bytes after it.
+// AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
+// MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
+// pc was worked out behind it, so the length is never used.  Pinned at one, as
+// it was, it measured 32.96 MHz against 33.59, and the length's lookup was on
+// the critical path in some seeds; free, it is on none.  The empty cells -
+// ${256 - rows.length} of them - let synthesis carry the pattern of the rows and columns
+// across them.
+// Rearranging the opcodes that ARE used, with the empties still pinned, made
+// it worse: 31.08.
 // =============================================================================
 
 module classify (
@@ -115,7 +122,7 @@ module classify (
         (* rom_style = "logic" *)
         case (op)
 ${cases}
-        default: t = 25'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx;
+        default: t = 25'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx;
         endcase
     end
 

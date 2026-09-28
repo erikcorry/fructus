@@ -92,7 +92,8 @@
 // placement seeds - `just speed-pipe`:
 //
 //                                                   cells     MHz   spread
-//     WITH THE JUMPS AND CALLS                       1388    32.96  32.5 .. 33.7
+//     EMPTY OPCODES' LENGTH LEFT TO THE MAPPER       1371    33.59  32.8 .. 34.4
+//     with the jumps and calls                       1388    32.96  32.5 .. 33.7
 //     pc + 1, 2, 3 as a LUT increment, no carry      1384    32.05  31.3 .. 33.0
 //     and length and kind looked up before the mux   1385    31.13  30.6 .. 33.1
 //     and a flop of its own for the next pc          1412    32.67  31.4 .. 34.1
