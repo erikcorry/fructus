@@ -80,6 +80,32 @@ for (let op = 0; op < 256; op++)
   }
 const brs = [...branches.values()];
 
+// THE JUMPS, found by their semantics.  An immediate target is patched in
+// after layout like a branch's offset.  A register target is a pair: a
+// `mov rX, #target` and then the jump through rX - so the jump always reads
+// the register the instruction just ahead of it wrote, through the bypass.
+// X is drawn at random, so `call r7`, which goes to the new lr and not the
+// target, comes up too.  ret is a mov into lr and then ret.
+const JUMP_SEM = /^(lr = pc; )?pc = (target|pc \+ target|R\[a\]|lr)$/;
+const find = (want) => {
+  for (let op = 0; op < 256; op++)
+    for (let b1 = 0; b1 < 256; b1++) {
+      const d = decode(dec, [op, b1, 0], 0);
+      if (d && want(d)) return { op, b1, d };
+    }
+  throw new Error('no such form');
+};
+const MOV_TO = Array.from({ length: 8 }, (_, x) =>
+  find((d) => d.nbytes === 3 && d.insn.semantics === 'R[d] = imm' && d.ops.d === x).op);
+const jumps = [];
+for (let op = 0; op < 256; op++) {
+  const d = decode(dec, [op, 0, 0], 0);
+  const m = d && JUMP_SEM.exec(d.insn.semantics ?? '');
+  if (!m) continue;
+  const how = m[2] === 'target' ? 'abs' : m[2] === 'pc + target' ? 'rel' : m[2] === 'lr' ? 'ret' : 'reg';
+  jumps.push({ op, jump: how });
+}
+
 // Lay a list of forms out as bytes, pointing each branch forward at a random
 // instruction boundary no more than a dozen instructions on - the halt at the
 // end is a boundary too - so every program ends.
@@ -90,13 +116,24 @@ const layout = (picks) => {
   for (const i of ins) { at.push(a); a += i.bytes.length; }
   at.push(a);                                          // the halt
   ins.forEach((i, k) => {
-    if (!i.f.branch) return;
+    if (!i.f.branch && !i.f.jump) return;
     const j = k + 1 + (rnd() % Math.min(12, ins.length - k));
-    i.bytes[2] = (at[j] - (at[k] + 3)) & 0xff;
+    const t = at[j];
+    switch (i.f.jump ?? 'branch') {
+      case 'branch': i.bytes[2] = (t - (at[k] + 3)) & 0xff; break;
+      case 'rel':    i.bytes[1] = (t - (at[k] + 2)) & 0xff; break;
+      default:       i.bytes[1] = t & 0xff; i.bytes[2] = t >> 8;   // abs, or the mov of a pair
+    }
   });
   return ins.flatMap((i) => i.bytes);
 };
 const draw = (f) => {
+  switch (f.jump) {
+    case 'abs': return [f.op, 0, 0];
+    case 'rel': return [f.op, 0];
+    case 'ret': return [MOV_TO[7], 0, 0, f.op];
+    case 'reg': { const x = rnd() & 7; return [MOV_TO[x], 0, 0, f.op, x]; }
+  }
   if (f.nbytes === 1) return [f.op];
   const bytes = [f.op, f.b1s[rnd() % f.b1s.length]];
   if (f.nbytes === 3) bytes.push(rnd() & 0xff);
@@ -136,17 +173,41 @@ const SOURCES = [
           iseq r6, r5, #0
           br   eq, r6, #0, down
           halt`,
+  `       mov  r0, #3
+          mov  r1, #0
+  again:  call bump
+          add  r0, r0, #-1
+          br   ne, r0, #0, again
+          jmpr over
+          mov  r2, #0xbad
+  over:   mov  r2, #there
+          jmp  r2
+          mov  r3, #0xbad
+  there:  call outer
+          jmp  done
+          mov  r4, #0xbad
+  done:   halt
+  outer:  mov  r5, lr
+          mov  r4, #bump
+          call r4
+          mov  lr, r5
+          ret
+  bump:   add  r1, r1, #1
+          ret`,
 ];
-const assembled = SOURCES.flatMap((src, i) => {
-  const f = `build/pipe-src-${i}.s`;
-  writeFileSync(f, src.split('\n').map((l) => l.trim()).join('\n') + '\n');
+// The second copy has its nop IN THE SOURCE, not put in front of the bytes:
+// a call or a jmp to a label is an absolute address, which the assembler
+// has to see move.
+const assembled = SOURCES.flatMap((src, i) => [src, `nop\n${src}`].map((text, j) => {
+  const f = `build/pipe-src-${i}-${j}.s`;
+  writeFileSync(f, text.split('\n').map((l) => l.trim()).join('\n') + '\n');
   const { code } = assemble(f);
   rmSync(f, { force: true });
-  return [[...code]];
-});
+  return [...code];
+}));
 
 const N_RANDOM = 60;
-const PROGRAMS = N_RANDOM + assembled.length * 2;
+const PROGRAMS = N_RANDOM + assembled.length;
 const programs = [];
 mkdirSync('build', { recursive: true });
 for (let p = 0; p < PROGRAMS; p++) {
@@ -154,15 +215,16 @@ for (let p = 0; p < PROGRAMS; p++) {
   if (p < N_RANDOM) {
     // The first program has every form twice, once from each alignment;
     // after that, one instruction in five is a branch.
-    const picks = p === 0 ? shuffle([...all, ...brs, NOP, ...all, ...brs])
-                          : Array.from({ length: 40 }, () => (rnd() % 5 === 0 ? brs[rnd() % brs.length]
-                                                                             : all[rnd() % all.length]));
+    const picks = p === 0 ? shuffle([...all, ...brs, ...jumps, NOP, ...all, ...brs, ...jumps])
+                          : Array.from({ length: 40 }, () => {
+                              const r = rnd() % 10;
+                              return r < 2 ? brs[rnd() % brs.length]
+                                   : r < 3 ? jumps[rnd() % jumps.length]
+                                   : all[rnd() % all.length];
+                            });
     bytes = layout(picks).concat([HALT]);
   } else {
-    // A nop in front moves everything a byte, and the branches' offsets are
-    // relative, so they still land where they did.
-    const k = p - N_RANDOM;
-    bytes = (k & 1 ? [NOP.op] : []).concat(assembled[k >> 1]);
+    bytes = assembled[p - N_RANDOM];
   }
   const reg = Array.from({ length: 8 }, val);
   const m = new Machine(spec).load(bytes, 0);
@@ -185,8 +247,9 @@ for (let p = 0; p < PROGRAMS; p++) {
     const pc = m.pc;
     const d = decode(dec, [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
     const taken = branches.has(`${d.insn.mnemonic}/${d.form.name}@${m.mem[pc]}`) && takes(pc, d.nbytes);
+    const jump = JUMP_SEM.test(d.insn.semantics ?? '');
     m.step();
-    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, R: Array.from(m.R) });
+    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, R: Array.from(m.R) });
   }
   programs.push({ bytes, reg, trace, old: m.cycles() });
   writeFileSync(`build/pipe-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
@@ -264,7 +327,7 @@ programs.forEach(({ trace, old }, p) => {
   // dispatch than retirement.
   for (let i = 1; i < Math.min(ds.length, trace.length + 1); i++) {
     const prev = trace[i - 1];
-    const want = prev.taken ? 4 : (prev.pc & 1) && prev.len === 3 ? 2 : 1;
+    const want = prev.jump ? 3 : prev.taken ? 4 : (prev.pc & 1) && prev.len === 3 ? 2 : 1;
     if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) complain(`program ${p} dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
     if (ds[i].cyc - ds[i - 1].cyc !== want)
       complain(`program ${p} dispatch ${i}: ${ds[i].cyc - ds[i - 1].cyc} cycles after the one at 0x${prev.pc.toString(16)}, want ${want}`);
@@ -277,8 +340,9 @@ for (const f of ['build/pipe-tb.vvp', 'build/pipe-tb.sv']) rmSync(f, { force: tr
 
 if (bad === 0) {
   const taken = programs.reduce((n, { trace }) => n + trace.filter((t) => t.taken).length, 0);
-  console.log(`ok    rtl/pipe/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over ${all.length + brs.length} forms, `
-            + `${taken} branches taken; registers and dispatch cadence agree with tools/sim.js`);
+  const jumped = programs.reduce((n, { trace }) => n + trace.filter((t) => t.jump).length, 0);
+  console.log(`ok    rtl/pipe/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over ${all.length + brs.length + jumps.length} forms, `
+            + `${taken} branches taken, ${jumped} jumps; registers and dispatch cadence agree with tools/sim.js`);
   console.log(`      ${cycNew} cycles to halt, against ${cycOld} on the byte-serial cost model `
             + `(${(cycOld / cycNew).toFixed(2)}x fewer)`);
 } else {

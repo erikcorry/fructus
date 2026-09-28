@@ -19,6 +19,7 @@
 //     kind   0 ALU     one result into one register, every stage single-cycle
 //            1 UCODE   anything else, and every opcode the spec leaves empty
 //            2 CBR     a conditional branch
+//            3 JUMP    an unconditional transfer: jmp, jmpr, call, ret
 //
 // and with the length it names the seven classes: ONE_BYTE_ALU is kind 0 and
 // length 1, THREE_BYTE_CONDITIONAL_BRANCH kind 2 and length 3, and so on.
@@ -40,32 +41,43 @@ const ALU = new Set(['mov', 'movhi', 'sxt8', 'bitrev', 'clmul', 'add', 'rsb', 'x
 const HALT = parseInt(spec.insn.find((i) => i.mnemonic === 'halt')
                           .form[0].encoding.replace(/[\s_]/g, ''), 2);
 
-const KIND = { alu: 0, ucode: 1, cbr: 2 };
+const KIND = { alu: 0, ucode: 1, cbr: 2, jump: 3 };
+const JUMP = new Set(['jmp', 'jmpr', 'call', 'ret']);
 const kindOf = (r) => {
   if (r.insns.every((i) => ALU.has(i.mnemonic) && !(i.extra_cycles > 0))) return KIND.alu;
   if (r.v.cond !== X) return KIND.cbr;
+  if (r.insns.every((i) => JUMP.has(i.mnemonic))) return KIND.jump;
   return KIND.ucode;
 };
 
-// {kind[1:0], len[1:0], wen, alu[3:0], lhs[3:0], rhs[3:0], dest[3:0], cond[1:0]}
+// {kind[1:0], len[1:0], wen, alu[3:0], lhs[3:0], rhs[3:0], dest[3:0], cond[1:0], pc[1:0]}
 //
 // A CONDITIONAL BRANCH RUNS THROUGH THE PIPELINE TOO, so its operand selects
 // and its condition source are real; its ALU operation and destination are
 // not, since it writes nothing - rtl/compare.sv reads the operands instead.
+//
+// SO DOES A JUMP, and `pc` says where its target is: 1 the next pc plus the
+// last byte, 2 the 16 bits of bytes 1 and 2, 3 the left-hand register.  A
+// branch's is always 1, and it must be there and not left to the mapper,
+// because decode builds every target from it.  A call is an ALU instruction
+// as well - lr takes the return address through the pass-through - so its
+// ALU fields are real and it writes.
 const bits = (v, w) => (v === X ? 'x'.repeat(w) : v.toString(2).padStart(w, '0'));
-const counts = [0, 0, 0];
+const counts = [0, 0, 0, 0];
 const cases = rows.map((r) => {
   const k = kindOf(r);
   counts[k]++;
   // The selects matter only to a row that flows; a row the experiment stops
   // at leaves them to the mapper.
-  const alu = k === KIND.alu, cbr = k === KIND.cbr, flows = alu || cbr;
+  const cbr = k === KIND.cbr, jump = k === KIND.jump;
+  const writes = (k === KIND.alu || jump) && r.v.dest !== X;
+  const piped = k !== KIND.ucode;
   const f = (v, on) => (on ? v : X);
-  const wen = alu ? (r.v.dest === X ? 0 : 1) : cbr ? 0 : X;
+  const wen = piped ? (writes ? 1 : 0) : X;
   const t = [bits(k, 2), bits(r.nbytes, 2), bits(wen, 1),
-             bits(f(r.v.alu, alu), 4), bits(f(r.v.lhs, flows), 4), bits(f(r.v.rhs, flows), 4),
-             bits(f(r.v.dest, alu), 4), bits(f(r.v.cond, cbr), 2)];
-  return `        8'h${r.op.toString(16).padStart(2, '0')}: t = 23'b${t.join('_')};    // ${r.who}`;
+             bits(f(r.v.alu, writes), 4), bits(f(r.v.lhs, piped), 4), bits(f(r.v.rhs, piped), 4),
+             bits(f(r.v.dest, writes), 4), bits(f(r.v.cond, cbr), 2), bits(f(r.v.pc, jump || cbr), 2)];
+  return `        8'h${r.op.toString(16).padStart(2, '0')}: t = 25'b${t.join('_')};    // ${r.who}`;
 }).join('\n');
 
 process.stdout.write(`// =============================================================================
@@ -78,14 +90,15 @@ process.stdout.write(`// =======================================================
 // rtl/pipe/cpu.sv decides from kind and length alone whether the next dispatch
 // can follow at once, and latches the rest for the decode stage.
 //
-// ${rows.length} opcodes: ${counts[0]} ALU, ${counts[1]} microcoded, ${counts[2]} conditional branches.
+// ${rows.length} opcodes: ${counts[0]} ALU, ${counts[1]} microcoded, ${counts[2]} conditional branches,
+// ${counts[3]} jumps.
 // An opcode the spec leaves empty is microcoded and one byte long, so that the
 // experiment stops at it rather than running on into the bytes after it.
 // =============================================================================
 
 module classify (
     input  logic [7:0] op,
-    output logic [1:0] kind,      // 0 ALU, 1 microcoded, 2 conditional branch
+    output logic [1:0] kind,      // 0 ALU, 1 microcoded, 2 conditional branch, 3 jump
     output logic [1:0] len,       // 1, 2 or 3 bytes
     output logic       wen,       // an ALU row writes its destination
     output logic       halt,      // it is halt
@@ -93,19 +106,20 @@ module classify (
     output logic [3:0] lhs_src,   // -> rtl/lhs.sv
     output logic [3:0] rhs_src,   // rtl/rhs.sv's codes, read by rtl/pipe/cpu.sv's decode
     output logic [3:0] dest_src,  // -> rtl/dest.sv
-    output logic [1:0] cond_src   // -> rtl/cond.sv, for a conditional branch
+    output logic [1:0] cond_src,  // -> rtl/cond.sv, for a conditional branch
+    output logic [1:0] pc_src     // a jump's target: 1 relative, 2 absolute, 3 register
 );
 
-    logic [22:0] t;
+    logic [24:0] t;
     always_comb begin
         (* rom_style = "logic" *)
         case (op)
 ${cases}
-        default: t = 23'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx;
+        default: t = 25'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx;
         endcase
     end
 
-    assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src} = t;
+    assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src} = t;
     assign halt = (op == 8'h${HALT.toString(16).padStart(2, '0')});
 
 endmodule
