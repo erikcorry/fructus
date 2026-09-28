@@ -64,8 +64,24 @@
 // and ret - and a call's return address as its right-hand operand, which lr
 // takes through the ALU's pass-through.  In the jump's ALU cycle the fetch
 // reads the target's word, chosen by flops, and it dispatches next: three
-// cycles, with nothing to squash.  `call lr` goes to the next instruction,
-// since its semantics write lr before reading it.  Nothing behind a branch can have done
+// cycles, with nothing to squash.
+//
+// `call lr` MEANS SOMETHING DIFFERENT HERE FROM rtl/cpu.sv.  Its semantics,
+// `lr = pc; pc = R[a]`, write lr before they read it, so this core - with
+// tools/sim.js - goes to the NEW lr, which is the next instruction, and
+// `call lr` is a way of writing the return address and falling through.
+// rtl/cpu.sv reads the register a cycle early and goes to the OLD lr, which
+// would make `call lr` a coroutine swap: jump to where lr pointed and leave
+// the return address in its place.  Checked in simulation, `call r7` at
+// 0x100 with lr = 0x4000: this core and tools/sim.js go to 0x102; rtl/cpu.sv
+// goes to 0x4000.  Which meaning the instruction set wants is for
+// isa/fructus.toml to say; until it does, the two processors disagree.
+//
+// AND rtl/cpu.sv'S RETURN ADDRESS FOR `call ra` LOOKED WRONG in the same
+// check: 0x0103 after a two-byte call at 0x100, for `call r1` as well as
+// `call r7`, where tools/sim.js and this core leave 0x0102.
+// tests/rtl-check.mjs calls only absolute targets, so no test compares a
+// register call's return address on that core.  Not investigated here.  Nothing behind a branch can have done
 // anything by then, because only the ALU stage writes; and halt takes effect
 // in the ALU stage rather than decode for the same reason.
 //
