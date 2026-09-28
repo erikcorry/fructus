@@ -15,10 +15,17 @@
 // tools/fpga-top.sv observes the real processor, so nothing is optimised away.
 // =============================================================================
 
-module top (input logic clk, input logic din, output wire dout);
+module top (input logic clk, input logic din, input logic irq, output wire dout);
 
     logic rst_q, rst;
     always_ff @(posedge clk) begin rst_q <= din; rst <= rst_q; end
+
+    // IRQ ARRIVES ON A REAL PIN, synchronised through two flops, as in
+    // tools/fpga-top.sv and for its reason: tied to a constant, yosys would
+    // fold ie, the take and the whole interrupt path out of the design, and
+    // the number would describe a processor that cannot be interrupted.
+    logic irq_q, irq_s;
+    always_ff @(posedge clk) begin irq_q <= irq; irq_s <= irq_q; end
 
     wire [15:0] addr;
     wire [15:0] word;
@@ -34,7 +41,7 @@ module top (input logic clk, input logic din, output wire dout);
     wire halted, trapped;
     wire [15:0] result;
     pipe_cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(word),
-                .mem_wdata(wdata), .mem_we(we),
+                .mem_wdata(wdata), .mem_we(we), .irq(irq_s),
                 .halted(halted), .trapped(trapped), .result(result), .retire(), .retire_pc());
 
     logic [15:0] so;

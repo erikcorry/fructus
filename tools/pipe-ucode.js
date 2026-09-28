@@ -12,12 +12,32 @@
 // sequencer reads when it has nothing to do.  The entries are assigned in
 // the order the routines are listed here, so one can be added anywhere.
 //
-// The word's fields and the rules for a memory instruction's steps are in
-// tools/gen-pipe-ucode.js's header.
+// The rules for a memory instruction's steps, and why the exception routines
+// are ordered as they are, are in tools/gen-pipe-ucode.js's header.
 // =============================================================================
 
 export const STEPS = 8;
 export const ENTRY_BITS = 5;
+
+// THE WORD, field by field: [name, bit, width, what it does in its step].
+// rtl/pipe/cpu.sv takes the same fields at the same bits.
+export const FIELDS = [
+  ['A',   0, 1, 'an address step: mar, or mar + 1 for a load, and mar steps up'],
+  ['C',   1, 1, "a load's byte arrives and shifts into ldq"],
+  ['R',   2, 1, 'dispatch is released'],
+  ['D',   3, 1, 'the last step'],
+  ['W',   4, 2, 'a loaded register is written: 1, 2 or 3, through the ALU'],
+  ['P',   6, 1, "a block move's pointer is written, the same way"],
+  ['WE',  7, 1, 'the NEXT step writes memory'],
+  ['KS',  8, 2, 'the register read this step: 0 .. 2 of the list, 3 a literal'],
+  ['KH', 10, 1, "which half of it a store's next byte is - or, when KS is 3, lr and not sp"],
+  ['SH', 11, 2, 'a shadow takes aq, the register read the step before: 1 shadow_sp, 2 shadow_lr, 3 shadow_isp'],
+  ['LQ', 13, 3, 'ldq takes: 1 the pc, 2 shadow_sp, 3 shadow_lr, 4 shadow_isp'],
+  ['WX', 16, 2, 'a register is written from ldq, through the ALU: 1 sp, 2 lr'],
+  ['IE', 18, 2, 'ie: 1 cleared, 2 set'],
+  ['RJ', 20, 2, 'the fetch goes to: 1 the vector, 2 aq, the register read the step before'],
+];
+export const WORD_BITS = 32;
 
 // A memory instruction's routine depends on how it moves bytes, not on which
 // instruction it is: push and stm step alike, and so do pop and ldm.
@@ -44,6 +64,36 @@ function memSteps({ st, blk, w2, n }) {
   return step.slice(1);
 }
 
+// The literal registers the exception routines read: KS 3, and KH picks.
+const SP = { KS: 3, KH: 0 }, LR = { KS: 3, KH: 1 };
+
+// THE EXCEPTION ROUTINES, statement for statement as isa/fructus.toml has
+// them.  A shadow and a register are never exchanged in one step.  A register
+// read in step k lands in aq for step k + 1, which is where a shadow - or
+// rti's redirect - takes it from, and a register is written from ldq, which
+// was loaded the step before; every read is of the old value, since each
+// register's write lands in the same step as the read of it or later.  The
+// redirect goes out in step 2, so the handler - or the return - is dispatched
+// in step 3, and every write has landed before it reaches decode in step 4.
+//
+// WHY aq AND NOT THE PORT ITSELF.  The port is decode's left port, borrowed,
+// and a shadow loaded from it straight has decode's path in front of it -
+// from the SPRAM, through the register number, into the register file's read
+// - which never carries a value to a shadow but which the timing cannot know
+// that about: it measured 30.25 MHz, every seed ending at a shadow.
+const EXCEPTIONS = {
+  //  shadow_lr = lr; lr = pc; shadow_sp = sp; sp = shadow_isp; ie = 0; pc = vector
+  brk: [{ ...LR, LQ: 1, IE: 1 },
+        { SH: 2, WX: 2, ...SP, LQ: 4, RJ: 1 },
+        { SH: 1, WX: 1, D: 1 }],
+  //  pc = lr; lr = shadow_lr; shadow_isp = sp; sp = shadow_sp; ie = 1
+  rti: [{ ...LR, LQ: 3, IE: 2 },
+        { RJ: 2, WX: 2, ...SP, LQ: 2 },
+        { SH: 3, WX: 1, D: 1 }],
+  sei: [{ IE: 2, R: 1, D: 1 }],
+  cli: [{ IE: 1, R: 1, D: 1 }],
+};
+
 // The shapes the instruction set has: ld, ld8, st and st8 move one register
 // and are no block; the block moves are two bytes a register.
 export const ROUTINES = [{ name: 'idle', steps: [] }];
@@ -58,22 +108,31 @@ for (const st of [0, 1])
           key: memKey(m), bytes: n * (w2 ? 2 : 1), steps: memSteps(m),
         });
       }
+for (const [name, steps] of Object.entries(EXCEPTIONS)) ROUTINES.push({ name, key: name, steps });
 if (ROUTINES.length > 1 << ENTRY_BITS) throw new Error('more routines than entries');
+if (ROUTINES.some((r) => r.steps.length > STEPS)) throw new Error('a routine is longer than eight steps');
 
-// Where a memory instruction's routine starts.
-export function entryOf(m) {
-  const e = ROUTINES.findIndex((r) => r.key === memKey(m));
-  if (e < 0) throw new Error(`no routine for ${memKey(m)}`);
+const find = (key) => {
+  const e = ROUTINES.findIndex((r) => r.key === key);
+  if (e < 0) throw new Error(`no routine for ${key}`);
   return e;
-}
+};
+
+// Where a memory instruction's routine starts, and an exception instruction's.
+export const entryOf = (m) => find(memKey(m));
+export const entryNamed = (mnemonic) => (mnemonic in EXCEPTIONS ? find(mnemonic) : null);
 
 // The ROM, a word per address.
 export function words() {
   const w = new Array(1 << (ENTRY_BITS + 3)).fill(0);
   ROUTINES.forEach((r, e) => r.steps.forEach((s, k) => {
-    w[(e << 3) | k] = (s.A ?? 0) | ((s.C ?? 0) << 1) | ((s.R ?? 0) << 2) | ((s.D ?? 0) << 3)
-                    | ((s.W ?? 0) << 4) | ((s.P ?? 0) << 6) | ((s.WE ?? 0) << 7)
-                    | ((s.KS ?? 0) << 8) | ((s.KH ?? 0) << 10);
+    let v = 0;
+    for (const [f, bit, width] of FIELDS) {
+      const x = s[f] ?? 0;
+      if (x >= 1 << width) throw new Error(`${r.name} step ${k + 1}: ${f} = ${x} does not fit`);
+      v += x * 2 ** bit;
+    }
+    w[(e << 3) | k] = v;
   }));
   return w;
 }

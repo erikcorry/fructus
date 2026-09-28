@@ -7,8 +7,18 @@
 // rtl/dest.sv, rtl/immgen.sv and rtl/cond.sv from the real processor
 // unchanged, and the ALU stage rtl/compare.sv.  It runs the one-register ALU
 // instructions, the conditional branches, the jumps and calls, the loads and
-// stores and block moves, and halt, and stops at anything else: a microcoded
-// instruction other than halt sets `trapped`.
+// stores and block moves, brk, rti, sei, cli and halt, and the interrupt
+// line; it stops at anything else - mul, clz and popcount, and the empty
+// opcodes - and sets `trapped`.
+//
+// AN INTERRUPT IS A brk DISPATCHED IN PLACE OF THE INSTRUCTION IT PREEMPTS,
+// with the pc left on that instruction, so brk's routine saves its address
+// and rti restarts it.  brk, rti, sei and cli are microcode routines - see
+// tools/gen-pipe-ucode.js - that move sp and lr through the shadows by the
+// paths a memory instruction already has: a register read through decode's
+// borrowed port, a register written from ldq through the ALU's pass-through.
+// halt stops; an interrupt with ie set wakes it through the bubble, and the
+// brk dispatched then saves the address after the halt.
 //
 // MEMORY IS A WORD WIDE.  `mem_addr` is a byte address whose bit 0 is always
 // clear; the word at that address, the even byte low, is on `mem_rdata` the
@@ -141,9 +151,22 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     THE SEQUENCER'S CONTROL AS MICROCODE, as here  1725    31.38  29.2 .. 33.0
+//     WITH EXCEPTIONS AND INTERRUPTS, as here        1917    30.61  29.2 .. 31.9
+//     the bypass selects spelled as AND-ORs          1927    29.25  28.4 .. 31.0
+//     a store's bytes taken from aq, not the port    2053    29.95  28.8 .. 31.6
+//     the sequencer's control as microcode           1725    31.38  29.2 .. 33.0
 //     its control as schedules in LUTs               1873    31.23  30.2 .. 33.3
 //     that, with dispatch never stopping itself      1853    30.57  29.2 .. 32.8
+//
+// INTERRUPTS COST 0.77 MHz of median and no low end, against the 0.83 they
+// cost rtl/cpu.sv, and 144 LUT4s and a second block RAM - the word grew to 32
+// bits.  The slow seeds are decode's: from the SPRAM, through a register
+// number and the eight-way read, into an operand flop.  Whichever flop on
+// that read reports - aq, bq, a shadow or the store byte wq - is only the one
+// that loses the tie, which is why taking the shadows and then wq off the
+// port's output removed them from the reports and bought nothing: the
+// shadows now take aq for that reason, but wq taken from aq as well cost 134
+// LUT4s and measured no faster, and was not kept.
 //
 // THE MICROCODE IS 125 LUT4s AND 148 CELLS SMALLER for one of the part's
 // thirty block RAMs, at the same clock: 1494 LUT4 against 1619.  Its control
@@ -206,6 +229,9 @@ module pipe_cpu (
     input  logic [15:0] mem_rdata,   // <- the word sampled at the last edge
     output logic [7:0]  mem_wdata,   // -> memory: the byte to write, in lane mem_addr[0]
     output logic        mem_we,      // -> memory: write it at this edge
+    input  logic        irq,         // <- the interrupt line, synchronised: level
+                                     //    sensitive, taken where an instruction
+                                     //    would have been dispatched, if ie is set
     output logic        halted,
     output logic        trapped,
     output logic [15:0] result,      // the ALU's output, for the harness
@@ -228,16 +254,24 @@ module pipe_cpu (
     logic [7:0]  nxt;       // the high byte of the word the port last held
 
     wire [7:0] lo = mem_rdata[7:0], hi = mem_rdata[15:8];
-    wire [7:0] op = pc[0] ? (use_nxt ? nxt : hi) : lo;
+    // AN INTERRUPT IS A brk DISPATCHED IN PLACE OF THE INSTRUCTION IT PREEMPTS.
+    // brk is opcode 0, so the substitution is an AND, and everything after it -
+    // the classifier's row, decode, the routine - is brk's.  The only
+    // difference is that the pc does not move on, so the routine saves the
+    // preempted instruction's address and rti restarts it.
+    wire       ie_q;                           // below, with the shadows
+    wire       take = go & ie_q & irq;
+    wire [7:0] opraw = pc[0] ? (use_nxt ? nxt : hi) : lo;
+    wire [7:0] op = opraw & {8{~take}};
 
     wire [1:0] kind, len, c_cond, c_pcsrc, c_mn;
-    wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush;
+    wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush, c_useq;
     wire [3:0] c_alu, c_lhs, c_rhs, c_dest;
     wire [4:0] c_uent;
     classify c (.op(op), .kind(kind), .len(len), .wen(c_wen), .halt(c_halt),
                 .alu_op(c_alu), .lhs_src(c_lhs), .rhs_src(c_rhs), .dest_src(c_dest),
                 .cond_src(c_cond), .pc_src(c_pcsrc), .mem(c_mem), .mst(c_mst), .mw2(c_mw2),
-                .mn(c_mn), .mblk(c_mblk), .mpush(c_mpush), .uent(c_uent));
+                .mn(c_mn), .mblk(c_mblk), .mpush(c_mpush), .useq(c_useq), .uent(c_uent));
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
     // down the fall-through path behind it, which costs nothing if the branch
@@ -254,7 +288,7 @@ module pipe_cpu (
     // the fetch reads before it, so from its ALU cycle on the port is the
     // sequencer's alone, and dispatch resumes only when the sequencer is done
     // with it.
-    wire piped   = flows | is_jump | c_mem;
+    wire piped   = flows | is_jump | c_useq;
     wire span3   = pc[0] & (len == 2'd3);  // three bytes starting odd: three words
 
     // The candidates for the next pc come off the pc flop in parallel, so the
@@ -270,8 +304,12 @@ module pipe_cpu (
     logic [15:0] mar;
     wire        ldnow;                     // a load's first address: the ALU's result
     wire [15:0] maddr;
+    wire        urj;                       // the microcode redirects the fetch
+    wire [15:0] rjaddr;
+    wire        wake;                      // an interrupt ends a halt
     assign mem_addr = taken_q ? {tgt_q[15:1], 1'b0}
                     : jnow    ? {jaddr[15:1], 1'b0}
+                    : urj     ? {rjaddr[15:1], 1'b0}
                     : ldnow   ? asum
                     : aphase  ? maddr
                     :           {go ? pcw + 15'd1 : pcw, 1'b0};
@@ -285,6 +323,14 @@ module pipe_cpu (
             pc <= tgt_q; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
         end else if (jnow) begin
             pc <= jaddr; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
+        end else if (urj) begin
+            pc <= rjaddr; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
+        end else if (take) begin
+            // The brk goes down the pipeline; the pc stays on the instruction
+            // it replaced.
+            go <= 1'b0; stop <= 1'b1; use_nxt <= 1'b0;
+        end else if (wake) begin
+            stop <= 1'b0;                  // the bubble, and then the brk
         end else if (mrestart) begin
             // The sequencer's last address is on the bus now.  The next cycle
             // is the bubble that reads pc's word, and dispatch follows it.
@@ -307,6 +353,7 @@ module pipe_cpu (
     logic        d_mem, d_mst, d_mw2, d_mblk, d_mpush;
     logic [1:0]  d_mn;
     logic [4:0]  d_uent;
+    logic        d_useq;
     logic [7:0]  d_op, d_b1;
     logic [3:0]  d_alu, d_lhs, d_rhs, d_dest;
     logic [1:0]  d_cond, d_pcsrc, d_len;
@@ -318,6 +365,7 @@ module pipe_cpu (
         d_jump  <= is_jump;
         {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
         d_uent  <= c_uent;
+        d_useq  <= c_useq;
         d_pcsrc <= c_pcsrc;
         d_len   <= len;
         d_halt  <= c_halt;
@@ -420,8 +468,19 @@ module pipe_cpu (
     // choice is made by flops, so it did not lengthen decode's paths.
     wire [2:0] kreg_b;
     wire [2:0] an_rd = (e_mem | mact) ? kreg_b : an;
+    // TWO SPELLINGS OF ONE FUNCTION.  While a routine runs decode is empty and
+    // `an` may be x, and simulation would carry e_we[an] into aq - which a
+    // routine reads - although e_we is 0 and the hardware's answer is 0 for
+    // any `an`.  The AND-OR gives simulation that 0.  But yosys maps it
+    // differently, on decode's critical path: 29.25 MHz against 30.61, medians
+    // of sixteen seeds.  So synthesis keeps the index.
+`ifdef SYNTHESIS
     wire fwd_a = e_we[an];
     wire fwd_b = use_reg & e_we[bn];
+`else
+    wire fwd_a = |(e_we & (8'd1 << an));
+    wire fwd_b = use_reg & |(e_we & (8'd1 << bn));
+`endif
     wire [15:0] rb = use_reg ? R[bn] : bval;
 
     // Everything decode hands on is dropped in a cycle that squashes: the
@@ -438,6 +497,7 @@ module pipe_cpu (
     logic        e_mem, e_mst, e_mw2, e_mblk, e_mpush;
     logic [2:0]  e_mN, e_l0, e_l1, e_l2, e_ptr;
     logic [4:0]  e_uent;               // where the microcode routine starts
+    logic        e_useq;               // it runs one
     logic        e_valid;             // for the harness
     logic [15:0] e_pc;                // for the harness
     always_ff @(posedge clk) begin
@@ -457,6 +517,7 @@ module pipe_cpu (
         {e_mst, e_mw2, e_mblk, e_mpush} <= {d_mst, d_mw2, d_mblk, d_mpush};
         {e_mN, e_l0, e_l1, e_l2, e_ptr} <= {mN_d, ml0_d, ml1_d, ml2_d, an};
         e_uent  <= d_uent;
+        e_useq  <= keep & d_useq;
         e_halt  <= d_halt;
         e_pc    <= d_pc;
     end
@@ -518,7 +579,7 @@ module pipe_cpu (
     //
     // A BYTE AT A TIME, aligned or not: two bytes of a word cost two cycles,
     // which a later version may take in one.
-    wire mstart = e_mem & ~taken_q;
+    wire mstart = e_useq & ~taken_q;
     wire [15:0] ea   = asum;
     wire [15:0] ptrv = e_mpush ? ea : aq + {13'd0, e_mN};   // where the pointer ends
 
@@ -534,7 +595,7 @@ module pipe_cpu (
 
     // THE ROUTINE'S ENTRY IS PREDECODE'S, a column of rtl/pipe/classify.sv
     // carried here like any other field, so any opcode can start anywhere.
-    wire [15:0] uw;
+    wire [31:0] uw;
     wire        mdone = uw[3];
     wire [7:0]  uaddr = mstart          ? {e_uent, 3'd0}
                       : (mact & ~mdone) ? {ment, mu + 3'd1}
@@ -550,13 +611,20 @@ module pipe_cpu (
     wire         uWE = uw[7];
     wire   [1:0] uKS = uw[9:8];
     wire         uKH = uw[10];
+    wire   [1:0] uSH = uw[12:11];
+    wire   [2:0] uLQ = uw[15:13];
+    wire   [1:0] uWX = uw[17:16];
+    wire   [1:0] uIE = uw[19:18];
+    wire   [1:0] uRJ = uw[21:20];
     wire   [7:0] mbyte = mlane ? hi : lo;
 
     // A loaded register that is the pointer is not written: the pointer's own
     // value is the one the semantics end with.
     wire [2:0] wreg = (uW == 2'd1) ? ml0 : (uW == 2'd2) ? ml1 : ml2;
     wire       wdat = (uW != 2'd0) & ~(mblk & wreg == mpr);
-    wire [7:0] mwe  = (wdat ? 8'd1 << wreg : 8'd0) | (uP ? 8'd1 << mpr : 8'd0);
+    wire [7:0] mwe  = (wdat ? 8'd1 << wreg : 8'd0) | (uP ? 8'd1 << mpr : 8'd0)
+                    | (uWX == 2'd1 ? 8'b0100_0000 : 8'd0)       // sp
+                    | (uWX == 2'd2 ? 8'b1000_0000 : 8'd0);      // lr
 
     assign mhold = mstart | (mact & ~mdone);
 
@@ -566,7 +634,8 @@ module pipe_cpu (
     // until the sequencer releases dispatch.  Two ports of the sequencer's own
     // - a word for the later bytes and one for byte 0 - were 186 of its 572
     // LUTs; one port of its own, a byte wide, still 114 more than borrowing.
-    wire [2:0] kreg  = mstart ? e_l0 : (uKS == 2'd0) ? ml0 : (uKS == 2'd1) ? ml1 : ml2;
+    wire [2:0] kreg  = mstart ? e_l0 : (uKS == 2'd0) ? ml0 : (uKS == 2'd1) ? ml1
+                     : (uKS == 2'd2) ? ml2 : {2'b11, uKH};      // 3: sp or lr
     assign kreg_b = kreg;
     wire       khalf = ~mstart & uKH;
     wire [15:0] kword = R[an_rd];
@@ -591,17 +660,43 @@ module pipe_cpu (
             mu  <= mu + 3'd1;
             if (aphase) begin mar <= mar + 16'd1; mlane <= maddr[0]; end
             if (mcap)   ldq <= mw2 ? {mbyte, ldq[15:8]} : {8'h00, mbyte};
+            else if (uLQ != 3'd0) ldq <= lqsrc;
             wq  <= kbyte;
             weq <= uWE;
         end
     end
+    // --- the exception state ----------------------------------------------------
+    // THREE SHADOWS AND ie, reached only by microcode: a shadow takes aq -
+    // the word the borrowed port read the step before - and gives its value to
+    // ldq, which the ALU's pass-through writes to sp or lr, so neither the
+    // register file nor its write port has anything new in front of it.
+    // rti's return address is aq too.  The vector is isa/fructus.toml's
+    // [cpu.vectors] brk.
+    localparam [15:0] VECTOR = 16'hfff8;
+    logic [15:0] shadow_sp, shadow_lr, shadow_isp;
+    logic        ie;
+    assign ie_q  = ie;
+    wire [15:0] lqsrc = (uLQ == 3'd1) ? pc : (uLQ == 3'd2) ? shadow_sp
+                      : (uLQ == 3'd3) ? shadow_lr : shadow_isp;
+    assign urj    = uRJ != 2'd0;
+    assign rjaddr = uRJ[0] ? VECTOR : aq;
+    assign wake   = halted & ie & irq;
+    always_ff @(posedge clk) begin
+        if (uSH == 2'd1) shadow_sp  <= aq;
+        if (uSH == 2'd2) shadow_lr  <= aq;
+        if (uSH == 2'd3) shadow_isp <= aq;
+        if (rst)                ie <= 1'b0;
+        else if (uIE == 2'd1)   ie <= 1'b0;
+        else if (uIE == 2'd2)   ie <= 1'b1;
+    end
+
     // A store's address is mar; a load's, whose mar is the address it last
     // put out, the one after.
     assign maddr = mar + {15'd0, ~mst};
     assign mem_wdata = wq;
     assign mem_we    = weq & aphase;
 
-    assign retire    = (e_valid & ~taken_q & ~e_mem) | mdone;
+    assign retire    = (e_valid & ~taken_q & ~e_useq) | mdone;
     assign retire_pc = mdone ? mpc : e_pc;
 
     // --- the one microcoded instruction there is --------------------------------
@@ -610,5 +705,6 @@ module pipe_cpu (
     always_ff @(posedge clk)
         if (rst) begin halted <= 1'b0; trapped <= 1'b0; end
         else if (e_ucode & ~taken_q) begin halted <= e_halt; trapped <= ~e_halt; end
+        else if (wake) halted <= 1'b0;
 
 endmodule

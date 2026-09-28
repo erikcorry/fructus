@@ -33,7 +33,7 @@
 
 import { loadSpec } from './isa.js';
 import { rows, X } from './predecode-rows.js';
-import { entryOf, ENTRY_BITS } from './pipe-ucode.js';
+import { entryOf, entryNamed, ENTRY_BITS } from './pipe-ucode.js';
 
 const spec = loadSpec();
 
@@ -85,6 +85,11 @@ const kindOf = (r) => {
 // Its destination field names the FIRST DATA REGISTER - a load's rd, a store's
 // rs, a block's first register - rather than anything written by the
 // ordinary write port, which a memory instruction does not use.
+//
+// AN EXCEPTION INSTRUCTION - brk, rti, sei, cli - RUNS A ROUTINE TOO, entered
+// the same way, and its ALU cycle does nothing.  `useq` marks every row with
+// a routine; `uent` is where it starts.  halt has none: it stops, and an
+// interrupt wakes it.
 const ALU_ADD = 0;
 const memOf = (r) => {
   const sem = r.insns[0].semantics ?? '';
@@ -101,9 +106,9 @@ const memOf = (r) => {
   return null;
 };
 const bits = (v, w) => (v === X ? 'x'.repeat(w) : v.toString(2).padStart(w, '0'));
-const W = 32 + ENTRY_BITS;
+const W = 33 + ENTRY_BITS;
 const counts = [0, 0, 0, 0];
-let memRows = 0;
+let memRows = 0, excRows = 0;
 const cases = rows.map((r) => {
   const k = kindOf(r);
   counts[k]++;
@@ -111,9 +116,12 @@ const cases = rows.map((r) => {
   // at leaves them to the mapper.
   const cbr = k === KIND.cbr, jump = k === KIND.jump;
   const mem = k === KIND.ucode ? memOf(r) : null;
+  const exc = k === KIND.ucode && r.insns.length === 1 ? entryNamed(r.insns[0].mnemonic) : null;
   if (mem) memRows++;
+  if (exc !== null) excRows++;
   const writes = (k === KIND.alu || jump) && r.v.dest !== X;
-  const piped = k !== KIND.ucode || !!mem;
+  const useq = !!mem || exc !== null;
+  const piped = k !== KIND.ucode || useq;
   const f = (v, on) => (on ? v : X);
   const wen = piped ? (writes ? 1 : 0) : X;
   const mf = (v, w) => bits(mem ? v : X, w);
@@ -122,7 +130,7 @@ const cases = rows.map((r) => {
              bits(mem ? mem.dest : f(r.v.dest, writes), 4), bits(f(r.v.cond, cbr), 2),
              bits(f(r.v.pc, jump || cbr), 2),
              bits(mem ? 1 : 0, 1), mf(mem?.st, 1), mf(mem?.w2, 1), mf(mem?.n, 2), mf(mem?.blk, 1), mf(mem?.push, 1),
-             bits(mem ? entryOf(mem) : X, ENTRY_BITS)];
+             bits(useq ? 1 : 0, 1), bits(mem ? entryOf(mem) : exc ?? X, ENTRY_BITS)];
   return `        8'h${r.op.toString(16).padStart(2, '0')}: t = ${W}'b${t.join('_')};    // ${r.who}`;
 }).join('\n');
 
@@ -136,8 +144,8 @@ process.stdout.write(`// =======================================================
 // rtl/pipe/cpu.sv decides from kind and length alone whether the next dispatch
 // can follow at once, and latches the rest for the decode stage.
 //
-// ${rows.length} opcodes: ${counts[0]} ALU, ${counts[1]} microcoded - ${memRows} of them memory instructions -
-// ${counts[2]} conditional branches, ${counts[3]} jumps.
+// ${rows.length} opcodes: ${counts[0]} ALU, ${counts[1]} microcoded - ${memRows} of them memory instructions and
+// ${excRows} exception instructions - ${counts[2]} conditional branches, ${counts[3]} jumps.
 // AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
 // MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
 // pc was worked out behind it, so the length is never used.  Pinned at one, as
@@ -167,6 +175,7 @@ module classify (
     output logic [1:0] mn,        //   1, 2 or 3 registers
     output logic       mblk,      //   a block move, walking and writing back lhs
     output logic       mpush,     //   downward, so its registers lie reversed
+    output logic       useq,      // it runs a routine: a memory or exception instruction
     output logic [${ENTRY_BITS - 1}:0] uent       // where its routine starts in rtl/pipe/ucode.sv
 );
 
@@ -175,12 +184,12 @@ module classify (
         (* rom_style = "logic" *)
         case (op)
 ${cases}
-        default: t = ${W}'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_${'x'.repeat(ENTRY_BITS)};
+        default: t = ${W}'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_${'x'.repeat(ENTRY_BITS)};
         endcase
     end
 
     assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src,
-            mem, mst, mw2, mn, mblk, mpush, uent} = t;
+            mem, mst, mw2, mn, mblk, mpush, useq, uent} = t;
     assign halt = (op == 8'h${HALT.toString(16).padStart(2, '0')});
 
 endmodule

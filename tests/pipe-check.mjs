@@ -113,6 +113,17 @@ for (let op = 0; op < 256; op++)
   }
 const brs = [...branches.values()];
 
+// THE EXCEPTION INSTRUCTIONS.  brk, sei and cli go in the random programs;
+// rti is reached only through brk, since the vector holds nothing but rti in
+// both machines - so a brk is a round trip that leaves every register as it
+// was, through the shadows.  Each costs rtl/pipe/cpu.sv five cycles,
+// dispatch to dispatch.
+const oneByte = (mnemonic) => parseInt(spec.insn.find((i) => i.mnemonic === mnemonic)
+                                           .form[0].encoding.replace(/[\s_]/g, ''), 2);
+const RTI = oneByte('rti'), VECTOR = spec.cpu.vectors.brk;
+const excs = ['brk', 'sei', 'cli'].map((mn) => ({ op: oneByte(mn), nbytes: 1, b1s: [0] }));
+const EXC = /^(brk|rti|sei|cli)$/;
+
 // THE JUMPS, found by their semantics.  An immediate target is patched in
 // after layout like a branch's offset.  A register target is a pair: a
 // `mov rX, #target` and then the jump through rX - so the jump always reads
@@ -301,11 +312,12 @@ for (let p = 0; p < PROGRAMS; p++) {
   if (p < N_ALU) {
     // The first program has every form twice, once from each alignment;
     // after that, one instruction in five is a branch.
-    const picks = p === 0 ? shuffle([...all, ...brs, ...jumps, NOP, ...all, ...brs, ...jumps])
+    const picks = p === 0 ? shuffle([...all, ...brs, ...jumps, ...excs, NOP, ...all, ...brs, ...jumps, ...excs])
                           : Array.from({ length: 40 }, () => {
-                              const r = rnd() % 10;
-                              return r < 2 ? brs[rnd() % brs.length]
-                                   : r < 3 ? jumps[rnd() % jumps.length]
+                              const r = rnd() % 20;
+                              return r < 4 ? brs[rnd() % brs.length]
+                                   : r < 6 ? jumps[rnd() % jumps.length]
+                                   : r < 7 ? excs[rnd() % excs.length]
                                    : all[rnd() % all.length];
                             });
     bytes = layout(picks).concat([HALT]);
@@ -330,6 +342,7 @@ for (let p = 0; p < PROGRAMS; p++) {
   }
   const reg = Array.from({ length: 8 }, draws);
   const m = new Machine(spec).load(bytes, 0);
+  m.mem[VECTOR] = RTI;
   reg.forEach((v, k) => { m.R[k] = v; });
   // WHETHER A BRANCH IS TAKEN IS NOT WHERE THE pc LANDS: a branch to the
   // very next instruction lands there either way, and the processor still
@@ -350,10 +363,11 @@ for (let p = 0; p < PROGRAMS; p++) {
     const d = decode(dec, [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
     const taken = branches.has(`${d.insn.mnemonic}/${d.form.name}@${m.mem[pc]}`) && takes(pc, d.nbytes);
     const jump = JUMP_SEM.test(d.insn.semantics ?? '');
+    const exc = EXC.test(d.insn.mnemonic);
     const mem = memBytes(d.insn.semantics ?? '');
     const memst = mem && /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(d.insn.semantics);
     m.step();
-    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, memst, R: Array.from(m.R) });
+    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, memst, exc, R: Array.from(m.R) });
   }
   // WHAT A STORE DID IS NOT IN ANY REGISTER, so both machines fold their whole
   // memory into one number at the halt, as tests/rtl-check.mjs does.
@@ -373,7 +387,7 @@ writeFileSync('build/pipe-tb.sv', `module tb;
     wire [7:0] wdata;
     wire we, halted, trapped, ret;
     pipe_cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
-                .mem_wdata(wdata), .mem_we(we),
+                .mem_wdata(wdata), .mem_we(we), .irq(1'b0),
                 .halted(halted), .trapped(trapped), .result(), .retire(ret), .retire_pc(rpc));
     // A word a cycle, the even byte low, as the SPRAM delivers it; a write goes
     // to the byte mem_addr names, at the same edge, and a read in that cycle
@@ -392,6 +406,9 @@ writeFileSync('build/pipe-tb.sv', `module tb;
             rst = 1;
             repeat (3) begin #1 clk = 1; #1 clk = 0; end
             for (k = 0; k < 8; k = k + 1) u.R[k] = regs[k];
+            // The shadows are not reset; tools/sim.js starts them at zero.
+            u.shadow_sp = 0; u.shadow_lr = 0; u.shadow_isp = 0;
+            mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
             rst = 0; cyc = 0;
             while (!halted && !trapped && cyc < 5000) begin
                 ev = ret; epc = rpc; go = u.go; dpc = u.pc; sq = u.taken_q;
@@ -410,10 +427,9 @@ writeFileSync('build/pipe-tb.sv', `module tb;
     end
 endmodule
 `);
-execFileSync('iverilog', ['-g2012', '-o', 'build/pipe-tb.vvp',
-  'rtl/pipe/cpu.sv', 'rtl/pipe/classify.sv', 'rtl/pipe/alu.sv', 'rtl/pipe/ucode.sv',
-  'rtl/lhs.sv', 'rtl/dest.sv', 'rtl/immgen.sv', 'rtl/cond.sv', 'rtl/compare.sv',
-  'build/pipe-tb.sv'], { stdio: 'inherit' });
+const RTL = ['rtl/pipe/cpu.sv', 'rtl/pipe/classify.sv', 'rtl/pipe/alu.sv', 'rtl/pipe/ucode.sv',
+             'rtl/lhs.sv', 'rtl/dest.sv', 'rtl/immgen.sv', 'rtl/cond.sv', 'rtl/compare.sv'];
+execFileSync('iverilog', ['-g2012', '-o', 'build/pipe-tb.vvp', ...RTL, 'build/pipe-tb.sv'], { stdio: 'inherit' });
 const out = execFileSync('vvp', ['build/pipe-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
 
 const rets = programs.map(() => []), disps = programs.map(() => []), squashes = programs.map(() => []), ends = [];
@@ -446,7 +462,7 @@ programs.forEach(({ trace, hash, old }, p) => {
   // dispatch than retirement.
   for (let i = 1; i < Math.min(ds.length, trace.length + 1); i++) {
     const prev = trace[i - 1];
-    const want = prev.mem ? prev.mem + (prev.memst ? 4 : 3) : prev.jump ? 3 : prev.taken ? 4
+    const want = prev.exc ? 5 : prev.mem ? prev.mem + (prev.memst ? 4 : 3) : prev.jump ? 3 : prev.taken ? 4
                : (prev.pc & 1) && prev.len === 3 ? 2 : 1;
     if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) complain(`program ${p} dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
     if (ds[i].cyc - ds[i - 1].cyc !== want)
@@ -455,8 +471,126 @@ programs.forEach(({ trace, hash, old }, p) => {
   cycNew += ends[p]?.cyc ?? 0;
   cycOld += old;
 });
-if (!process.env.PIPE_KEEP) for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/pipe-prog-${p}.hex`, `build/pipe-reg-${p}.hex`]) rmSync(f, { force: true });
 for (const f of ['build/pipe-tb.vvp', 'build/pipe-tb.sv']) rmSync(f, { force: true });
+
+// --- the interrupt line -----------------------------------------------------------
+// THE SAME PROGRAMS, INTERRUPTED EVERY FEW CYCLES, as tests/rtl-check.mjs does
+// for rtl/cpu.sv.  The vector holds nothing but rti, so an interrupt entered
+// and left must leave a program exactly as if it had never come: the same
+// registers and memory at the halt as the simulator's run without one.  The
+// line goes up 17 to 39 cycles after each take, at random, and down at the
+// next, so interrupts land after every kind of instruction.  Not on a fixed
+// period: a level-sensitive line that comes back just as the preempted
+// instruction is dispatched again starves it forever.
+//
+// AND ONCE AT THE HALT.  The machine must go on AFTER the halt, so a second
+// one is put there, and the pc must end a byte further on than it waited at.
+//
+// A PROGRAM THAT RAN cli may rightly take none, and one whose ie is clear at
+// the halt is not woken; the simulator, started with ie set as the test bench
+// sets the RTL's, says which those are.
+const finals = programs.map(({ bytes, reg }) => {
+  const m = new Machine(spec).load(bytes, 0);
+  m.mem[VECTOR] = RTI;
+  m.ie = 1;
+  reg.forEach((v, k) => { m.R[k] = v; });
+  let cli = false;
+  for (let guard = 0; !m.halted && guard < 1000; guard++) {
+    if (m.mem[m.pc] === excs[2].op) cli = true;
+    m.step();
+  }
+  m.mem[m.pc] = HALT;                            // as the test bench puts after the halt
+  let hash = 0;
+  for (let k = 0; k < 65536; k++) hash = (Math.imul(hash, 31) + m.mem[k]) & 0x7fffffff;
+  return { R: Array.from(m.R), hash, cli, ie: m.ie };
+});
+writeFileSync('build/pipe-irq-tb.sv', `module tb;
+    logic clk = 0, rst = 1, irq = 0, drop;
+    integer next, lfsr;
+    logic [7:0] mem [0:65535];
+    logic [15:0] rdata;
+    logic [15:0] regs [0:7];
+    wire [15:0] addr;
+    wire [7:0] wdata;
+    wire we, halted, trapped;
+    pipe_cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
+                .mem_wdata(wdata), .mem_we(we), .irq(irq),
+                .halted(halted), .trapped(trapped), .result(), .retire(), .retire_pc());
+    always @(posedge clk) begin
+        rdata <= {mem[{addr[15:1], 1'b1}], mem[{addr[15:1], 1'b0}]};
+        if (we) mem[addr] <= wdata;
+    end
+    integer p, k, cyc, takes, h, pc1;
+    reg [8*64:1] name;
+    // One cycle.  With \`raise\`, the line goes up at \`next\`; it drops after
+    // a take, and \`next\` is then 17 to 39 cycles on.
+    task tick(input integer raise);
+        begin
+            if (raise && cyc == next) irq = 1;
+            drop = u.take;
+            if (drop) takes = takes + 1;
+            #1 clk = 1; #1 clk = 0;
+            if (drop) begin
+                irq = 0;
+                lfsr = (lfsr * 1103515245 + 12345) & 32'h7fffffff;
+                next = cyc + 17 + (lfsr >> 8) % 23;
+            end
+            cyc = cyc + 1;
+        end
+    endtask
+    initial begin
+        for (p = 0; p < ${PROGRAMS}; p = p + 1) begin
+            for (k = 0; k < 65536; k = k + 1) mem[k] = 8'h00;
+            $sformat(name, "build/pipe-prog-%0d.hex", p); $readmemh(name, mem);
+            $sformat(name, "build/pipe-reg-%0d.hex", p);  $readmemh(name, regs);
+            mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
+            irq = 0;
+            rst = 1;
+            repeat (3) begin #1 clk = 1; #1 clk = 0; end
+            for (k = 0; k < 8; k = k + 1) u.R[k] = regs[k];
+            u.shadow_sp = 0; u.shadow_lr = 0; u.shadow_isp = 0;
+            u.ie = 1'b1;                       // as sei would
+            rst = 0; cyc = 0; takes = 0; next = 5 + p % 7; lfsr = p + 1;
+            while (!halted && !trapped && cyc < 50000) tick(1);
+            // At the halt: a second one after it, and the line once more.
+            pc1 = u.pc;
+            mem[pc1] = 8'h${HALT.toString(16).padStart(2, '0')};
+            irq = 1;
+            k = cyc;
+            while (irq && cyc < k + 50) tick(0);
+            irq = 0;
+            repeat (40) tick(0);
+            h = 0;
+            for (k = 0; k < 65536; k = k + 1) h = (h * 31 + mem[k]) & 32'h7fffffff;
+            $display("IRQ %0d %0d %0d %0d %0d %h %h %h %h %h %h %h %h %0d %0d", p, halted, trapped, takes, h,
+                     u.R[0], u.R[1], u.R[2], u.R[3], u.R[4], u.R[5], u.R[6], u.R[7], pc1, u.pc);
+        end
+        $finish;
+    end
+endmodule
+`);
+execFileSync('iverilog', ['-g2012', '-o', 'build/pipe-irq-tb.vvp',
+  ...RTL, 'build/pipe-irq-tb.sv'], { stdio: 'inherit' });
+const irqOut = execFileSync('vvp', ['build/pipe-irq-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+let irqTakes = 0;
+const irqSeen = new Set();
+for (const line of irqOut.split('\n')) {
+  const f = line.trim().split(/\s+/);
+  if (f[0] !== 'IRQ') continue;
+  const p = +f[1], R = f.slice(6, 14).map((x) => parseInt(x, 16)), fin = finals[p];
+  irqSeen.add(p);
+  irqTakes += +f[4];
+  if (f[2] !== '1' || f[3] !== '0') complain(`program ${p}: ${f[3] === '1' ? 'trapped' : 'did not halt'} under interrupts`);
+  if (!fin.cli && +f[4] < 1) complain(`program ${p}: no interrupt taken`);
+  if (+f[5] !== fin.hash) complain(`program ${p}: memory folds to ${f[5]} under interrupts and ${fin.hash} without`);
+  if (fin.ie && +f[15] !== +f[14] + 1)
+    complain(`program ${p}: waited at 0x${(+f[14]).toString(16)} and ended at 0x${(+f[15]).toString(16)}, not a byte on, after the interrupt at the halt`);
+  if (R.some((v, k) => v !== fin.R[k]))
+    complain(`program ${p}: r=${R.map(hex4).join(' ')} under interrupts, sim r=${fin.R.map(hex4).join(' ')}`);
+}
+if (irqSeen.size !== PROGRAMS) complain(`${PROGRAMS - irqSeen.size} programs printed nothing under interrupts`);
+for (const f of ['build/pipe-irq-tb.vvp', 'build/pipe-irq-tb.sv']) rmSync(f, { force: true });
+if (!process.env.PIPE_KEEP) for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/pipe-prog-${p}.hex`, `build/pipe-reg-${p}.hex`]) rmSync(f, { force: true });
 
 if (bad === 0) {
   const taken = programs.reduce((n, { trace }) => n + trace.filter((t) => t.taken).length, 0);
@@ -468,6 +602,8 @@ if (bad === 0) {
             + `registers, memory and dispatch cadence agree with tools/sim.js`);
   console.log(`      ${cycNew} cycles to halt, against ${cycOld} on the byte-serial cost model `
             + `(${(cycOld / cycNew).toFixed(2)}x fewer)`);
+  console.log(`ok    rtl/pipe/cpu.sv, interrupted: ${PROGRAMS} programs under ${irqTakes} interrupts, `
+            + `the last at each halt, end as tools/sim.js does without them`);
 } else {
   console.log(`FAIL  rtl/pipe/cpu.sv: ${bad} disagreements with tools/sim.js`);
   process.exit(1);
