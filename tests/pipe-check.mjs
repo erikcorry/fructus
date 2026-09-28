@@ -411,7 +411,7 @@ writeFileSync('build/pipe-tb.sv', `module tb;
 endmodule
 `);
 execFileSync('iverilog', ['-g2012', '-o', 'build/pipe-tb.vvp',
-  'rtl/pipe/cpu.sv', 'rtl/pipe/classify.sv', 'rtl/pipe/alu.sv',
+  'rtl/pipe/cpu.sv', 'rtl/pipe/classify.sv', 'rtl/pipe/alu.sv', 'rtl/pipe/ucode.sv',
   'rtl/lhs.sv', 'rtl/dest.sv', 'rtl/immgen.sv', 'rtl/cond.sv', 'rtl/compare.sv',
   'build/pipe-tb.sv'], { stdio: 'inherit' });
 const out = execFileSync('vvp', ['build/pipe-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });

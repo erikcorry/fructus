@@ -33,6 +33,7 @@
 
 import { loadSpec } from './isa.js';
 import { rows, X } from './predecode-rows.js';
+import { entryOf, ENTRY_BITS } from './pipe-ucode.js';
 
 const spec = loadSpec();
 
@@ -100,6 +101,7 @@ const memOf = (r) => {
   return null;
 };
 const bits = (v, w) => (v === X ? 'x'.repeat(w) : v.toString(2).padStart(w, '0'));
+const W = 32 + ENTRY_BITS;
 const counts = [0, 0, 0, 0];
 let memRows = 0;
 const cases = rows.map((r) => {
@@ -119,8 +121,9 @@ const cases = rows.map((r) => {
              bits(mem ? ALU_ADD : f(r.v.alu, writes), 4), bits(f(r.v.lhs, piped), 4), bits(f(r.v.rhs, piped), 4),
              bits(mem ? mem.dest : f(r.v.dest, writes), 4), bits(f(r.v.cond, cbr), 2),
              bits(f(r.v.pc, jump || cbr), 2),
-             bits(mem ? 1 : 0, 1), mf(mem?.st, 1), mf(mem?.w2, 1), mf(mem?.n, 2), mf(mem?.blk, 1), mf(mem?.push, 1)];
-  return `        8'h${r.op.toString(16).padStart(2, '0')}: t = 32'b${t.join('_')};    // ${r.who}`;
+             bits(mem ? 1 : 0, 1), mf(mem?.st, 1), mf(mem?.w2, 1), mf(mem?.n, 2), mf(mem?.blk, 1), mf(mem?.push, 1),
+             bits(mem ? entryOf(mem) : X, ENTRY_BITS)];
+  return `        8'h${r.op.toString(16).padStart(2, '0')}: t = ${W}'b${t.join('_')};    // ${r.who}`;
 }).join('\n');
 
 process.stdout.write(`// =============================================================================
@@ -163,20 +166,21 @@ module classify (
     output logic       mw2,       //   two bytes a register
     output logic [1:0] mn,        //   1, 2 or 3 registers
     output logic       mblk,      //   a block move, walking and writing back lhs
-    output logic       mpush      //   downward, so its registers lie reversed
+    output logic       mpush,     //   downward, so its registers lie reversed
+    output logic [${ENTRY_BITS - 1}:0] uent       // where its routine starts in rtl/pipe/ucode.sv
 );
 
-    logic [31:0] t;
+    logic [${W - 1}:0] t;
     always_comb begin
         (* rom_style = "logic" *)
         case (op)
 ${cases}
-        default: t = 32'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;
+        default: t = ${W}'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_${'x'.repeat(ENTRY_BITS)};
         endcase
     end
 
     assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src,
-            mem, mst, mw2, mn, mblk, mpush} = t;
+            mem, mst, mw2, mn, mblk, mpush, uent} = t;
     assign halt = (op == 8'h${HALT.toString(16).padStart(2, '0')});
 
 endmodule

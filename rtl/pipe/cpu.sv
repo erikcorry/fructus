@@ -137,6 +137,22 @@
 //     floorplanned, ALU stage in (1,1)-(12,12)       1191    26.55  25.4 .. 27.4
 //     floorplanned, ALU stage in (1,4)-(14,14)       1191    27.02  26.2 .. 27.9
 //
+// AND OVER SIXTEEN SEEDS, in a table of its own because a median of sixteen
+// and a median of eight are not comparable:
+//
+//                                                   cells     MHz   spread
+//     THE SEQUENCER'S CONTROL AS MICROCODE, as here  1725    31.38  29.2 .. 33.0
+//     its control as schedules in LUTs               1873    31.23  30.2 .. 33.3
+//     that, with dispatch never stopping itself      1853    30.57  29.2 .. 32.8
+//
+// THE MICROCODE IS 125 LUT4s AND 148 CELLS SMALLER for one of the part's
+// thirty block RAMs, at the same clock: 1494 LUT4 against 1619.  Its control
+// comes out of the RAM's own output register, so nothing about it is on the
+// critical path.  Stopping dispatch from decode instead of at dispatch - so
+// that dispatch needs nothing of the classifier but the length - cost no
+// cycle but moved the whole distribution down: the kind had never been on
+// the path to the pc, only to `go` and `stop`.
+//
 // THE SHIFTERS ARE THE THREE MHz BETWEEN THIS AND 30.  Everything else in the
 // stage - the read, the adder, the logic operations, the result mux and the
 // write - reaches 30.5 once they are gone.  They cannot be hidden by moving
@@ -217,10 +233,11 @@ module pipe_cpu (
     wire [1:0] kind, len, c_cond, c_pcsrc, c_mn;
     wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush;
     wire [3:0] c_alu, c_lhs, c_rhs, c_dest;
+    wire [4:0] c_uent;
     classify c (.op(op), .kind(kind), .len(len), .wen(c_wen), .halt(c_halt),
                 .alu_op(c_alu), .lhs_src(c_lhs), .rhs_src(c_rhs), .dest_src(c_dest),
                 .cond_src(c_cond), .pc_src(c_pcsrc), .mem(c_mem), .mst(c_mst), .mw2(c_mw2),
-                .mn(c_mn), .mblk(c_mblk), .mpush(c_mpush));
+                .mn(c_mn), .mblk(c_mblk), .mpush(c_mpush), .uent(c_uent));
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
     // down the fall-through path behind it, which costs nothing if the branch
@@ -289,6 +306,7 @@ module pipe_cpu (
     logic        d_valid, d_ucode, d_halt, d_odd, d_wen, d_cbr, d_jump;
     logic        d_mem, d_mst, d_mw2, d_mblk, d_mpush;
     logic [1:0]  d_mn;
+    logic [4:0]  d_uent;
     logic [7:0]  d_op, d_b1;
     logic [3:0]  d_alu, d_lhs, d_rhs, d_dest;
     logic [1:0]  d_cond, d_pcsrc, d_len;
@@ -299,6 +317,7 @@ module pipe_cpu (
         d_cbr   <= is_cbr;
         d_jump  <= is_jump;
         {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
+        d_uent  <= c_uent;
         d_pcsrc <= c_pcsrc;
         d_len   <= len;
         d_halt  <= c_halt;
@@ -418,7 +437,7 @@ module pipe_cpu (
     logic [15:0] e_tgt;
     logic        e_mem, e_mst, e_mw2, e_mblk, e_mpush;
     logic [2:0]  e_mN, e_l0, e_l1, e_l2, e_ptr;
-    logic [1:0]  e_mn;
+    logic [4:0]  e_uent;               // where the microcode routine starts
     logic        e_valid;             // for the harness
     logic [15:0] e_pc;                // for the harness
     always_ff @(posedge clk) begin
@@ -436,7 +455,8 @@ module pipe_cpu (
         e_ucode <= d_ucode & ~taken_q;
         e_mem   <= keep & d_mem;
         {e_mst, e_mw2, e_mblk, e_mpush} <= {d_mst, d_mw2, d_mblk, d_mpush};
-        {e_mN, e_l0, e_l1, e_l2, e_ptr, e_mn} <= {mN_d, ml0_d, ml1_d, ml2_d, an, d_mn};
+        {e_mN, e_l0, e_l1, e_l2, e_ptr} <= {mN_d, ml0_d, ml1_d, ml2_d, an};
+        e_uent  <= d_uent;
         e_halt  <= d_halt;
         e_pc    <= d_pc;
     end
@@ -470,114 +490,85 @@ module pipe_cpu (
     // THE MEMORY SEQUENCER
     // =========================================================================
     // It starts in a memory instruction's ALU cycle, whose ALU computes the
-    // first address into `mar` - so no adder stands in front of the address pins -
-    // and then takes one cycle a byte, `mt` counting them from 1:
+    // first address - a load puts it out at once, from the adder, and a store
+    // keeps it in `mar` - and then takes one cycle a byte:
     //
-    //     mt 1 .. N      the address is mar, which steps up by one; a store
-    //                    writes the byte `wq` holds, filled the cycle before
-    //     mt 2 .. N + 1  a load's byte arrives, from the lane mar[0] was, and
-    //                    shifts into `ldq` - low byte first
-    //     mt N           dispatch is released: mt N + 1 is the bubble that reads
-    //                    the next instruction's word, which dispatches at N + 2
+    //     address steps  the address is mar, or mar + 1 for a load; a store
+    //                    writes the byte `wq` holds, filled the step before
+    //     arrivals       a load's byte comes back, from the lane its address
+    //                    had, and shifts into `ldq` - low byte first
+    //     release        dispatch is let go as the last address goes out
     //
     // AND IT WRITES REGISTERS THROUGH THE ALU: e_op is held at 13, whose result
     // is `ldq`, and `mwe` joins the write enables.  A loaded register is written
     // the cycle after its last byte arrives, while the next byte shifts in
     // behind it.  A block move's pointer is written through the same word:
-    // a load's FIRST, at mt 1, with any loaded register that is the pointer
-    // left unwritten - the semantics end with the pointer's own value - and a
-    // store's LAST, at N + 1, so that a stored register that is the pointer is
-    // still read as it was.  Every write lands before the next instruction
-    // reaches decode at N + 3, so nothing needs the bypass.
+    // a load's FIRST, with any loaded register that is the pointer left
+    // unwritten - the semantics end with the pointer's own value - and a
+    // store's LAST, so that a stored register that is the pointer is still read
+    // as it was.  Every write lands before the next instruction reaches decode,
+    // so nothing needs the bypass.
+    //
+    // WHICH STEP DOES WHAT IS MICROCODE: rtl/pipe/ucode.sv, a block RAM
+    // generated by tools/gen-pipe-ucode.js, whose header has the rules and the
+    // word.  It is addressed by the instruction's shape and the step, a step
+    // ahead - its output is registered, so every control here comes out of a
+    // flop, the RAM's own.  Only what happens IN the ALU cycle is logic here:
+    // no word can have been read for it.
     //
     // A BYTE AT A TIME, aligned or not: two bytes of a word cost two cycles,
     // which a later version may take in one.
-    // THE FIRST ADDRESS IS THE ALU'S RESULT: the table gives every memory
-    // instruction op 0, and its operands are the base and the offset.
     wire mstart = e_mem & ~taken_q;
     wire [15:0] ea   = asum;
     wire [15:0] ptrv = e_mpush ? ea : aq + {13'd0, e_mN};   // where the pointer ends
 
     logic       mact, mst, mw2, mblk, mlane, weq;
-    logic [3:0] mt;
+    logic [2:0] mu;                        // the step, less one
+    logic [4:0] ment;                      // the routine's entry
     logic [2:0] ml0, ml1, ml2, mpr;
     logic [7:0] wq;
     logic [15:0] mpc;
 
-    // EVERY CONTROL IS A FLOP.  Each is a nine-step schedule, bit t - 1 for
-    // step t, worked out once in the ALU cycle and shifted one place a cycle,
-    // so what the step does is bit 0 of a shift register.  The register write
-    // enables are a one-hot flop filled a cycle ahead.  Worked out from the
-    // step counter as it went, they measured 30.99 MHz: the counter's sums and
-    // compares, the enable decode, and then a global buffer, in front of the
-    // register file's clock enables.
-    function automatic [8:0] at(input [3:0] t);
-        at = (t == 4'd0) ? 9'd0 : 9'd1 << (t - 4'd1);
-    endfunction
-    // A LOAD PUTS ITS FIRST ADDRESS OUT IN ITS ALU CYCLE, straight from the
-    // ALU, so its steps are one earlier than a store's: addresses mar + 1 at
-    // steps 1 .. N - 1, bytes arriving at 1 .. N, register i written at
-    // 1 + (i + 1) x bytes-per-register, and dispatch released at N - 1 - in
-    // the ALU cycle itself for a one-byte load.  A store cannot do the same:
-    // its first byte's data would have to be read in decode, whose two ports
-    // are busy then with its address.
-    wire [3:0] eN   = {1'b0, e_mN};
-    wire [3:0] eEnd = e_mst ? (e_mblk ? eN + 4'd1 : eN) : eN + 4'd1;
-    wire [8:0] eA   = e_mst ? (9'd1 << eN) - 9'd1                 // steps 1 .. N
-                            : (9'd1 << (eN - 4'd1)) - 9'd1;       // steps 1 .. N - 1
-    wire [8:0] eC   = e_mst ? 9'd0 : (9'd1 << eN) - 9'd1;         // steps 1 .. N
-    wire [8:0] eR   = e_mst ? at(eN) : at(eN - 4'd1);
-    //  step:           a load's registers, when their last byte is in
-    wire [8:0] eW0  = e_mst ? 9'd0 : at(e_mw2 ? 4'd3 : 4'd2);
-    wire [8:0] eW1  = (~e_mst & e_mn >= 2'd2) ? at(4'd5) : 9'd0;
-    wire [8:0] eW2  = (~e_mst & e_mn == 2'd3) ? at(4'd7) : 9'd0;
-    //  a block's pointer: a load's first, a store's last
-    wire [8:0] eP   = ~e_mblk ? 9'd0 : e_mst ? at(eN + 4'd1) : at(4'd1);
+    // A load puts its first address out in its ALU cycle, from the adder.
     assign ldnow = e_mem & ~e_mst;
 
-    logic [8:0] sA, sC, sR, sD, sW0, sW1, sW2, sP;
-    assign aphase   = sA[0];
-    assign mrestart = sR[0] | (mstart & ~e_mst & e_mN == 3'd1);
-    wire   mcap     = sC[0];
-    wire   mdone    = sD[0];
+    // THE ROUTINE'S ENTRY IS PREDECODE'S, a column of rtl/pipe/classify.sv
+    // carried here like any other field, so any opcode can start anywhere.
+    wire [15:0] uw;
+    wire        mdone = uw[3];
+    wire [7:0]  uaddr = mstart          ? {e_uent, 3'd0}
+                      : (mact & ~mdone) ? {ment, mu + 3'd1}
+                      :                   8'd0;
+    pipe_ucode u (.clk(clk), .addr(uaddr), .word(uw));
+
+    assign aphase   = uw[0];
+    wire   mcap     = uw[1];
+    // A one-byte load releases dispatch in its ALU cycle, before any word.
+    assign mrestart = uw[2] | (mstart & ~e_mst & e_mN == 3'd1);
+    wire   [1:0] uW  = uw[5:4];
+    wire         uP  = uw[6];
+    wire         uWE = uw[7];
+    wire   [1:0] uKS = uw[9:8];
+    wire         uKH = uw[10];
     wire   [7:0] mbyte = mlane ? hi : lo;
 
     // A loaded register that is the pointer is not written: the pointer's own
     // value is the one the semantics end with.
-    wire sup0 = mblk & (ml0 == mpr), sup1 = mblk & (ml1 == mpr), sup2 = mblk & (ml2 == mpr);
-    wire [7:0] mwe_n = mstart ? (eP[0] ? 8'd1 << e_ptr : 8'd0)
-                     : ((sW0[1] & ~sup0) ? 8'd1 << ml0 : 8'd0)
-                     | ((sW1[1] & ~sup1) ? 8'd1 << ml1 : 8'd0)
-                     | ((sW2[1] & ~sup2) ? 8'd1 << ml2 : 8'd0)
-                     | (sP[1] ? 8'd1 << mpr : 8'd0);
-    logic [7:0] mwe;
-    always_ff @(posedge clk) begin
-        mwe <= rst ? 8'd0 : mwe_n;
-        if (rst) {sA, sC, sR, sD, sW0, sW1, sW2, sP} <= '0;
-        else if (mstart) begin
-            sA  <= eA;
-            sC  <= eC;
-            sR  <= eR;
-            sD  <= at(eEnd);
-            {sW0, sW1, sW2, sP} <= {eW0, eW1, eW2, eP};
-        end else
-            {sA, sC, sR, sD, sW0, sW1, sW2, sP} <= {sA >> 1, sC >> 1, sR >> 1, sD >> 1,
-                                                    sW0 >> 1, sW1 >> 1, sW2 >> 1, sP >> 1};
-    end
+    wire [2:0] wreg = (uW == 2'd1) ? ml0 : (uW == 2'd2) ? ml1 : ml2;
+    wire       wdat = (uW != 2'd0) & ~(mblk & wreg == mpr);
+    wire [7:0] mwe  = (wdat ? 8'd1 << wreg : 8'd0) | (uP ? 8'd1 << mpr : 8'd0);
 
-    // e_op is 13 from the ALU cycle to the sequencer's last.
     assign mhold = mstart | (mact & ~mdone);
 
-    // A store's next byte: byte k, in the cycle before the one that writes it -
-    // the first register's low byte in the ALU cycle, and after that register
-    // k / 2, half k % 2.  It is read through DECODE'S LEFT PORT, which has
-    // nothing to do from a memory instruction's ALU cycle until the sequencer
-    // releases dispatch.  Two ports of the sequencer's own - a word for the
-    // later bytes and one for byte 0 - were 186 of its 572 LUTs; one port of
-    // its own, a byte wide, still 114 more than borrowing.
-    wire [2:0] kreg  = mstart ? e_l0 : (mt[2:1] == 2'd0) ? ml0 : (mt[2:1] == 2'd1) ? ml1 : ml2;
+    // A store's next byte: the first register's low byte in the ALU cycle, and
+    // after that the one the word names.  It is read through DECODE'S LEFT
+    // PORT, which has nothing to do from a memory instruction's ALU cycle
+    // until the sequencer releases dispatch.  Two ports of the sequencer's own
+    // - a word for the later bytes and one for byte 0 - were 186 of its 572
+    // LUTs; one port of its own, a byte wide, still 114 more than borrowing.
+    wire [2:0] kreg  = mstart ? e_l0 : (uKS == 2'd0) ? ml0 : (uKS == 2'd1) ? ml1 : ml2;
     assign kreg_b = kreg;
-    wire       khalf = ~mstart & mt[0];
+    wire       khalf = ~mstart & uKH;
     wire [15:0] kword = R[an_rd];
     wire [7:0]  kbyte = khalf ? kword[15:8] : kword[7:0];
 
@@ -586,7 +577,8 @@ module pipe_cpu (
         else if (mstart) mact <= 1'b1;
         else if (mdone)  mact <= 1'b0;
         if (mstart) begin
-            mt  <= 4'd1;
+            mu  <= 3'd0;
+            ment <= e_uent;
             mar <= ea;
             mlane <= ea[0];
             ldq <= ptrv;                   // a block's pointer, written from here
@@ -596,11 +588,11 @@ module pipe_cpu (
             wq  <= kbyte;
             weq <= e_mst;
         end else begin
-            mt  <= mt + 4'd1;
+            mu  <= mu + 3'd1;
             if (aphase) begin mar <= mar + 16'd1; mlane <= maddr[0]; end
             if (mcap)   ldq <= mw2 ? {mbyte, ldq[15:8]} : {8'h00, mbyte};
             wq  <= kbyte;
-            weq <= mst & sA[1];            // a store writes in every address step
+            weq <= uWE;
         end
     end
     // A store's address is mar; a load's, whose mar is the address it last
