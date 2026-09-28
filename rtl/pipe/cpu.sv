@@ -151,16 +151,22 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     WITH EXCEPTIONS AND INTERRUPTS, as here        1917    30.61  29.2 .. 31.9
+//     MICROCODE REDIRECTING THROUGH taken_q, as here 1883    31.10  29.9 .. 32.0
+//     with exceptions and interrupts, own mux arm    1917    30.61  29.2 .. 31.9
+//     and without the opcode substitution (wrong)    1901    30.62  29.6 .. 32.0
 //     the bypass selects spelled as AND-ORs          1927    29.25  28.4 .. 31.0
 //     a store's bytes taken from aq, not the port    2053    29.95  28.8 .. 31.6
 //     the sequencer's control as microcode           1725    31.38  29.2 .. 33.0
 //     its control as schedules in LUTs               1873    31.23  30.2 .. 33.3
 //     that, with dispatch never stopping itself      1853    30.57  29.2 .. 32.8
 //
-// INTERRUPTS COST 0.77 MHz of median and no low end, against the 0.83 they
-// cost rtl/cpu.sv, and 144 LUT4s and a second block RAM - the word grew to 32
-// bits.  The slow seeds are decode's: from the SPRAM, through a register
+// INTERRUPTS COST 0.28 MHz of median and nothing at the low end, 124 LUT4s
+// and a second block RAM - the word grew to 32 bits - and a cycle on brk and
+// rti, which redirect the fetch through taken_q and tgt_q, the flops a taken
+// branch uses, a cycle after their word asks.  Given an arm of their own on
+// the address mux they cost 0.77, and they took five cycles rather than six.
+// The opcode substitution that makes an interrupt a brk costs nothing: taken
+// out, the design measured the same.  The slow seeds are decode's: from the SPRAM, through a register
 // number and the eight-way read, into an operand flop.  Whichever flop on
 // that read reports - aq, bq, a shadow or the store byte wq - is only the one
 // that loses the tie, which is why taking the shadows and then wq off the
@@ -309,7 +315,6 @@ module pipe_cpu (
     wire        wake;                      // an interrupt ends a halt
     assign mem_addr = taken_q ? {tgt_q[15:1], 1'b0}
                     : jnow    ? {jaddr[15:1], 1'b0}
-                    : urj     ? {rjaddr[15:1], 1'b0}
                     : ldnow   ? asum
                     : aphase  ? maddr
                     :           {go ? pcw + 15'd1 : pcw, 1'b0};
@@ -323,8 +328,6 @@ module pipe_cpu (
             pc <= tgt_q; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
         end else if (jnow) begin
             pc <= jaddr; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
-        end else if (urj) begin
-            pc <= rjaddr; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
         end else if (take) begin
             // The brk goes down the pipeline; the pc stays on the instruction
             // it replaced.
@@ -541,8 +544,13 @@ module pipe_cpu (
     // The instruction in the ALU stage while taken_q is set is the first of
     // the three behind the branch, so it may neither write nor branch.
     always_ff @(posedge clk) begin
-        taken_q <= ~rst & ~taken_q & e_cbr & taken;
-        tgt_q   <= e_tgt;
+        // THE MICROCODE REDIRECTS THROUGH THE SAME FLOPS a taken branch does, a
+        // cycle after its word asks: a fourth arm on the address mux, for the
+        // word's own address, measured 30.61 MHz against 31.13 without it.
+        // The squash taken_q brings finds nothing to squash - dispatch is
+        // stopped - and the routine's own writes are not taken_q's to stop.
+        taken_q <= ~rst & ~taken_q & ((e_cbr & taken) | urj);
+        tgt_q   <= urj ? rjaddr : e_tgt;
         for (int k = 0; k < 8; k++) if ((e_we[k] & ~taken_q) | mwe[k]) R[k] <= y;
     end
     assign result = y;

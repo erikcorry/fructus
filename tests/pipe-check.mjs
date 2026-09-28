@@ -116,13 +116,15 @@ const brs = [...branches.values()];
 // THE EXCEPTION INSTRUCTIONS.  brk, sei and cli go in the random programs;
 // rti is reached only through brk, since the vector holds nothing but rti in
 // both machines - so a brk is a round trip that leaves every register as it
-// was, through the shadows.  Each costs rtl/pipe/cpu.sv five cycles,
-// dispatch to dispatch.
+// was, through the shadows.  brk and rti cost rtl/pipe/cpu.sv six cycles,
+// dispatch to dispatch, since they redirect the fetch through taken_q; sei
+// and cli five.
 const oneByte = (mnemonic) => parseInt(spec.insn.find((i) => i.mnemonic === mnemonic)
                                            .form[0].encoding.replace(/[\s_]/g, ''), 2);
 const RTI = oneByte('rti'), VECTOR = spec.cpu.vectors.brk;
 const excs = ['brk', 'sei', 'cli'].map((mn) => ({ op: oneByte(mn), nbytes: 1, b1s: [0] }));
 const EXC = /^(brk|rti|sei|cli)$/;
+const EXC_CYCLES = { brk: 6, rti: 6, sei: 5, cli: 5 };
 
 // THE JUMPS, found by their semantics.  An immediate target is patched in
 // after layout like a branch's offset.  A register target is a pair: a
@@ -363,7 +365,7 @@ for (let p = 0; p < PROGRAMS; p++) {
     const d = decode(dec, [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
     const taken = branches.has(`${d.insn.mnemonic}/${d.form.name}@${m.mem[pc]}`) && takes(pc, d.nbytes);
     const jump = JUMP_SEM.test(d.insn.semantics ?? '');
-    const exc = EXC.test(d.insn.mnemonic);
+    const exc = EXC.test(d.insn.mnemonic) ? EXC_CYCLES[d.insn.mnemonic] : 0;
     const mem = memBytes(d.insn.semantics ?? '');
     const memst = mem && /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(d.insn.semantics);
     m.step();
@@ -462,7 +464,7 @@ programs.forEach(({ trace, hash, old }, p) => {
   // dispatch than retirement.
   for (let i = 1; i < Math.min(ds.length, trace.length + 1); i++) {
     const prev = trace[i - 1];
-    const want = prev.exc ? 5 : prev.mem ? prev.mem + (prev.memst ? 4 : 3) : prev.jump ? 3 : prev.taken ? 4
+    const want = prev.exc ? prev.exc : prev.mem ? prev.mem + (prev.memst ? 4 : 3) : prev.jump ? 3 : prev.taken ? 4
                : (prev.pc & 1) && prev.len === 3 ? 2 : 1;
     if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) complain(`program ${p} dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
     if (ds[i].cyc - ds[i - 1].cyc !== want)
