@@ -151,7 +151,13 @@ export const ALU_OPS = [
   { code: 11, name: 'asr',   does: 'lhs >>> rhs[3:0]' },
   { code: 12, name: 'unary', does: "rtl/unary.sv's fast operations on lhs" },
   { code: 13, name: 'slow',  does: "rtl/unary.sv's slow operations, registered a cycle earlier" },
+  { code: 14, name: 'mul',   does: 'lhs * rhs, low half, from an SB_MAC16 registered a cycle earlier' },
 ];
+
+// The operations whose result is registered, so that an instruction using one
+// must declare `extra_cycles` and nothing else may: rtl/ucode.sv gives exactly
+// those the SLOW step.
+export const ALU_REGISTERED = new Set(['slow', 'mul']);
 
 // --- which operation each instruction needs, from its semantics ---------------
 export const ALU_RULES = [
@@ -171,6 +177,7 @@ export const ALU_RULES = [
   [/^R\[d\] = (shl|asr|lsr)\(R\[a\], (R\[b\]|imm) & 15\)$/, (m) => m[1]],
   // an operation that declares extra cycles is one whose result is registered
   [/^R\[d\] = (sxt8|clz|bitrev|popcount|clmul)\(R\[a\]\)$/, (m, insn) => (insn.extra_cycles ? 'slow' : 'unary')],
+  [/^R\[d\] = R\[a\] \* (R\[b\]|imm)$/,                    'mul'],
   [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
   [/^R\[d\] = \(\((R\[b\]|imm) & 0xff\) << 8\) \| \(R\[a\] & 0xff\)$/, 'movhi'],
   [/^R\[d\] = \(R\[a\] & mask\) != 0$/,                    'isset'],

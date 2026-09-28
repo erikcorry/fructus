@@ -15,10 +15,10 @@ written, but never tested on hardware. Timing analysis puts it between about
 22 and 30 MHz on iCE40, depending on the configuration — the CPU alone or with
 the VGA frame buffers beside it, 32K or 64K of memory — and every configuration
 is fast enough to share the VGA's 25 MHz clock as a single clock domain. Most
-byte codes take two cycles. Full barrel shifter, but no cache, branch
-predictor, or mul instruction. Not very pipelined.
+byte codes take two cycles. Full barrel shifter and a 16×16 multiply in one of
+the iCE40's DSPs, but no cache or branch predictor. Not very pipelined.
 
-![The Fructus opcode map: 145 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
+![The Fructus opcode map: 149 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
 
 The design is RISC-inspired:
 - The only memory operations are load, store, push, pop, store-multiple, load-multiple.
@@ -345,6 +345,18 @@ between registers `and rd, ra, #255` is three through imm10. `popcount`'s adds
 are written as gates, so no carry chain is forced on it; the carry chains it had
 cost more in routing than its size suggested.
 
+`mul` takes the low half of a 16×16 product from an `SB_MAC16`, at 0x30
+(`rd, rd, #imm5`), 0x31 (`rd, ra, #imm10`) and 0x36/0x37 (`rd, ra, rb`) — the
+unary row's free columns, in the ALU groups' shapes. Like `clz` and `popcount`
+it takes a cycle more than its length: the DSP's register after its adder is
+filled in the SLOW step and read out in EXEC, and once the right-hand operand
+is in its flop all four opcodes run the same two microcode words. `rtl/alu.sv`
+instantiates the DSP rather than letting yosys's `-dsp` infer it, because the
+inference copies the operand flops into the DSP's input registers and drags
+the logic in front of them to its column: 26.6 MHz inferred, 29.5 instantiated,
+against 29.1 without `mul`, medians of eight seeds. nextpnr doesn't time
+through `SB_MAC16` at all — see [the toolchain notes](docs/fpga-toolchain.md).
+
 Port B's register number comes off the instruction bytes rather than out of
 immgen, so the register file's read overlaps the immediate unit instead of
 waiting for it — four LUT levels and 38 MHz against six and 31, with a real 8×16
@@ -552,6 +564,8 @@ The instruction set is settled enough to write real code against, and the
 snippets in `snippets/` are real code. Open:
 
 - `clz`, `bitrev` and `popcount` are marked TENTATIVE in the spec.
+- gcc does not use `mul` yet: a 16-bit multiply still calls libgcc's `__mulhi3`.
+  The port needs a `mulhi3` pattern in `vendor/gcc/gcc/config/fructus/fructus.md`.
 - The monitor in `tangerine/` is barely started.
 - Nothing checks that a call site and its callee agree about arity. The fix is
   a `.args` declaration the assembler and linker verify; `isa/abi.s` describes

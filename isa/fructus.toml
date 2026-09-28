@@ -944,9 +944,11 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   0010_1101                mov  rd, #immask5          2 bytes
 #   0010_111b                movhi rd, ra, rb           2 bytes
 #
-#   0011_0000 .. 0011_0001   -- free
+#   0011_0000                mul  rd, rd, #imm5         2 bytes
+#   0011_0001                mul  rd, ra, #imm10        3 bytes
 #   0011_001s                unary ops, 5 in TWO opcodes 2 bytes
-#   0011_0100 .. 0011_0111   -- free
+#   0011_0100 .. 0011_0101   -- free
+#   0011_011b                mul  rd, ra, rb            2 bytes
 #
 #   THE mov ROW IS AN ALU GROUP WITHOUT AN ALU OPERATION, and it is numbered as
 #   one.  `mov rd, #imm` is `or rd, #imm` with the register half thrown away, so
@@ -968,25 +970,27 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   THE UNARY OPERATIONS HAVE A ROW OF THEIR OWN, which they did not before -
 #   they shared mov's, three constants and eight operations in eight opcodes.
 #   Nothing about that was wrong, but the two have nothing to do with each other
-#   and the row read as two half-rows.  Six of the eight slots are free now, so
-#   a unary operation that wants a whole opcode - one with a real second operand,
-#   or one whose selector will not fit in two bits - has somewhere to go.
+#   and the row read as two half-rows.  The free slots let mul take the ALU
+#   group's shape around them: +0, +1 and +6/+7, with the unary pair in +2/+3.
+#   It is the row's other operation that is registered - the unary pair at 0x33
+#   is the first - so the row holds both of the machine's slow operations.
 #
-#   AND THE ROW'S +0 SLOT IS AN EXPANSION PATH WORTH SAYING OUT LOUD.  0011_0000
-#   is free and has the `dddi_iiii` shape: one register and FIVE spare bits.  A
-#   unary whose destination is tied to its source - `rd = f(rd)`, the same tie
+#   AND +4 AND +5 ARE AN EXPANSION PATH WORTH SAYING OUT LOUD.  Each is free and
+#   has the `dddi_iiii` shape: one register and FIVE spare bits.  A unary whose
+#   destination is tied to its source - `rd = f(rd)`, the same tie
 #   `ld rd, [rd, #off5]` already uses - spends nothing on a second register, so
 #   those five bits are all selector:
 #
-#       byte 0 = 0011_0000, byte 1 = dddi_iiii
+#       byte 0 = 0011_0100, byte 1 = dddi_iiii
 #       -> 32 single-register unary operations
 #
 #   That is more than five times the two-opcode form's six, out of ONE opcode,
-#   and +4 and +5 could do the same again if it ever came to it.  So the six at
-#   0011_001s are not a ceiling on unary operations; they are the ceiling on
-#   unary operations that want a separate destination.  Nothing occupies +0 yet
-#   because nothing needs it - it is written down so that "the unary encoding is
-#   full" is never a reason to put an operation somewhere worse.
+#   and +5 could do the same again.  +0 held this paragraph until mul took it.
+#   So the six at 0011_001s are not a ceiling on unary operations; they are the
+#   ceiling on unary operations that want a separate destination.  Nothing
+#   occupies +4 yet because nothing needs it - it is written down so that "the
+#   unary encoding is full" is never a reason to put an operation somewhere
+#   worse.
 #
 #   THE UNARY OPERATIONS ARE STILL IN THE RIGHT COLUMN, and the column is the
 #   whole argument for putting them here.  Byte 1 of a unary op is
@@ -2331,6 +2335,80 @@ semantics = "R[d] = clmul(R[a])"
   [[insn.form]]
   name     = "reg_reg"
   encoding = "0011_0010  01aa_addd"
+
+
+# --- mul ---------------------------------------------------------------------
+# The low sixteen bits of a product, in the unary row's four free columns with
+# the ALU group's shapes: +0 imm5, +1 imm10, +6/+7 three registers.  There is
+# no imm3 form - +2/+3 are the unary opcodes - and no mask forms, because a
+# power of two is a shift and a mask is nothing to multiply by.
+#
+#     0x30  mul rd, rd, #imm5      2 bytes
+#     0x31  mul rd, ra, #imm10     3 bytes
+#     0x36  mul rd, ra, rb         2 bytes, with 0x37
+#
+# SIGNED AND UNSIGNED ARE THE SAME INSTRUCTION.  The low half of a product does
+# not depend on how its operands are read, so one mul serves both and the
+# immediates are sign extended like every other ALU group's: `mul rd, rd, #-3`
+# is what it looks like.
+#
+# THE PRODUCT IS AN SB_MAC16's, AND IT IS REGISTERED, like popcount's counts.
+# The DSP's own register sits after the adder that combines its four 8x8
+# partial products, so the whole multiply happens in the SLOW step and EXEC
+# reads a register.  See rtl/alu.sv for why the DSP is instantiated.
+# A single-cycle multiply would be the deepest path in the machine: flop to
+# DSP to flop measures about 16 ns under icetime, half of it routing to and
+# from the DSP's column.  So each form takes one cycle more than its length.
+#
+# ALL FOUR OPCODES SHARE ONE TAIL.  Once the right-hand operand is in its flop
+# they are the same instruction, so every form ends in SLOW and then EXEC; the
+# three-byte form fetches its last byte on the way.  See rtl/ucode.sv.
+#
+# nextpnr-ice40 0.7 DOES NOT TIME THROUGH SB_MAC16, so `just speed` cannot see
+# this path at all; icetime can.
+#
+# GCC DOES NOT USE IT YET.  The port has no mulhi3 pattern, so a multiply in C
+# is still a call to libgcc's __mulhi3.
+
+[[insn]]
+mnemonic = "mul"
+summary  = "rd = low 16 bits of ra * rb"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = R[a] * R[b]"
+extra_cycles = 1
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "0011_011b  ccaa_addd"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+[[insn]]
+mnemonic = "mul"
+summary  = "rd = low 16 bits of ra * immediate"
+operands = [
+  { name = "d",   type = "reg"   },
+  { name = "a",   type = "reg"   },
+  { name = "imm", type = "int16" },
+]
+syntax   = "{d}, {a}, #{imm}"
+semantics = "R[d] = R[a] * imm"
+extra_cycles = 1
+
+  [[insn.form]]
+  name     = "reg_imm5"
+  encoding = "0011_0000  iiii_iddd"
+  fields   = { i = "imm:imm5" }
+  tie      = { a = "d" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm10"
+  encoding = "0011_0001  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
 # --- br ---------------------------------------------------------------------

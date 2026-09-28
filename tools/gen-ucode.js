@@ -24,7 +24,7 @@
 
 import { loadSpec } from './isa.js';
 import { buildDecoder, decode } from './decode.js';
-import { ALU_RULES, ALU_ELSEWHERE, ALU_LATER, LHS_FIELD, LHS_PORTB } from './control.js';
+import { ALU_RULES, ALU_ELSEWHERE, ALU_LATER, ALU_REGISTERED, LHS_FIELD, LHS_PORTB } from './control.js';
 
 // THE STEP NAMES A PORT-A SOURCE BY ITS CODE, not by a two-bit selector that
 // rtl/cpu.sv has to expand.  A 4:1 mux over codes cost a LUT level in series
@@ -89,7 +89,7 @@ rom[STEP.FETCH2] = word({ fetch: 1, next: STEP.EXEC });  why.set(STEP.FETCH2, 'f
 rom[STEP.HALT]   = word({ halt: 1, next: STEP.HALT });   why.set(STEP.HALT, 'stay here');
 rom[STEP.TRAP]   = word({ trap: 1, next: STEP.TRAP });   why.set(STEP.TRAP, 'stay here, flagged');
 rom[STEP.BOOT]   = word({ dispatch: 1 });                why.set(STEP.BOOT, 'after reset: the first opcode is on the bus');
-rom[STEP.SLOW]   = word({ next: STEP.EXEC });               why.set(STEP.SLOW, 'wait: rtl/unary.sv registers the slow pair');
+rom[STEP.SLOW]   = word({ next: STEP.EXEC });               why.set(STEP.SLOW, 'wait: the slow pair or the product is being registered');
 rom[STEP.BRF2]   = word({ fetch: 1, next: STEP.BRDO });     why.set(STEP.BRF2, "a branch's displacement");
 rom[STEP.BRDO]   = word({ pcload: 2, dispatch: 1, next: STEP.PCDISP });
                                                             why.set(STEP.BRDO, 'take it, or dispatch what is already on the bus');
@@ -278,6 +278,11 @@ for (const n of [1, 2, 3]) {
                            'pop: the address, which is the pointer itself');
 }
 
+// A three-byte form with a registered result fetches its last byte and then
+// joins the two-byte ones at SLOW: once the right-hand operand is in its flop,
+// every form of mul is the same instruction and runs the same words.
+STEP.F2SLOW = alloc({ fetch: 1, next: STEP.SLOW }, 'fetch byte 2, then wait with the two-byte forms');
+
 // --- the entry points ------------------------------------------------------------
 const classify = (d) => {
   const sem = d.insn.semantics ?? '';
@@ -331,11 +336,12 @@ const classify = (d) => {
   // registered, and the other way round - or the wait and the register disagree.
   const name = typeof rule[1] === 'function' ? rule[1](sem.match(rule[0]), d.insn) : rule[1];
   const extra = d.insn.extra_cycles ?? 0;
-  if ((name === 'slow') !== (extra > 0))
+  if (ALU_REGISTERED.has(name) !== (extra > 0))
     throw new Error(`${d.insn.mnemonic}: extra_cycles ${extra} but ALU operation ${name}`);
-  if (extra > 1 || (extra && d.nbytes !== 2))
-    throw new Error(`${d.insn.mnemonic}: only one extra cycle on a two-byte form is implemented`);
-  return extra ? 'alu2slow' : d.nbytes === 1 ? 'alu1' : d.nbytes === 2 ? 'alu2' : 'alu3';
+  if (extra > 1 || (extra && d.nbytes === 1))
+    throw new Error(`${d.insn.mnemonic}: only one extra cycle on a two- or three-byte form is implemented`);
+  if (extra) return d.nbytes === 2 ? 'alu2slow' : 'alu3slow';
+  return d.nbytes === 1 ? 'alu1' : d.nbytes === 2 ? 'alu2' : 'alu3';
 };
 const ENTRY = {
   brcond:   () => word({ fetch: 1, next: STEP.BRF2 }),
@@ -367,6 +373,7 @@ const ENTRY = {
   alu1: () => word({ next: STEP.EXEC }),
   alu2: () => word({ fetch: 1, next: STEP.EXEC }),
   alu2slow: () => word({ fetch: 1, next: STEP.SLOW }),
+  alu3slow: () => word({ fetch: 1, next: STEP.F2SLOW }),
   alu3: () => word({ fetch: 1, next: STEP.FETCH2 }),
   halt: () => word({ halt: 1, next: STEP.HALT }),
   nop:  () => word({ dispatch: 1 }),
@@ -574,9 +581,11 @@ ${stepText}
 //       3     next opcode     EXEC: wen, dispatch   write the result, dispatch
 //
 // An instruction that declares \`extra_cycles\` in the spec - clz and popcount,
-// whose result rtl/unary.sv registers - enters through SLOW instead of going
-// straight to EXEC: a step that consumes nothing, so the next opcode waits on
-// the bus while the register fills.
+// whose result rtl/unary.sv registers, and mul, whose product rtl/alu.sv's
+// SB_MAC16 does - enters through SLOW instead of going straight to EXEC: a step
+// that consumes nothing, so the next opcode waits on the bus while the
+// register fills.  A three-byte one fetches its last byte in F2SLOW first, so
+// every form of mul converges on the same two words.
 //
 // A ONE-BYTE FORM'S ENTRY WORD FETCHES NOTHING, and that is what makes
 // rtl/cpu.sv's early operand read possible.  Every other instruction's entry
@@ -602,6 +611,8 @@ ${listed('alu1')}
 ${listed('alu2')}
 //     two-byte ALU with a registered result, one extra cycle through SLOW:
 ${listed('alu2slow')}
+//     three-byte ALU with a registered result, through F2SLOW and then SLOW:
+${listed('alu3slow')}
 //     three-byte ALU:
 ${listed('alu3')}
 //     conditional branches - fetch both bytes, then take or dispatch:

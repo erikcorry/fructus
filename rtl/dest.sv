@@ -17,9 +17,9 @@
 // FOUND BY DECODING, every multi-byte form's written registers:
 //
 //    8  rd field      insn[10:8]
-//             ld ld8 mov/reg_imm5 movhi mov/reg_immbit5 mov/reg_immask5 clmul
-//             bitrev sxt8 clz popcount add rsb xor or and shl asr lsr iseq
-//             isset pop (a) ldm (a)
+//             ld ld8 mov/reg_imm5 movhi mov/reg_immbit5 mov/reg_immask5 mul
+//             clmul bitrev sxt8 clz popcount add rsb xor or and shl asr lsr
+//             iseq isset pop (a) ldm (a)
 //    9  ra field      insn[13:11]
 //             pop (b) ldm (b)
 //   10  opcode field  insn[2:0]

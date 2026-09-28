@@ -29,11 +29,11 @@
 // from the instruction:
 //
 //   rd field  insn[10:8]
-//             ld ld8 add rsb xor or and shl asr lsr iseq isset br jmp brclr
-//             call brset
+//             ld ld8 mul add rsb xor or and shl asr lsr iseq isset br jmp
+//             brclr call brset
 //   ra field  insn[13:11]
-//             st st8 ld ld8 movhi clmul bitrev sxt8 clz popcount add rsb xor
-//             or and shl asr lsr iseq br
+//             st st8 ld ld8 movhi mul clmul bitrev sxt8 clz popcount add rsb
+//             xor or and shl asr lsr iseq br
 //
 // THE COLUMN NEARLY DECIDES IT - +0, +4 and +5 are rd, the rest ra - and the
 // exceptions, computed rather than remembered, are:

@@ -27,7 +27,8 @@ import { BUILTIN, test, Machine } from '../tools/sim.js';
 import { buildDecoder, decode } from '../tools/decode.js';
 import { execFileSync } from 'node:child_process';
 import { assemble } from './harness.mjs';
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 const have = (cmd) => {
   try { execFileSync('sh', ['-c', `command -v ${cmd}`], { stdio: 'ignore' }); return true; }
@@ -654,7 +655,7 @@ endmodule
     return () => (s ^= s << 13, s ^= s >>> 17, s ^= s << 5, s >>> 0); })();
   const NAMES = spec.optype.cond3.names;
   const UN = unaryOps();
-  const OP = { add: 0, rsb: 1, iseq: 2, isset: 3, xor: 4, or: 5, and: 6, rhs: 7, shl: 8, lsr: 9, movhi: 10, asr: 11, unary: 12, slow: 13 };
+  const OP = { add: 0, rsb: 1, iseq: 2, isset: 3, xor: 4, or: 5, and: 6, rhs: 7, shl: 8, lsr: 9, movhi: 10, asr: 11, unary: 12, slow: 13, mul: 14 };
   const E = [0, 1, 2, 0x7ffe, 0x7fff, 0x8000, 0x8001, 0xfffe, 0xffff, 0x00ff, 0x0100, 0x5555];
   const pairs = [];
   for (const a of E) for (const b of E) pairs.push([a, b]);
@@ -680,14 +681,16 @@ endmodule
     rows.push(row(OP.and, l, r, l & r));
     rows.push(row(OP.rhs, l, r, r));
     rows.push(row(OP.movhi, l, r, ((r & 0xff) << 8) | (l & 0xff)));
+    rows.push(row(OP.mul, l, r, Math.imul(l, r)));   // registered, like the slow pair
     for (const nm of ['shl', 'lsr', 'asr']) rows.push(row(OP[nm], l, r, BUILTIN[nm](l, r & 15)));
     // the operation rides rhs[2:1]; every other bit of rhs is left random, and
     // the slow pair is read through its own operation code
     for (const o of UN)
       rows.push(row(o.slow ? OP.slow : OP.unary, l, (r & ~6) | (o.code << 1), BUILTIN[o.name](l)));
   }
-  writeFileSync('build/alu-tb.txt', rows.join('\n') + '\n');
-  writeFileSync('build/alu-tb.sv', `module tb;
+  const aluRows = rows.join('\n') + '\n';
+  writeFileSync('build/alu-tb.txt', aluRows);
+  const aluTb = `module tb;
     logic clk = 0;
     logic [3:0] op;
     logic [15:0] l, r, want_, got;
@@ -707,13 +710,27 @@ endmodule
                 end
             end
         end
-        if (bad == 0) $display("ok    rtl/alu.sv: %0d vectors against tools/sim.js, all correct", n);
-        else $display("FAIL  rtl/alu.sv: %0d of %0d wrong", bad, n);
+        if (bad == 0) $display("ok    rtl/alu.sv\${WHICH}: %0d vectors against tools/sim.js, all correct", n);
+        else $display("FAIL  rtl/alu.sv\${WHICH}: %0d of %0d wrong", bad, n);
         $finish;
     end
 endmodule
-`);
+`;
+  writeFileSync('build/alu-tb.sv', aluTb.replaceAll('\${WHICH}', ''));
   run('alu', ['rtl/unary.sv', 'rtl/alu.sv'], 'alu-tb');
+
+  // AND AGAIN WITH THE SB_MAC16 THAT SYNTHESIS GETS.  Everything above runs the
+  // behavioural product rtl/alu.sv gives iverilog; this runs the same vectors
+  // through the DSP instance and its parameters, in yosys's own model of the
+  // cell, which is what would catch a register or an output select set wrong.
+  const cells = have('yosys')
+    ? join(dirname(execFileSync('sh', ['-c', 'command -v yosys'], { encoding: 'utf8' }).trim()), '../share/yosys/ice40/cells_sim.v')
+    : null;
+  if (cells && existsSync(cells)) {
+    writeFileSync('build/alu-tb.txt', aluRows);
+    writeFileSync('build/alu-tb.sv', aluTb.replaceAll('\${WHICH}', ", with yosys's SB_MAC16 model"));
+    run('alu', ['-DSYNTHESIS', cells, 'rtl/unary.sv', 'rtl/alu.sv'], 'alu-tb');
+  } else console.log("skip  rtl/alu.sv's SB_MAC16: yosys's ice40 cell models not found");
 
   // --- the compare unit on its own: cond neg mask lhs rhs want ------------------
   const cmp = [];

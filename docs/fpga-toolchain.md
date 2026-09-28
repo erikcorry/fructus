@@ -51,7 +51,7 @@ icepack build/top.asc build/top.bin
 `nextpnr` prints device utilisation and a maximum clock frequency, which is
 the number to watch as the CPU grows.
 
-## Two things that catch you out
+## Three things that catch you out
 
 **A module is not a chip.** Synthesising a component with all its ports
 exposed asks for one package pin per port, and `nextpnr` refuses:
@@ -71,6 +71,26 @@ register files are often built that way. iCE40 cannot, and its block RAM reads
 a cycle late — so an 8 x 16 register file with asynchronous reads is
 flip-flops and multiplexers, and nothing else will do. Measured: 128 `SB_DFFE`
 and 200 `SB_LUT4`, 340 logic cells, 6% of a UP5K, 99 MHz.
+
+**`nextpnr` does not time through the DSPs.** nextpnr-ice40 0.7 has no timing
+arcs through `SB_MAC16`, so a path into or out of one is simply missing from
+its report — a flop, a combinational 16×16 multiply and a flop reported the
+same 134 MHz whatever the DSP's registers were set to. `icetime` does time it:
+
+```sh
+nextpnr-ice40 --up5k --package sg48 --pcf-allow-unconstrained --json build/top.json --asc build/top.asc
+icetime -d up5k -mt build/top.asc
+```
+
+That same test measured 15.9 to 17.0 ns under `icetime` over six seeds: about
+8 inside the DSP and 6 getting to and from its column. `icetime` in turn ignores
+the DSP's pipeline registers, so for a registered configuration go by Lattice's
+figures in `timings_up5k.txt` — `SB_MAC16_MUL_U_16X16_*` in icestorm's chipdb.
+`synth_ice40 -dsp` maps a `*` onto a DSP, but it also moves registers into the
+DSP, including copies of flops that feed other logic, and it rewrites the
+registers of an `SB_MAC16` you instantiated yourself. So `rtl/alu.sv`
+instantiates its multiplier and nothing here passes `-dsp`. Without the flag,
+a `*` that isn't instantiated becomes some three hundred LUTs.
 
 ## The parts
 

@@ -42,8 +42,10 @@
 //            sxt8, bitrev, clmul
 //   13  slow   rtl/unary.sv's slow operations, registered a cycle earlier
 //            clz, popcount
+//   14  mul    lhs * rhs, low half, from an SB_MAC16 registered a cycle earlier
+//            mul
 //
-//   14, 15 are free.  Not yet: .
+//   15 are free.  Not yet: .
 //
 // BRANCHES ARE DECIDED BESIDE THE ALU, NOT IN IT.  rtl/compare.sv takes the
 // same two operands and answers one bit that never enters this block's result,
@@ -57,7 +59,30 @@
 // instructions the cycle to compute it in - rtl/ucode.sv's SLOW step.  lhs and
 // rhs do not change between the two cycles, because the instruction and its
 // selects are already in flops.  So no path through them is longer than one
-// operand select, a unary pair, and a register.  This is the one clocked input.
+// operand select, a unary pair, and a register.
+//
+// AND SO IS THE PRODUCT, the same way and for the same reason: operation 14
+// reads an SB_MAC16's own register, which the SLOW step fills from lhs and rhs
+// and EXEC reads out.  It is PIPELINE_16x16_MULT_REG2, after the adder that
+// joins the four 8x8 partial products, so the whole multiply - about 8 ns by
+// Lattice's figures, and 4 more getting to the DSP's column - happens in the
+// SLOW cycle, and EXEC sees a register at 2 ns clock-to-out.  clk is there
+// for these two and nothing else.
+//
+// THE DSP IS INSTANTIATED, NOT INFERRED.  Given `always_ff prod <= lhs * rhs`,
+// yosys's -dsp does use one SB_MAC16 - but it moves copies of rtl/cpu.sv's
+// operand flops into the DSP as its input registers, so the logic in front
+// of those flops, the memory's byte select and the address adder, has to reach
+// the DSP's column at the edge of the die as well.  Measured, medians of
+// eight seeds: 29.05 MHz by nextpnr and 27.33 by icetime without mul, 26.59
+// and 25.11 inferred, 29.48 and 27.69 as it is here - no cost the seeds can
+// see.  And -dsp rewrites an instantiated SB_MAC16's registers the same way,
+// so nothing may synthesise this with it.  iverilog has no SB_MAC16, and
+// simulates the product it computes.
+//
+// NEITHER TIMER SEES INSIDE IT.  nextpnr-ice40 0.7 has no arcs through
+// SB_MAC16 and icetime ignores its register parameters, so the SLOW cycle's
+// multiply is checked against Lattice's figures and not measured.
 //
 // THE CODES FOLLOW THE CIRCUIT.  Code bit 0 is the adder's subtract, so add and
 // rsb differ in one wire.  The shifts put their direction in bit 0 and
@@ -96,7 +121,7 @@
 // =============================================================================
 
 module alu (
-    input  logic        clk,     // for rtl/unary.sv's slow pair only
+    input  logic        clk,     // for the slow pair and the product only
     input  logic [15:0] lhs,     // register file port A: rtl/lhs.sv
     input  logic [15:0] rhs,     // rtl/rhs.sv
     input  logic [3:0]  op,      // microcode: which operation
@@ -111,6 +136,31 @@ module alu (
     wire [3:0]  amt  = rhs[3:0];
     wire [15:0] unf, uns;
     unary u (.clk(clk), .a(lhs), .sel(rhs[2:1]), .fast(unf), .slow(uns));   // two bits of the imm3 value
+    wire  [15:0] prod;                                   // lhs * rhs, a cycle late
+`ifdef SYNTHESIS
+    wire  [31:0] mac_o;
+    SB_MAC16 #(
+        .A_REG(1'b0), .B_REG(1'b0), .C_REG(1'b0), .D_REG(1'b0),
+        .TOP_8x8_MULT_REG(1'b0), .BOT_8x8_MULT_REG(1'b0),
+        .PIPELINE_16x16_MULT_REG1(1'b0), .PIPELINE_16x16_MULT_REG2(1'b1),
+        .TOPOUTPUT_SELECT(2'b11), .BOTOUTPUT_SELECT(2'b11),
+        .TOPADDSUB_LOWERINPUT(2'b10), .TOPADDSUB_UPPERINPUT(1'b1), .TOPADDSUB_CARRYSELECT(2'b11),
+        .BOTADDSUB_LOWERINPUT(2'b10), .BOTADDSUB_UPPERINPUT(1'b1), .BOTADDSUB_CARRYSELECT(2'b00),
+        .MODE_8x8(1'b0), .A_SIGNED(1'b0), .B_SIGNED(1'b0)
+    ) mac (
+        .CLK(clk), .CE(1'b1), .A(lhs), .B(rhs), .C(16'd0), .D(16'd0),
+        .AHOLD(1'b0), .BHOLD(1'b0), .CHOLD(1'b0), .DHOLD(1'b0),
+        .IRSTTOP(1'b0), .IRSTBOT(1'b0), .ORSTTOP(1'b0), .ORSTBOT(1'b0),
+        .OLOADTOP(1'b0), .OLOADBOT(1'b0), .ADDSUBTOP(1'b0), .ADDSUBBOT(1'b0),
+        .OHOLDTOP(1'b0), .OHOLDBOT(1'b0), .CI(1'b0), .ACCUMCI(1'b0), .SIGNEXTIN(1'b0),
+        .O(mac_o), .CO(), .ACCUMCO(), .SIGNEXTOUT()
+    );
+    assign prod = mac_o[15:0];                           // the low half is all mul keeps
+`else
+    logic [15:0] prod_q;
+    always_ff @(posedge clk) prod_q <= lhs * rhs;
+    assign prod = prod_q;
+`endif
 
     always_comb case (op)
         4'd0, 4'd1: y = sum;
@@ -126,6 +176,7 @@ module alu (
         4'd11:      y = $signed(lhs) >>> amt;
         4'd12:      y = unf;
         4'd13:      y = uns;
+        4'd14:      y = prod;
         default:    y = 16'hxxxx;
     endcase
 
