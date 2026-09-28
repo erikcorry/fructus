@@ -87,9 +87,12 @@ const kindOf = (r) => {
 // ordinary write port, which a memory instruction does not use.
 //
 // AN EXCEPTION INSTRUCTION - brk, rti, sei, cli - RUNS A ROUTINE TOO, entered
-// the same way, and its ALU cycle does nothing.  `useq` marks every row with
-// a routine; `uent` is where it starts.  halt has none: it stops, and an
-// interrupt wakes it.
+// the same way, and its ALU cycle does nothing.  So do the two-cycle
+// operations, mul, clz and popcount.  `useq` marks every row with a routine;
+// `uent` is where it starts; `uslow` marks clz and popcount; `urs` says
+// dispatch is released in the ALU cycle, as a routine whose last write lands
+// before the next instruction reaches decode can.  halt has none: it stops, and an interrupt wakes
+// it.
 const ALU_ADD = 0;
 const memOf = (r) => {
   const sem = r.insns[0].semantics ?? '';
@@ -106,7 +109,7 @@ const memOf = (r) => {
   return null;
 };
 const bits = (v, w) => (v === X ? 'x'.repeat(w) : v.toString(2).padStart(w, '0'));
-const W = 33 + ENTRY_BITS;
+const W = 35 + ENTRY_BITS;
 const counts = [0, 0, 0, 0];
 let memRows = 0, excRows = 0;
 const cases = rows.map((r) => {
@@ -116,7 +119,15 @@ const cases = rows.map((r) => {
   // at leaves them to the mapper.
   const cbr = k === KIND.cbr, jump = k === KIND.jump;
   const mem = k === KIND.ucode ? memOf(r) : null;
-  const exc = k === KIND.ucode && r.insns.length === 1 ? entryNamed(r.insns[0].mnemonic) : null;
+  // A row runs a named routine if every instruction in it runs the same one:
+  // 0x33 is clz and popcount, which the ALU cycle has already told apart.
+  const named = r.insns.map((i) => entryNamed(i.mnemonic));
+  const exc = k === KIND.ucode && named[0] !== null && named.every((e) => e === named[0]) ? named[0] : null;
+  const slow = r.insns.every((i) => ['clz', 'popcount'].includes(i.mnemonic));
+  // Released in the ALU cycle: whatever finishes in its first step, so that
+  // the next instruction reaches decode as its write lands.
+  const urs = (mem && !mem.st && !mem.w2 && mem.n === 1) || slow
+           || r.insns.every((i) => i.mnemonic === 'mul');
   if (mem) memRows++;
   if (exc !== null) excRows++;
   const writes = (k === KIND.alu || jump) && r.v.dest !== X;
@@ -124,13 +135,18 @@ const cases = rows.map((r) => {
   const piped = k !== KIND.ucode || useq;
   const f = (v, on) => (on ? v : X);
   const wen = piped ? (writes ? 1 : 0) : X;
-  const mf = (v, w) => bits(mem ? v : X, w);
+  // A memory field is real on every row with a routine, not only a memory
+  // instruction's: the sequencer reads mpush and mblk whatever it runs - for
+  // which register a step writes, and whether that is the pointer - and left
+  // to the mapper, mul could as well have written the reversed list.
+  const mf = (v, w) => bits(mem ? v : useq ? 0 : X, w);
   const t = [bits(k, 2), bits(r.nbytes, 2), bits(wen, 1),
              bits(mem ? ALU_ADD : f(r.v.alu, writes), 4), bits(f(r.v.lhs, piped), 4), bits(f(r.v.rhs, piped), 4),
-             bits(mem ? mem.dest : f(r.v.dest, writes), 4), bits(f(r.v.cond, cbr), 2),
+             bits(mem ? mem.dest : f(r.v.dest, writes || useq), 4), bits(f(r.v.cond, cbr), 2),
              bits(f(r.v.pc, jump || cbr), 2),
              bits(mem ? 1 : 0, 1), mf(mem?.st, 1), mf(mem?.w2, 1), mf(mem?.n, 2), mf(mem?.blk, 1), mf(mem?.push, 1),
-             bits(useq ? 1 : 0, 1), bits(mem ? entryOf(mem) : exc ?? X, ENTRY_BITS)];
+             bits(useq ? 1 : 0, 1), bits(mem ? entryOf(mem) : exc ?? X, ENTRY_BITS),
+             bits(useq ? (slow ? 1 : 0) : X, 1), bits(useq ? (urs ? 1 : 0) : X, 1)];
   return `        8'h${r.op.toString(16).padStart(2, '0')}: t = ${W}'b${t.join('_')};    // ${r.who}`;
 }).join('\n');
 
@@ -145,7 +161,7 @@ process.stdout.write(`// =======================================================
 // can follow at once, and latches the rest for the decode stage.
 //
 // ${rows.length} opcodes: ${counts[0]} ALU, ${counts[1]} microcoded - ${memRows} of them memory instructions and
-// ${excRows} exception instructions - ${counts[2]} conditional branches, ${counts[3]} jumps.
+// ${excRows} exception or two-cycle ones - ${counts[2]} conditional branches, ${counts[3]} jumps.
 // AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
 // MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
 // pc was worked out behind it, so the length is never used.  Pinned at one, as
@@ -176,7 +192,9 @@ module classify (
     output logic       mblk,      //   a block move, walking and writing back lhs
     output logic       mpush,     //   downward, so its registers lie reversed
     output logic       useq,      // it runs a routine: a memory or exception instruction
-    output logic [${ENTRY_BITS - 1}:0] uent       // where its routine starts in rtl/pipe/ucode.sv
+    output logic [${ENTRY_BITS - 1}:0] uent,      // where its routine starts in rtl/pipe/ucode.sv
+    output logic       uslow,     // its ALU cycle puts clz or popcount of aq into ldq
+    output logic       urs        // dispatch is released in its ALU cycle
 );
 
     logic [${W - 1}:0] t;
@@ -184,12 +202,12 @@ module classify (
         (* rom_style = "logic" *)
         case (op)
 ${cases}
-        default: t = ${W}'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_${'x'.repeat(ENTRY_BITS)};
+        default: t = ${W}'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_${'x'.repeat(ENTRY_BITS)}_x_x;
         endcase
     end
 
     assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src,
-            mem, mst, mw2, mn, mblk, mpush, useq, uent} = t;
+            mem, mst, mw2, mn, mblk, mpush, useq, uent, uslow, urs} = t;
     assign halt = (op == 8'h${HALT.toString(16).padStart(2, '0')});
 
 endmodule

@@ -51,8 +51,9 @@ const EDGE = [0, 1, 2, 0x7fff, 0x8000, 0xffff, 0x00ff, 0x0100];
 const val = () => (rnd() % 4 === 0 ? EDGE[rnd() % EDGE.length] : rnd() & 0xffff);
 
 // --- the forms: decided from the semantics, not from the classifier ----------
-// One register written, no memory, no second statement, and single-cycle in
-// the spec - less mul, which the experiment leaves out.  nop comes too.
+// One register written, no memory, no second statement.  nop comes too.  The
+// two-cycle ones - mul, clz, popcount, which the spec gives an extra cycle -
+// run a routine and cost four cycles, dispatch to dispatch.
 const forms = new Map();
 for (let op = 0; op < 256; op++)
   for (let b1 = 0; b1 < 256; b1++) {
@@ -60,8 +61,7 @@ for (let op = 0; op < 256; op++)
     if (!d) continue;
     const sem = d.insn.semantics ?? '';
     const ok = d.insn.mnemonic === 'nop'
-            || (/^R\[[a-z]\] = /.test(sem) && !/M(8|16)\[|;/.test(sem)
-                && !(d.insn.extra_cycles > 0) && d.insn.mnemonic !== 'mul');
+            || (/^R\[[a-z]\] = /.test(sem) && !/M(8|16)\[|;/.test(sem));
     if (!ok) continue;
     const key = `${d.insn.mnemonic}/${d.form.name}@${op}`;
     if (!forms.has(key)) forms.set(key, { op, nbytes: d.nbytes, b1s: [] });
@@ -365,7 +365,8 @@ for (let p = 0; p < PROGRAMS; p++) {
     const d = decode(dec, [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
     const taken = branches.has(`${d.insn.mnemonic}/${d.form.name}@${m.mem[pc]}`) && takes(pc, d.nbytes);
     const jump = JUMP_SEM.test(d.insn.semantics ?? '');
-    const exc = EXC.test(d.insn.mnemonic) ? EXC_CYCLES[d.insn.mnemonic] : 0;
+    const exc = EXC.test(d.insn.mnemonic) ? EXC_CYCLES[d.insn.mnemonic]
+              : d.insn.extra_cycles > 0 ? 4 : 0;
     const mem = memBytes(d.insn.semantics ?? '');
     const memst = mem && /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(d.insn.semantics);
     m.step();
@@ -433,6 +434,20 @@ const RTL = ['rtl/pipe/cpu.sv', 'rtl/pipe/classify.sv', 'rtl/pipe/alu.sv', 'rtl/
              'rtl/lhs.sv', 'rtl/dest.sv', 'rtl/immgen.sv', 'rtl/cond.sv', 'rtl/compare.sv'];
 execFileSync('iverilog', ['-g2012', '-o', 'build/pipe-tb.vvp', ...RTL, 'build/pipe-tb.sv'], { stdio: 'inherit' });
 const out = execFileSync('vvp', ['build/pipe-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+
+// AND AGAIN WITH THE SB_MAC16 THAT SYNTHESIS GETS, as tests/rtl-check.mjs does
+// for rtl/alu.sv: yosys's own model of the DSP, which checks the instance's
+// parameters.  Every line must be the same, less the $finish, whose time unit
+// the cells' `timescale changes.
+const CELLS = '/usr/share/yosys/ice40/cells_sim.v';
+execFileSync('iverilog', ['-g2012', '-DPIPE_CELLS', '-o', 'build/pipe-tb.vvp', CELLS, ...RTL, 'build/pipe-tb.sv'],
+             { stdio: ['ignore', 'ignore', 'inherit'] });
+const trace = (text) => text.split('\n').filter((l) => !/\$finish/.test(l)).join('\n');
+const outCells = execFileSync('vvp', ['build/pipe-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+if (trace(outCells) !== trace(out)) {
+  console.log('FAIL  rtl/pipe/cpu.sv: with yosys\'s SB_MAC16 it runs differently from the plain multiply');
+  process.exit(1);
+}
 
 const rets = programs.map(() => []), disps = programs.map(() => []), squashes = programs.map(() => []), ends = [];
 for (const line of out.split('\n')) {

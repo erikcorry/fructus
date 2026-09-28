@@ -7,9 +7,9 @@
 // rtl/dest.sv, rtl/immgen.sv and rtl/cond.sv from the real processor
 // unchanged, and the ALU stage rtl/compare.sv.  It runs the one-register ALU
 // instructions, the conditional branches, the jumps and calls, the loads and
-// stores and block moves, brk, rti, sei, cli and halt, and the interrupt
-// line; it stops at anything else - mul, clz and popcount, and the empty
-// opcodes - and sets `trapped`.
+// stores and block moves, mul, clz and popcount, brk, rti, sei, cli and halt,
+// and the interrupt line - the whole instruction set.  An empty opcode sets
+// `trapped`.
 //
 // AN INTERRUPT IS A brk DISPATCHED IN PLACE OF THE INSTRUCTION IT PREEMPTS,
 // with the pc left on that instruction, so brk's routine saves its address
@@ -151,7 +151,9 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     MICROCODE REDIRECTING THROUGH taken_q, as here 1883    31.10  29.9 .. 32.0
+//     MUL, CLZ AND POPCOUNT, as here                 1986    31.68  31.0 .. 32.7
+//     clz and popcount whole into ldq in one cycle   2012    26.40  25.4 .. 27.4
+//     microcode redirecting through taken_q          1883    31.10  29.9 .. 32.0
 //     with exceptions and interrupts, own mux arm    1917    30.61  29.2 .. 31.9
 //     and without the opcode substitution (wrong)    1901    30.62  29.6 .. 32.0
 //     the bypass selects spelled as AND-ORs          1927    29.25  28.4 .. 31.0
@@ -166,7 +168,20 @@
 // branch uses, a cycle after their word asks.  Given an arm of their own on
 // the address mux they cost 0.77, and they took five cycles rather than six.
 // The opcode substitution that makes an interrupt a brk costs nothing: taken
-// out, the design measured the same.  The slow seeds are decode's: from the SPRAM, through a register
+// out, the design measured the same.
+//
+// THE TWO-CYCLE OPERATIONS COST NOTHING, and the design came out faster, which
+// is placement and not a gain to count on; what counts is that no seed's
+// critical path touches them.  mul's SB_MAC16 and clz and popcount's unit
+// work on the operand flops every cycle into registers of their own, a flop
+// in the middle of the popcount's tree, and a routine takes the result into
+// ldq - so neither meets the ALU's result mux, and the only thing pulling
+// toward the DSP's column is a bare wire from a flop.  nextpnr cannot time
+// through the SB_MAC16, so the path out of its output register - about 2 ns
+// clock to out on the part's own figures, then a mux into ldq - is not in
+// these numbers.  The whole of clz and popcount computed in the ALU cycle and
+// chosen into ldq was 26.40: yosys pushed ldq back into the popcount tree, and
+// the flops it made there took a reset from dispatch.  The slow seeds are decode's: from the SPRAM, through a register
 // number and the eight-way read, into an operand flop.  Whichever flop on
 // that read reports - aq, bq, a shadow or the store byte wq - is only the one
 // that loses the tie, which is why taking the shadows and then wq off the
@@ -271,13 +286,14 @@ module pipe_cpu (
     wire [7:0] op = opraw & {8{~take}};
 
     wire [1:0] kind, len, c_cond, c_pcsrc, c_mn;
-    wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush, c_useq;
+    wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush, c_useq, c_uslow, c_urs;
     wire [3:0] c_alu, c_lhs, c_rhs, c_dest;
     wire [4:0] c_uent;
     classify c (.op(op), .kind(kind), .len(len), .wen(c_wen), .halt(c_halt),
                 .alu_op(c_alu), .lhs_src(c_lhs), .rhs_src(c_rhs), .dest_src(c_dest),
                 .cond_src(c_cond), .pc_src(c_pcsrc), .mem(c_mem), .mst(c_mst), .mw2(c_mw2),
-                .mn(c_mn), .mblk(c_mblk), .mpush(c_mpush), .useq(c_useq), .uent(c_uent));
+                .mn(c_mn), .mblk(c_mblk), .mpush(c_mpush), .useq(c_useq), .uent(c_uent),
+                .uslow(c_uslow), .urs(c_urs));
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
     // down the fall-through path behind it, which costs nothing if the branch
@@ -356,7 +372,7 @@ module pipe_cpu (
     logic        d_mem, d_mst, d_mw2, d_mblk, d_mpush;
     logic [1:0]  d_mn;
     logic [4:0]  d_uent;
-    logic        d_useq;
+    logic        d_useq, d_uslow, d_urs;
     logic [7:0]  d_op, d_b1;
     logic [3:0]  d_alu, d_lhs, d_rhs, d_dest;
     logic [1:0]  d_cond, d_pcsrc, d_len;
@@ -369,6 +385,7 @@ module pipe_cpu (
         {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
         d_uent  <= c_uent;
         d_useq  <= c_useq;
+        {d_uslow, d_urs} <= {c_uslow, c_urs};
         d_pcsrc <= c_pcsrc;
         d_len   <= len;
         d_halt  <= c_halt;
@@ -501,6 +518,7 @@ module pipe_cpu (
     logic [2:0]  e_mN, e_l0, e_l1, e_l2, e_ptr;
     logic [4:0]  e_uent;               // where the microcode routine starts
     logic        e_useq;               // it runs one
+    logic        e_uslow, e_urs;       // clz or popcount into ldq; released at once
     logic        e_valid;             // for the harness
     logic [15:0] e_pc;                // for the harness
     always_ff @(posedge clk) begin
@@ -521,6 +539,7 @@ module pipe_cpu (
         {e_mN, e_l0, e_l1, e_l2, e_ptr} <= {mN_d, ml0_d, ml1_d, ml2_d, an};
         e_uent  <= d_uent;
         e_useq  <= keep & d_useq;
+        {e_uslow, e_urs} <= {d_uslow, d_urs};
         e_halt  <= d_halt;
         e_pc    <= d_pc;
     end
@@ -613,7 +632,9 @@ module pipe_cpu (
     assign aphase   = uw[0];
     wire   mcap     = uw[1];
     // A one-byte load releases dispatch in its ALU cycle, before any word.
-    assign mrestart = uw[2] | (mstart & ~e_mst & e_mN == 3'd1);
+    // A routine done in one step - a one-byte load, clz, popcount, mul -
+    // releases dispatch in its ALU cycle, before any word: predecode says so.
+    assign mrestart = uw[2] | (mstart & e_urs);
     wire   [1:0] uW  = uw[5:4];
     wire         uP  = uw[6];
     wire         uWE = uw[7];
@@ -684,7 +705,17 @@ module pipe_cpu (
     logic [15:0] shadow_sp, shadow_lr, shadow_isp;
     logic        ie;
     assign ie_q  = ie;
-    wire [15:0] lqsrc = (uLQ == 3'd1) ? pc : (uLQ == 3'd2) ? shadow_sp
+    // clz and popcount of aq, with a flop in the middle, and the product of aq
+    // and bq, each worked on every cycle and each a cycle late: the routine
+    // takes the one it wants in its first step.  With the whole of clz and
+    // popcount chosen into ldq in the ALU cycle instead, it measured 26.40 MHz:
+    // yosys pushed ldq back into the popcount tree, and the flops it made
+    // there took a reset from dispatch.
+    wire [15:0] slowv, prod;
+    pipe_slow sl (.clk(clk), .a(aq), .pop(e_usel[1]), .y(slowv));
+    pipe_mul  mulu (.clk(clk), .a(aq), .b(bq), .p(prod));
+    wire [15:0] lqsrc = (uLQ == 3'd1) ? pc : (uLQ == 3'd5) ? prod : (uLQ == 3'd6) ? slowv
+                      : (uLQ == 3'd2) ? shadow_sp
                       : (uLQ == 3'd3) ? shadow_lr : shadow_isp;
     assign urj    = uRJ != 2'd0;
     assign rjaddr = uRJ[0] ? VECTOR : aq;

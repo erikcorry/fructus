@@ -32,7 +32,7 @@ export const FIELDS = [
   ['KS',  8, 2, 'the register read this step: 0 .. 2 of the list, 3 a literal'],
   ['KH', 10, 1, "which half of it a store's next byte is - or, when KS is 3, lr and not sp"],
   ['SH', 11, 2, 'a shadow takes aq, the register read the step before: 1 shadow_sp, 2 shadow_lr, 3 shadow_isp'],
-  ['LQ', 13, 3, 'ldq takes: 1 the pc, 2 shadow_sp, 3 shadow_lr, 4 shadow_isp'],
+  ['LQ', 13, 3, 'ldq takes: 1 the pc, 2 shadow_sp, 3 shadow_lr, 4 shadow_isp, 5 the product, 6 clz or popcount'],
   ['WX', 16, 2, 'a register is written from ldq, through the ALU: 1 sp, 2 lr'],
   ['IE', 18, 2, 'ie: 1 cleared, 2 set'],
   ['RJ', 20, 2, 'the fetch goes to: 1 the vector, 2 aq, the register read the step before'],
@@ -92,7 +92,17 @@ const EXCEPTIONS = {
         { SH: 3, WX: 1, D: 1 }],
   sei: [{ IE: 2, R: 1, D: 1 }],
   cli: [{ IE: 1, R: 1, D: 1 }],
+  // THE TWO-CYCLE OPERATIONS, which release dispatch in their ALU cycle, as a
+  // one-byte load does.  Each has a unit that works on aq and bq every cycle
+  // into a register of its own - mul's SB_MAC16 its output register, clz and
+  // popcount a flop - so the result of the ALU cycle's operands is there in
+  // step 1, which takes it into ldq; step 2 writes rd.  Neither result goes
+  // near the ALU's result mux.
+  slow: [{ LQ: 6 }, { W: 1, D: 1 }],
+  mul:  [{ LQ: 5 }, { W: 1, D: 1 }],
 };
+// Which routine an instruction that is not a memory instruction runs.
+const NAMED = { brk: 'brk', rti: 'rti', sei: 'sei', cli: 'cli', clz: 'slow', popcount: 'slow', mul: 'mul' };
 
 // The shapes the instruction set has: ld, ld8, st and st8 move one register
 // and are no block; the block moves are two bytes a register.
@@ -120,7 +130,7 @@ const find = (key) => {
 
 // Where a memory instruction's routine starts, and an exception instruction's.
 export const entryOf = (m) => find(memKey(m));
-export const entryNamed = (mnemonic) => (mnemonic in EXCEPTIONS ? find(mnemonic) : null);
+export const entryNamed = (mnemonic) => (mnemonic in NAMED ? find(NAMED[mnemonic]) : null);
 
 // The ROM, a word per address.
 export function words() {
