@@ -62,22 +62,59 @@ const kindOf = (r) => {
 // because decode builds every target from it.  A call is an ALU instruction
 // as well - lr takes the return address through the pass-through - so its
 // ALU fields are real and it writes.
+//
+// A MEMORY INSTRUCTION IS MICROCODED - dispatch stops behind it - BUT IT
+// ENTERS THE PIPELINE, and rtl/pipe/cpu.sv's sequencer moves its bytes from
+// the ALU stage.  Its fields, read off the semantics:
+//
+//     mem    it is one
+//     st     it writes memory, not registers
+//     w2     two bytes to a register (ld, st and the block moves), not one
+//     n      how many registers: 1, 2 or 3
+//     blk    a block move, which walks a pointer - lhs names it - and writes
+//            the pointer back; ld and st do neither
+//     push   the block runs downward from the pointer, so its registers lie
+//            in memory in the reverse of their order in the instruction
+//
+// Its destination field names the FIRST DATA REGISTER - a load's rd, a store's
+// rs, a block's first register - rather than anything written by the
+// ordinary write port, which a memory instruction does not use.
+const memOf = (r) => {
+  const sem = r.insns[0].semantics ?? '';
+  let m;
+  if ((m = /^R\[d\] = M(8|16)\[R\[a\] \+ (off|R\[b\])\]$/.exec(sem)))
+    return { st: 0, w2: m[1] === '16' ? 1 : 0, n: 1, blk: 0, push: 0, dest: r.v.dest };
+  if ((m = /^M(8|16)\[R\[a\] \+ (off|R\[b\])\] = R\[s\]$/.exec(sem)))
+    return { st: 1, w2: m[1] === '16' ? 1 : 0, n: 1, blk: 0, push: 0, dest: 8 };
+  if (/^base = (sp|r1|r2); /.test(sem)) {
+    const n = (sem.match(/M16\[/g) ?? []).length;
+    return { st: /M16\[base[^\]]*\] = R/.test(sem) ? 1 : 0, w2: 1, n, blk: 1,
+             push: /base - /.test(sem) ? 1 : 0, dest: 8 };
+  }
+  return null;
+};
 const bits = (v, w) => (v === X ? 'x'.repeat(w) : v.toString(2).padStart(w, '0'));
 const counts = [0, 0, 0, 0];
+let memRows = 0;
 const cases = rows.map((r) => {
   const k = kindOf(r);
   counts[k]++;
   // The selects matter only to a row that flows; a row the experiment stops
   // at leaves them to the mapper.
   const cbr = k === KIND.cbr, jump = k === KIND.jump;
+  const mem = k === KIND.ucode ? memOf(r) : null;
+  if (mem) memRows++;
   const writes = (k === KIND.alu || jump) && r.v.dest !== X;
-  const piped = k !== KIND.ucode;
+  const piped = k !== KIND.ucode || !!mem;
   const f = (v, on) => (on ? v : X);
   const wen = piped ? (writes ? 1 : 0) : X;
+  const mf = (v, w) => bits(mem ? v : X, w);
   const t = [bits(k, 2), bits(r.nbytes, 2), bits(wen, 1),
              bits(f(r.v.alu, writes), 4), bits(f(r.v.lhs, piped), 4), bits(f(r.v.rhs, piped), 4),
-             bits(f(r.v.dest, writes), 4), bits(f(r.v.cond, cbr), 2), bits(f(r.v.pc, jump || cbr), 2)];
-  return `        8'h${r.op.toString(16).padStart(2, '0')}: t = 25'b${t.join('_')};    // ${r.who}`;
+             bits(mem ? mem.dest : f(r.v.dest, writes), 4), bits(f(r.v.cond, cbr), 2),
+             bits(f(r.v.pc, jump || cbr), 2),
+             bits(mem ? 1 : 0, 1), mf(mem?.st, 1), mf(mem?.w2, 1), mf(mem?.n, 2), mf(mem?.blk, 1), mf(mem?.push, 1)];
+  return `        8'h${r.op.toString(16).padStart(2, '0')}: t = 32'b${t.join('_')};    // ${r.who}`;
 }).join('\n');
 
 process.stdout.write(`// =============================================================================
@@ -90,8 +127,8 @@ process.stdout.write(`// =======================================================
 // rtl/pipe/cpu.sv decides from kind and length alone whether the next dispatch
 // can follow at once, and latches the rest for the decode stage.
 //
-// ${rows.length} opcodes: ${counts[0]} ALU, ${counts[1]} microcoded, ${counts[2]} conditional branches,
-// ${counts[3]} jumps.
+// ${rows.length} opcodes: ${counts[0]} ALU, ${counts[1]} microcoded - ${memRows} of them memory instructions -
+// ${counts[2]} conditional branches, ${counts[3]} jumps.
 // AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
 // MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
 // pc was worked out behind it, so the length is never used.  Pinned at one, as
@@ -114,19 +151,26 @@ module classify (
     output logic [3:0] rhs_src,   // rtl/rhs.sv's codes, read by rtl/pipe/cpu.sv's decode
     output logic [3:0] dest_src,  // -> rtl/dest.sv
     output logic [1:0] cond_src,  // -> rtl/cond.sv, for a conditional branch
-    output logic [1:0] pc_src     // a jump's target: 1 relative, 2 absolute, 3 register
+    output logic [1:0] pc_src,    // a jump's target: 1 relative, 2 absolute, 3 register
+    output logic       mem,       // a memory instruction: the rest describe it
+    output logic       mst,       //   it stores
+    output logic       mw2,       //   two bytes a register
+    output logic [1:0] mn,        //   1, 2 or 3 registers
+    output logic       mblk,      //   a block move, walking and writing back lhs
+    output logic       mpush      //   downward, so its registers lie reversed
 );
 
-    logic [24:0] t;
+    logic [31:0] t;
     always_comb begin
         (* rom_style = "logic" *)
         case (op)
 ${cases}
-        default: t = 25'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx;
+        default: t = 32'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;
         endcase
     end
 
-    assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src} = t;
+    assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src,
+            mem, mst, mw2, mn, mblk, mpush} = t;
     assign halt = (op == 8'h${HALT.toString(16).padStart(2, '0')});
 
 endmodule

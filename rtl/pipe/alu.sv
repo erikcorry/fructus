@@ -7,7 +7,12 @@
 // here, but the three arms that are not a function of this cycle's inputs are
 // gone: clz and popcount (code 13), whose result is registered half way, and
 // mul (code 14), whose SB_MAC16 delivers a cycle late.  The experiment
-// classifies all three as microcoded, so neither code reaches this block.
+// classifies all three as microcoded.
+//
+// CODE 13 IS REUSED for the memory sequencer's word, which is how a load's
+// bytes and a block move's pointer reach the register file: through the ALU's
+// result, as rtl/cpu.sv's loads reach it through the pass-through, so the
+// register file's write port has no second source in front of it.
 //
 // The fast unary operations keep their home in the same way rtl/alu.sv gives
 // them one - selected by bits 2:1 of the right-hand immediate, which is the
@@ -20,6 +25,8 @@ module pipe_alu (
     input  logic [15:0] rhs,
     input  logic [1:0]  usel,    // the fast unary operation: the immediate's bits 2:1
     input  logic [3:0]  op,
+    input  logic [15:0] mdata,   // the memory sequencer's word: what a load or a
+                                 // block move's pointer writes, under op 13
     output logic [15:0] y
 );
 
@@ -57,6 +64,7 @@ module pipe_alu (
         4'd10:      y = hiv;
         4'd11:      y = $signed(lhs) >>> amt;
         4'd12:      y = unf;
+        4'd13:      y = mdata;
         default:    y = 16'hxxxx;
     endcase
 

@@ -21,7 +21,9 @@
 // dispatches a taken branch squashes are dropped before that is checked.
 // The forms are drawn so that every length lands at both alignments.
 //
-// Needs iverilog; skips without it.
+// Needs iverilog; skips without it.  PIPE_KEEP=1 leaves the programs in
+// build/pipe-prog-N.hex and their registers in build/pipe-reg-N.hex, for
+// looking at one that fails.
 // =============================================================================
 
 import { loadSpec } from '../tools/isa.js';
@@ -66,6 +68,35 @@ for (let op = 0; op < 256; op++)
     forms.get(key).b1s.push(b1);
   }
 const all = [...forms.values()];
+
+// THE MEMORY INSTRUCTIONS, from their semantics, in the two pools
+// tests/rtl-check.mjs uses.  A load is safe beside anything: it reads, and
+// whatever it reads the simulator reads too.  A store is not - it could write
+// over the program - so stores and the block moves that store go in programs
+// of their own, whose registers all start in a window far above the program,
+// and in which nothing but a walking pointer writes a register.  pop and ldm
+// write registers from memory, so they go with the loads.
+//
+// `bytes` is what the sequencer moves, and what rtl/pipe/cpu.sv charges: a
+// memory instruction's next dispatch comes bytes + 4 cycles after its own.
+const memBytes = (sem) => {
+  const blk = /^base = (sp|r1|r2); /.test(sem);
+  if (blk) return 2 * (sem.match(/M16\[/g) ?? []).length;
+  const m = /M(8|16)\[R\[a\] \+ (off|R\[b\])\]/.exec(sem);
+  return m ? (m[1] === '8' ? 1 : 2) : 0;
+};
+const memPools = { ld: new Map(), st: new Map() };
+for (let op = 0; op < 256; op++)
+  for (let b1 = 0; b1 < 256; b1++) {
+    const d = decode(dec, [op, b1, 0], 0);
+    const sem = d?.insn.semantics ?? '';
+    if (!d || !memBytes(sem)) continue;
+    const kind = /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(sem) ? 'st' : 'ld';
+    const key = `${d.insn.mnemonic}/${d.form.name}@${op}`;
+    if (!memPools[kind].has(key)) memPools[kind].set(key, { op, nbytes: d.nbytes, b1s: [] });
+    memPools[kind].get(key).b1s.push(b1);
+  }
+const loads = [...memPools.ld.values()], stores = [...memPools.st.values()];
 
 // The conditional branches, by what they are: a pc-relative transfer taken
 // on a test.  The offset byte is filled in once the program is laid out.
@@ -194,6 +225,55 @@ const SOURCES = [
           ret
   bump:   add  r1, r1, #1
           ret`,
+  // Stores read back: both widths, an odd address, every block move, and the
+  // pointer in a block's own list both ways.
+  `       mov  sp, #0x4000
+          mov  r1, #0x3000
+          mov  r0, #0x1234
+          st   r0, [r1, #0]
+          st8  r0, [r1, #3]
+          ld   r2, [r1, #0]
+          ld8  r3, [r1, #3]
+          ld   r4, [r1, #1]
+          mov  r5, #2
+          ld   r4, [r1, r5]
+          st   r4, [r1, #5]
+          push r0, r2, r3
+          push r4
+          pop  r5
+          pop  r0, r2, r3
+          mov  r2, #0x3000
+          ldm  r3, r4
+          mov  r1, #0x3101
+          stm  r0, r5, r1
+          add  r2, r2, #-4
+          ldm  r5
+          mov  r2, #0x3101
+          ldm  r3, r2, r4
+          push sp
+          pop  sp
+          push r6, r0
+          pop  r0, r6
+          halt`,
+  // A copy loop, word by word, as memcpy would do it.
+  `       mov  r2, #0x3000
+          mov  r1, #0x3000
+          mov  r0, #0x0102
+          mov  r3, #4
+  fill:   stm  r0
+          add  r0, r0, #0x0202
+          add  r3, r3, #-1
+          br   ne, r3, #0, fill
+          mov  r1, #0x3401
+          mov  r3, #2
+  copy:   ldm  r4, r5
+          stm  r4, r5
+          add  r3, r3, #-1
+          br   ne, r3, #0, copy
+          mov  r1, #0x3401
+          ld   r4, [r1, #0]
+          ld   r5, [r1, #6]
+          halt`,
 ];
 // The second copy has its nop IN THE SOURCE, not put in front of the bytes:
 // a call or a jmp to a label is an absolute address, which the assembler
@@ -206,13 +286,17 @@ const assembled = SOURCES.flatMap((src, i) => [src, `nop\n${src}`].map((text, j)
   return [...code];
 }));
 
-const N_RANDOM = 60;
+const N_ALU = 60, N_LD = 20, N_ST = 20;
+const N_RANDOM = N_ALU + N_LD + N_ST;
+// Even, and far above any program these make: the widest displacement is ten
+// signed bits and an index is another register from the same window.
+const safe = () => 0x2000 + ((rnd() % 0x1000) & ~1);
 const PROGRAMS = N_RANDOM + assembled.length;
 const programs = [];
 mkdirSync('build', { recursive: true });
 for (let p = 0; p < PROGRAMS; p++) {
-  let bytes;
-  if (p < N_RANDOM) {
+  let bytes, draws = val;
+  if (p < N_ALU) {
     // The first program has every form twice, once from each alignment;
     // after that, one instruction in five is a branch.
     const picks = p === 0 ? shuffle([...all, ...brs, ...jumps, NOP, ...all, ...brs, ...jumps])
@@ -223,10 +307,26 @@ for (let p = 0; p < PROGRAMS; p++) {
                                    : all[rnd() % all.length];
                             });
     bytes = layout(picks).concat([HALT]);
+  } else if (p < N_ALU + N_LD) {
+    // Loads among everything else; the first has every load twice.
+    const picks = p === N_ALU ? shuffle([...loads, NOP, ...loads])
+                              : Array.from({ length: 40 }, () => {
+                                  const r = rnd() % 10;
+                                  return r < 3 ? loads[rnd() % loads.length]
+                                       : r < 4 ? brs[rnd() % brs.length]
+                                       : all[rnd() % all.length];
+                                });
+    bytes = layout(picks).concat([HALT]);
+  } else if (p < N_RANDOM) {
+    // Stores alone, from the safe window; the first has every one twice.
+    const picks = p === N_ALU + N_LD ? shuffle([...stores, NOP, ...stores])
+                                     : Array.from({ length: 30 }, () => stores[rnd() % stores.length]);
+    bytes = layout(picks).concat([HALT]);
+    draws = safe;
   } else {
     bytes = assembled[p - N_RANDOM];
   }
-  const reg = Array.from({ length: 8 }, val);
+  const reg = Array.from({ length: 8 }, draws);
   const m = new Machine(spec).load(bytes, 0);
   reg.forEach((v, k) => { m.R[k] = v; });
   // WHETHER A BRANCH IS TAKEN IS NOT WHERE THE pc LANDS: a branch to the
@@ -248,10 +348,15 @@ for (let p = 0; p < PROGRAMS; p++) {
     const d = decode(dec, [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
     const taken = branches.has(`${d.insn.mnemonic}/${d.form.name}@${m.mem[pc]}`) && takes(pc, d.nbytes);
     const jump = JUMP_SEM.test(d.insn.semantics ?? '');
+    const mem = memBytes(d.insn.semantics ?? '');
     m.step();
-    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, R: Array.from(m.R) });
+    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, R: Array.from(m.R) });
   }
-  programs.push({ bytes, reg, trace, old: m.cycles() });
+  // WHAT A STORE DID IS NOT IN ANY REGISTER, so both machines fold their whole
+  // memory into one number at the halt, as tests/rtl-check.mjs does.
+  let hash = 0;
+  for (let k = 0; k < 65536; k++) hash = (Math.imul(hash, 31) + m.mem[k]) & 0x7fffffff;
+  programs.push({ bytes, reg, trace, hash, old: m.cycles() });
   writeFileSync(`build/pipe-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
   writeFileSync(`build/pipe-reg-${p}.hex`, reg.map(hex4).join('\n') + '\n');
 }
@@ -261,13 +366,20 @@ writeFileSync('build/pipe-tb.sv', `module tb;
     logic [7:0] mem [0:65535];
     logic [15:0] rdata;
     logic [15:0] regs [0:7];
-    wire [15:0] addr;
-    wire halted, trapped;
+    wire [15:0] addr, rpc;
+    wire [7:0] wdata;
+    wire we, halted, trapped, ret;
     pipe_cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
-                .halted(halted), .trapped(trapped), .result());
-    // A word a cycle, the even byte low, as the SPRAM delivers it.
-    always @(posedge clk) rdata <= {mem[{addr[15:1], 1'b1}], mem[{addr[15:1], 1'b0}]};
-    integer p, k, cyc, ev, epc, go, dpc, sq;
+                .mem_wdata(wdata), .mem_we(we),
+                .halted(halted), .trapped(trapped), .result(), .retire(ret), .retire_pc(rpc));
+    // A word a cycle, the even byte low, as the SPRAM delivers it; a write goes
+    // to the byte mem_addr names, at the same edge, and a read in that cycle
+    // sees what was there before.
+    always @(posedge clk) begin
+        rdata <= {mem[{addr[15:1], 1'b1}], mem[{addr[15:1], 1'b0}]};
+        if (we) mem[addr] <= wdata;
+    end
+    integer p, k, cyc, ev, epc, go, dpc, sq, h;
     reg [8*64:1] name;
     initial begin
         for (p = 0; p < ${PROGRAMS}; p = p + 1) begin
@@ -279,7 +391,7 @@ writeFileSync('build/pipe-tb.sv', `module tb;
             for (k = 0; k < 8; k = k + 1) u.R[k] = regs[k];
             rst = 0; cyc = 0;
             while (!halted && !trapped && cyc < 5000) begin
-                ev = u.e_valid & ~u.taken_q; epc = u.e_pc; go = u.go; dpc = u.pc; sq = u.taken_q;
+                ev = ret; epc = rpc; go = u.go; dpc = u.pc; sq = u.taken_q;
                 #1 clk = 1; #1 clk = 0;
                 if (sq) $display("SQUASH %0d %0d", p, cyc);
                 if (go) $display("DISP %0d %0d %h", p, cyc, dpc[15:0]);
@@ -287,7 +399,9 @@ writeFileSync('build/pipe-tb.sv', `module tb;
                                  u.R[0], u.R[1], u.R[2], u.R[3], u.R[4], u.R[5], u.R[6], u.R[7]);
                 cyc = cyc + 1;
             end
-            $display("END %0d %0d %0d %0d", p, halted, trapped, cyc);
+            h = 0;
+            for (k = 0; k < 65536; k = k + 1) h = (h * 31 + mem[k]) & 32'h7fffffff;
+            $display("END %0d %0d %0d %0d %0d", p, halted, trapped, cyc, h);
         end
         $finish;
     end
@@ -305,12 +419,14 @@ for (const line of out.split('\n')) {
   if (f[0] === 'RET')  rets[+f[1]].push({ pc: parseInt(f[2], 16), R: f.slice(3, 11).map((h) => parseInt(h, 16)) });
   if (f[0] === 'DISP') disps[+f[1]].push({ cyc: +f[2], pc: parseInt(f[3], 16) });
   if (f[0] === 'SQUASH') squashes[+f[1]].push(+f[2]);
-  if (f[0] === 'END')  ends[+f[1]] = { halted: f[2] === '1', trapped: f[3] === '1', cyc: +f[4] };
+  if (f[0] === 'END')  ends[+f[1]] = { halted: f[2] === '1', trapped: f[3] === '1', cyc: +f[4], hash: +f[5] };
 }
 
 let bad = 0, instructions = 0, cycNew = 0, cycOld = 0;
 const complain = (msg) => { if (bad++ < 8) console.log(`  MISMATCH ${msg}`); };
-programs.forEach(({ trace, old }, p) => {
+programs.forEach(({ trace, hash, old }, p) => {
+  if (ends[p] && ends[p].hash !== hash)
+    complain(`program ${p}: memory folds to ${ends[p].hash} on the RTL and ${hash} on the simulator`);
   // A squash in cycle T undoes the dispatches of T - 2, T - 1 and T: the
   // three instructions behind the branch.
   const got = rets[p];
@@ -327,7 +443,8 @@ programs.forEach(({ trace, old }, p) => {
   // dispatch than retirement.
   for (let i = 1; i < Math.min(ds.length, trace.length + 1); i++) {
     const prev = trace[i - 1];
-    const want = prev.jump ? 3 : prev.taken ? 4 : (prev.pc & 1) && prev.len === 3 ? 2 : 1;
+    const want = prev.mem ? prev.mem + 4 : prev.jump ? 3 : prev.taken ? 4
+               : (prev.pc & 1) && prev.len === 3 ? 2 : 1;
     if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) complain(`program ${p} dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
     if (ds[i].cyc - ds[i - 1].cyc !== want)
       complain(`program ${p} dispatch ${i}: ${ds[i].cyc - ds[i - 1].cyc} cycles after the one at 0x${prev.pc.toString(16)}, want ${want}`);
@@ -335,14 +452,17 @@ programs.forEach(({ trace, old }, p) => {
   cycNew += ends[p]?.cyc ?? 0;
   cycOld += old;
 });
-for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/pipe-prog-${p}.hex`, `build/pipe-reg-${p}.hex`]) rmSync(f, { force: true });
+if (!process.env.PIPE_KEEP) for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/pipe-prog-${p}.hex`, `build/pipe-reg-${p}.hex`]) rmSync(f, { force: true });
 for (const f of ['build/pipe-tb.vvp', 'build/pipe-tb.sv']) rmSync(f, { force: true });
 
 if (bad === 0) {
   const taken = programs.reduce((n, { trace }) => n + trace.filter((t) => t.taken).length, 0);
   const jumped = programs.reduce((n, { trace }) => n + trace.filter((t) => t.jump).length, 0);
-  console.log(`ok    rtl/pipe/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over ${all.length + brs.length + jumps.length} forms, `
-            + `${taken} branches taken, ${jumped} jumps; registers and dispatch cadence agree with tools/sim.js`);
+  const moved = programs.reduce((n, { trace }) => n + trace.filter((t) => t.mem).length, 0);
+  console.log(`ok    rtl/pipe/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over `
+            + `${all.length + brs.length + jumps.length + loads.length + stores.length} forms, `
+            + `${taken} branches taken, ${jumped} jumps, ${moved} memory instructions; `
+            + `registers, memory and dispatch cadence agree with tools/sim.js`);
   console.log(`      ${cycNew} cycles to halt, against ${cycOld} on the byte-serial cost model `
             + `(${(cycOld / cycNew).toFixed(2)}x fewer)`);
 } else {

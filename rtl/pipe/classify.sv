@@ -8,8 +8,8 @@
 // rtl/pipe/cpu.sv decides from kind and length alone whether the next dispatch
 // can follow at once, and latches the rest for the decode stage.
 //
-// 149 opcodes: 86 ALU, 50 microcoded, 7 conditional branches,
-// 6 jumps.
+// 149 opcodes: 86 ALU, 50 microcoded - 40 of them memory instructions -
+// 7 conditional branches, 6 jumps.
 // AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
 // MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
 // pc was worked out behind it, so the length is never used.  Pinned at one, as
@@ -32,167 +32,174 @@ module classify (
     output logic [3:0] rhs_src,   // rtl/rhs.sv's codes, read by rtl/pipe/cpu.sv's decode
     output logic [3:0] dest_src,  // -> rtl/dest.sv
     output logic [1:0] cond_src,  // -> rtl/cond.sv, for a conditional branch
-    output logic [1:0] pc_src     // a jump's target: 1 relative, 2 absolute, 3 register
+    output logic [1:0] pc_src,    // a jump's target: 1 relative, 2 absolute, 3 register
+    output logic       mem,       // a memory instruction: the rest describe it
+    output logic       mst,       //   it stores
+    output logic       mw2,       //   two bytes a register
+    output logic [1:0] mn,        //   1, 2 or 3 registers
+    output logic       mblk,      //   a block move, walking and writing back lhs
+    output logic       mpush      //   downward, so its registers lie reversed
 );
 
-    logic [24:0] t;
+    logic [31:0] t;
     always_comb begin
         (* rom_style = "logic" *)
         case (op)
-        8'h00: t = 25'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // brk
-        8'h01: t = 25'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // halt
-        8'h02: t = 25'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // rti
-        8'h03: t = 25'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld
-        8'h04: t = 25'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld8
-        8'h05: t = 25'b00_01_1_0000_0000_1001_0000_xx_xx;    // add
-        8'h06: t = 25'b00_01_1_0000_0000_1111_0000_xx_xx;    // add
-        8'h07: t = 25'b00_01_1_0000_0000_1010_0000_xx_xx;    // add
-        8'h09: t = 25'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // st
-        8'h0a: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // st
-        8'h0b: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // st
-        8'h0e: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // st
-        8'h0f: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // st
-        8'h11: t = 25'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // st8
-        8'h12: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // st8
-        8'h13: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // st8
-        8'h16: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // st8
-        8'h17: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // st8
-        8'h18: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld
-        8'h19: t = 25'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld
-        8'h1a: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld
-        8'h1b: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld
-        8'h1e: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld
-        8'h1f: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld
-        8'h20: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld8
-        8'h21: t = 25'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld8
-        8'h22: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld8
-        8'h23: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld8
-        8'h26: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld8
-        8'h27: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ld8
-        8'h28: t = 25'b00_10_1_0111_xxxx_1011_1000_xx_xx;    // mov
-        8'h29: t = 25'b00_11_1_1010_1001_1011_1000_xx_xx;    // movhi
-        8'h2c: t = 25'b00_10_1_0111_xxxx_1011_1000_xx_xx;    // mov
-        8'h2d: t = 25'b00_10_1_0111_xxxx_1011_1000_xx_xx;    // mov
-        8'h2e: t = 25'b00_10_1_1010_1001_1101_1000_xx_xx;    // movhi
-        8'h2f: t = 25'b00_10_1_1010_1001_1101_1000_xx_xx;    // movhi
-        8'h30: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // mul
-        8'h31: t = 25'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // mul
-        8'h32: t = 25'b00_10_1_1100_1001_1011_1000_xx_xx;    // clmul bitrev sxt8
-        8'h33: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // clz popcount
-        8'h36: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // mul
-        8'h37: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // mul
-        8'h38: t = 25'b00_10_1_0000_1000_1011_1000_xx_xx;    // add
-        8'h39: t = 25'b00_11_1_0000_1001_1011_1000_xx_xx;    // add
-        8'h3a: t = 25'b00_10_1_0000_1001_1011_1000_xx_xx;    // add
-        8'h3b: t = 25'b00_10_1_0000_1001_1011_1000_xx_xx;    // add
-        8'h3c: t = 25'b00_10_1_0000_1000_1011_1000_xx_xx;    // add
-        8'h3d: t = 25'b00_10_1_0000_1000_1011_1000_xx_xx;    // add
-        8'h3e: t = 25'b00_10_1_0000_1001_1101_1000_xx_xx;    // add
-        8'h3f: t = 25'b00_10_1_0000_1001_1101_1000_xx_xx;    // add
-        8'h40: t = 25'b00_10_1_0001_1000_1011_1000_xx_xx;    // rsb
-        8'h41: t = 25'b00_11_1_0001_1001_1011_1000_xx_xx;    // rsb
-        8'h42: t = 25'b00_10_1_0001_1001_1011_1000_xx_xx;    // rsb
-        8'h43: t = 25'b00_10_1_0001_1001_1011_1000_xx_xx;    // rsb
-        8'h46: t = 25'b00_10_1_0001_1001_1101_1000_xx_xx;    // rsb
-        8'h47: t = 25'b00_10_1_0001_1001_1101_1000_xx_xx;    // rsb
-        8'h48: t = 25'b00_10_1_0100_1000_1011_1000_xx_xx;    // xor
-        8'h49: t = 25'b00_11_1_0100_1001_1011_1000_xx_xx;    // xor
-        8'h4a: t = 25'b00_10_1_0100_1001_1011_1000_xx_xx;    // xor
-        8'h4b: t = 25'b00_10_1_0100_1001_1011_1000_xx_xx;    // xor
-        8'h4c: t = 25'b00_10_1_0100_1000_1011_1000_xx_xx;    // xor
-        8'h4d: t = 25'b00_10_1_0100_1000_1011_1000_xx_xx;    // xor
-        8'h4e: t = 25'b00_10_1_0100_1001_1101_1000_xx_xx;    // xor
-        8'h4f: t = 25'b00_10_1_0100_1001_1101_1000_xx_xx;    // xor
-        8'h50: t = 25'b00_10_1_0101_1000_1011_1000_xx_xx;    // or
-        8'h51: t = 25'b00_11_1_0101_1001_1011_1000_xx_xx;    // or
-        8'h52: t = 25'b00_10_1_0101_1001_1011_1000_xx_xx;    // or
-        8'h53: t = 25'b00_10_1_0101_1001_1011_1000_xx_xx;    // or
-        8'h54: t = 25'b00_10_1_0101_1000_1011_1000_xx_xx;    // or
-        8'h55: t = 25'b00_10_1_0101_1000_1011_1000_xx_xx;    // or
-        8'h56: t = 25'b00_10_1_0101_1001_1101_1000_xx_xx;    // or
-        8'h57: t = 25'b00_10_1_0101_1001_1101_1000_xx_xx;    // or
-        8'h58: t = 25'b00_10_1_0110_1000_1011_1000_xx_xx;    // and
-        8'h59: t = 25'b00_11_1_0110_1001_1011_1000_xx_xx;    // and
-        8'h5a: t = 25'b00_10_1_0110_1001_1011_1000_xx_xx;    // and
-        8'h5b: t = 25'b00_10_1_0110_1001_1011_1000_xx_xx;    // and
-        8'h5c: t = 25'b00_10_1_0110_1000_1011_1000_xx_xx;    // and
-        8'h5d: t = 25'b00_10_1_0110_1000_1011_1000_xx_xx;    // and
-        8'h5e: t = 25'b00_10_1_0110_1001_1101_1000_xx_xx;    // and
-        8'h5f: t = 25'b00_10_1_0110_1001_1101_1000_xx_xx;    // and
-        8'h60: t = 25'b00_10_1_1000_1000_1011_1000_xx_xx;    // shl
-        8'h62: t = 25'b00_10_1_1000_1001_1011_1000_xx_xx;    // shl
-        8'h63: t = 25'b00_10_1_1000_1001_1011_1000_xx_xx;    // shl
-        8'h66: t = 25'b00_10_1_1000_1001_1101_1000_xx_xx;    // shl
-        8'h67: t = 25'b00_10_1_1000_1001_1101_1000_xx_xx;    // shl
-        8'h68: t = 25'b00_10_1_1011_1000_1011_1000_xx_xx;    // asr
-        8'h6a: t = 25'b00_10_1_1011_1001_1011_1000_xx_xx;    // asr
-        8'h6b: t = 25'b00_10_1_1011_1001_1011_1000_xx_xx;    // asr
-        8'h6e: t = 25'b00_10_1_1011_1001_1101_1000_xx_xx;    // asr
-        8'h6f: t = 25'b00_10_1_1011_1001_1101_1000_xx_xx;    // asr
-        8'h70: t = 25'b00_10_1_1001_1000_1011_1000_xx_xx;    // lsr
-        8'h72: t = 25'b00_10_1_1001_1001_1011_1000_xx_xx;    // lsr
-        8'h73: t = 25'b00_10_1_1001_1001_1011_1000_xx_xx;    // lsr
-        8'h76: t = 25'b00_10_1_1001_1001_1101_1000_xx_xx;    // lsr
-        8'h77: t = 25'b00_10_1_1001_1001_1101_1000_xx_xx;    // lsr
-        8'h78: t = 25'b00_10_1_0010_1000_1011_1000_xx_xx;    // iseq
-        8'h79: t = 25'b00_11_1_0010_1001_1011_1000_xx_xx;    // iseq
-        8'h7a: t = 25'b00_10_1_0010_1001_1011_1000_xx_xx;    // iseq
-        8'h7b: t = 25'b00_10_1_0010_1001_1011_1000_xx_xx;    // iseq
-        8'h7c: t = 25'b00_10_1_0011_1000_1011_1000_xx_xx;    // isset
-        8'h7d: t = 25'b00_10_1_0011_1000_1011_1000_xx_xx;    // isset
-        8'h7e: t = 25'b00_10_1_0010_1001_1101_1000_xx_xx;    // iseq
-        8'h7f: t = 25'b00_10_1_0010_1001_1101_1000_xx_xx;    // iseq
-        8'h80: t = 25'b00_01_1_0000_0001_0000_0001_xx_xx;    // add
-        8'h81: t = 25'b00_01_1_0101_0001_1000_0000_xx_xx;    // or
-        8'h82: t = 25'b00_01_1_0101_0000_1000_0001_xx_xx;    // or
-        8'h83: t = 25'b00_01_1_0111_xxxx_1000_0000_xx_xx;    // mov
-        8'h84: t = 25'b00_01_1_0100_0000_1001_0000_xx_xx;    // xor
-        8'h85: t = 25'b00_01_1_0000_0000_0001_0000_xx_xx;    // add
-        8'h87: t = 25'b00_01_0_xxxx_xxxx_xxxx_xxxx_xx_xx;    // nop
-        8'h88: t = 25'b00_11_1_0111_xxxx_0100_1010_xx_xx;    // mov
-        8'h89: t = 25'b00_11_1_0111_xxxx_0100_1010_xx_xx;    // mov
-        8'h8a: t = 25'b00_11_1_0111_xxxx_0100_1010_xx_xx;    // mov
-        8'h8b: t = 25'b00_11_1_0111_xxxx_0100_1010_xx_xx;    // mov
-        8'h8c: t = 25'b00_11_1_0111_xxxx_0100_1010_xx_xx;    // mov
-        8'h8d: t = 25'b00_11_1_0111_xxxx_0100_1010_xx_xx;    // mov
-        8'h8e: t = 25'b00_11_1_0111_xxxx_0100_1010_xx_xx;    // mov
-        8'h8f: t = 25'b00_11_1_0111_xxxx_0100_1010_xx_xx;    // mov
-        8'h90: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // push
-        8'h91: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // stm
-        8'h92: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // push
-        8'h93: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // stm
-        8'h94: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // stm
-        8'h95: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // stm
-        8'h96: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // push
-        8'h97: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // push
-        8'h98: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // pop
-        8'h99: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ldm
-        8'h9a: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // pop
-        8'h9b: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ldm
-        8'h9c: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ldm
-        8'h9d: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // ldm
-        8'h9e: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // pop
-        8'h9f: t = 25'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // pop
-        8'ha0: t = 25'b10_11_0_xxxx_1000_1100_xxxx_01_01;    // br
-        8'ha1: t = 25'b11_11_0_xxxx_xxxx_xxxx_xxxx_xx_10;    // jmp
-        8'ha2: t = 25'b11_10_0_xxxx_1000_xxxx_xxxx_xx_11;    // jmp
-        8'ha3: t = 25'b11_10_0_xxxx_xxxx_1011_xxxx_xx_01;    // jmpr
-        8'ha4: t = 25'b10_11_0_xxxx_1000_1011_xxxx_10_01;    // brclr
-        8'ha5: t = 25'b10_11_0_xxxx_1000_1011_xxxx_10_01;    // brclr
-        8'ha6: t = 25'b10_11_0_xxxx_1001_1101_xxxx_00_01;    // br
-        8'ha7: t = 25'b10_11_0_xxxx_1001_1101_xxxx_00_01;    // br
-        8'ha9: t = 25'b11_11_1_0111_xxxx_0010_0111_xx_10;    // call
-        8'haa: t = 25'b11_10_1_0111_1000_0010_0111_xx_11;    // call
-        8'hab: t = 25'b11_01_0_xxxx_0111_0111_xxxx_xx_11;    // ret
-        8'hac: t = 25'b10_11_0_xxxx_1000_1011_xxxx_11_01;    // brset
-        8'had: t = 25'b10_11_0_xxxx_1000_1011_xxxx_11_01;    // brset
-        8'hae: t = 25'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // sei
-        8'haf: t = 25'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx;    // cli
-        default: t = 25'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx;
+        8'h00: t = 32'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;    // brk
+        8'h01: t = 32'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;    // halt
+        8'h02: t = 32'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;    // rti
+        8'h03: t = 32'b01_01_0_xxxx_0000_1000_0000_xx_xx_1_0_1_01_0_0;    // ld
+        8'h04: t = 32'b01_01_0_xxxx_0000_1000_0000_xx_xx_1_0_0_01_0_0;    // ld8
+        8'h05: t = 32'b00_01_1_0000_0000_1001_0000_xx_xx_0_x_x_xx_x_x;    // add
+        8'h06: t = 32'b00_01_1_0000_0000_1111_0000_xx_xx_0_x_x_xx_x_x;    // add
+        8'h07: t = 32'b00_01_1_0000_0000_1010_0000_xx_xx_0_x_x_xx_x_x;    // add
+        8'h09: t = 32'b01_11_0_xxxx_1001_1011_1000_xx_xx_1_1_1_01_0_0;    // st
+        8'h0a: t = 32'b01_10_0_xxxx_1001_1011_1000_xx_xx_1_1_1_01_0_0;    // st
+        8'h0b: t = 32'b01_10_0_xxxx_1001_1011_1000_xx_xx_1_1_1_01_0_0;    // st
+        8'h0e: t = 32'b01_10_0_xxxx_1001_1101_1000_xx_xx_1_1_1_01_0_0;    // st
+        8'h0f: t = 32'b01_10_0_xxxx_1001_1101_1000_xx_xx_1_1_1_01_0_0;    // st
+        8'h11: t = 32'b01_11_0_xxxx_1001_1011_1000_xx_xx_1_1_0_01_0_0;    // st8
+        8'h12: t = 32'b01_10_0_xxxx_1001_1011_1000_xx_xx_1_1_0_01_0_0;    // st8
+        8'h13: t = 32'b01_10_0_xxxx_1001_1011_1000_xx_xx_1_1_0_01_0_0;    // st8
+        8'h16: t = 32'b01_10_0_xxxx_1001_1101_1000_xx_xx_1_1_0_01_0_0;    // st8
+        8'h17: t = 32'b01_10_0_xxxx_1001_1101_1000_xx_xx_1_1_0_01_0_0;    // st8
+        8'h18: t = 32'b01_10_0_xxxx_1000_1011_1000_xx_xx_1_0_1_01_0_0;    // ld
+        8'h19: t = 32'b01_11_0_xxxx_1001_1011_1000_xx_xx_1_0_1_01_0_0;    // ld
+        8'h1a: t = 32'b01_10_0_xxxx_1001_1011_1000_xx_xx_1_0_1_01_0_0;    // ld
+        8'h1b: t = 32'b01_10_0_xxxx_1001_1011_1000_xx_xx_1_0_1_01_0_0;    // ld
+        8'h1e: t = 32'b01_10_0_xxxx_1001_1101_1000_xx_xx_1_0_1_01_0_0;    // ld
+        8'h1f: t = 32'b01_10_0_xxxx_1001_1101_1000_xx_xx_1_0_1_01_0_0;    // ld
+        8'h20: t = 32'b01_10_0_xxxx_1000_1011_1000_xx_xx_1_0_0_01_0_0;    // ld8
+        8'h21: t = 32'b01_11_0_xxxx_1001_1011_1000_xx_xx_1_0_0_01_0_0;    // ld8
+        8'h22: t = 32'b01_10_0_xxxx_1001_1011_1000_xx_xx_1_0_0_01_0_0;    // ld8
+        8'h23: t = 32'b01_10_0_xxxx_1001_1011_1000_xx_xx_1_0_0_01_0_0;    // ld8
+        8'h26: t = 32'b01_10_0_xxxx_1001_1101_1000_xx_xx_1_0_0_01_0_0;    // ld8
+        8'h27: t = 32'b01_10_0_xxxx_1001_1101_1000_xx_xx_1_0_0_01_0_0;    // ld8
+        8'h28: t = 32'b00_10_1_0111_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x;    // mov
+        8'h29: t = 32'b00_11_1_1010_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // movhi
+        8'h2c: t = 32'b00_10_1_0111_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x;    // mov
+        8'h2d: t = 32'b00_10_1_0111_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x;    // mov
+        8'h2e: t = 32'b00_10_1_1010_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // movhi
+        8'h2f: t = 32'b00_10_1_1010_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // movhi
+        8'h30: t = 32'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;    // mul
+        8'h31: t = 32'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;    // mul
+        8'h32: t = 32'b00_10_1_1100_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // clmul bitrev sxt8
+        8'h33: t = 32'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;    // clz popcount
+        8'h36: t = 32'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;    // mul
+        8'h37: t = 32'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;    // mul
+        8'h38: t = 32'b00_10_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // add
+        8'h39: t = 32'b00_11_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // add
+        8'h3a: t = 32'b00_10_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // add
+        8'h3b: t = 32'b00_10_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // add
+        8'h3c: t = 32'b00_10_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // add
+        8'h3d: t = 32'b00_10_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // add
+        8'h3e: t = 32'b00_10_1_0000_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // add
+        8'h3f: t = 32'b00_10_1_0000_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // add
+        8'h40: t = 32'b00_10_1_0001_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // rsb
+        8'h41: t = 32'b00_11_1_0001_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // rsb
+        8'h42: t = 32'b00_10_1_0001_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // rsb
+        8'h43: t = 32'b00_10_1_0001_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // rsb
+        8'h46: t = 32'b00_10_1_0001_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // rsb
+        8'h47: t = 32'b00_10_1_0001_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // rsb
+        8'h48: t = 32'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // xor
+        8'h49: t = 32'b00_11_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // xor
+        8'h4a: t = 32'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // xor
+        8'h4b: t = 32'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // xor
+        8'h4c: t = 32'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // xor
+        8'h4d: t = 32'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // xor
+        8'h4e: t = 32'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // xor
+        8'h4f: t = 32'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // xor
+        8'h50: t = 32'b00_10_1_0101_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // or
+        8'h51: t = 32'b00_11_1_0101_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // or
+        8'h52: t = 32'b00_10_1_0101_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // or
+        8'h53: t = 32'b00_10_1_0101_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // or
+        8'h54: t = 32'b00_10_1_0101_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // or
+        8'h55: t = 32'b00_10_1_0101_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // or
+        8'h56: t = 32'b00_10_1_0101_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // or
+        8'h57: t = 32'b00_10_1_0101_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // or
+        8'h58: t = 32'b00_10_1_0110_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // and
+        8'h59: t = 32'b00_11_1_0110_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // and
+        8'h5a: t = 32'b00_10_1_0110_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // and
+        8'h5b: t = 32'b00_10_1_0110_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // and
+        8'h5c: t = 32'b00_10_1_0110_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // and
+        8'h5d: t = 32'b00_10_1_0110_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // and
+        8'h5e: t = 32'b00_10_1_0110_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // and
+        8'h5f: t = 32'b00_10_1_0110_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // and
+        8'h60: t = 32'b00_10_1_1000_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // shl
+        8'h62: t = 32'b00_10_1_1000_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // shl
+        8'h63: t = 32'b00_10_1_1000_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // shl
+        8'h66: t = 32'b00_10_1_1000_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // shl
+        8'h67: t = 32'b00_10_1_1000_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // shl
+        8'h68: t = 32'b00_10_1_1011_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // asr
+        8'h6a: t = 32'b00_10_1_1011_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // asr
+        8'h6b: t = 32'b00_10_1_1011_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // asr
+        8'h6e: t = 32'b00_10_1_1011_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // asr
+        8'h6f: t = 32'b00_10_1_1011_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // asr
+        8'h70: t = 32'b00_10_1_1001_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // lsr
+        8'h72: t = 32'b00_10_1_1001_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // lsr
+        8'h73: t = 32'b00_10_1_1001_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // lsr
+        8'h76: t = 32'b00_10_1_1001_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // lsr
+        8'h77: t = 32'b00_10_1_1001_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // lsr
+        8'h78: t = 32'b00_10_1_0010_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // iseq
+        8'h79: t = 32'b00_11_1_0010_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // iseq
+        8'h7a: t = 32'b00_10_1_0010_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // iseq
+        8'h7b: t = 32'b00_10_1_0010_1001_1011_1000_xx_xx_0_x_x_xx_x_x;    // iseq
+        8'h7c: t = 32'b00_10_1_0011_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // isset
+        8'h7d: t = 32'b00_10_1_0011_1000_1011_1000_xx_xx_0_x_x_xx_x_x;    // isset
+        8'h7e: t = 32'b00_10_1_0010_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // iseq
+        8'h7f: t = 32'b00_10_1_0010_1001_1101_1000_xx_xx_0_x_x_xx_x_x;    // iseq
+        8'h80: t = 32'b00_01_1_0000_0001_0000_0001_xx_xx_0_x_x_xx_x_x;    // add
+        8'h81: t = 32'b00_01_1_0101_0001_1000_0000_xx_xx_0_x_x_xx_x_x;    // or
+        8'h82: t = 32'b00_01_1_0101_0000_1000_0001_xx_xx_0_x_x_xx_x_x;    // or
+        8'h83: t = 32'b00_01_1_0111_xxxx_1000_0000_xx_xx_0_x_x_xx_x_x;    // mov
+        8'h84: t = 32'b00_01_1_0100_0000_1001_0000_xx_xx_0_x_x_xx_x_x;    // xor
+        8'h85: t = 32'b00_01_1_0000_0000_0001_0000_xx_xx_0_x_x_xx_x_x;    // add
+        8'h87: t = 32'b00_01_0_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;    // nop
+        8'h88: t = 32'b00_11_1_0111_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x;    // mov
+        8'h89: t = 32'b00_11_1_0111_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x;    // mov
+        8'h8a: t = 32'b00_11_1_0111_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x;    // mov
+        8'h8b: t = 32'b00_11_1_0111_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x;    // mov
+        8'h8c: t = 32'b00_11_1_0111_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x;    // mov
+        8'h8d: t = 32'b00_11_1_0111_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x;    // mov
+        8'h8e: t = 32'b00_11_1_0111_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x;    // mov
+        8'h8f: t = 32'b00_11_1_0111_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x;    // mov
+        8'h90: t = 32'b01_10_0_xxxx_0110_0011_1000_xx_xx_1_1_1_01_1_1;    // push
+        8'h91: t = 32'b01_10_0_xxxx_0001_0011_1000_xx_xx_1_1_1_01_1_0;    // stm
+        8'h92: t = 32'b01_10_0_xxxx_0110_0011_1000_xx_xx_1_1_1_10_1_1;    // push
+        8'h93: t = 32'b01_10_0_xxxx_0001_0011_1000_xx_xx_1_1_1_10_1_0;    // stm
+        8'h94: t = 32'b01_10_0_xxxx_0001_0011_1000_xx_xx_1_1_1_11_1_0;    // stm
+        8'h95: t = 32'b01_10_0_xxxx_0001_0011_1000_xx_xx_1_1_1_11_1_0;    // stm
+        8'h96: t = 32'b01_10_0_xxxx_0110_0011_1000_xx_xx_1_1_1_11_1_1;    // push
+        8'h97: t = 32'b01_10_0_xxxx_0110_0011_1000_xx_xx_1_1_1_11_1_1;    // push
+        8'h98: t = 32'b01_10_0_xxxx_0110_0011_1000_xx_xx_1_0_1_01_1_0;    // pop
+        8'h99: t = 32'b01_10_0_xxxx_0010_0011_1000_xx_xx_1_0_1_01_1_0;    // ldm
+        8'h9a: t = 32'b01_10_0_xxxx_0110_0011_1000_xx_xx_1_0_1_10_1_0;    // pop
+        8'h9b: t = 32'b01_10_0_xxxx_0010_0011_1000_xx_xx_1_0_1_10_1_0;    // ldm
+        8'h9c: t = 32'b01_10_0_xxxx_0010_0011_1000_xx_xx_1_0_1_11_1_0;    // ldm
+        8'h9d: t = 32'b01_10_0_xxxx_0010_0011_1000_xx_xx_1_0_1_11_1_0;    // ldm
+        8'h9e: t = 32'b01_10_0_xxxx_0110_0011_1000_xx_xx_1_0_1_11_1_0;    // pop
+        8'h9f: t = 32'b01_10_0_xxxx_0110_0011_1000_xx_xx_1_0_1_11_1_0;    // pop
+        8'ha0: t = 32'b10_11_0_xxxx_1000_1100_xxxx_01_01_0_x_x_xx_x_x;    // br
+        8'ha1: t = 32'b11_11_0_xxxx_xxxx_xxxx_xxxx_xx_10_0_x_x_xx_x_x;    // jmp
+        8'ha2: t = 32'b11_10_0_xxxx_1000_xxxx_xxxx_xx_11_0_x_x_xx_x_x;    // jmp
+        8'ha3: t = 32'b11_10_0_xxxx_xxxx_1011_xxxx_xx_01_0_x_x_xx_x_x;    // jmpr
+        8'ha4: t = 32'b10_11_0_xxxx_1000_1011_xxxx_10_01_0_x_x_xx_x_x;    // brclr
+        8'ha5: t = 32'b10_11_0_xxxx_1000_1011_xxxx_10_01_0_x_x_xx_x_x;    // brclr
+        8'ha6: t = 32'b10_11_0_xxxx_1001_1101_xxxx_00_01_0_x_x_xx_x_x;    // br
+        8'ha7: t = 32'b10_11_0_xxxx_1001_1101_xxxx_00_01_0_x_x_xx_x_x;    // br
+        8'ha9: t = 32'b11_11_1_0111_xxxx_0010_0111_xx_10_0_x_x_xx_x_x;    // call
+        8'haa: t = 32'b11_10_1_0111_1000_0010_0111_xx_11_0_x_x_xx_x_x;    // call
+        8'hab: t = 32'b11_01_0_xxxx_0111_0111_xxxx_xx_11_0_x_x_xx_x_x;    // ret
+        8'hac: t = 32'b10_11_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x;    // brset
+        8'had: t = 32'b10_11_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x;    // brset
+        8'hae: t = 32'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;    // sei
+        8'haf: t = 32'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;    // cli
+        default: t = 32'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x;
         endcase
     end
 
-    assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src} = t;
+    assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src,
+            mem, mst, mw2, mn, mblk, mpush} = t;
     assign halt = (op == 8'h01);
 
 endmodule

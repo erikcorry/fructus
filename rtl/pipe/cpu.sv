@@ -6,9 +6,9 @@
 // except for rtl/pipe/classify.sv; the decode stage borrows rtl/lhs.sv,
 // rtl/dest.sv, rtl/immgen.sv and rtl/cond.sv from the real processor
 // unchanged, and the ALU stage rtl/compare.sv.  It runs the one-register ALU
-// instructions, the conditional branches, the jumps and calls, and halt, and
-// stops at anything else: a microcoded instruction other than halt sets
-// `trapped`.
+// instructions, the conditional branches, the jumps and calls, the loads and
+// stores and block moves, and halt, and stops at anything else: a microcoded
+// instruction other than halt sets `trapped`.
 //
 // MEMORY IS A WORD WIDE.  `mem_addr` is a byte address whose bit 0 is always
 // clear; the word at that address, the even byte low, is on `mem_rdata` the
@@ -59,6 +59,15 @@
 // anything by then, because only the ALU stage writes; and halt takes effect
 // in the ALU stage rather than decode for the same reason.
 //
+// A LOAD, A STORE OR A BLOCK MOVE ENTERS THE PIPELINE AND STOPS DISPATCH, and
+// that is what keeps it off the bus while instructions are fetched: its own
+// bytes are the last thing the fetch reads, and by its ALU cycle the port is
+// idle.  The ALU cycle registers the first address; a sequencer then moves one
+// byte a cycle, writes registers through the ALU's result, and releases
+// dispatch as its last address goes out.  N bytes cost N + 4 cycles from one
+// dispatch to the next: 5 for ld8 and st8, 6 for ld, st and a one-register
+// push or pop, 10 for three registers.  See THE MEMORY SEQUENCER below.
+//
 // ONE BYPASS, FROM THE ALU STAGE INTO DECODE'S OPERAND FLOPS.  The instruction
 // directly ahead is in the ALU stage while this one decodes and writes only at
 // the edge that ends the cycle, so its result is not yet in the register file.
@@ -92,7 +101,9 @@
 // placement seeds - `just speed-pipe`:
 //
 //                                                   cells     MHz   spread
-//     EMPTY OPCODES' LENGTH LEFT TO THE MAPPER       1371    33.59  32.8 .. 34.4
+//     WITH LOADS, STORES AND BLOCK MOVES             2050    31.35  29.9 .. 33.3
+//     the sequencer's controls from its counter      1933    30.99  29.9 .. 31.4
+//     empty opcodes' length left to the mapper       1371    33.59  32.8 .. 34.4
 //     with the jumps and calls                       1388    32.96  32.5 .. 33.7
 //     pc + 1, 2, 3 as a LUT increment, no carry      1384    32.05  31.3 .. 33.0
 //     and length and kind looked up before the mux   1385    31.13  30.6 .. 33.1
@@ -166,11 +177,16 @@
 module pipe_cpu (
     input  logic        clk,
     input  logic        rst,
-    output logic [15:0] mem_addr,    // -> memory: a word address, bit 0 clear
+    output logic [15:0] mem_addr,    // -> memory: the word is [15:1]; [0] is the byte lane
+                                     //    a store writes, and clear for every fetch
     input  logic [15:0] mem_rdata,   // <- the word sampled at the last edge
+    output logic [7:0]  mem_wdata,   // -> memory: the byte to write, in lane mem_addr[0]
+    output logic        mem_we,      // -> memory: write it at this edge
     output logic        halted,
     output logic        trapped,
-    output logic [15:0] result       // the ALU's output, for the harness
+    output logic [15:0] result,      // the ALU's output, for the harness
+    output logic        retire,      // for the harness: an instruction completes
+    output logic [15:0] retire_pc    //   this cycle, and this was its address
 );
 
     // A taken branch, decided in the ALU stage at the last edge: this cycle
@@ -190,12 +206,13 @@ module pipe_cpu (
     wire [7:0] lo = mem_rdata[7:0], hi = mem_rdata[15:8];
     wire [7:0] op = pc[0] ? (use_nxt ? nxt : hi) : lo;
 
-    wire [1:0] kind, len, c_cond, c_pcsrc;
-    wire       c_wen, c_halt;
+    wire [1:0] kind, len, c_cond, c_pcsrc, c_mn;
+    wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush;
     wire [3:0] c_alu, c_lhs, c_rhs, c_dest;
     classify c (.op(op), .kind(kind), .len(len), .wen(c_wen), .halt(c_halt),
                 .alu_op(c_alu), .lhs_src(c_lhs), .rhs_src(c_rhs), .dest_src(c_dest),
-                .cond_src(c_cond), .pc_src(c_pcsrc));
+                .cond_src(c_cond), .pc_src(c_pcsrc), .mem(c_mem), .mst(c_mst), .mw2(c_mw2),
+                .mn(c_mn), .mblk(c_mblk), .mpush(c_mpush));
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
     // down the fall-through path behind it, which costs nothing if the branch
@@ -207,7 +224,12 @@ module pipe_cpu (
     wire is_cbr  = (kind == 2'd2);
     wire is_jump = (kind == 2'd3);
     wire flows   = (kind == 2'd0) | is_cbr;
-    wire piped   = flows | is_jump;
+    // A MEMORY INSTRUCTION ENTERS THE PIPELINE AND STOPS DISPATCH, as a jump
+    // does, and for the reason the bus needs: its own bytes are the last thing
+    // the fetch reads before it, so from its ALU cycle on the port is the
+    // sequencer's alone, and dispatch resumes only when the sequencer is done
+    // with it.
+    wire piped   = flows | is_jump | c_mem;
     wire span3   = pc[0] & (len == 2'd3);  // three bytes starting odd: three words
 
     // The candidates for the next pc come off the pc flop in parallel, so the
@@ -219,8 +241,11 @@ module pipe_cpu (
     // A jump in the ALU stage reads its target's word, chosen by flops alone.
     wire        jnow;
     wire [15:0] jaddr;
+    wire        aphase, mrestart;          // the memory sequencer, below
+    logic [15:0] mar;
     assign mem_addr = taken_q ? {tgt_q[15:1], 1'b0}
                     : jnow    ? {jaddr[15:1], 1'b0}
+                    : aphase  ? mar
                     :           {go ? pcw + 15'd1 : pcw, 1'b0};
 
     always_ff @(posedge clk) begin
@@ -232,6 +257,10 @@ module pipe_cpu (
             pc <= tgt_q; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
         end else if (jnow) begin
             pc <= jaddr; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
+        end else if (mrestart) begin
+            // The sequencer's last address is on the bus now.  The next cycle
+            // is the bubble that reads pc's word, and dispatch follows it.
+            stop <= 1'b0;
         end else if (go) begin
             pc      <= pcn;
             go      <= flows & ~span3;
@@ -247,6 +276,8 @@ module pipe_cpu (
     // DECODE
     // =========================================================================
     logic        d_valid, d_ucode, d_halt, d_odd, d_wen, d_cbr, d_jump;
+    logic        d_mem, d_mst, d_mw2, d_mblk, d_mpush;
+    logic [1:0]  d_mn;
     logic [7:0]  d_op, d_b1;
     logic [3:0]  d_alu, d_lhs, d_rhs, d_dest;
     logic [1:0]  d_cond, d_pcsrc, d_len;
@@ -256,6 +287,7 @@ module pipe_cpu (
         d_ucode <= ~rst & ~taken_q & go & ~piped;
         d_cbr   <= is_cbr;
         d_jump  <= is_jump;
+        {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
         d_pcsrc <= c_pcsrc;
         d_len   <= len;
         d_halt  <= c_halt;
@@ -332,6 +364,17 @@ module pipe_cpu (
     // decode itself latched a cycle ago - and takes the ALU's result instead
     // of the register file's.  On the ALU's side that is one LUT between `y`
     // and the operand flop, in place of the two levels of read it replaces.
+    // --- a memory instruction's registers, in the order of their addresses ------
+    // The first is the destination field: a load's rd, a store's rs, a block
+    // move's first register.  A push stores downward, so its registers lie in
+    // memory the other way round, the last one lowest.
+    wire [2:0] rb_ = ins[13:11], rc_ = {ins[15:14], ins[0]};
+    wire [2:0] ml0_d = !d_mpush ? wn : (d_mn == 2'd3) ? rc_ : (d_mn == 2'd2) ? rb_ : wn;
+    wire [2:0] ml1_d = !d_mpush ? rb_ : (d_mn == 2'd3) ? rb_ : wn;
+    wire [2:0] ml2_d = !d_mpush ? rc_ : wn;
+    wire [2:0] mN_d  = d_mw2 ? {d_mn, 1'b0} : {1'b0, d_mn};   // bytes: 1, 2, 4 or 6
+    wire [15:0] moff_d = d_mpush ? -{13'd0, mN_d} : 16'd0;     // a push starts 2n down
+
     (* ram_style = "logic" *)
     logic [15:0] R [0:7];
 
@@ -345,6 +388,7 @@ module pipe_cpu (
     // Everything decode hands on is dropped in a cycle that squashes: the
     // instruction in decode then is one of the three behind a taken branch.
     wire keep = d_valid & ~taken_q;
+    wire mhold;                        // the sequencer holds e_op at 13
 
     logic [3:0]  e_op;
     logic [1:0]  e_usel;              // the fast unary operation: bval[2:1]
@@ -352,6 +396,10 @@ module pipe_cpu (
     logic        e_cbr, e_neg, e_mask, e_ucode, e_halt, e_jump, e_jreg;
     logic [2:0]  e_code;
     logic [15:0] e_tgt;
+    logic        e_mem, e_mst, e_mw2, e_mblk, e_mpush;
+    logic [2:0]  e_mN, e_l0, e_l1, e_l2, e_ptr;
+    logic [1:0]  e_mn;
+    logic [15:0] e_moff;
     logic        e_valid;             // for the harness
     logic [15:0] e_pc;                // for the harness
     always_ff @(posedge clk) begin
@@ -360,18 +408,23 @@ module pipe_cpu (
         bq      <= fwd_b ? y : rb;
         e_usel  <= bval[2:1];
         e_we    <= (keep & d_wen) ? 8'd1 << wn : 8'd0;
-        e_op    <= d_alu;
+        e_op    <= mhold ? 4'd13 : d_alu;
         e_cbr   <= keep & d_cbr;
         e_jump  <= keep & d_jump;
         e_jreg  <= jreg & ~calllr;
         {e_code, e_neg, e_mask} <= {ccode, cneg, cmask};
         e_tgt   <= tgt;
         e_ucode <= d_ucode & ~taken_q;
+        e_mem   <= keep & d_mem;
+        {e_mst, e_mw2, e_mblk, e_mpush} <= {d_mst, d_mw2, d_mblk, d_mpush};
+        {e_mN, e_l0, e_l1, e_l2, e_ptr, e_mn} <= {mN_d, ml0_d, ml1_d, ml2_d, an, d_mn};
+        e_moff  <= moff_d;
         e_halt  <= d_halt;
         e_pc    <= d_pc;
     end
 
-    pipe_alu a (.lhs(aq), .rhs(bq), .usel(e_usel), .op(e_op), .y(y));
+    logic [15:0] ldq;                   // the sequencer's word: below
+    pipe_alu a (.lhs(aq), .rhs(bq), .usel(e_usel), .op(e_op), .mdata(ldq), .y(y));
 
     // THE CONDITION HAS ITS OWN UNIT, as in rtl/cpu.sv: rtl/compare.sv's
     // subtractor reads the same operand flops as the ALU and none of its
@@ -390,9 +443,130 @@ module pipe_cpu (
     always_ff @(posedge clk) begin
         taken_q <= ~rst & ~taken_q & e_cbr & taken;
         tgt_q   <= e_tgt;
-        for (int k = 0; k < 8; k++) if (e_we[k] & ~taken_q) R[k] <= y;
+        for (int k = 0; k < 8; k++) if ((e_we[k] & ~taken_q) | mwe[k]) R[k] <= y;
     end
     assign result = y;
+
+    // =========================================================================
+    // THE MEMORY SEQUENCER
+    // =========================================================================
+    // It starts in a memory instruction's ALU cycle, which computes the first
+    // address into `mar` - so no adder stands in front of the address pins -
+    // and then takes one cycle a byte, `mt` counting them from 1:
+    //
+    //     mt 1 .. N      the address is mar, which steps up by one; a store
+    //                    writes the byte `wq` holds, filled the cycle before
+    //     mt 2 .. N + 1  a load's byte arrives, from the lane mar[0] was, and
+    //                    shifts into `ldq` - low byte first
+    //     mt N           dispatch is released: mt N + 1 is the bubble that reads
+    //                    the next instruction's word, which dispatches at N + 2
+    //
+    // AND IT WRITES REGISTERS THROUGH THE ALU: e_op is held at 13, whose result
+    // is `ldq`, and `mwe` joins the write enables.  A loaded register is written
+    // the cycle after its last byte arrives, while the next byte shifts in
+    // behind it.  A block move's pointer is written through the same word:
+    // a load's FIRST, at mt 1, with any loaded register that is the pointer
+    // left unwritten - the semantics end with the pointer's own value - and a
+    // store's LAST, at N + 1, so that a stored register that is the pointer is
+    // still read as it was.  Every write lands before the next instruction
+    // reaches decode at N + 3, so nothing needs the bypass.
+    //
+    // A BYTE AT A TIME, aligned or not: two bytes of a word cost two cycles,
+    // which a later version may take in one.
+    wire mstart = e_mem & ~taken_q;
+    wire [15:0] ea   = aq + (e_mblk ? e_moff : bq);
+    wire [15:0] ptrv = e_mpush ? ea : aq + {13'd0, e_mN};   // where the pointer ends
+
+    logic       mact, mst, mw2, mblk, mlane, weq;
+    logic [3:0] mt;
+    logic [2:0] ml0, ml1, ml2, mpr;
+    logic [7:0] wq;
+    logic [15:0] mpc;
+
+    // EVERY CONTROL IS A FLOP.  Each is a nine-step schedule, bit t - 1 for
+    // step t, worked out once in the ALU cycle and shifted one place a cycle,
+    // so what the step does is bit 0 of a shift register.  The register write
+    // enables are a one-hot flop filled a cycle ahead.  Worked out from the
+    // step counter as it went, they measured 30.99 MHz: the counter's sums and
+    // compares, the enable decode, and then a global buffer, in front of the
+    // register file's clock enables.
+    function automatic [8:0] at(input [3:0] t);
+        at = (t == 4'd0) ? 9'd0 : 9'd1 << (t - 4'd1);
+    endfunction
+    wire [3:0] eN   = {1'b0, e_mN};
+    wire [3:0] eEnd = e_mst ? (e_mblk ? eN + 4'd1 : eN) : eN + 4'd2;
+    wire [8:0] eA   = (9'd1 << eN) - 9'd1;                        // steps 1 .. N
+    //  step:           a load's registers, when their last byte is in
+    wire [8:0] eW0  = e_mst ? 9'd0 : at(e_mw2 ? 4'd4 : 4'd3);
+    wire [8:0] eW1  = (~e_mst & e_mn >= 2'd2) ? at(4'd6) : 9'd0;
+    wire [8:0] eW2  = (~e_mst & e_mn == 2'd3) ? at(4'd8) : 9'd0;
+    //  a block's pointer: a load's first, a store's last
+    wire [8:0] eP   = ~e_mblk ? 9'd0 : e_mst ? at(eN + 4'd1) : at(4'd1);
+
+    logic [8:0] sA, sC, sR, sD, sW0, sW1, sW2, sP;
+    assign aphase   = sA[0];
+    assign mrestart = sR[0];
+    wire   mcap     = sC[0];
+    wire   mdone    = sD[0];
+    wire   [7:0] mbyte = mlane ? hi : lo;
+
+    // A loaded register that is the pointer is not written: the pointer's own
+    // value is the one the semantics end with.
+    wire sup0 = mblk & (ml0 == mpr), sup1 = mblk & (ml1 == mpr), sup2 = mblk & (ml2 == mpr);
+    wire [7:0] mwe_n = mstart ? (eP[0] ? 8'd1 << e_ptr : 8'd0)
+                     : ((sW0[1] & ~sup0) ? 8'd1 << ml0 : 8'd0)
+                     | ((sW1[1] & ~sup1) ? 8'd1 << ml1 : 8'd0)
+                     | ((sW2[1] & ~sup2) ? 8'd1 << ml2 : 8'd0)
+                     | (sP[1] ? 8'd1 << mpr : 8'd0);
+    logic [7:0] mwe;
+    always_ff @(posedge clk) begin
+        mwe <= rst ? 8'd0 : mwe_n;
+        if (rst) {sA, sC, sR, sD, sW0, sW1, sW2, sP} <= '0;
+        else if (mstart) begin
+            sA  <= eA;
+            sC  <= e_mst ? 9'd0 : eA << 1;                        // steps 2 .. N + 1
+            sR  <= at(eN);
+            sD  <= at(eEnd);
+            {sW0, sW1, sW2, sP} <= {eW0, eW1, eW2, eP};
+        end else
+            {sA, sC, sR, sD, sW0, sW1, sW2, sP} <= {sA >> 1, sC >> 1, sR >> 1, sD >> 1,
+                                                    sW0 >> 1, sW1 >> 1, sW2 >> 1, sP >> 1};
+    end
+
+    // e_op is 13 from the ALU cycle to the sequencer's last.
+    assign mhold = mstart | (mact & ~mdone);
+
+    // A store's next byte: byte k, in the cycle before the one that writes it.
+    wire [2:0]  kreg  = (mt[2:1] == 2'd0) ? ml0 : (mt[2:1] == 2'd1) ? ml1 : ml2;
+    wire [15:0] kval  = R[kreg];
+    wire [15:0] k0val = R[e_l0];
+
+    always_ff @(posedge clk) begin
+        if (rst)         mact <= 1'b0;
+        else if (mstart) mact <= 1'b1;
+        else if (mdone)  mact <= 1'b0;
+        if (mstart) begin
+            mt  <= 4'd1;
+            mar <= ea;
+            ldq <= ptrv;                   // a block's pointer, written from here
+            {mst, mw2, mblk} <= {e_mst, e_mw2, e_mblk};
+            {ml0, ml1, ml2, mpr} <= {e_l0, e_l1, e_l2, e_ptr};
+            mpc <= e_pc;
+            wq  <= k0val[7:0];
+            weq <= e_mst;
+        end else begin
+            mt  <= mt + 4'd1;
+            if (aphase) begin mar <= mar + 16'd1; mlane <= mar[0]; end
+            if (mcap)   ldq <= mw2 ? {mbyte, ldq[15:8]} : {8'h00, mbyte};
+            wq  <= mt[0] ? kval[15:8] : kval[7:0];
+            weq <= mst & sA[1];            // a store writes in every address step
+        end
+    end
+    assign mem_wdata = wq;
+    assign mem_we    = weq & aphase;
+
+    assign retire    = (e_valid & ~taken_q & ~e_mem) | mdone;
+    assign retire_pc = mdone ? mpc : e_pc;
 
     // --- the one microcoded instruction there is --------------------------------
     // It takes effect in the ALU stage, not in decode, because a halt just
