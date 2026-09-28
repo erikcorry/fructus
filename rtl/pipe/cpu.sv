@@ -152,6 +152,7 @@
 //
 //                                                   cells     MHz   spread
 //     MUL, CLZ AND POPCOUNT, as here                 1986    31.68  31.0 .. 32.7
+//     and ld8's release worked out in the ALU cycle  2013    30.21  29.4 .. 32.0
 //     clz and popcount whole into ldq in one cycle   2012    26.40  25.4 .. 27.4
 //     microcode redirecting through taken_q          1883    31.10  29.9 .. 32.0
 //     with exceptions and interrupts, own mux arm    1917    30.61  29.2 .. 31.9
@@ -170,9 +171,13 @@
 // The opcode substitution that makes an interrupt a brk costs nothing: taken
 // out, the design measured the same.
 //
-// THE TWO-CYCLE OPERATIONS COST NOTHING, and the design came out faster, which
-// is placement and not a gain to count on; what counts is that no seed's
-// critical path touches them.  mul's SB_MAC16 and clz and popcount's unit
+// THE TWO-CYCLE OPERATIONS COST ABOUT 0.9 MHz, AND THE COLUMN THEY BROUGHT
+// BOUGHT BACK 1.5.  A one-byte load's early release was worked out in its ALU
+// cycle as `~e_mst & e_mN == 1`, a compare over the ALU stage's flops in front
+// of `stop` and the dispatch enables; predecode's `urs` column, which the
+// two-cycle operations needed anyway, makes it one flop.  Put back, the old
+// expression measured 30.21 - so the design is faster than before these
+// operations for that reason, and no seed's critical path touches them.  mul's SB_MAC16 and clz and popcount's unit
 // work on the operand flops every cycle into registers of their own, a flop
 // in the middle of the popcount's tree, and a routine takes the result into
 // ldq - so neither meets the ALU's result mux, and the only thing pulling
