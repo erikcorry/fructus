@@ -20,17 +20,18 @@
 //             instruction's dispatch is the very next cycle, unless the bytes
 //             cannot be there in time (below).
 //   DECODE    the whole instruction is present, part of it perhaps still on
-//             the read port.  The left register's number, the right-hand side
-//             - a register number, or a 16-bit value that looks like an
-//             immediate to the ALU whatever it was made from - the operation
-//             and the destination are latched.
-//   ALU       the register file is read, the operation done, and the result
-//             written, all in one cycle.  Nothing in front of the ALU but flops
-//             and the register file's read muxes.
+//             the read port.  Both operands are latched - the left one read
+//             from the register file, the right one read from it or made into
+//             a 16-bit value that looks like an immediate to the ALU, whatever
+//             it was made from - with the operation and the destination.
+//   ALU       two operand flops, the operation, and the result written.
 //
-// NO FORWARDING IS NEEDED because the registers are read in the stage that
-// writes them.  An instruction in ALU at cycle t writes at the edge ending t;
-// the next one reaches ALU at t + 1 at the earliest and reads the new value.
+// ONE BYPASS, FROM THE ALU STAGE INTO DECODE'S OPERAND FLOPS.  The instruction
+// directly ahead is in the ALU stage while this one decodes and writes only at
+// the edge that ends the cycle, so its result is not yet in the register file.
+// Decode knows that instruction's destination - it latched it itself, one-hot,
+// a cycle earlier - and takes the result in place of the read when the numbers
+// match.  Anything older has already landed.
 //
 // WHERE THE BYTES ARE.  After the dispatch of an instruction at pc the address
 // presented is ALWAYS the word after pc's word - whatever the instruction's
@@ -58,8 +59,12 @@
 // placement seeds - `just speed-pipe`:
 //
 //                                                   cells     MHz   spread
+//     OPERANDS READ IN DECODE, WITH THE BYPASS       1186    34.95  34.0 .. 36.2
+//
+//   and before it, with the register file read in the ALU stage:
+//
 //     register numbers binary, read by 8:1 mux       1177    26.25  25.9 .. 26.5
-//     REGISTER SELECTS ONE-HOT, as here              1170    27.54  26.8 .. 28.4
+//     register selects one-hot                       1170    27.54  26.8 .. 28.4
 //     and the result mux an AND-OR, one-hot op       1188    26.85  25.6 .. 27.1
 //     shift amount from the immediate only (wrong)   1145    27.59  27.1 .. 28.2
 //     no shifts at all (wrong)                                30.50  29.6 .. 31.3
@@ -86,12 +91,14 @@
 // single hop shorter.  At nine levels 30 MHz is out of reach wherever they
 // sit; only fewer levels will get there.
 //
-// The last row is an ablation, not a design: it prices a register-count
-// shift at nothing, so the barrel shifter behind a register read is not what
-// sets the clock.  The ALU stage is simply deep - register read, operation,
-// result mux, register write - at eight to nine LUTs, two thirds of it wire.
-// rtl/cpu.sv reads its operands a cycle early for exactly this reason, and
-// runs at 29.5 on the same harness.
+// WHAT FIXED IT WAS MOVING THE READ, NOT THE SHIFTERS.  rtl/cpu.sv as of
+// 735e301, which reads its operands a cycle early with the same shifters,
+// measured 33.96 on this harness; the shifters were only too slow with a
+// register read in front of them.  With the read in decode the ALU loop is
+// operand flop, ALU, result mux, and then either the register file or - one
+// LUT - the bypass into the operand flops, and it is off the critical path:
+// every seed's path now runs from the SPRAM's data out, through decode, to an
+// operand flop or the pc, in six or seven cells.
 // =============================================================================
 
 module pipe_cpu (
@@ -190,41 +197,46 @@ module pipe_cpu (
     // =========================================================================
     // ALU
     // =========================================================================
-    // THE REGISTER NUMBERS ARRIVE ONE-HOT.  Decode has the time to expand
-    // them, and the ALU stage then reads the register file as an AND-OR over
-    // eight registers rather than through an eight-way binary mux, and writes
-    // it with enables that are flops.  The right-hand side's OR has a ninth
-    // term, the immediate, which decode zeroes whenever a register is chosen -
-    // so no select stands between either one and the ALU.
-    logic [7:0]  e_asel, e_bsel, e_we;
+    // THE OPERANDS ARE READ IN DECODE, into flops, so the ALU stage is those
+    // two flops, the ALU and the write - as in rtl/cpu.sv, which measures 34
+    // on the same harness for that reason.  Read in the ALU stage instead, the
+    // register file's read put two more levels in front of the shifters, and
+    // that measured 27.54.
+    //
+    // THE ONE HAZARD IS THE INSTRUCTION DIRECTLY AHEAD.  It is in the ALU
+    // stage while this one decodes, and its result reaches the register file
+    // only at the edge that ends this cycle, so the read below cannot see it.
+    // Anything older has already landed.  So decode compares its register
+    // numbers with that instruction's destination - `e_we`, one-hot, which
+    // decode itself latched a cycle ago - and takes the ALU's result instead
+    // of the register file's.  On the ALU's side that is one LUT between `y`
+    // and the operand flop, in place of the two levels of read it replaces.
+    (* ram_style = "logic" *)
+    logic [15:0] R [0:7];
+
+    logic [7:0]  e_we;                // the destination in the ALU stage, one-hot
+    wire  [15:0] y;
+
+    wire fwd_a = e_we[an];
+    wire fwd_b = use_reg & e_we[bn];
+    wire [15:0] rb = use_reg ? R[bn] : bval;
+
     logic [3:0]  e_op;
-    logic [15:0] e_imm;
+    logic [1:0]  e_usel;              // the fast unary operation: bval[2:1]
+    logic [15:0] aq, bq;
     logic        e_valid;             // for the harness
     logic [15:0] e_pc;                // for the harness
     always_ff @(posedge clk) begin
         e_valid <= d_valid;
-        e_asel  <= 8'd1 << an;
-        e_bsel  <= use_reg ? 8'd1 << bn : 8'd0;
-        e_imm   <= use_reg ? 16'd0 : bval;
+        aq      <= fwd_a ? y : R[an];
+        bq      <= fwd_b ? y : rb;
+        e_usel  <= bval[2:1];
         e_we    <= (d_valid & d_wen) ? 8'd1 << wn : 8'd0;
         e_op    <= d_alu;
         e_pc    <= d_pc;
     end
 
-    (* ram_style = "logic" *)
-    logic [15:0] R [0:7];
-
-    logic [15:0] av, bv;
-    always_comb begin
-        av = 16'd0;
-        bv = e_imm;
-        for (int k = 0; k < 8; k++) begin
-            av = av | (R[k] & {16{e_asel[k]}});
-            bv = bv | (R[k] & {16{e_bsel[k]}});
-        end
-    end
-    wire [15:0] y;
-    pipe_alu a (.lhs(av), .rhs(bv), .usel(e_imm[2:1]), .op(e_op), .y(y));
+    pipe_alu a (.lhs(aq), .rhs(bq), .usel(e_usel), .op(e_op), .y(y));
 
     always_ff @(posedge clk)
         for (int k = 0; k < 8; k++) if (e_we[k]) R[k] <= y;
