@@ -151,7 +151,8 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     THE pc'S CARRY ADDED A CYCLE LATE, as here     1953    31.05  29.5 .. 32.6
+//     REGISTER JUMPS THROUGH taken_q, as here        1946    31.81  30.0 .. 32.6
+//     the pc's carry added a cycle late              1953    31.05  29.5 .. 32.6
 //     mul, clz and popcount                          1986    31.68  31.0 .. 32.7
 //     and ld8's release worked out in the ALU cycle  2013    30.21  29.4 .. 32.0
 //     clz and popcount whole into ldq in one cycle   2012    26.40  25.4 .. 27.4
@@ -257,6 +258,13 @@
 // 31.68, all of it decode's and the ALU's paths, which it does not touch;
 // kept because it removes a whole family of critical paths, so that what
 // speeds decode up is not capped by dispatch just behind it.
+//
+// AND aq NO LONGER REACHES THE ADDRESS MUX OR THE pc.  A jump to a register
+// took its target straight from aq into both, and the path reports showed the
+// ALU's own logic named after the pc and placed beside it, a long wire from
+// aq.  Through tgt_q and taken_q, a cycle late, as rti's return does - jmp ra,
+// call ra and ret take four cycles, not three - the ALU loop left all but two
+// critical paths of sixteen, and the median rose to 31.81.
 //
 // WHAT FIXED IT WAS MOVING THE READ, NOT THE SHIFTERS.  rtl/cpu.sv as of
 // 735e301, which reads its operands a cycle early with the same shifters,
@@ -594,8 +602,16 @@ module pipe_cpu (
     // memory's address pins in the cycle it is made.  That costs a cycle on a
     // taken branch: the target dispatches two cycles after the branch's ALU
     // cycle, four after its own dispatch.
-    assign jnow  = e_jump & ~taken_q;
-    assign jaddr = e_jreg ? aq : e_tgt;
+    // A JUMP TO A REGISTER GOES THROUGH taken_q, a cycle late, as rti does:
+    // its target, aq, goes into tgt_q, which already takes aq for rti, and
+    // the fetch goes there through taken_q's arm.  So aq - the operand flop
+    // the ALU, the comparator and the bypass all hang on - no longer reaches
+    // the address mux or the pc at all, and this arm is a flop's alone.
+    // jmp ra, call ra and ret take four cycles, not three; `call lr`, whose
+    // target is the next pc and not the register, stays at three.
+    wire jreg_now = e_jump & e_jreg & ~taken_q;
+    assign jnow  = e_jump & ~e_jreg & ~taken_q;
+    assign jaddr = e_tgt;
 
     wire taken;
     compare cp (.lhs(aq), .rhs(bq), .cond(e_code), .neg(e_neg), .mask(e_mask), .taken(taken));
@@ -608,8 +624,8 @@ module pipe_cpu (
         // word's own address, measured 30.61 MHz against 31.13 without it.
         // The squash taken_q brings finds nothing to squash - dispatch is
         // stopped - and the routine's own writes are not taken_q's to stop.
-        taken_q <= ~rst & ~taken_q & ((e_cbr & taken) | urj);
-        tgt_q   <= urj ? rjaddr : e_tgt;
+        taken_q <= ~rst & ~taken_q & ((e_cbr & taken) | urj | jreg_now);
+        tgt_q   <= (urj | jreg_now) ? rjaddr : e_tgt;
         for (int k = 0; k < 8; k++) if ((e_we[k] & ~taken_q) | mwe[k]) R[k] <= y;
     end
     assign result = y;
@@ -758,7 +774,7 @@ module pipe_cpu (
                       : (uLQ == 3'd2) ? shadow_sp
                       : (uLQ == 3'd3) ? shadow_lr : shadow_isp;
     assign urj    = uRJ != 2'd0;
-    assign rjaddr = uRJ[0] ? VECTOR : aq;
+    assign rjaddr = (urj & uRJ[0]) ? VECTOR : aq;         // aq: rti's, or a register jump's
     assign wake   = halted & ie & irq;
     always_ff @(posedge clk) begin
         if (uSH == 2'd1) shadow_sp  <= aq;
