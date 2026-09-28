@@ -151,7 +151,8 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     MUL, CLZ AND POPCOUNT, as here                 1986    31.68  31.0 .. 32.7
+//     THE pc'S CARRY ADDED A CYCLE LATE, as here     1953    31.05  29.5 .. 32.6
+//     mul, clz and popcount                          1986    31.68  31.0 .. 32.7
 //     and ld8's release worked out in the ALU cycle  2013    30.21  29.4 .. 32.0
 //     clz and popcount whole into ldq in one cycle   2012    26.40  25.4 .. 27.4
 //     microcode redirecting through taken_q          1883    31.10  29.9 .. 32.0
@@ -247,6 +248,16 @@
 // which the change does not touch.  Near the SPRAM, placement answers to more
 // than the path being changed.
 //
+// WHAT DID TAKE THE pc OFF EVERY CRITICAL PATH was not a better adder but
+// splitting it across two cycles: the pc is a base, two low bits and a carry
+// still to be added, and a dispatch finishes only the low bits and the carry
+// - a two-bit add from the classifier's length into three flops - while the
+// high bits take the resolved base, from flops.  No seed of sixteen then ends
+// at the pc, against five.  The median came out 0.6 MHz lower, 31.05 against
+// 31.68, all of it decode's and the ALU's paths, which it does not touch;
+// kept because it removes a whole family of critical paths, so that what
+// speeds decode up is not capped by dispatch just behind it.
+//
 // WHAT FIXED IT WAS MOVING THE READ, NOT THE SHIFTERS.  rtl/cpu.sv as of
 // 735e301, which reads its operands a cycle early with the same shifters,
 // measured 33.96 on this harness; the shifters were only too slow with a
@@ -283,7 +294,21 @@ module pipe_cpu (
     // =========================================================================
     // DISPATCH / PREDECODE
     // =========================================================================
-    logic [15:0] pc;        // the instruction dispatching this cycle, if `go`
+    // THE pc IS KEPT AS A BASE, TWO LOW BITS AND A CARRY STILL TO BE ADDED, so
+    // that a dispatch finishes only the part that needs the opcode's length:
+    // the two low bits and whether they carry, one LUT each from the
+    // classifier into a flop.  The high bits take the resolved high bits of
+    // the pc being dispatched - base, or base + 1 if a carry is pending - which
+    // are flops and an incrementer, and settled while the opcode was still
+    // arriving.  So the fourteen-bit carry is added in the cycle after the one
+    // that made it, and never behind the classifier.  `pc`, below, is the
+    // whole value, for everything that reads it.
+    logic [13:0] pcb;       // the base of pc[15:2]
+    logic [1:0]  pcl;       // pc[1:0]
+    logic        pcc;       // a carry into the base, not yet added
+    wire  [13:0] pcb1 = pcb + 14'd1;
+    wire  [13:0] pch  = pcc ? pcb1 : pcb;
+    wire  [15:0] pc   = {pch, pcl};  // the instruction dispatching this cycle, if `go`
     logic        go;        // this cycle dispatches
     logic        stop;      // a microcoded instruction was dispatched: freeze
     logic        use_nxt;   // an odd pc's opcode is in nxt, not on the port
@@ -330,8 +355,7 @@ module pipe_cpu (
 
     // The candidates for the next pc come off the pc flop in parallel, so the
     // classifier's length only picks one.
-    wire [15:0] pc1 = pc + 16'd1, pc2 = pc + 16'd2, pc3 = pc + 16'd3;
-    wire [15:0] pcn = (len == 2'd1) ? pc1 : (len == 2'd2) ? pc2 : pc3;
+    wire [2:0]  pcs = {1'b0, pcl} + {1'b0, len};   // the low bits' sum, and its carry
     wire [14:0] pcw = pc[15:1];
 
     // A jump in the ALU stage reads its target's word, chosen by flops alone.
@@ -353,12 +377,12 @@ module pipe_cpu (
     always_ff @(posedge clk) begin
         nxt <= hi;
         if (rst) begin
-            pc <= 16'd0; go <= 1'b0; stop <= 1'b0; use_nxt <= 1'b0;
+            {pcb, pcl, pcc} <= 17'd0; go <= 1'b0; stop <= 1'b0; use_nxt <= 1'b0;
         end else if (taken_q) begin
             // The target's word is being read now; it dispatches next cycle.
-            pc <= tgt_q; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
+            {pcb, pcl, pcc} <= {tgt_q, 1'b0}; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
         end else if (jnow) begin
-            pc <= jaddr; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
+            {pcb, pcl, pcc} <= {jaddr, 1'b0}; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
         end else if (take) begin
             // The brk goes down the pipeline; the pc stays on the instruction
             // it replaced.
@@ -370,7 +394,8 @@ module pipe_cpu (
             // is the bubble that reads pc's word, and dispatch follows it.
             stop <= 1'b0;
         end else if (go) begin
-            pc      <= pcn;
+            pcb     <= pch;
+            {pcc, pcl} <= pcs;
             go      <= flows & ~span3;
             stop    <= ~flows;
             use_nxt <= ~pc[0] & (len == 2'd1);
