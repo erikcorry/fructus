@@ -4,27 +4,31 @@
 #
 #   node tools/speed.mjs --pipe --floorplan
 #
-# THE ALU STAGE IN ONE RECTANGLE.  Its flops, the register file, and the logic
-# between them - which yosys names after `so`, the observation register the
-# ALU's result feeds in tools/pipe-top.sv - are confined to a region, so that
-# the placer cannot spread the one path that sets the clock across the die.
-# The processor's SPRAM is pinned at the bottom left, and dispatch and decode
-# are left free to settle between it and the region.
+# THE SPRAM, PINNED.  Left to itself the placer puts the processor's SPRAM in
+# either bottom corner, seed by seed, and dispatch and decode - whose paths
+# start at its data out - settle wherever it lands.  PIPE_SPRAM in the
+# environment names the BEL; the default is the bottom left, X0/Y0/spram_1.
+# The pairs are X0/Y0/spram_1 and _2 at the left, X25/Y0/spram_3 and _4 at the
+# right.
 #
-# The region is PIPE_FP="x0,y0,x1,y1" in the environment, for trying shapes
-# from tools/speed.mjs without editing this file; the default is the one
-# rtl/pipe/cpu.sv's header quotes.  MEASURED, it does not help - see there.
+# AND, IF PIPE_FP="x0,y0,x1,y1" IS GIVEN, THE ALU STAGE IN THAT RECTANGLE: its
+# flops, the register file, and the logic between them, which yosys names
+# after `so`, the observation register the ALU's result feeds.  MEASURED, that
+# does not help - see rtl/pipe/cpu.sv's header - so it is off unless asked for.
 # =============================================================================
 
 import os
 
-x0, y0, x1, y1 = (int(v) for v in os.environ.get("PIPE_FP", "1,1,12,12").split(","))
-ctx.createRectangularRegion("alu", x0, y0, x1, y1)
+spram = os.environ.get("PIPE_SPRAM", "X0/Y0/spram_1")
+fp = os.environ.get("PIPE_FP")
+if fp:
+    x0, y0, x1, y1 = (int(v) for v in fp.split(","))
+    ctx.createRectangularRegion("alu", x0, y0, x1, y1)
 
 ALU = ("so", "u.R", "u.e_", "u.a.")
 
 for name, cell in ctx.cells:
     if name == "ram_RAM":
-        cell.setAttr("BEL", "X0/Y0/spram_1")
-    elif cell.type == "ICESTORM_LC" and name.startswith(ALU):
+        cell.setAttr("BEL", spram)
+    elif fp and cell.type == "ICESTORM_LC" and name.startswith(ALU):
         ctx.constrainCellToRegion(name, "alu")

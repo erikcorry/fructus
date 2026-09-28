@@ -152,6 +152,8 @@
 //
 //                                                   cells     MHz   spread
 //     REGISTER JUMPS THROUGH taken_q, as here        1946    31.81  30.0 .. 32.6
+//     and the SPRAM pinned at the bottom left        1946    31.77  29.2 .. 32.8
+//     and the SPRAM pinned at the bottom right       1946    31.29  30.4 .. 32.0
 //     the pc's carry added a cycle late              1953    31.05  29.5 .. 32.6
 //     mul, clz and popcount                          1986    31.68  31.0 .. 32.7
 //     and ld8's release worked out in the ALU cycle  2013    30.21  29.4 .. 32.0
@@ -265,6 +267,14 @@
 // aq.  Through tgt_q and taken_q, a cycle late, as rti's return does - jmp ra,
 // call ra and ret take four cycles, not three - the ALU loop left all but two
 // critical paths of sixteen, and the median rose to 31.81.
+//
+// PINNING THE SPRAM DOES NOT HELP, in either corner.  The placer uses both,
+// seed by seed; pinned at the left, decode settles beside it and the ALU loop
+// ends ten critical paths of sixteen instead of two, and the median does not
+// move; pinned at the right, decode ends all sixteen and it is half a MHz
+// lower.  Decode's operand read and the ALU loop are the same length, seven
+// or eight LUTs and two thirds of it wire, and placement only decides which
+// of the two reports.  More clock needs fewer levels in both.
 //
 // WHAT FIXED IT WAS MOVING THE READ, NOT THE SHIFTERS.  rtl/cpu.sv as of
 // 735e301, which reads its operands a cycle early with the same shifters,
