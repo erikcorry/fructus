@@ -241,6 +241,11 @@
 // endpoint in fifteen seeds of sixteen: with the length feeding the carry and
 // the low bits directly, abc folded the classifier's table into that logic and
 // made it deeper - nine cells from the SPRAM to the pc's enable, not seven.
+// Keeping the length a mux select - one 14-bit incrementer on the carry chain
+// shared by three finished candidates, which the length chooses among - was
+// 29.98: the pc ended fewer paths, four of sixteen, but decode's got slower,
+// which the change does not touch.  Near the SPRAM, placement answers to more
+// than the path being changed.
 //
 // WHAT FIXED IT WAS MOVING THE READ, NOT THE SHIFTERS.  rtl/cpu.sv as of
 // 735e301, which reads its operands a cycle early with the same shifters,
