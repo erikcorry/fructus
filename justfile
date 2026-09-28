@@ -174,3 +174,7 @@ map:
 # Place rtl/ on an iCE40 UP5K behind a real SPRAM and report the median MHz.
 speed seeds='8':
     @node tools/speed.mjs {{seeds}}
+
+# The same, for the pipelined experiment in rtl/pipe/.
+speed-pipe seeds='8':
+    @node tools/speed.mjs {{seeds}} --pipe

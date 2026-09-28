@@ -3,10 +3,13 @@
 // speed.mjs - how fast rtl/ runs on an iCE40 UP5K
 // =============================================================================
 //
-//   node tools/speed.mjs [seeds]        (or: just speed)
+//   node tools/speed.mjs [seeds] [--pipe [--floorplan]]
+//                                   (or: just speed, just speed-pipe)
 //
 // Synthesises rtl/ with tools/fpga-top.sv, places it once per seed, and reports
-// the median maximum frequency.
+// the median maximum frequency.  --pipe measures the pipelined experiment in
+// rtl/pipe/ instead, behind tools/pipe-top.sv; --floorplan places it with
+// tools/pipe-floorplan.py, whose region PIPE_FP in the environment overrides.
 //
 // WHY EIGHT SEEDS AND A MEDIAN.  nextpnr's placer is randomised, and a single
 // placement of this design wanders by two or three MHz - enough to reverse the
@@ -26,10 +29,15 @@ import { cpus } from 'node:os';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
-const SEEDS = Number(process.argv[2] ?? 8);
-const OUT = 'build/speed';
-const MODULES = ['cpu', 'ucode', 'insn', 'predecode', 'lhs', 'immgen', 'rhs',
-                 'unary', 'alu', 'dest', 'cond', 'compare'];
+const args = process.argv.slice(2);
+const PIPE = args.includes('--pipe');
+const PLAN = PIPE && args.includes('--floorplan') ? 'tools/pipe-floorplan.py' : null;
+const SEEDS = Number(args.find((a) => !a.startsWith('--')) ?? 8);
+const OUT = PIPE ? 'build/speed-pipe' : 'build/speed';
+const MODULES = PIPE
+  ? ['pipe/cpu', 'pipe/classify', 'pipe/alu', 'lhs', 'dest', 'immgen']
+  : ['cpu', 'ucode', 'insn', 'predecode', 'lhs', 'immgen', 'rhs',
+     'unary', 'alu', 'dest', 'cond', 'compare'];
 
 const have = async (cmd) => {
   try { await run('sh', ['-c', `command -v ${cmd}`]); return true; } catch { return false; }
@@ -41,7 +49,7 @@ for (const tool of ['yosys', 'nextpnr-ice40'])
   }
 
 mkdirSync(OUT, { recursive: true });
-const files = [...MODULES.map((m) => `rtl/${m}.sv`), 'tools/fpga-top.sv'];
+const files = [...MODULES.map((m) => `rtl/${m}.sv`), PIPE ? 'tools/pipe-top.sv' : 'tools/fpga-top.sv'];
 
 // --- synthesise once; every seed places the same netlist -----------------------
 process.stdout.write('synthesising ... ');
@@ -57,7 +65,9 @@ const place = async (seed) => {
   const log = `${OUT}/s${seed}.log`;
   await run('sh', ['-c',
     `nextpnr-ice40 --up5k --package sg48 --pcf-allow-unconstrained `
-    + `--json ${OUT}/top.json --seed ${seed} --freq 50 > ${log} 2>&1 || true`]);
+    + `--json ${OUT}/top.json --seed ${seed} --freq 50 `
+    + (PLAN ? `--pre-place ${PLAN} ` : '')
+    + `> ${log} 2>&1 || true`]);
   const text = readFileSync(log, 'utf8');
   const mhz = text.match(/Max frequency for clock '[^']*': ([\d.]+) MHz/g)?.pop();
   if (!mhz) throw new Error(`seed ${seed}: nextpnr reported no frequency, see ${log}`);
