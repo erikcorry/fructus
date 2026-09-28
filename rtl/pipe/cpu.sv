@@ -235,7 +235,12 @@
 // it, measured slower, and so did also reading the length before the opcode
 // mux: what stands between the SPRAM and the pc is the classifier's table,
 // three or four LUTs for a function of eight bits, and the five-input mux in
-// front of it - not the sum behind it.
+// front of it - not the sum behind it.  Measured again over sixteen seeds
+// with the whole instruction set in, the LUT increment chosen by the length's
+// two-bit carry was 29.26 MHz against 31.68, and the pc was the critical
+// endpoint in fifteen seeds of sixteen: with the length feeding the carry and
+// the low bits directly, abc folded the classifier's table into that logic and
+// made it deeper - nine cells from the SPRAM to the pc's enable, not seven.
 //
 // WHAT FIXED IT WAS MOVING THE READ, NOT THE SHIFTERS.  rtl/cpu.sv as of
 // 735e301, which reads its operands a cycle early with the same shifters,
