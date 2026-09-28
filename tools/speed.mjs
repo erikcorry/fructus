@@ -35,7 +35,7 @@ const PLAN = PIPE && args.includes('--floorplan') ? 'tools/pipe-floorplan.py' : 
 const SEEDS = Number(args.find((a) => !a.startsWith('--')) ?? 8);
 const OUT = PIPE ? 'build/speed-pipe' : 'build/speed';
 const MODULES = PIPE
-  ? ['pipe/cpu', 'pipe/classify', 'pipe/alu', 'lhs', 'dest', 'immgen']
+  ? ['pipe/cpu', 'pipe/classify', 'pipe/alu', 'lhs', 'dest', 'immgen', 'cond', 'compare']
   : ['cpu', 'ucode', 'insn', 'predecode', 'lhs', 'immgen', 'rhs',
      'unary', 'alu', 'dest', 'cond', 'compare'];
 

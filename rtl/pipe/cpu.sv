@@ -4,9 +4,10 @@
 //
 // AN EXPERIMENT BESIDE rtl/cpu.sv, NOT A REPLACEMENT FOR IT.  Written by hand
 // except for rtl/pipe/classify.sv; the decode stage borrows rtl/lhs.sv,
-// rtl/dest.sv and rtl/immgen.sv from the real processor unchanged.  It runs the
-// one-register ALU instructions and halt, and stops at anything else: a
-// microcoded instruction other than halt sets `trapped`.
+// rtl/dest.sv, rtl/immgen.sv and rtl/cond.sv from the real processor
+// unchanged, and the ALU stage rtl/compare.sv.  It runs the one-register ALU
+// instructions, the conditional branches and halt, and stops at anything
+// else: a microcoded instruction other than halt sets `trapped`.
 //
 // MEMORY IS A WORD WIDE.  `mem_addr` is a byte address whose bit 0 is always
 // clear; the word at that address, the even byte low, is on `mem_rdata` the
@@ -25,6 +26,28 @@
 //             a 16-bit value that looks like an immediate to the ALU, whatever
 //             it was made from - with the operation and the destination.
 //   ALU       two operand flops, the operation, and the result written.
+//
+// A CONDITIONAL BRANCH FLOWS THROUGH ALL THREE STAGES as an ALU instruction
+// does, with the same operands and the same bypass - it compares a register
+// with a register or a constant - and dispatch carries on behind it down the
+// fall-through path.  Decode latches its condition, from rtl/cond.sv, and its
+// target; the ALU stage decides it with rtl/compare.sv, a subtractor of its
+// own beside the ALU on the same operand flops, and REGISTERS the verdict.
+// If the branch is taken, the next cycle squashes the three instructions
+// behind it - in the ALU stage, in decode, and dispatching - and reads the
+// target's word, which dispatches the cycle after:
+//
+//     cycle   0          1          2          3            4
+//     branch  dispatch   decode     ALU: taken
+//     behind             dispatch   decode     squashed
+//                                   dispatch   squashed
+//                                              squashed
+//     target                                   word read    dispatch
+//
+// So a taken branch costs four cycles, and one not taken costs what any
+// three-byte instruction does.  Nothing behind a branch can have done
+// anything by then, because only the ALU stage writes; and halt takes effect
+// in the ALU stage rather than decode for the same reason.
 //
 // ONE BYPASS, FROM THE ALU STAGE INTO DECODE'S OPERAND FLOPS.  The instruction
 // directly ahead is in the ALU stage while this one decodes and writes only at
@@ -59,7 +82,8 @@
 // placement seeds - `just speed-pipe`:
 //
 //                                                   cells     MHz   spread
-//     OPERANDS READ IN DECODE, WITH THE BYPASS       1186    34.95  34.0 .. 36.2
+//     WITH THE CONDITIONAL BRANCHES                  1330    35.53  34.3 .. 36.1
+//     operands read in decode, with the bypass       1186    34.95  34.0 .. 36.2
 //
 //   and before it, with the register file read in the ALU stage:
 //
@@ -111,6 +135,11 @@ module pipe_cpu (
     output logic [15:0] result       // the ALU's output, for the harness
 );
 
+    // A taken branch, decided in the ALU stage at the last edge: this cycle
+    // the three instructions behind it are wrong, and the fetch goes to `tgt_q`.
+    logic        taken_q;
+    logic [15:0] tgt_q;
+
     // =========================================================================
     // DISPATCH / PREDECODE
     // =========================================================================
@@ -123,30 +152,38 @@ module pipe_cpu (
     wire [7:0] lo = mem_rdata[7:0], hi = mem_rdata[15:8];
     wire [7:0] op = pc[0] ? (use_nxt ? nxt : hi) : lo;
 
-    wire [1:0] kind, len;
+    wire [1:0] kind, len, c_cond;
     wire       c_wen, c_halt;
     wire [3:0] c_alu, c_lhs, c_rhs, c_dest;
     classify c (.op(op), .kind(kind), .len(len), .wen(c_wen), .halt(c_halt),
-                .alu_op(c_alu), .lhs_src(c_lhs), .rhs_src(c_rhs), .dest_src(c_dest));
+                .alu_op(c_alu), .lhs_src(c_lhs), .rhs_src(c_rhs), .dest_src(c_dest),
+                .cond_src(c_cond));
 
-    wire is_alu = (kind == 2'd0);
-    wire span3  = pc[0] & (len == 2'd3);   // three bytes starting odd: three words
+    // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
+    // down the fall-through path behind it, which costs nothing if the branch
+    // is not taken, and is undone below if it is.
+    wire is_cbr  = (kind == 2'd2);
+    wire flows   = (kind == 2'd0) | is_cbr;
+    wire span3   = pc[0] & (len == 2'd3);  // three bytes starting odd: three words
 
     // The candidates for the next pc come off the pc flop in parallel, so the
     // classifier's length only picks one.
     wire [15:0] pc1 = pc + 16'd1, pc2 = pc + 16'd2, pc3 = pc + 16'd3;
     wire [14:0] pcw = pc[15:1];
 
-    assign mem_addr = {go ? pcw + 15'd1 : pcw, 1'b0};
+    assign mem_addr = taken_q ? {tgt_q[15:1], 1'b0} : {go ? pcw + 15'd1 : pcw, 1'b0};
 
     always_ff @(posedge clk) begin
         nxt <= hi;
         if (rst) begin
             pc <= 16'd0; go <= 1'b0; stop <= 1'b0; use_nxt <= 1'b0;
+        end else if (taken_q) begin
+            // The target's word is being read now; it dispatches next cycle.
+            pc <= tgt_q; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
         end else if (go) begin
             pc      <= (len == 2'd1) ? pc1 : (len == 2'd2) ? pc2 : pc3;
-            go      <= is_alu & ~span3;
-            stop    <= ~is_alu;
+            go      <= flows & ~span3;
+            stop    <= ~flows;
             use_nxt <= ~pc[0] & (len == 2'd1);
         end else if (!stop) begin
             go      <= 1'b1;               // the bubble: pc's word arrives now
@@ -157,20 +194,23 @@ module pipe_cpu (
     // =========================================================================
     // DECODE
     // =========================================================================
-    logic        d_valid, d_ucode, d_halt, d_odd, d_wen;
+    logic        d_valid, d_ucode, d_halt, d_odd, d_wen, d_cbr;
     logic [7:0]  d_op, d_b1;
     logic [3:0]  d_alu, d_lhs, d_rhs, d_dest;
-    logic [15:0] d_pc;
+    logic [1:0]  d_cond;
+    logic [15:0] d_pc, d_pc3;
     always_ff @(posedge clk) begin
-        d_valid <= ~rst & go & is_alu;
-        d_ucode <= ~rst & go & ~is_alu;
+        d_valid <= ~rst & ~taken_q & go & flows;
+        d_ucode <= ~rst & ~taken_q & go & ~flows;
+        d_cbr   <= is_cbr;
         d_halt  <= c_halt;
         d_odd   <= pc[0];
         d_op    <= op;
         d_b1    <= hi;                     // an even pc's byte 1
         d_wen   <= c_wen;
-        {d_alu, d_lhs, d_rhs, d_dest} <= {c_alu, c_lhs, c_rhs, c_dest};
+        {d_alu, d_lhs, d_rhs, d_dest, d_cond} <= {c_alu, c_lhs, c_rhs, c_dest, c_cond};
         d_pc    <= pc;
+        d_pc3   <= pc3;                    // a branch's next instruction
     end
 
     // The instruction, whole: byte 1 latched or on the port, byte 2 on the port.
@@ -193,6 +233,14 @@ module pipe_cpu (
     immgen g (.insn(ins), .cimm(rk & rc == 3'd4), .imm(imm));
     wire [15:0] konst = {{13{rc[2]}}, rc};
     wire [15:0] bval  = use_imm ? imm : rk ? konst : ins[23:8];
+
+    // --- a branch's condition and target ------------------------------------------
+    // The displacement is always the last byte, and it counts from the
+    // instruction after the branch - which dispatch already had as pc + 3.
+    wire [2:0] ccode;
+    wire       cneg, cmask;
+    cond cu (.insn(ins), .src(d_cond), .code(ccode), .neg(cneg), .mask(cmask));
+    wire [15:0] tgt = d_pc3 + {{8{b2[7]}}, b2};
 
     // =========================================================================
     // ALU
@@ -221,30 +269,58 @@ module pipe_cpu (
     wire fwd_b = use_reg & e_we[bn];
     wire [15:0] rb = use_reg ? R[bn] : bval;
 
+    // Everything decode hands on is dropped in a cycle that squashes: the
+    // instruction in decode then is one of the three behind a taken branch.
+    wire keep = d_valid & ~taken_q;
+
     logic [3:0]  e_op;
     logic [1:0]  e_usel;              // the fast unary operation: bval[2:1]
     logic [15:0] aq, bq;
+    logic        e_cbr, e_neg, e_mask, e_ucode, e_halt;
+    logic [2:0]  e_code;
+    logic [15:0] e_tgt;
     logic        e_valid;             // for the harness
     logic [15:0] e_pc;                // for the harness
     always_ff @(posedge clk) begin
-        e_valid <= d_valid;
+        e_valid <= keep;
         aq      <= fwd_a ? y : R[an];
         bq      <= fwd_b ? y : rb;
         e_usel  <= bval[2:1];
-        e_we    <= (d_valid & d_wen) ? 8'd1 << wn : 8'd0;
+        e_we    <= (keep & d_wen) ? 8'd1 << wn : 8'd0;
         e_op    <= d_alu;
+        e_cbr   <= keep & d_cbr;
+        {e_code, e_neg, e_mask} <= {ccode, cneg, cmask};
+        e_tgt   <= tgt;
+        e_ucode <= d_ucode & ~taken_q;
+        e_halt  <= d_halt;
         e_pc    <= d_pc;
     end
 
     pipe_alu a (.lhs(aq), .rhs(bq), .usel(e_usel), .op(e_op), .y(y));
 
-    always_ff @(posedge clk)
-        for (int k = 0; k < 8; k++) if (e_we[k]) R[k] <= y;
+    // THE CONDITION HAS ITS OWN UNIT, as in rtl/cpu.sv: rtl/compare.sv's
+    // subtractor reads the same operand flops as the ALU and none of its
+    // result.  Its verdict is REGISTERED, so the comparison never reaches the
+    // memory's address pins in the cycle it is made.  That costs a cycle on a
+    // taken branch: the target dispatches two cycles after the branch's ALU
+    // cycle, four after its own dispatch.
+    wire taken;
+    compare cp (.lhs(aq), .rhs(bq), .cond(e_code), .neg(e_neg), .mask(e_mask), .taken(taken));
+
+    // The instruction in the ALU stage while taken_q is set is the first of
+    // the three behind the branch, so it may neither write nor branch.
+    always_ff @(posedge clk) begin
+        taken_q <= ~rst & ~taken_q & e_cbr & taken;
+        tgt_q   <= e_tgt;
+        for (int k = 0; k < 8; k++) if (e_we[k] & ~taken_q) R[k] <= y;
+    end
     assign result = y;
 
     // --- the one microcoded instruction there is --------------------------------
+    // It takes effect in the ALU stage, not in decode, because a halt just
+    // behind a taken branch reaches decode before the branch is decided.
     always_ff @(posedge clk)
         if (rst) begin halted <= 1'b0; trapped <= 1'b0; end
-        else if (d_ucode) begin halted <= d_halt; trapped <= ~d_halt; end
+        else if (e_ucode & ~taken_q) begin halted <= e_halt; trapped <= ~e_halt; end
 
 endmodule

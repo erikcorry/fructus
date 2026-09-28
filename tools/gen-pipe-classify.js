@@ -8,9 +8,9 @@
 // THE EXPERIMENT IN rtl/pipe/ IS NOT THE PROCESSOR.  It is a three-stage
 // pipeline - dispatch/predecode, decode, ALU - over a 16-bit memory port, built
 // to find out what clock such a machine could run at before anything else is
-// committed to it.  So far it runs the one-register ALU instructions only;
-// everything else is classified, so the categories are real, but is stopped at
-// as though it were microcoded.
+// committed to it.  So far it runs the one-register ALU instructions and the
+// conditional branches; everything else is classified, so the categories are
+// real, but is stopped at as though it were microcoded.
 //
 // ONE ROW PER OPCODE, from tools/predecode-rows.js - the rows rtl/predecode.sv
 // is built from - with two things added: the category, and the instruction's
@@ -47,20 +47,25 @@ const kindOf = (r) => {
   return KIND.ucode;
 };
 
-// {kind[1:0], len[1:0], wen, alu[3:0], lhs[3:0], rhs[3:0], dest[3:0]}
+// {kind[1:0], len[1:0], wen, alu[3:0], lhs[3:0], rhs[3:0], dest[3:0], cond[1:0]}
+//
+// A CONDITIONAL BRANCH RUNS THROUGH THE PIPELINE TOO, so its operand selects
+// and its condition source are real; its ALU operation and destination are
+// not, since it writes nothing - rtl/compare.sv reads the operands instead.
 const bits = (v, w) => (v === X ? 'x'.repeat(w) : v.toString(2).padStart(w, '0'));
 const counts = [0, 0, 0];
 const cases = rows.map((r) => {
   const k = kindOf(r);
   counts[k]++;
-  // The selects matter only to an ALU row; a row the experiment stops at
-  // leaves them to the mapper.
-  const alu = k === KIND.alu;
-  const f = (v) => (alu ? v : X);
-  const wen = alu ? (r.v.dest === X ? 0 : 1) : X;
+  // The selects matter only to a row that flows; a row the experiment stops
+  // at leaves them to the mapper.
+  const alu = k === KIND.alu, cbr = k === KIND.cbr, flows = alu || cbr;
+  const f = (v, on) => (on ? v : X);
+  const wen = alu ? (r.v.dest === X ? 0 : 1) : cbr ? 0 : X;
   const t = [bits(k, 2), bits(r.nbytes, 2), bits(wen, 1),
-             bits(f(r.v.alu), 4), bits(f(r.v.lhs), 4), bits(f(r.v.rhs), 4), bits(f(r.v.dest), 4)];
-  return `        8'h${r.op.toString(16).padStart(2, '0')}: t = 21'b${t.join('_')};    // ${r.who}`;
+             bits(f(r.v.alu, alu), 4), bits(f(r.v.lhs, flows), 4), bits(f(r.v.rhs, flows), 4),
+             bits(f(r.v.dest, alu), 4), bits(f(r.v.cond, cbr), 2)];
+  return `        8'h${r.op.toString(16).padStart(2, '0')}: t = 23'b${t.join('_')};    // ${r.who}`;
 }).join('\n');
 
 process.stdout.write(`// =============================================================================
@@ -87,19 +92,20 @@ module classify (
     output logic [3:0] alu_op,    // -> rtl/pipe/alu.sv
     output logic [3:0] lhs_src,   // -> rtl/lhs.sv
     output logic [3:0] rhs_src,   // rtl/rhs.sv's codes, read by rtl/pipe/cpu.sv's decode
-    output logic [3:0] dest_src   // -> rtl/dest.sv
+    output logic [3:0] dest_src,  // -> rtl/dest.sv
+    output logic [1:0] cond_src   // -> rtl/cond.sv, for a conditional branch
 );
 
-    logic [20:0] t;
+    logic [22:0] t;
     always_comb begin
         (* rom_style = "logic" *)
         case (op)
 ${cases}
-        default: t = 21'b01_01_x_xxxx_xxxx_xxxx_xxxx;
+        default: t = 23'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx;
         endcase
     end
 
-    assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src} = t;
+    assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src} = t;
     assign halt = (op == 8'h${HALT.toString(16).padStart(2, '0')});
 
 endmodule
