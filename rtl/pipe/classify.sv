@@ -19,6 +19,17 @@
 // across them.
 // Rearranging the opcodes that ARE used, with the empties still pinned, made
 // it worse: 31.08.
+//
+// THAT IS SAFE ONLY WHILE A TRAP IS WHERE THE MACHINE STOPS.  Dispatching an
+// empty opcode loads the pc with its length added, so the pc behind it is
+// garbage - x in simulation - and nothing may save it.  Today nothing does:
+// `trapped` is terminal, and an interrupt cannot be taken behind the opcode
+// because dispatch has stopped.  One taken AS it dispatches never sees it at
+// all - the brk substituted for it is classified instead, and the take keeps
+// the pc - so lr gets the opcode's own address.  But a routine for
+// isa/fructus.toml's reserved illegal_insn vector that saved `pc` as brk's
+// does would save the garbage: it must save the ALU stage's e_pc, the
+// opcode's own address, or the empties' length must be pinned again.
 // =============================================================================
 
 module classify (
