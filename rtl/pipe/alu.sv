@@ -27,11 +27,13 @@ module pipe_alu (
     input  logic [3:0]  op,
     input  logic [15:0] mdata,   // the memory sequencer's word: what a load or a
                                  // block move's pointer writes, under op 13
-    output logic [15:0] y
+    output logic [15:0] y,
+    output logic [15:0] sum      // the adder alone, ahead of the result mux: a
+                                 // load's first address, for the address pins
 );
 
     wire        sub  = op[0];
-    wire [15:0] sum  = rhs + (lhs ^ {16{sub}}) + {15'd0, sub};
+    assign      sum  = rhs + (lhs ^ {16{sub}}) + {15'd0, sub};
     wire [15:0] xorv = lhs ^ rhs;
     wire [15:0] andv = lhs & rhs;
     wire [15:0] hiv  = {rhs[7:0], lhs[7:0]};

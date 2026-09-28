@@ -62,11 +62,14 @@
 // A LOAD, A STORE OR A BLOCK MOVE ENTERS THE PIPELINE AND STOPS DISPATCH, and
 // that is what keeps it off the bus while instructions are fetched: its own
 // bytes are the last thing the fetch reads, and by its ALU cycle the port is
-// idle.  The ALU cycle registers the first address; a sequencer then moves one
-// byte a cycle, writes registers through the ALU's result, and releases
-// dispatch as its last address goes out.  N bytes cost N + 4 cycles from one
-// dispatch to the next: 5 for ld8 and st8, 6 for ld, st and a one-register
-// push or pop, 10 for three registers.  See THE MEMORY SEQUENCER below.
+// idle.  The ALU computes the first address - base plus offset, op 0 - and a
+// load puts it straight out from the adder, while a store registers it first;
+// a sequencer then moves one byte a cycle, writes registers through the ALU's
+// result, and releases dispatch as its last address goes out.  N bytes cost
+// N + 3 cycles from one dispatch to the next for a load and N + 4 for a store:
+// 4 for ld8, 5 for ld and a one-register pop, 5 for st8, 6 for st and a
+// one-register push, 9 and 10 for three registers.  See THE MEMORY SEQUENCER
+// below.
 //
 // ONE BYPASS, FROM THE ALU STAGE INTO DECODE'S OPERAND FLOPS.  The instruction
 // directly ahead is in the ALU stage while this one decodes and writes only at
@@ -101,7 +104,10 @@
 // placement seeds - `just speed-pipe`:
 //
 //                                                   cells     MHz   spread
-//     A STORE'S DATA THROUGH DECODE'S LEFT PORT      1816    32.06  31.2 .. 32.8
+//     A LOAD'S FIRST ADDRESS FROM THE ADDER, AT ONCE 1873    31.14  30.2 .. 33.3
+//     and from the ALU's result, through its mux     1884    29.73  27.6 .. 30.9
+//     the first address from the ALU, registered     1802    32.12  30.7 .. 32.9
+//     a store's data through decode's left port      1816    32.06  31.2 .. 32.8
 //     through a byte-wide port of its own            1937    31.22  28.9 .. 31.7
 //     with loads, stores and block moves             2050    31.35  29.9 .. 33.3
 //     the sequencer's controls from its counter      1933    30.99  29.9 .. 31.4
@@ -245,9 +251,12 @@ module pipe_cpu (
     wire [15:0] jaddr;
     wire        aphase, mrestart;          // the memory sequencer, below
     logic [15:0] mar;
+    wire        ldnow;                     // a load's first address: the ALU's result
+    wire [15:0] maddr;
     assign mem_addr = taken_q ? {tgt_q[15:1], 1'b0}
                     : jnow    ? {jaddr[15:1], 1'b0}
-                    : aphase  ? mar
+                    : ldnow   ? asum
+                    : aphase  ? maddr
                     :           {go ? pcw + 15'd1 : pcw, 1'b0};
 
     always_ff @(posedge clk) begin
@@ -328,8 +337,12 @@ module pipe_cpu (
     immgen g (.insn(ins), .cimm(rk & rc == 3'd4), .imm(imm));
     wire [15:0] konst = {{13{rc[2]}}, rc};
     // Code 2 is a call's return address, the next pc, which lr takes through
-    // the ALU's pass-through.
-    wire [15:0] bval  = use_imm ? imm : rk ? konst : (rc == 3'd2) ? d_next : ins[23:8];
+    // the ALU's pass-through.  Code 3 is a block move's offset from its
+    // pointer - -2n for a push, 0 otherwise - which the ALU adds to make the
+    // first address, as it adds a load's or store's offset.
+    wire [15:0] moff_d;
+    wire [15:0] bval  = use_imm ? imm : rk ? konst
+                      : (rc == 3'd2) ? d_next : (rc == 3'd3) ? moff_d : ins[23:8];
 
     // --- a branch's condition, and a transfer's target -----------------------------
     // A displacement is always the last byte, and counts from the instruction
@@ -375,7 +388,7 @@ module pipe_cpu (
     wire [2:0] ml1_d = !d_mpush ? rb_ : (d_mn == 2'd3) ? rb_ : wn;
     wire [2:0] ml2_d = !d_mpush ? rc_ : wn;
     wire [2:0] mN_d  = d_mw2 ? {d_mn, 1'b0} : {1'b0, d_mn};   // bytes: 1, 2, 4 or 6
-    wire [15:0] moff_d = d_mpush ? -{13'd0, mN_d} : 16'd0;     // a push starts 2n down
+    assign moff_d = d_mpush ? -{13'd0, mN_d} : 16'd0;         // a push starts 2n down
 
     (* ram_style = "logic" *)
     logic [15:0] R [0:7];
@@ -406,7 +419,6 @@ module pipe_cpu (
     logic        e_mem, e_mst, e_mw2, e_mblk, e_mpush;
     logic [2:0]  e_mN, e_l0, e_l1, e_l2, e_ptr;
     logic [1:0]  e_mn;
-    logic [15:0] e_moff;
     logic        e_valid;             // for the harness
     logic [15:0] e_pc;                // for the harness
     always_ff @(posedge clk) begin
@@ -425,13 +437,13 @@ module pipe_cpu (
         e_mem   <= keep & d_mem;
         {e_mst, e_mw2, e_mblk, e_mpush} <= {d_mst, d_mw2, d_mblk, d_mpush};
         {e_mN, e_l0, e_l1, e_l2, e_ptr, e_mn} <= {mN_d, ml0_d, ml1_d, ml2_d, an, d_mn};
-        e_moff  <= moff_d;
         e_halt  <= d_halt;
         e_pc    <= d_pc;
     end
 
     logic [15:0] ldq;                   // the sequencer's word: below
-    pipe_alu a (.lhs(aq), .rhs(bq), .usel(e_usel), .op(e_op), .mdata(ldq), .y(y));
+    wire [15:0] asum;
+    pipe_alu a (.lhs(aq), .rhs(bq), .usel(e_usel), .op(e_op), .mdata(ldq), .y(y), .sum(asum));
 
     // THE CONDITION HAS ITS OWN UNIT, as in rtl/cpu.sv: rtl/compare.sv's
     // subtractor reads the same operand flops as the ALU and none of its
@@ -457,8 +469,8 @@ module pipe_cpu (
     // =========================================================================
     // THE MEMORY SEQUENCER
     // =========================================================================
-    // It starts in a memory instruction's ALU cycle, which computes the first
-    // address into `mar` - so no adder stands in front of the address pins -
+    // It starts in a memory instruction's ALU cycle, whose ALU computes the
+    // first address into `mar` - so no adder stands in front of the address pins -
     // and then takes one cycle a byte, `mt` counting them from 1:
     //
     //     mt 1 .. N      the address is mar, which steps up by one; a store
@@ -480,8 +492,10 @@ module pipe_cpu (
     //
     // A BYTE AT A TIME, aligned or not: two bytes of a word cost two cycles,
     // which a later version may take in one.
+    // THE FIRST ADDRESS IS THE ALU'S RESULT: the table gives every memory
+    // instruction op 0, and its operands are the base and the offset.
     wire mstart = e_mem & ~taken_q;
-    wire [15:0] ea   = aq + (e_mblk ? e_moff : bq);
+    wire [15:0] ea   = asum;
     wire [15:0] ptrv = e_mpush ? ea : aq + {13'd0, e_mN};   // where the pointer ends
 
     logic       mact, mst, mw2, mblk, mlane, weq;
@@ -500,19 +514,30 @@ module pipe_cpu (
     function automatic [8:0] at(input [3:0] t);
         at = (t == 4'd0) ? 9'd0 : 9'd1 << (t - 4'd1);
     endfunction
+    // A LOAD PUTS ITS FIRST ADDRESS OUT IN ITS ALU CYCLE, straight from the
+    // ALU, so its steps are one earlier than a store's: addresses mar + 1 at
+    // steps 1 .. N - 1, bytes arriving at 1 .. N, register i written at
+    // 1 + (i + 1) x bytes-per-register, and dispatch released at N - 1 - in
+    // the ALU cycle itself for a one-byte load.  A store cannot do the same:
+    // its first byte's data would have to be read in decode, whose two ports
+    // are busy then with its address.
     wire [3:0] eN   = {1'b0, e_mN};
-    wire [3:0] eEnd = e_mst ? (e_mblk ? eN + 4'd1 : eN) : eN + 4'd2;
-    wire [8:0] eA   = (9'd1 << eN) - 9'd1;                        // steps 1 .. N
+    wire [3:0] eEnd = e_mst ? (e_mblk ? eN + 4'd1 : eN) : eN + 4'd1;
+    wire [8:0] eA   = e_mst ? (9'd1 << eN) - 9'd1                 // steps 1 .. N
+                            : (9'd1 << (eN - 4'd1)) - 9'd1;       // steps 1 .. N - 1
+    wire [8:0] eC   = e_mst ? 9'd0 : (9'd1 << eN) - 9'd1;         // steps 1 .. N
+    wire [8:0] eR   = e_mst ? at(eN) : at(eN - 4'd1);
     //  step:           a load's registers, when their last byte is in
-    wire [8:0] eW0  = e_mst ? 9'd0 : at(e_mw2 ? 4'd4 : 4'd3);
-    wire [8:0] eW1  = (~e_mst & e_mn >= 2'd2) ? at(4'd6) : 9'd0;
-    wire [8:0] eW2  = (~e_mst & e_mn == 2'd3) ? at(4'd8) : 9'd0;
+    wire [8:0] eW0  = e_mst ? 9'd0 : at(e_mw2 ? 4'd3 : 4'd2);
+    wire [8:0] eW1  = (~e_mst & e_mn >= 2'd2) ? at(4'd5) : 9'd0;
+    wire [8:0] eW2  = (~e_mst & e_mn == 2'd3) ? at(4'd7) : 9'd0;
     //  a block's pointer: a load's first, a store's last
     wire [8:0] eP   = ~e_mblk ? 9'd0 : e_mst ? at(eN + 4'd1) : at(4'd1);
+    assign ldnow = e_mem & ~e_mst;
 
     logic [8:0] sA, sC, sR, sD, sW0, sW1, sW2, sP;
     assign aphase   = sA[0];
-    assign mrestart = sR[0];
+    assign mrestart = sR[0] | (mstart & ~e_mst & e_mN == 3'd1);
     wire   mcap     = sC[0];
     wire   mdone    = sD[0];
     wire   [7:0] mbyte = mlane ? hi : lo;
@@ -531,8 +556,8 @@ module pipe_cpu (
         if (rst) {sA, sC, sR, sD, sW0, sW1, sW2, sP} <= '0;
         else if (mstart) begin
             sA  <= eA;
-            sC  <= e_mst ? 9'd0 : eA << 1;                        // steps 2 .. N + 1
-            sR  <= at(eN);
+            sC  <= eC;
+            sR  <= eR;
             sD  <= at(eEnd);
             {sW0, sW1, sW2, sP} <= {eW0, eW1, eW2, eP};
         end else
@@ -563,6 +588,7 @@ module pipe_cpu (
         if (mstart) begin
             mt  <= 4'd1;
             mar <= ea;
+            mlane <= ea[0];
             ldq <= ptrv;                   // a block's pointer, written from here
             {mst, mw2, mblk} <= {e_mst, e_mw2, e_mblk};
             {ml0, ml1, ml2, mpr} <= {e_l0, e_l1, e_l2, e_ptr};
@@ -571,12 +597,15 @@ module pipe_cpu (
             weq <= e_mst;
         end else begin
             mt  <= mt + 4'd1;
-            if (aphase) begin mar <= mar + 16'd1; mlane <= mar[0]; end
+            if (aphase) begin mar <= mar + 16'd1; mlane <= maddr[0]; end
             if (mcap)   ldq <= mw2 ? {mbyte, ldq[15:8]} : {8'h00, mbyte};
             wq  <= kbyte;
             weq <= mst & sA[1];            // a store writes in every address step
         end
     end
+    // A store's address is mar; a load's, whose mar is the address it last
+    // put out, the one after.
+    assign maddr = mar + {15'd0, ~mst};
     assign mem_wdata = wq;
     assign mem_we    = weq & aphase;
 

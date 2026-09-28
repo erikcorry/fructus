@@ -76,9 +76,15 @@ const kindOf = (r) => {
 //     push   the block runs downward from the pointer, so its registers lie
 //            in memory in the reverse of their order in the instruction
 //
+// ITS ALU OPERATION IS ADD, whatever the row says: in the ALU cycle the ALU
+// computes the first address, R[a] plus the offset for ld and st - which the
+// operand selects already deliver - and the pointer plus -2n or 0 for a block
+// move, whose offset decode supplies as its right-hand side.
+//
 // Its destination field names the FIRST DATA REGISTER - a load's rd, a store's
 // rs, a block's first register - rather than anything written by the
 // ordinary write port, which a memory instruction does not use.
+const ALU_ADD = 0;
 const memOf = (r) => {
   const sem = r.insns[0].semantics ?? '';
   let m;
@@ -110,7 +116,7 @@ const cases = rows.map((r) => {
   const wen = piped ? (writes ? 1 : 0) : X;
   const mf = (v, w) => bits(mem ? v : X, w);
   const t = [bits(k, 2), bits(r.nbytes, 2), bits(wen, 1),
-             bits(f(r.v.alu, writes), 4), bits(f(r.v.lhs, piped), 4), bits(f(r.v.rhs, piped), 4),
+             bits(mem ? ALU_ADD : f(r.v.alu, writes), 4), bits(f(r.v.lhs, piped), 4), bits(f(r.v.rhs, piped), 4),
              bits(mem ? mem.dest : f(r.v.dest, writes), 4), bits(f(r.v.cond, cbr), 2),
              bits(f(r.v.pc, jump || cbr), 2),
              bits(mem ? 1 : 0, 1), mf(mem?.st, 1), mf(mem?.w2, 1), mf(mem?.n, 2), mf(mem?.blk, 1), mf(mem?.push, 1)];

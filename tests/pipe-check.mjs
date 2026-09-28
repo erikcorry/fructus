@@ -78,7 +78,9 @@ const all = [...forms.values()];
 // write registers from memory, so they go with the loads.
 //
 // `bytes` is what the sequencer moves, and what rtl/pipe/cpu.sv charges: a
-// memory instruction's next dispatch comes bytes + 4 cycles after its own.
+// memory instruction's next dispatch comes bytes + 4 cycles after its own if
+// it stores, and bytes + 3 if it loads, since a load's first address is the
+// ALU's result, put out in its ALU cycle.
 const memBytes = (sem) => {
   const blk = /^base = (sp|r1|r2); /.test(sem);
   if (blk) return 2 * (sem.match(/M16\[/g) ?? []).length;
@@ -349,8 +351,9 @@ for (let p = 0; p < PROGRAMS; p++) {
     const taken = branches.has(`${d.insn.mnemonic}/${d.form.name}@${m.mem[pc]}`) && takes(pc, d.nbytes);
     const jump = JUMP_SEM.test(d.insn.semantics ?? '');
     const mem = memBytes(d.insn.semantics ?? '');
+    const memst = mem && /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(d.insn.semantics);
     m.step();
-    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, R: Array.from(m.R) });
+    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, memst, R: Array.from(m.R) });
   }
   // WHAT A STORE DID IS NOT IN ANY REGISTER, so both machines fold their whole
   // memory into one number at the halt, as tests/rtl-check.mjs does.
@@ -443,7 +446,7 @@ programs.forEach(({ trace, hash, old }, p) => {
   // dispatch than retirement.
   for (let i = 1; i < Math.min(ds.length, trace.length + 1); i++) {
     const prev = trace[i - 1];
-    const want = prev.mem ? prev.mem + 4 : prev.jump ? 3 : prev.taken ? 4
+    const want = prev.mem ? prev.mem + (prev.memst ? 4 : 3) : prev.jump ? 3 : prev.taken ? 4
                : (prev.pc & 1) && prev.len === 3 ? 2 : 1;
     if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) complain(`program ${p} dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
     if (ds[i].cyc - ds[i - 1].cyc !== want)
