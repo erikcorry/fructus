@@ -250,6 +250,14 @@ length_from_first_byte = true
 # three-byte one: the fetch holds the word after the pc's, and three bytes at an
 # odd address reach into the word after THAT, which arrives a cycle late.
 #
+# WHAT THAT COSTS, MEASURED on tests/bench's kernels: 1.5% of all cycles at
+# -Os and at -O2, and it is the ceiling on anything alignment could win.  Only
+# placement can win it - reordering within a block never changes the parity
+# of what follows - and aligning every loop head to an even address with a
+# `nop` won 0.13% at -O2 for five bytes, because moving one loop flips the
+# parity of the next: matmul got worse.  Padding would have to be chosen per
+# loop, by which parity its body pays less at.
+#
 # A TAKEN BRANCH IS FOUR because the pipeline runs on down the fall-through
 # path behind it: the ALU stage decides it, the three instructions behind it are
 # squashed, and the target's word is read.  Not taken, it cost what any

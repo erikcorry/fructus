@@ -312,7 +312,9 @@ simulator counts.
 `mul` takes the low half of a 16×16 product from an `SB_MAC16`, at 0x30
 (`rd, rd, #imm5`), 0x31 (`rd, ra, #imm10`) and 0x36/0x37 (`rd, ra, rb`) — the
 unary row's free columns, in the ALU groups' shapes. Like `clz` and `popcount`
-it takes a cycle more than its length. `rtl/alu.sv` instantiates the DSP rather
+it takes four cycles, a two-step routine. gcc emits it only with `-mmul`,
+since a part without a multiplier has no `mul`; without it a product is a call
+to libgcc's `__mulhi3`. `rtl/alu.sv` instantiates the DSP rather
 than letting yosys's `-dsp` infer it, because the inference copies the operand
 flops into the DSP's input registers and drags the logic in front of them to
 its column. nextpnr doesn't time through `SB_MAC16` at all — see [the

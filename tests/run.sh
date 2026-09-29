@@ -210,6 +210,27 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     done
     rm -f build/_as build/_as.bin
 
+    # --- -mmul, and only -mmul, uses the multiplier -------------------------
+    # A part without a DSP has no mul, so the compiler must not emit one
+    # unless asked; asked, the products must be right.  tests/mul.c checks
+    # `*' against a shift-and-add loop that never multiplies.
+    if tools/fcc -O2 -S tests/mul.c -o - 2>/dev/null | grep -q '^[[:space:]]mul[[:space:]]'; then
+        printf 'FAIL  the compiler emits mul without -mmul\n'; fail=1
+    else
+        printf 'ok    no mul without -mmul\n'
+    fi
+    for o in -O2 -Os; do
+        if tools/fcc $o -mmul -S tests/mul.c -o - 2>/dev/null | grep -q '^[[:space:]]mul[[:space:]]' \
+           && tools/fcc $o -mmul tests/mul.c -o build/_mul 2>build/_err \
+           && node tools/fcc-run.mjs build/_mul.bin; then
+            printf 'ok    -mmul products are right at %s\n' "$o"
+        else
+            printf 'FAIL  -mmul products at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    rm -f build/_mul build/_mul.bin
+
     # --- setjmp and longjmp, which no epilogue unwinds ----------------------
     # tests/setjmp.c sets three locals before the setjmp and checks them after
     # a longjmp from twenty frames down, so it fails if libc/setjmp.s restores
