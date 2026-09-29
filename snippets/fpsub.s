@@ -160,8 +160,9 @@ done:                                   ;                          total  65
 ;               br      norm_loop               ; 2
 ;
 ; - fifteen bytes against seventeen.  What clz buys is TIME: that loop runs up
-; to fifteen times after the 16-bit step, so about 225 cycles worst case against
-; a flat 17.  Constant time also matters for its own sake here, because the
+; to fifteen times after the 16-bit step, at about nine cycles a trip, so about
+; 140 cycles worst case against a flat 11 - clz at four and seven instructions
+; at one.  Constant time also matters for its own sake here, because the
 ; iteration count is the cancellation depth, which is operand data.
 ;
 ; THE 16-BIT STEP IS NOT AN OPTIMISATION, it is required.  `clz` reads one

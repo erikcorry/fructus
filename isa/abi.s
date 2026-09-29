@@ -252,29 +252,29 @@
 ; WHAT A PUSH ACTUALLY COSTS
 ; ----------------------------------------------------------------------------
 ;
-; Byte count is a good first proxy for run time, because the memory bus is
-; 6502-like and every instruction byte is a bus cycle to fetch.  It is not the
-; whole story for push and pop.  Each 16-bit memory access costs TWO MORE bus
-; cycles on top of the fetch, and a multi-register push does one access per
-; register named:
+; Byte count is no proxy for run time: the processor dispatches an instruction
+; a cycle, whatever its length - see the cost model under [cpu] in the spec.
+; A push or a pop is the exception that matters here.  It stops the pipeline
+; while it moves its bytes, one a cycle, and for four cycles more if it
+; writes, three if it reads:
 ;
-;       push    lr                      2 bytes    2 + 2 = 4 bus cycles
-;       push    lr, r4                  2 bytes    2 + 4 = 6 bus cycles
-;       push    lr, r4, r3              2 bytes    2 + 6 = 8 bus cycles
+;       push    lr                      2 bytes     6 cycles   pop 5
+;       push    lr, r4                  2 bytes     8 cycles   pop 7
+;       push    lr, r4, r3              2 bytes    10 cycles   pop 9
 ;
-; THE SECOND AND THIRD REGISTERS OF A PUSH ARE FREE IN SPACE AND NOT IN TIME.
-; That matters for reasoning about the save convention, because it is easy to
-; look at the byte counts alone and conclude that preserving three registers is
-; as cheap as preserving one.  It is, to the fetch unit; it is twice the work to
-; the bus.
+; THE SECOND AND THIRD REGISTERS OF A PUSH ARE FREE IN SPACE AND NOT IN TIME,
+; though they are cheap in time: two cycles each, where the push itself is
+; four.  That matters for reasoning about the save convention, because it is
+; easy to look at the byte counts alone and conclude that preserving three
+; registers is as cheap as preserving one.
 ;
 ; The comparison still comes out the same way, and by more than the bytes
-; suggest.  Using a callee saved register costs 4 extra bus cycles ONCE PER
-; INVOCATION - two on the push, two on the pop, with no extra fetch at all.  A
-; caller spilling one value around a call costs 4 bytes and 8 bus cycles EVERY
-; TIME THAT CALL SITE EXECUTES.  A call inside a loop pays the second cost per
-; iteration and the first not at all, which is the case the sliding convention
-; is really aimed at.
+; suggest.  Using a callee saved register costs 4 extra cycles ONCE PER
+; INVOCATION - two on the push, two on the pop.  A caller spilling one value
+; around a call costs 4 bytes and 11 cycles - a push of its own at six and a pop
+; at five - EVERY TIME THAT CALL SITE EXECUTES.  A call inside a loop pays the
+; second cost per iteration and the first not at all, which is the case the
+; sliding convention is really aimed at.
 ;
 ; ----------------------------------------------------------------------------
 ; ARGUMENTS
@@ -364,8 +364,8 @@
 ; WHY AGGREGATES AND NOT JUST SCALARS.  A two-word struct - a pointer and a tag,
 ; a pointer and a length, a pointer and a reference count - is the shape a
 ; language with fat pointers returns constantly, and pushing every one of them
-; through memory would cost a stack slot, four bus cycles to write and four to
-; read at every call.  Since structs are already decomposed for ARGUMENTS, and
+; through memory would cost a stack slot, and a store and a load at every
+; call - eleven cycles at the least, against none in registers.  Since structs are already decomposed for ARGUMENTS, and
 ; a two-word struct is already passed in two registers, returning it in two
 ; registers needs no new machinery at all.
 ;
@@ -567,9 +567,9 @@ full_example:
         ret                             ;                                1
 
 ; THE THIRD REGISTER IS FREE IN BYTES AND NOT IN CYCLES.  This push is the same
-; two bytes as `push lr` and does three times the bus work: 8 cycles against
-; 4, and the same again on the pop.  Naming a register you do not use costs
-; nothing to fetch and four cycles to execute, so the prologue should still name
+; two bytes as `push lr` and moves three times the data: 10 cycles against 6,
+; and 9 against 5 on the pop.  Naming a register you do not use costs no space
+; and four cycles to execute, two each way, so the prologue should still name
 ; only what the body actually touches.
 
 ; POP ORDER IS THE REVERSE OF PUSH ORDER.  A push writes its registers left to
@@ -647,13 +647,14 @@ loop_body_alt:
         ret                             ;                    total  27   1
 
 ; 12 bytes of loop body against 16, and the difference is not only bytes: the
-; two extra instructions are a push and a pop, so they carry 8 bus cycles of
-; memory traffic on top of their 4 bytes of fetch, every iteration.  The push
-; that replaced them is one instruction executed once.
+; two extra instructions are a push and a pop, eleven cycles every iteration in
+; a loop whose other instructions cost 22 - two loads at five, the call at
+; three, the `ret` that comes back at four, an add and the taken branch.  The
+; push that replaced them is one instruction executed once.
 ;
 ; THE PROLOGUES ARE THE SAME SIZE.  `push lr, r4, r3` and `push lr, r4` are
-; both two bytes, so the extra callee-saved register cost this function nothing
-; to fetch and 4 bus cycles once.  That is the whole trade, and it is the reason
+; both two bytes, so the extra callee-saved register cost this function no
+; space and 4 cycles once.  That is the whole trade, and it is the reason
 ; the sliding convention is cheap to lose with: when arity guesses wrong, the
 ; loser pays two bytes, and when it guesses right the winner stops paying in a
 ; loop.

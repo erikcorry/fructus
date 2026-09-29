@@ -197,13 +197,6 @@ export const BUILTIN = {
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };
 
-// Whether an instruction reads operands at all: one assignment, into a
-// register, and not the pc's business.  A ONE-BYTE form of one of these has no
-// fetch cycle to read them in, so it spends a cycle of its own - see step().
-// The implicit loads are here too, and for the same reason: their address
-// register is read in exactly that cycle.
-const computes = (sem) => /^R\[[a-z]\] = /.test(sem) && !sem.includes(';');
-
 export class Machine {
   constructor(spec) {
     this.spec  = spec;
@@ -231,17 +224,15 @@ export class Machine {
     this.count  = 0;
     this.tmp    = {};      // scratch names, cleared at every instruction
 
-    // THE COST MODEL.  See [cpu] in the spec, which is where it is defined.
-    // The bus is 6502-like: one cycle per byte, carrying instruction fetch and
-    // data alike, so an instruction costs the bytes it occupies plus the bytes
-    // it moves.  A taken RELATIVE branch costs one more, for the add that
-    // produces pc + off; there is nothing to fetch while the adder runs.
-    // Nothing here models a pipeline, because there isn't one to model.
-    this.fetched = 0;      // instruction bytes
+    // THE COST MODEL.  See [cpu] in the spec, which is where it is defined, and
+    // rtl/cpu.sv, whose dispatch cadence tests/cpu-check.mjs holds this to,
+    // instruction by instruction.  The pipeline dispatches one instruction a
+    // cycle; step() charges each instruction the cycles from its dispatch to
+    // the next one's.
+    this.cyc     = 0;      // cycles, dispatch to dispatch
+    this.odd     = 0;      // of them, cycles lost to a three-byte instruction at an odd address
     this.bus     = 0;      // data bytes read or written
-    this.taken   = 0;      // relative branches taken, one cycle each
     this.penalty = spec.cpu.taken_branch_penalty ?? 0;
-    this.slow    = 0;      // extra cycles an instruction declares: `extra_cycles`
 
     // WHICH INSTRUCTIONS PAY IT COMES FROM THE SEMANTICS, not from a list here
     // that would have to be kept in step.  An instruction is a relative branch
@@ -385,74 +376,59 @@ export class Machine {
     const d  = decode(this.dec, this.mem, at);
     if (!d) throw new Error(`no instruction at 0x${at.toString(16)} (first byte 0x${this.mem[at].toString(16)})`);
     this.pc = u16(at + d.nbytes);
-    this.fetched += d.nbytes;
-    this.slow += d.insn.extra_cycles ?? 0;
-    // A ONE-BYTE FORM THAT COMPUTES COSTS TWO CYCLES.  The hardware reads its
-    // operands in the cycle before the ALU sees them, and a one-byte form has
-    // no second byte whose fetch cycle could do that - so it spends a cycle of
-    // its own instead.  nop and halt are not here: they compute nothing and
-    // read nothing.  See the byte-serial core's ucode.sv, its one-byte entry words, and cpu.sv.
-    if (d.nbytes === 1 && computes(d.insn.semantics ?? '')) this.slow += 1;
-    // AN EXCEPTION IS SIX CYCLES, and it is recognised by naming a shadow -
-    // which only `brk' and `rti' do.  The count comes from the byte-serial core's ucode.sv and not
-    // from arithmetic here: an entry word that fetches nothing, the four steps
-    // that move the shadow registers, and the cycle that dispatches the
-    // handler's first opcode.  One byte, so five cycles beyond it.
-    //
-    // FOUR OF THE SIX ARE THE SHADOWS, and they are the price of not putting a
-    // mux in front of the register file: two stack pointers moved one way each,
-    // plus lr, at one register per cycle.  A swap would be one cycle and 3.3
-    // MHz off every instruction in the machine.  See the byte-serial core's cpu.sv.
-    const exception = /shadow_lr|shadow_sp/.test(d.insn.semantics ?? '');
-    if (exception) this.slow += 5;
-    // A TRANSFER WHOSE TARGET IS A REGISTER COSTS THREE CYCLES, whatever its
-    // length: one to read the register, one to present it as an address, and
-    // one for the target's opcode to arrive.  `ret' is one byte and pays two
-    // of them, `jmp ra' and `call ra' are two bytes and pay one.  A target in
-    // the instruction's own bytes needs none of this - it is already there.
-    //
-    // `rti' IS EXCLUDED THOUGH ITS SEMANTICS OPEN WITH `pc = lr'.  It does read
-    // the return address off port A the way `ret' does, but that read is one
-    // step of the six counted above rather than an extra on top of them, and
-    // without this guard it would be charged twice.
-    if (!exception && /\bpc = (lr|R\[[a-z]\])/.test(d.insn.semantics ?? '')) this.slow += 3 - d.nbytes;
-    // A MEMORY ACCESS COSTS ONE CYCLE MORE THAN ITS BYTES AND THE BYTES IT
-    // MOVES, for the add that produces the address.  It is the taken branch's
-    // cycle over again, for the same reason: the operands are read a cycle
-    // BEFORE they are used, so the address cannot be on the bus until the cycle
-    // after the instruction's last byte arrived, and there is nothing to fetch
-    // while the adder runs.  See the byte-serial core's cpu.sv's address unit.
-    if (/M(8|16)\[/.test(d.insn.semantics ?? '')) this.slow += 1;
-    // AND A LOADING BLOCK MOVE PAYS ONE MORE - pop and ldm - because its last
-    // act is to write the pointer it walked and the register file has ONE write
-    // port, so that write cannot share the cycle that writes the last register
-    // it loaded.  push and stm have no such conflict: they write no register
-    // from memory, so the pointer write lands in the cycle the next opcode is
-    // dispatched in, which is where every other instruction's result lands too.
-    if (/R\[[a-z]\] = M16\[base/.test(d.insn.semantics ?? '')) this.slow += 1;
-    // AND A STORE PAYS ONE MORE, for the cycle that fills the store-data flop.
-    // rtl/cpu.sv drives the memory's data pins from a register, not from a mux,
-    // so the byte must be SELECTED a cycle before it goes out: the address cycle
-    // selects the first one and the bytes follow it instead of riding with it.
-    // One cycle per store whatever its width - push triple fills once and then
-    // writes six bytes.  A LOAD PAYS NOTHING HERE: its bytes arrive from the
-    // memory into the right operand flop, which was always a flop, so nothing
-    // combinational ever stood between the register file and the data pins for
-    // them.  That is why this tests the statement and not just the access.
-    if ((d.insn.semantics ?? '').split(';').some((s) => /^\s*M(8|16)\[/.test(s.trim())))
-      this.slow += 1;
+    const sem = d.insn.semantics ?? '';
+    const bus = this.bus;
     this.wrotePc = false;
     this.tmp = {};           // no scratch name outlives its instruction
     if (trace) trace(at, d, this);
     for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);
-    // TAKEN means the assignment to pc RAN, not that pc ended up somewhere
-    // else.  Those differ, and the difference is not academic: a branch whose
-    // target is the next instruction still puts pc + off through the adder and
-    // still costs the cycle.  Testing the outcome instead of the act made
-    // `br eq, r0, #0, .next` look free, which tests/branch-cost.s caught.
-    if (this.wrotePc && this.relative.get(d.insn)) this.taken += this.penalty;
+    this.cyc += this.cost(d, at, sem, this.bus - bus);
     this.count++;
     return d;
+  }
+
+  // The cycles from this instruction's dispatch to the next one's, on the
+  // pipeline in rtl/cpu.sv.  `moved` is the data bytes it read or wrote.
+  cost(d, at, sem, moved) {
+    // AN EXCEPTION IS SIX CYCLES, and it is recognised by naming a shadow -
+    // which only `brk' and `rti' do: a microcode routine that moves sp and lr
+    // through the shadows, and a redirect of the fetch through taken_q.  sei
+    // and cli are routines too, without the redirect, and cost five.
+    if (/shadow_lr|shadow_sp/.test(sem)) return 6;
+    if (/^ie = [01]$/.test(sem)) return 5;
+    // A MEMORY INSTRUCTION STOPS DISPATCH until its last address is out, and
+    // its bytes go a byte a cycle.  A load's first address comes straight out
+    // of the ALU's adder, so N bytes cost N + 3; a store registers its address
+    // first and costs N + 4.  ld8 4, ld and a one-register pop 5; st8 5, st
+    // and a one-register push 6.  How many bytes is what the semantics moved.
+    if (/M(8|16)\[/.test(sem)) {
+      const stores = sem.split(';').some((s) => /^\s*M(8|16)\[/.test(s.trim()));
+      return moved + (stores ? 4 : 3);
+    }
+    // mul, clz and popcount run a two-step routine: `extra_cycles` beyond one.
+    if (d.insn.extra_cycles) return 1 + d.insn.extra_cycles;
+    // A CONDITIONAL BRANCH FLOWS DOWN THE PIPE LIKE AN ALU INSTRUCTION, with
+    // dispatch carrying on behind it.  TAKEN, it squashes the three behind it
+    // and fetches the target: `taken_branch_penalty` more.  Taken means the
+    // assignment to pc RAN, not that pc ended up somewhere else - a branch to
+    // the very next instruction still pays, which tests/branch-cost.s pins.
+    if (/^if /.test(sem) && this.relative.get(d.insn)) {
+      if (this.wrotePc) return 1 + this.penalty;
+    } else if (this.wrotePc) {
+      // A JUMP OR CALL stops dispatch behind it and fetches the target in its
+      // ALU cycle: three cycles.  Through a register - jmp ra, call ra, ret -
+      // the target goes through taken_q, a cycle later: four.  `call lr` goes
+      // to the NEW lr, the next pc, which is no register read: three.
+      const viaReg = /\bpc = (lr|R\[[a-z]\])$/.test(sem)
+                  && !(/^lr = pc; pc = R\[a\]$/.test(sem) && d.ops.a === this.named.lr);
+      return viaReg ? 4 : 3;
+    }
+    // ANYTHING ELSE IS ONE CYCLE, unless its bytes cannot be there in time.
+    // Memory is a word wide and the fetch holds the word after the pc's: three
+    // bytes at an odd address reach into the word after that, which arrives a
+    // cycle late.
+    if (d.nbytes === 3 && (at & 1)) { this.odd++; return 2; }
+    return 1;
   }
 
   // Run until halted, until `stopAt` is reached, or until `max` instructions.
@@ -468,8 +444,8 @@ export class Machine {
   // Zero the cost counters.  Tests used to open-code this, and open-coded the
   // SUM as well - which is how the taken-branch penalty went unnoticed by every
   // cycle assertion in the suite the moment it was added.  One definition.
-  reset() { this.fetched = this.bus = this.taken = this.slow = 0; return this; }
-  cycles() { return this.fetched + this.bus + this.taken + this.slow; }
+  reset() { this.cyc = this.odd = this.bus = 0; return this; }
+  cycles() { return this.cyc; }
 }
 
 // =============================================================================

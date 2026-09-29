@@ -242,11 +242,11 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   };
 
   const rungs = [
-    ['memcpy',                 19.0000, 1],
-    ['memcpy2',                10.5000, 1],
-    ['memcpy3',                 9.5000, 1],
-    ['memcpy4',                 7.5000, 1],
-    ['memcpy_divisible_by_32',  5.4688, 32],
+    ['memcpy',                 16.0000, 1],
+    ['memcpy2',                 9.0000, 1],
+    ['memcpy3',                 8.5000, 1],
+    ['memcpy4',                 7.0000, 1],
+    ['memcpy_divisible_by_32',  5.0000, 32],
   ];
 
   for (const [name, want, unit] of rungs) {
@@ -354,12 +354,12 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
                                              // the axis every routine here
                                              // actually costs time along
   const want = [
-    ['mul_16',      UNIFORM, 166], ['mul_16',      SMALL_A, 166],
-    ['mul_16_x4',   UNIFORM, 126], ['mul_16_x4',   SMALL_A, 126],
-    ['mul_16_fast', UNIFORM, 103], ['mul_16_fast', SMALL_A, 103],
-    ['mul_16_fast_erik', UNIFORM, 122], ['mul_16_fast_erik', SMALL_A, 122],
-    ['mul_16_nib', UNIFORM, 113], ['mul_16_nib', SMALL_A, 113],
-    ['mul_16_min',  UNIFORM, 166], ['mul_16_min',  SMALL_A,  91],
+    ['mul_16',      UNIFORM, 112], ['mul_16',      SMALL_A, 112],
+    ['mul_16_x4',   UNIFORM,  87], ['mul_16_x4',   SMALL_A,  87],
+    ['mul_16_fast', UNIFORM,  70], ['mul_16_fast', SMALL_A,  70],
+    ['mul_16_fast_erik', UNIFORM, 89], ['mul_16_fast_erik', SMALL_A, 89],
+    ['mul_16_nib', UNIFORM,  83], ['mul_16_nib', SMALL_A,  83],
+    ['mul_16_min',  UNIFORM, 111], ['mul_16_min',  SMALL_A,  60],
   ];
   for (const [entry, gen, target] of want) {
     const got = mean(entry, gen);
@@ -377,16 +377,16 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
         call('mul_16_fast', 0xbeef, 3).cycles > call('mul_16', 0xbeef, 3).cycles,
         'the unrolled chain no longer loses on a 2-bit multiplier');
 
-  // THE TWO DISPATCHES CROSS OVER, which is the whole point of keeping both.
-  // A linear scan costs 3c+4 and a computed goto a flat 23, so the scan wins
-  // on a wide multiplier and loses badly on a narrow one.  If either of these
-  // stopped holding, one of the two routines would have become pointless.
-  check('mul: the scan wins on a wide multiplier',
-        call('mul_16_fast', 0xbeef, 0xffff).cycles < call('mul_16_fast_erik', 0xbeef, 0xffff).cycles,
-        'the scan no longer beats the computed goto at clz = 0');
-  check('mul: the computed goto wins on a narrow one',
-        call('mul_16_fast_erik', 0xbeef, 15).cycles < call('mul_16_fast', 0xbeef, 15).cycles,
-        'the computed goto no longer beats the scan at clz = 12');
+  // THE TWO DISPATCHES NO LONGER CROSS.  On the byte-serial core an untaken
+  // brset cost three cycles and the computed goto won below clz = 7; on the
+  // pipeline it costs one or two, while the computed goto pays for push and
+  // pop of lr, a clz and a jump through a register - so the scan is never
+  // behind.  If that stops holding, mul_16_fast_erik has a reason to exist
+  // again and the file's header should say so.
+  for (const b of [0xffff, 0x0fff, 0x00ff, 0x000f])
+    check('mul: the scan is never behind the computed goto',
+          call('mul_16_fast', 0xbeef, b).cycles <= call('mul_16_fast_erik', 0xbeef, b).cycles,
+          `the computed goto beats the scan at b = 0x${b.toString(16)}`);
   check('mul: swapping beats all of it when the operands are lopsided',
         mean('mul_16_min', SMALL_A) < mean('mul_16_fast', SMALL_A),
         'the swap prologue no longer beats the unrolled chain on a small multiplicand');
@@ -398,23 +398,18 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   check('mul: the nibble table pays now',
         mean('mul_16_nib', UNIFORM) < mean('mul_16_x4', UNIFORM),
         'the nibble table no longer beats the four-bit loop');
-  // AND ITS DISPATCH IS NOW WHAT HOLDS IT BACK.  The table entry is reached by
-  // a computed `ret', which is a register-sourced transfer, and those cost
-  // three cycles whatever their length - so the table pays two cycles a nibble
-  // that a straight-line chain does not.  Its steady state is still the best
-  // here, 15 cycles a nibble against the unrolled chain's 16, but the margin no
-  // longer covers the prologue on a RANDOM 16-bit multiplier.
-  //
-  // So the ordering now depends on the distribution, and both halves are
-  // pinned: the chain wins on the uniform mean, and the table still wins when
-  // the multiplier really uses all sixteen bits.  If the first of these ever
-  // fails, the register transfer has got cheaper and the trade has moved back.
+  // AND ITS BRACKET IS NOW WHAT HOLDS IT BACK.  Its steady state is still the
+  // best here, about 10.75 cycles a nibble against the chain's 16 or so, but
+  // saving and restoring three registers and dispatching through a register
+  // cost it about forty cycles the chain never pays - more than four nibbles
+  // of margin.  So the chain wins at every width, and both ends are pinned: the
+  // uniform mean, and the all-ones multiplier where every nibble does work.
   check('mul: the chain beats the table on a random 16-bit multiplier',
         mean('mul_16_fast', UNIFORM) < mean('mul_16_nib', UNIFORM),
         'the nibble table is ahead on the uniform mean again');
-  check('mul: but the table still wins when every bit is set',
-        call('mul_16_nib', 0xbeef, 0xffff).cycles < call('mul_16_fast', 0xbeef, 0xffff).cycles,
-        'the nibble table no longer beats the unrolled chain on an all-ones multiplier');
+  check('mul: and even when every bit is set',
+        call('mul_16_fast', 0xbeef, 0xffff).cycles < call('mul_16_nib', 0xbeef, 0xffff).cycles,
+        'the nibble table beats the unrolled chain on an all-ones multiplier again');
   check('mul: and its prologue costs it the narrow one',
         mean('mul_16_nib', SMALL_B) > mean('mul_16_x4', SMALL_B),
         'the nibble table now beats the four-bit loop on 8-bit multipliers too');
@@ -460,10 +455,10 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
       return tot / 400;
     };
     const wide16 = w((r) => [r(16), r(16)]), wide8 = w((r) => [r(16), r(8)]);
-    check('mul_16_16_32 cost', Math.abs(wide16 - 316) < 2,
-          `16x16 costs ${wide16.toFixed(1)} cycles, the file says 316`);
-    check('mul_16_16_32 narrow', Math.abs(wide8 - 168) < 2,
-          `16x8 costs ${wide8.toFixed(1)} cycles, the file says 168`);
+    check('mul_16_16_32 cost', Math.abs(wide16 - 208) < 2,
+          `16x16 costs ${wide16.toFixed(1)} cycles, the file says 208`);
+    check('mul_16_16_32 narrow', Math.abs(wide8 - 116) < 2,
+          `16x8 costs ${wide8.toFixed(1)} cycles, the file says 116`);
     // The swap is load-bearing here too: a narrow multiplicand must be moved
     // into the multiplier, or the loop runs over all sixteen bits.
     check('mul_16_16_32 swaps', w((r) => [r(8), r(16)]) < wide16 * 0.75,
@@ -476,12 +471,12 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 }
 
 // --- the cost model: what a taken branch costs -------------------------------
-// Every performance figure in this repo rests on one cycle being charged for a
-// taken RELATIVE branch and nothing for an absolute transfer.  Nothing else in
-// the suite would catch the simulator dropping that: the numbers would all move
-// together, and each assertion would be re-tightened around the new wrong value
-// by whoever ran the tests next.  So it is measured here directly, one
-// instruction at a time.
+// Every performance figure in this repo rests on what a taken branch, a jump
+// and a three-byte instruction at an odd address are charged.  Nothing else in
+// the suite would catch the simulator drifting from the spec: the numbers would
+// all move together, and each assertion would be re-tightened around the new
+// wrong value by whoever ran the tests next.  So it is measured here directly,
+// one instruction at a time.
 {
   const { code, syms } = assemble('tests/branch-cost.s');
   const cost = (label) => {
@@ -497,27 +492,28 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 
   const want = [
     ['b_taken', 4, 'a 3-byte branch, taken'],
-    ['b_fall',  3, 'a 3-byte branch, not taken'],
+    ['b_odd',   2, 'a 3-byte branch at an odd address, not taken'],
+    ['b_even',  1, 'a 3-byte branch at an even address, not taken'],
     ['j_rel',   3, 'a 2-byte relative jump'],
     ['j_abs',   3, 'a 3-byte absolute jump'],
     ['c_abs',   3, 'a 3-byte absolute call'],
-    ['j_reg',   3, 'a 2-byte jump through a register'],
-    ['i_ret',   3, 'ret: one byte, and three cycles to read lr and use it'],
+    ['c_lr',    3, '`call lr`, to the next instruction'],
+    ['j_reg',   4, 'a 2-byte jump through a register'],
+    ['i_ret',   4, 'ret: one byte, and four cycles through a register'],
   ];
   for (const [label, cycles, what] of want)
     check('branch cost', cost(label) === cycles,
           `${what} cost ${cost(label)} cycles, want ${cycles}`);
 
   // The pair that isolates the cause: the same branch, the same three bytes,
-  // taken and not.  `callr` used to make the point from the other side and has
-  // been removed from the ISA - see tests/branch-cost.s.
-  check('branch cost', cost('b_taken') - cost('b_fall') === 1,
-        `taken and not-taken differ by ${cost('b_taken') - cost('b_fall')}, want 1`);
+  // both at even addresses, taken and not.
+  check('branch cost', cost('b_taken') - cost('b_even') === spec.cpu.taken_branch_penalty,
+        `taken and not-taken differ by ${cost('b_taken') - cost('b_even')}, want ${spec.cpu.taken_branch_penalty}`);
 
   // The penalty is declared in the spec, not buried in the simulator.
-  check('branch cost', spec.cpu.taken_branch_penalty === 1,
+  check('branch cost', spec.cpu.taken_branch_penalty === 3,
         `spec says the penalty is ${spec.cpu.taken_branch_penalty}`);
-  console.log('ok    cost model: taken relative branches cost one cycle, absolute none');
+  console.log('ok    cost model: a taken branch 4 cycles, a jump 3, through a register 4, three bytes at an odd address 2');
 }
 
 // --- zeroed memory traps, and does not run away ------------------------------
@@ -604,10 +600,9 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 // looks right from one end and the value is simply lost.
 //
 // AND THE CYCLE COUNT IS PINNED, because the cost model charges it: six cycles,
-// which is the byte-serial core's ucode.sv's entry word, the four steps that move the shadows, and
-// the cycle that dispatches the handler's first opcode.  Four of those six are
-// the price of having no mux in front of the register file - two stack pointers
-// moved one way each, plus lr, one register per cycle.
+// dispatch to dispatch - a microcode routine in rtl/cpu.sv that moves sp and lr
+// through the shadows one register a cycle, since there is no mux in front of
+// the register file to swap them, and a redirect of the fetch through taken_q.
 {
   const opcodeOf = (mnemonic) => {
     const i = spec.insn.find((x) => x.mnemonic === mnemonic && !(x.operands ?? []).length);
@@ -728,8 +723,8 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 // cheap enough that there is no reason to sample.
 //
 // The cycle counts are pinned because they are the whole point of the file -
-// clz exists in snippets/ to price the TENTATIVE opcode against ~45 logic
-// cells, and a figure nobody checks is a figure that goes stale.
+// clz exists in snippets/ to price the TENTATIVE opcode, four cycles, against
+// ~45 logic cells, and a figure nobody checks is a figure that goes stale.
 {
   const { code, syms } = assemble('snippets/clz.s');
   const EXIT = 0xfffc;
@@ -741,10 +736,10 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 
   // name, its cycle range, and whether it must be right at zero
   const CASES = [
-    ['clz',     25, 29],
-    ['clz2',    19, 38],
-    ['clz_nz',  23, 27],
-    ['clz_big', 17, 18],
+    ['clz',     17, 24],
+    ['clz2',    14, 29],
+    ['clz_nz',  16, 23],
+    ['clz_big', 13, 16],
   ];
   for (const [name, lo, hi] of CASES) {
     let bad = -1, best = Infinity, worst = 0;
@@ -790,7 +785,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     else if (r[2] !== 0x2222 || r[3] !== 0x3333 || r[4] !== 0x4444) { bad = n; why = 'clobbered a callee saved register'; }
   }
   check('digits3 is right', bad < 0, `n = ${bad}: ${why}`);
-  check('digits3 costs 58', best === 58 && worst === 58, `measured ${best}..${worst}`);
+  check('digits3 costs 39', best === 39 && worst === 39, `measured ${best}..${worst}`);
   console.log('ok    snippets/digits3.s: 1000 inputs, and its cycle count');
 }
 

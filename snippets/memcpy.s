@@ -19,59 +19,53 @@
 ; THE LADDER
 ; ----------------------------------------------------------------------------
 ; Every figure below is measured by tests/sim-check.mjs, not counted by hand,
-; and the test fails if a rung gets slower or copies the wrong bytes.  The bus
-; is 6502-like: one cycle per instruction byte fetched, one per data byte moved,
-; one more for a relative branch that is TAKEN, one more for each ACCESS, which
-; is the add that produces its address, and one more again for each STORE, which
-; fills the flop rtl/cpu.sv drives the memory's data pins from - see the cost
-; model under [cpu] in the spec.  Every loop below pays the branch once an
-; iteration, the address once per load or store, and the flop once per store,
-; and those last two are why every rung here costs more than the fetch-and-data
-; count alone would say.
+; and the test fails if a rung gets slower or copies the wrong bytes.  See the
+; cost model under [cpu] in the spec: an ALU instruction or a branch not taken
+; is a cycle, whatever its length; a taken branch is four; and a memory
+; instruction stops the pipeline while it moves its bytes, one a cycle - N + 3
+; cycles for a load of N bytes, N + 4 for a store.  So `ld8` is 4 and `st8` 5,
+; `ld` 5 and `st` 6, and a byte loaded and stored costs 9 cycles of which only
+; 2 move it.  Every rung below is a story about moving more bytes per memory
+; instruction.
 ;
 ;                                                          c/B     at 256
-;       memcpy                   byte at a time, counted    19.0000  19.02
-;       memcpy2                  word at a time, counted    10.5000  10.54
-;       memcpy3                  word at a time, no counter  9.5000   9.54
-;       memcpy4                  two words, no counter       7.5000   7.55
-;       memcpy_divisible_by_32   pop and push, sp the cursor 5.4688   5.64
+;       memcpy                   byte at a time, counted    16.0000  16.01
+;       memcpy2                  word at a time, counted     9.0000   9.02
+;       memcpy3                  word at a time, no counter  8.5000   8.54
+;       memcpy4                  two words, no counter       7.0000   7.04
+;       memcpy_divisible_by_32   pop and push, sp the cursor 5.0000   5.16
 ;
 ; The first column is the loop alone, recovered by differencing two lengths so
 ; that the setup cancels; the second is a whole 256-byte call, setup included.
 ;
 ; For scale, a 6502 does 13 cycles/byte, or 10 with self-modifying code.  So the
-; naive loop here is well behind a decent 6502 loop, and the last rung is about
-; two and a half times faster than one.  Copying a byte costs two cycles nothing
-; can remove, one to read it and one to write it, so 2.00 is the floor and every
-; rung below is a story about deleting instruction fetch - and, now, about
-; moving more bytes per address that has to be computed and per store that has
-; to fill the data flop.
+; naive loop here is behind a decent 6502 loop, and the last rung is two and a
+; half times faster than one.  Copying a byte costs two cycles nothing can
+; remove, one to read it and one to write it, so 2.00 is the floor.
 ;
-; WHERE IT ENDS UP.  snippets/speed-of-light-memcpy-core.s takes the last idea
-; further and reaches 4.93 by dropping `push` again: pop is worth keeping
-; because it moves three registers for two instruction bytes, but push has to
-; give sp back to the source afterwards, and plain stores turn out to be
-; cheaper than the handover.
+; WHERE IT ENDS UP.  snippets/speed-of-light-memcpy-core.s reaches 4.67 with pop
+; and plain stores and no handover at all - and finds that swapping sp between
+; the pointers with `mov`s, a cycle each, and writing with push beats that.
 ; ============================================================================
 
 
 ; ============================================================================
-; 1.  byte at a time, counted                                     19.0000 c/B
+; 1.  byte at a time, counted                                     16.0000 c/B
 ; ============================================================================
 ; The obvious loop, and the baseline everything else is measured against.  Six
-; instructions, 12 bytes of fetch and 2 of data to move a single byte, plus the
-; cycle the taken branch costs, one for each of the two addresses, one for the
-; store's data flop and one for the one-byte `add` - so 17 of the 19 cycles are
-; the machine reading its own instructions and working out where to read next.
+; instructions to move a single byte: 9 cycles for the load and the store, of
+; which 2 move the byte, 3 for the counter and the pointers, and 4 for the
+; taken branch - so 14 of the 16 cycles are the machine starting memory
+; instructions and working out where to read next.
 
 memcpy:
         br      eq, r2, #0, .done       ; a zero count must not wrap the counter
 .top:
         ld8     r5, [r0]                ;                               4
         st8     r5, [r1]                ;                               5
-        add     r0, r0, #1              ; one byte: the pinned form     2
-        add     r1, r1, #1              ; two bytes: r1 is not pinned   2
-        add     r2, r2, #-1             ;                               2
+        add     r0, r0, #1              ; one byte: the pinned form     1
+        add     r1, r1, #1              ; two bytes: r1 is not pinned   1
+        add     r2, r2, #-1             ;                               1
         br      ne, r2, #0, .top        ;                               4
 .done:
         ret
@@ -82,26 +76,26 @@ memcpy:
 
 
 ; ============================================================================
-; 2.  word at a time, counted                                     10.5000 c/B
+; 2.  word at a time, counted                                      9.0000 c/B
 ; ============================================================================
 ; Unaligned 16-bit access is legal and costs nothing extra, so the word loop
 ; needs no alignment preamble - it just runs, whatever the pointers are.  That
 ; is the single biggest reason this rung is nearly free to write.
 ;
-; Same six instructions, twice the data - 21 cycles an iteration instead of 19,
-; for two bytes instead of one.  The two addresses cost the same whichever width
-; they are, so widening the access is the one change that buys back a cycle it
-; never paid for.  The odd byte left over at the end is handled once, after the
-; loop.
+; Same six instructions, twice the data - 18 cycles an iteration instead of 16,
+; for two bytes instead of one.  A memory instruction's three or four cycles of
+; overhead are the same whichever width it is, so widening the access buys back
+; nearly half the loop.  The odd byte left over at the end is handled once,
+; after the loop.
 
 memcpy2:
         br      lo, r2, #2, .tail       ; fewer than two bytes: no loop at all
 .top:
         ld      r5, [r0]                ;                               5
         st      r5, [r1]                ;                               6
-        add     r0, r0, #2              ; one byte: also pinned         2
-        add     r1, r1, #2              ;                               2
-        add     r2, r2, #-2             ;                               2
+        add     r0, r0, #2              ; one byte: also pinned         1
+        add     r1, r1, #2              ;                               1
+        add     r2, r2, #-2             ;                               1
         br      hs, r2, #2, .top        ; at least two left             4
 .tail:
         br      eq, r2, #0, .done       ; 0 or 1 bytes remain
@@ -116,12 +110,12 @@ memcpy2:
 
 
 ; ============================================================================
-; 3.  word at a time, no counter                                   9.5000 c/B
+; 3.  word at a time, no counter                                   8.5000 c/B
 ; ============================================================================
 ; The counter is redundant: the source pointer already knows how far it has
 ; gone.  Turn count into a source LIMIT once, and the loop loses an instruction
 ; - `add r2, r2, #-2` disappears and the branch compares r0 against r2 instead
-; of against zero.  Two cycles per word - 10.50 down to 9.50 - bought with one
+; of against zero.  One cycle per word - 9.00 down to 8.50 - bought with one
 ; instruction of setup.
 ;
 ; The cost is that an odd count no longer falls out of the loop; it has to be
@@ -141,8 +135,8 @@ memcpy3:
 .top:
         ld      r5, [r0]                ;                               5
         st      r5, [r1]                ;                               6
-        add     r0, r0, #2              ;                               2
-        add     r1, r1, #2              ;                               2
+        add     r0, r0, #2              ;                               1
+        add     r1, r1, #2              ;                               1
         br      lo, r0, r2, .top        ;                               4
 .done:
         ret
@@ -154,7 +148,7 @@ memcpy3:
 
 
 ; ============================================================================
-; 4.  two words per iteration, no counter                          7.5000 c/B
+; 4.  two words per iteration, no counter                          7.0000 c/B
 ; ============================================================================
 ; Unrolling once amortises the loop tail - one branch and one pair of pointer
 ; bumps now serve four bytes instead of two - and the second word rides on the
@@ -183,28 +177,27 @@ memcpy4:
         st      r5, [r1]                ;                               6
         ld      r5, [r0, #2]            ;                               5
         st      r5, [r1, #2]            ;                               6
-        add     r0, r0, #4              ; two bytes: 4 is not pinned    2
-        add     r1, r1, #4              ;                               2
+        add     r0, r0, #4              ; two bytes: 4 is not pinned    1
+        add     r1, r1, #4              ;                               1
         br      lo, r0, r2, .top        ;                               4
 .done:
         ret
 
-; NOTE WHAT UNROLLING STOPS BUYING.  Count everything that is not data, since
-; the data is fixed: rung 3 spends 15 cycles to move 2 bytes, this spends 22 to
-; move 4, a third word would spend 29 to move 6 and a fourth 36 to move 8.  That
-; is 9.50, 7.50, 6.83, 6.50 cycles/byte - each step recovers less than half of
-; what the last one did, and all of it converges on the 5.50 a load-store pair
-; costs, three of which are the two addresses and the store's data flop.
-; Getting below that needs a different instruction, not a longer loop.
-; Next rung.
+; NOTE WHAT UNROLLING STOPS BUYING.  Every word costs a load and a store, 11
+; cycles, and the loop around them 6: rung 3 spends 17 cycles to move 2 bytes,
+; this spends 28 to move 4, a third word would spend 39 to move 6 and a fourth
+; 50 to move 8.  That is 8.50, 7.00, 6.50, 6.25 cycles/byte - each step
+; recovers less than half of what the last one did, and all of it converges on
+; the 5.50 a load-store pair costs, only 2.00 of which is the data.  Getting
+; below that needs a different instruction, not a longer loop.  Next rung.
 
 
 ; ============================================================================
-; 5.  pop and push, with sp as the cursor                          5.4688 c/B
+; 5.  pop and push, with sp as the cursor                          5.0000 c/B
 ; ============================================================================
-; `pop rA, rB, rC` moves six bytes for two instruction bytes, and `push` writes
-; six for two.  Nothing else in the machine moves more than one register per
-; instruction.  Both of them are hardwired to sp - so to use them for a copy,
+; `pop rA, rB, rC` reads six bytes in 9 cycles, and `push` writes six in 10.
+; Nothing else in the machine moves more than one register per instruction,
+; and a word through `ld` and `st` costs 11.  Both of them are hardwired to sp - so to use them for a copy,
 ; sp has to BE the pointer, first the source and then the destination.
 ;
 ; INTERRUPTS MUST HAVE THEIR OWN STACK POINTER while this runs.  sp spends the
@@ -238,59 +231,58 @@ memcpy_divisible_by_32:
         mov     lr, sp                  ; lr is the only pointer left
         ld      sp, [lr]                ; sp = src, and the real stack is gone
 .top:
-        pop     r0, r1, r2              ; src +0  .. +5                10
-        pop     r3, r4, r5              ; src +6  .. +11               10
+        pop     r0, r1, r2              ; src +0  .. +5                 9
+        pop     r3, r4, r5              ; src +6  .. +11                9
         ld      sp, [lr, #2]            ; sp = dst + 12                 5
         push    r5, r4, r3              ; dst +6  .. +11               10
         push    r2, r1, r0              ; dst +0  .. +5,  sp = dst     10
         ld      sp, [lr]                ;                               5
-        add     sp, sp, #12             ; sp = src + 12                 2
-        pop     r0, r1, r2              ; src +12 .. +17               10
-        pop     r3, r4, r5              ; src +18 .. +23               10
+        add     sp, sp, #12             ; sp = src + 12                 1
+        pop     r0, r1, r2              ; src +12 .. +17                9
+        pop     r3, r4, r5              ; src +18 .. +23                9
         ld      sp, [lr, #2]            ;                               5
-        add     sp, sp, #12             ; sp = dst + 24                 2
+        add     sp, sp, #12             ; sp = dst + 24                 1
         push    r5, r4, r3              ; dst +18 .. +23               10
         push    r2, r1, r0              ; dst +12 .. +17               10
         ld      sp, [lr]                ;                               5
-        add     sp, sp, #24             ; sp = src + 24, three bytes    3
-        pop     r0, r1                  ; src +24 .. +27                8
-        pop     r2, r3                  ; src +28 .. +31                8
-        mov     r4, sp                  ; r4 = src + 32, the next src   2
+        add     sp, sp, #24             ; sp = src + 24, three bytes    1
+        pop     r0, r1                  ; src +24 .. +27                7
+        pop     r2, r3                  ; src +28 .. +31                7
+        mov     r4, sp                  ; r4 = src + 32, the next src   1
         ld      sp, [lr, #2]            ;                               5
-        add     sp, sp, #20             ; sp = dst + 32, three bytes    3
+        add     sp, sp, #20             ; three bytes at an odd address 2
         push    r3, r2                  ; dst +28 .. +31                8
         push    r1, r0                  ; dst +24 .. +27, sp = dst+24   8
         ld      r5, [lr, #4]            ; the limit                     5
         st      r4, [lr]                ; write the source back         6
-        add     sp, sp, #20             ; sp = (dst+32) + 12, the bias  3
+        add     sp, sp, #20             ; sp = (dst+32) + 12, the bias  1
         st      sp, [lr, #2]            ; write the destination back    6
-        mov     sp, r4                  ; sp = src again                2
+        mov     sp, r4                  ; sp = src again                1
         br      ne, r5, r4, .top        ;                               4
         add     sp, lr, #6              ; drop the three-word block
         pop     r3, r4, lr              ; and the real stack is back
         ret
 
-; WHERE THE 175 CYCLES GO.  The pops and pushes are 112 of them and move all 32
-; bytes: 3.50 per byte, of which 2.00 is the read and the write that no machine
-; can avoid, 0.75 is their own instruction fetch, and the remaining 0.75 is what
-; each access pays beyond that - an address for all twelve, a write-port cycle
-; for the six pops, a data flop for the six pushes.  The other
-; 63 - 1.969 per byte - is pointer juggling: five `ld sp` handovers at five
-; cycles each, the constants that undo push's backwards walk, the two
-; write-backs, and the branch with its taken cycle.  More than a third of this
-; routine is spent deciding where sp is pointing.
+; WHERE THE 160 CYCLES GO.  The pops and pushes are 106 of them and move all 32
+; bytes: 3.31 per byte, of which 2.00 is the read and the write that no machine
+; can avoid and 1.31 is what each of the twelve pays to start - three cycles a
+; pop and four a push.  The other 54 - 1.69 per byte - is pointer juggling:
+; five `ld sp` handovers at five cycles each, the limit load, the two
+; write-backs at six, the constants that undo push's backwards walk, and the
+; branch.  A third of this routine is spent deciding where sp is pointing, and
+; most of that is the pointers living in memory, because there is no register
+; to keep them in.
 ;
 ; WHY 32 AND NOT 12.  Twelve bytes - one pop-triple each way - is the smallest
-; block that works, and it would cost the same 28 cycles of bookkeeping at the
+; block that works, and it would cost the same 23 cycles of bookkeeping at the
 ; bottom of the loop: the limit load, the two write-backs, the two `mov`s that
-; shuttle the source through r4, and the branch.  That is 28 over 12 bytes, 2.33
-; per byte, against 28 over 32, or 0.875.  Better by a cycle and a half per
+; shuttle the source through r4, and the branch.  That is 23 over 12 bytes, 1.92
+; per byte, against 23 over 32, or 0.72.  Better by a cycle and a fifth per
 ; byte, for the cost of writing the block out twice more.  Bigger would be
 ; better again, until the branch runs out of reach - which at 65 bytes of loop
 ; body is not far off.
 ;
-; AND WHY IT IS STILL NOT THE FLOOR.  speed-of-light-memcpy-core.s deletes every
-; handover by never giving sp to the destination at all: sp stays on the source
-; for the whole copy and the writes go through ordinary stores.  That trades
-; push's cheap writes for zero juggling and reaches 4.9333 - half a cycle per
-; byte better, and the reason this ladder stops here.
+; AND WHY IT IS STILL NOT THE FLOOR.  speed-of-light-memcpy-core.s keeps both
+; pointers in registers.  With sp on the source for the whole copy and the
+; writes through ordinary stores it reaches 4.6667; swapping sp between the two
+; with `mov`s, a cycle each, and writing with push, it reaches 4.03.

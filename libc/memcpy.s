@@ -46,14 +46,14 @@
 ; BOTH TESTS ARE INCLUSIVE, and that is not cosmetic.  Regions that abut exactly
 ; - dest + n == src, or src + n == dest - do not overlap, so the fast path is
 ; correct for them and `ls` lets them take it; `lo` would send both the long way
-; round for nothing.  Measured, the descending loop is 19.0 cycles/byte against
-; the bulk loop's 5.25, so the difference is nearly a factor of four on a case that
-; turns up whenever a caller copies into the slot next to its source.
+; round for nothing.  Measured, the descending loop is 16.0 cycles/byte against
+; the bulk loop's 4.94, so the difference is more than a factor of three on a
+; case that turns up whenever a caller copies into the slot next to its source.
 ;
 ; THE CHEAPER TEST GOES FIRST.  dest <= src needs no arithmetic and leaves in
 ; three bytes; the other has to compute src + n first.  A copy into a fresh
 ; buffer usually satisfies the first one, so the common path is also the short
-; one - 399 cycles against 404 for a 64-byte move.
+; one - 369 cycles against 371 for a 64-byte move.
 ;
 ; tests/libc-check.mjs measures which loop ran, for every placement.  Correctness
 ; alone would not pin this down: a memmove that always descends copies the right
@@ -121,19 +121,19 @@ memcpy:
         add     r2, r2, r1              ; r2 = end of the source
         jmpr    .bottom
 .top:
-        pop     r3, r4, r5              ; src +0 .. +5                 10
+        pop     r3, r4, r5              ; src +0 .. +5                  9
         st      r3, [r0]                ;                               6
         st      r4, [r0, #2]            ;                               6
         st      r5, [r0, #4]            ;                               6
-        pop     r3, r4, r5              ; src +6 .. +11                10
+        pop     r3, r4, r5              ; src +6 .. +11                 9
         st      r3, [r0, #6]            ;                               6
-        add     r0, r0, #8              ;                               2
+        add     r0, r0, #8              ;                               1
         st      r4, [r0]                ; dest +8                       6
         st      r5, [r0, #2]            ; dest +10                      6
-        pop     r3, r4                  ; src +12 .. +15                8
+        pop     r3, r4                  ; src +12 .. +15                7
         st      r3, [r0, #4]            ; dest +12                      6
         st      r4, [r0, #6]            ; dest +14                      6
-        add     r0, r0, #8              ;                               2
+        add     r0, r0, #8              ;                               1
 .bottom:
         br      ne, sp, r2, .top        ;                               4
 

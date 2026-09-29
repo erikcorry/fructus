@@ -15,8 +15,9 @@ written, but never tested on hardware. Timing analysis puts it between about
 22 and 30 MHz on iCE40, depending on the configuration — the CPU alone or with
 the VGA frame buffers beside it, 32K or 64K of memory — and every configuration
 is fast enough to share the VGA's 25 MHz clock as a single clock domain. Most
-byte codes take two cycles. Full barrel shifter and a 16×16 multiply in one of
-the iCE40's DSPs, but no cache or branch predictor. Not very pipelined.
+instructions take one cycle, whatever their length, in a three-stage pipeline.
+Full barrel shifter and a 16×16 multiply in one of the iCE40's DSPs, but no
+cache or branch predictor.
 
 ![The Fructus opcode map: 149 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
 
@@ -51,9 +52,12 @@ But we don't want to pay the typical code density penalty of RISC on a 64k machi
   byte 1 for the register list.
 
 It is conceived to run on the
-kind of machine a 6502 ran on — a narrow memory bus where every instruction byte
-is a cycle you pay for — so the design question behind almost every decision in
-here is *what does this cost in bytes*.
+kind of machine a 6502 ran on — a 64K address space where every byte of code
+is one you cannot spend on anything else — so the design question behind almost
+every decision in here is *what does this cost in bytes*. The first core also
+fetched a byte a cycle, so bytes were time as well; the pipelined core that
+replaced it runs most instructions in a cycle whatever their length, and bytes
+are now space alone.
 
 The non-interactive SVG opcode map above and the interactive HTML form with per-cell tooltips come from
 `npm run map`.
@@ -234,10 +238,10 @@ one at an odd address, which spans three words and takes two. A conditional
 branch flows through all three stages and is decided in the ALU stage, beside
 the ALU: not taken it costs nothing extra, taken it costs four cycles. Jumps and
 calls take three, or four through a register. Measured behind a real SPRAM,
-the processor runs at 31.8 MHz (`just speed`, medians of sixteen placements),
-and on the random programs of `tests/cpu-check.mjs` it runs in fewer cycles than
-the byte-serial cost model `tools/sim.js` keeps. The header of `rtl/cpu.sv` has
-the reasons for each choice and what the alternatives measured.
+the processor runs at 31.8 MHz (`just speed`, medians of sixteen placements).
+`tools/sim.js` counts the same cycles, and `tests/cpu-check.mjs` holds the two
+together instruction by instruction on random programs. The header of
+`rtl/cpu.sv` has the reasons for each choice and what the alternatives measured.
 
 `rtl/cpu.sv` and `rtl/alu.sv` are written by hand, but what they know about the
 instruction set comes from the spec: the per-opcode control is the generated
@@ -448,15 +452,16 @@ into a zeroed page all trap to the handler with the faulting address in `lr`,
 where a monitor can print it. `nop` is at `0x87`, as far from them as the
 one-byte region reaches.
 
-**Current assumption: A taken relative branch costs one cycle more than its length**, for the add
-that produces `pc + off`; an absolute `jmp`, `call` or `ret` costs nothing
-beyond its bytes, because the target is latched as it is fetched or read
-straight from the register file. This is the 6502's behaviour — a branch is two
-cycles falling through and three when taken, while `JMP` absolute is exactly
-three — and it is what makes a longer unrolled loop worth anything once the
-instruction mix is fixed. The simulator does not keep a list of which
-instructions are which: `pc = pc + off` mentions `pc` on the right and is
-therefore relative, `pc = target` does not.
+**The cost model is the pipeline's**, and it is under `[cpu]` in the spec: an
+ALU instruction or an untaken branch is one cycle, or two for three bytes at an
+odd address; a taken branch four; a jump or call three, or four through a
+register; a load of N bytes N + 3 and a store N + 4, so `ld` is five and a
+three-register `push` ten; mul, clz and popcount four. A taken branch is what
+makes a longer unrolled loop worth anything once the instruction mix is fixed,
+and a memory instruction is the slowest thing a program does often. The
+simulator does not keep a list of which instructions are which: the semantics
+say which assign `pc` conditionally, which unconditionally, and which touch
+memory.
 
 ## Possible enhancements
 

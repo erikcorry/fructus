@@ -7,7 +7,16 @@
 ; Two versions of the same shape: three `brclr` tests narrow the answer to a
 ; nibble, then the nibble is resolved either by a table (clz) or by four more
 ; bit tests (clz2).  Written to price the TENTATIVE `clz` opcode against the
-; ~45 logic cells the hardware version measures at.
+; ~45 logic cells the hardware version measures at.  The opcode is four cycles,
+; flat.
+;
+; MEASURED over all 65536 inputs, by tests/sim-check.mjs, in cycles from the
+; call's first instruction to its `ret` inclusive:
+;
+;       clz       17 .. 24      table, right at zero
+;       clz2      14 .. 29      no table
+;       clz_nz    16 .. 23      table, undefined at zero
+;       clz_big   13 .. 16      a 256-byte table
 ;
 ; r0, r1 and r5 are all caller saved always, so this needs no prologue.  r5 is
 ; also the assembler's scratch, so nothing here may need an immediate
@@ -93,7 +102,7 @@ clz2:
 ; --- undefined at zero -----------------------------------------------------
 ; gcc's __builtin_clz leaves clz(0) undefined, and the fp routines special-case
 ; zero anyway, so this asks what the guarantee is worth.  The answer turns out
-; to be almost nothing - see the measurement in the header.
+; to be almost nothing - one cycle, the `and`; see the measurement in the header.
 clz_nz:
         brclr   r0, #0xff00, .b8
         brclr   r0, #0xf000, .b4

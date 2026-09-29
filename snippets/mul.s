@@ -9,6 +9,14 @@
 ; also caller saved - which is exactly the three registers this needs, so there
 ; is no prologue and no epilogue anywhere in this file.
 ;
+; THE PROCESSOR HAS A `mul` NOW - the low half of a 16x16 product from the
+; UP5K's DSP, in four cycles; see isa/fructus.toml.  Everything here is for a
+; part without a multiplier, which is what gcc assumes unless told otherwise.
+;
+; The column beside each instruction is its cycles on the pipeline - see the
+; cost model under [cpu] in the spec - and a branch's is what it costs falling
+; through, one cycle or two at an odd address; taken, it is four.
+;
 ; THE FRONT DOOR IS mul_16_min, which swaps the operands so the smaller one is
 ; the multiplier and falls through into the loop.  Every routine here costs
 ; time per bit of the multiplier and nothing for its leading zeros, so that
@@ -19,12 +27,12 @@
 ; MEASURED, by tests/sim-check.mjs, over 600 pairs from each distribution
 ; ----------------------------------------------------------------------------
 ;                        bytes   b 16-bit   b 8-bit   a 8-bit, b 16-bit
-;       mul_16              21       166        82        166
-;       mul_16_x4           32       126        67        126
-;       mul_16_fast        158       103        75        103
-;       mul_16_fast_erik   132       122        70        122
-;       mul_16_nib         274       113        79        113
-;       mul_16_min           8       166        86         91
+;       mul_16              21       112        56        112
+;       mul_16_x4           32        87        46         87
+;       mul_16_fast        158        70        48         70
+;       mul_16_fast_erik   132        89        55         89
+;       mul_16_nib         274        83        61         83
+;       mul_16_min           8       111        60         60
 ;
 ; THE FIRST THREE ROWS HAVE IDENTICAL FIRST AND LAST COLUMNS, and that is the
 ; whole argument for the fourth.  Their cost is a function of the MULTIPLIER
@@ -34,8 +42,8 @@
 ; decide which operand the multiplier is.
 ;
 ; THE PLAIN LOOP IS ALREADY GOOD, and it is worth saying why before improving
-; on it.  It costs 10 cycles for a set bit and 11 for a clear one, and about
-; 6.5 of that is the two branches.  The obvious loop -
+; on it.  It costs 7 cycles a bit, set or clear, and 4 of that is the taken
+; branch every bit ends in.  The obvious loop -
 ;
 ;       .top:   brclr   r1, #1, .skip
 ;               add     r0, r0, r5
@@ -44,57 +52,53 @@
 ;               br      ne, r1, #0, .top
 ;
 ; - has only one bit test but pays a separate loop-back branch, and comes to
-; 12.5 cycles a bit.  Rotating the loop so the two conditional branches ARE the
-; loop control is what buys the 2 cycles, and it is why unrolling has to give
-; something back before it gains anything.
+; 9 cycles a bit, 8 set and 10 clear.  Rotating the loop so the two conditional
+; branches ARE the loop control is what buys the 2 cycles, and it is why
+; unrolling has to give something back before it gains anything.
 ;
-; UNROLLING IS WORTH ABOUT A QUARTER.  Four bits to a group amortises the
-; counter shift and the loop branch over four bits instead of paying two
-; branches for each, and costs 16 bytes.  Handling those four as two pairs
-; rather than four singles - see below - is what takes it from a fifth to a
-; quarter, and costs nothing at all.
+; UNROLLING IS WORTH ABOUT A FIFTH.  Four bits to a group amortises the counter
+; shift and the loop branch over four bits instead of paying a taken branch
+; for each, and costs 11 bytes.  Handling those four as two pairs rather than
+; four singles - see below - is part of that, and costs nothing at all.
 ;
-; FULLY UNROLLING IS WORTH ABOUT A THIRD, and only above 7 bits.  It is the
-; fastest thing here for a wide multiplier and the slowest for a narrow one,
-; because its dispatch has to walk down to the top set bit.  158 bytes.
+; FULLY UNROLLING IS WORTH ABOUT A THIRD, on a wide multiplier.  It is the
+; fastest thing here for one, and behind both loops for a narrow one, because
+; its dispatch has to walk down to the top set bit.  158 bytes.
 ;
 ; AND THE BIGGEST SINGLE WIN IS NOT UNROLLING AT ALL.  All of these cost time
 ; per bit of the MULTIPLIER and nothing for its leading zeros, so which operand
 ; sits in r1 matters more than any of the above: 8 bytes of compare and swap
-; take the last column from 166 to 91 on the plain loop, and would take the
-; four-bit one from 126 to about 71 - its 8-bit column plus the swap.  It costs
+; take the last column from 112 to 60 on the plain loop, and would take the
+; four-bit one from 87 to about 50 - its 8-bit column plus the swap.  It costs
 ; 4 cycles when it does not help.
 ;
 ; AND IT PAYS FOR ITSELF TWICE, because it also removes the zero test.  Both
-; loops used to open with `br eq, r0, #0` - three bytes and three cycles on
-; every call, to save a hundred and sixty on the rare one where an operand is
-; zero.  With the swap in front that test is dead: zero is the smallest value
-; there is, so a zero operand is always the one that ends up as the multiplier,
-; and a zero multiplier drops out of the bottom of the loop on the first pass
-; without any help.  Removing it took three cycles off every column above.
+; loops used to open with `br eq, r0, #0` - three bytes and a cycle on every
+; call, to save a hundred on the rare one where an operand is zero.  With the
+; swap in front that test is dead: zero is the smallest value there is, so a
+; zero operand is always the one that ends up as the multiplier, and a zero
+; multiplier drops out of the bottom of the loop on the first pass without any
+; help.
 ;
 ; The only caller that loses is one that jumps straight to `mul_16` with a zero
-; in r0 and something wide in r1 - 170 cycles rather than 21.  Through
-; mul_16_min the same call is 30.
+; in r0 and something wide in r1 - 118 cycles rather than about 8.  Through
+; mul_16_min the same call is 18.
 ;
 ; WHICH TO USE.  mul_16_x4, with mul_16_min in front of it - 40 bytes together,
-; never worst in any column, and it ties the best unrolled chain outright in
-; the middle one.  mul_16 if space is the binding constraint.
+; never worst in any column, and the best of all of them in the middle one.
+; mul_16 if space is the binding constraint.
 ;
-; Neither fully unrolled version is easy to justify any more.  Between them
-; they cost 132 or 158 bytes to beat 45 by at most 16%, and only on multipliers
-; that use most of their sixteen bits; on eight-bit multipliers mul_16_x4 ties
-; the better of them exactly.  They are here because the dispatch question is
-; interesting, not because the answer is to use one.  mul_16_nib still has the
-; best steady state of any of them - 3.75 cycles a bit - and the worst
-; prologue, but it no longer wins outright: its dispatch is a computed `ret',
-; a register transfer costs three cycles, and two cycles a nibble is more than
-; its margin over the unrolled chain.  On uniformly random 16-bit multipliers
-; the chain is now ahead, 103 against 113; the table wins only when the
-; multiplier really uses all sixteen bits, 106 against 114.  On narrow ones
-; mul_16_x4 does the same work in 32 bytes.  It is the one to look at if
-; 274 bytes is affordable, and the one to widen to radix 256 if six kilobytes
-; is.
+; mul_16_fast is the only other one worth its bytes: 158 of them, to beat
+; mul_16_x4 by a fifth on multipliers that use most of their sixteen bits, and
+; to lose to it on eight-bit ones.  The other two are here because the
+; dispatch question is interesting, and on this core they are both beaten by
+; mul_16_fast in every column.  mul_16_fast_erik's computed goto costs more
+; than the scan it replaces, at every width - see below.  mul_16_nib still has
+; the best steady state of any of them, 2.5 to 2.75 cycles a bit, and the
+; worst prologue and exit, about forty cycles between them: its dispatch is a
+; computed `ret', four cycles a nibble, and it saves and restores three
+; registers.  Even a full-width multiplier, where all four nibbles do work,
+; does not pay that back - 80 cycles against the chain's 62 on 0xffff.
 ; ============================================================================
 
 
@@ -112,9 +116,10 @@
 ;
 ; THE LOOP IS ROTATED so that the two exits fall at the bottom, which is what
 ; lets a set bit and a clear bit take different paths without an unconditional
-; jump in either.  It does mean a CLEAR bit costs one cycle more than a set
-; one - 11 against 10 - because it reaches .clear through a taken branch while
-; a set bit reaches .set through one and then falls through.
+; jump in either.  Each takes exactly one branch: a set bit reaches .set
+; through `brset`, a clear one falls through it and reaches .clear through
+; `br` - and the add the clear bit skips pays for the fall-through, so both
+; cost 7 cycles.
 
 ; ============================================================================
 ; mul_16_min - a prologue: put the smaller operand in the multiplier  8 bytes
@@ -141,30 +146,30 @@
 ; programs do, where one side is a count or a small constant.
 
 mul_16_min:
-        br      ls, r1, r0, mul_16      ; 3   b is already the smaller
-        mov     r5, r0                  ; 2
-        mov     r0, r1                  ; 2
-        mov     r1, r5                  ; 2   ... and fall through
+        br      ls, r1, r0, mul_16      ; 1   b is already the smaller
+        mov     r5, r0                  ; 1
+        mov     r0, r1                  ; 1
+        mov     r1, r5                  ; 1   ... and fall through
 
 
 ; ============================================================================
 ; mul_16 - shift and add, one bit at a time                          21 bytes
 ; ============================================================================
 mul_16:
-        shl     r5, r0, #1              ; 2   r5 = a << 1
-        brset   r1, #1, .entry          ; 3   bit 0 set: r0 already holds a
+        shl     r5, r0, #1              ; 1   r5 = a << 1
+        brset   r1, #1, .entry          ; 1   bit 0 set: r0 already holds a
         mov     r0, #0                  ; 1   otherwise start the sum at zero
-        jmpr    .entry                  ; 2
+        jmpr    .entry                  ; 3
 .set:
-        add     r0, r0, r5              ; 2
+        add     r0, r0, r5              ; 1
 .clear:
-        shl     r5, r5, #1              ; 2
+        shl     r5, r5, #1              ; 1
 .entry:
-        lsr     r1, r1, #1              ; 2   LOGICAL: an arithmetic shift would
+        lsr     r1, r1, #1              ; 1   LOGICAL: an arithmetic shift would
 .end:                                   ;     never clear r1 and never end
-        brset   r1, #1, .set            ; 3
-        br      ne, r1, #0, .clear      ; 3
-        ret                             ; 1
+        brset   r1, #1, .set            ; 1
+        br      ne, r1, #0, .clear      ; 2
+        ret                             ; 4
 
 
 ; ============================================================================
@@ -194,47 +199,49 @@ mul_16:
 ; one-byte encoding at 0x07.  That costs the multiplier its register - it moves
 ; to r5, which a two-argument function owns anyway - and one extra `mov` in the
 ; setup, which the pinned `mov r1, r0` gives back.  Six adds in the loop go from
-; two bytes to one: 37 bytes to 32, and 124 cycles to 113.
+; two bytes to one: 37 bytes to 32.  On the byte-serial core that was cycles
+; too, 124 to 113; on this one an add is a cycle whatever its length, and it is
+; bytes alone.
 ;
-; TWO IS STILL THE OPTIMUM, but by less than it was.  Bit j of a group needs
-; 2^j adds when it is set, at one cycle each now rather than two, so with a
-; branch at 3 cycles falling through and 4 taken a group of k bits costs
+; TWO IS STILL THE OPTIMUM.  Bit j of a group needs 2^j adds when it is set, a
+; cycle each, and its `brclr` costs one cycle falling through and four taken,
+; so with the group's shift at one a group of k bits costs
 ;
-;       2 + sum(j < k) [ 4/2 + (3 + 2^j)/2 ]  =  2 + 3.5k + (2^k - 1)/2
+;       1 + sum(j < k) [ 4/2 + (1 + 2^j)/2 ]  =  1 + 2.5k + (2^k - 1)/2
 ;
-;       k = 1   6.000 cycles a bit        the shift-every-bit version
-;       k = 2   5.250                     <- this loop
-;       k = 3   5.333
-;       k = 4   5.875
+;       k = 1   4.000 cycles a bit        the shift-every-bit version
+;       k = 2   3.750                     <- this loop
+;       k = 3   4.000
+;       k = 4   4.625
 ;
-; Cheaper adds tilt it towards wider groups - k = 3 was half a cycle behind and
-; is now a thirteenth of one - but the adds still grow geometrically and the
-; shift saved is still just one instruction, so two holds.
+; - ignoring the cycle a three-byte `brclr` at an odd address adds when it
+; falls through.  The adds grow geometrically and the shift saved is just one
+; instruction, so two holds.
 
 mul_16_x4:
-        mov     r5, r1                  ; 2   the multiplier vacates r1 ...
+        mov     r5, r1                  ; 1   the multiplier vacates r1 ...
         mov     r1, r0                  ; 1   ... so the multiplicand can have it
         mov     r0, #0                  ; 1   acc = 0
 .top:
-        brclr   r5, #0x0001, .s0        ; 3
+        brclr   r5, #0x0001, .s0        ; 2
         add     r0, r0, r1              ; 1   += a<<i, in one byte
 .s0:
-        brclr   r5, #0x0002, .s1        ; 3
+        brclr   r5, #0x0002, .s1        ; 2
         add     r0, r0, r1              ; 1   twice, because r1 has not moved
         add     r0, r0, r1              ; 1   ... and 2*(a<<i) is a<<(i+1)
 .s1:
-        shl     r1, r1, #2              ; 2   one shift for the pair
-        brclr   r5, #0x0004, .s2        ; 3
+        shl     r1, r1, #2              ; 1   one shift for the pair
+        brclr   r5, #0x0004, .s2        ; 1
         add     r0, r0, r1              ; 1
 .s2:
-        brclr   r5, #0x0008, .s3        ; 3
+        brclr   r5, #0x0008, .s3        ; 1
         add     r0, r0, r1              ; 1
         add     r0, r0, r1              ; 1
 .s3:
-        shl     r1, r1, #2              ; 2
-        lsr     r5, r5, #4              ; 2
-        br      ne, r5, #0, .top        ; 3
-        ret                             ; 1
+        shl     r1, r1, #2              ; 1
+        lsr     r5, r5, #4              ; 1
+        br      ne, r5, #0, .top        ; 2
+        ret                             ; 4
 
 
 ; ============================================================================
@@ -277,28 +284,29 @@ mul_16_x4:
 ;   to hold exactly a, and r0 still does.  That is the trick immediately below
 ;   this paragraph - I had found it for the scan and not carried it across.
 ;
-; So: 23, not 28, in 132 bytes rather than 158 - and 29 rather than 23 today,
-; because the jump into the chain is a register transfer and those now cost
-; three cycles.
+; So: 23, not 28, in 132 bytes rather than 158 - on the byte-serial core.  On
+; the pipeline the same code costs more than its bytes: `push lr` and `pop lr`
+; are memory instructions at six and five cycles, `clz` a two-step routine at
+; four, and the jump into the chain goes through a register, at four.
 ;
-; A LINEAR SCAN OF brset IS STILL CHEAPER WHERE IT MATTERS, but by much less
-; than that comparison claimed.  Sixteen tests, falling through until one hits:
-; 3 cycles for each bit that is clear and 4 for the one that is set, so 3c + 4
-; for c leading zeros, against a flat 29.  They cross at c = 7, not c = 8:
+; SO THE LINEAR SCAN OF brset WINS OUTRIGHT.  Sixteen tests, falling through
+; until one hits: a cycle for each bit that is clear - two for the half of them
+; that start at an odd address, since every one is three bytes - and four for
+; the one that is set, so about 1.5c + 4 for c leading zeros.  The computed
+; goto's prologue and its exit through `pop lr` cost more than that at every
+; width, and they only meet at the bottom, where both are nearly all overhead:
 ;
 ;       b        clz    scan   computed
-;       0xffff     0     114        133
-;       0x0fff     4      98        105
-;       0x03ff     6      90         91
-;       0x00ff     8      82         77
-;       0x000f    12      66         49
-;       0            16      55         30
+;       0xffff     0      62         82
+;       0x0fff     4      54         68
+;       0x03ff     6      50         61
+;       0x00ff     8      46         54
+;       0x000f    12      38         40
+;       0            16      30         30
 ;
-; c is 0 half the time and 1 a quarter of the time on uniformly random input,
-; so the scan still wins there - 103 against 122.  On anything narrower the
-; computed goto wins, and it wins by a great deal at the bottom.  Which is the
-; better dispatch depends entirely on what the multipliers look like, and the
-; computed one is smaller either way.
+; On the byte-serial core the two crossed at c = 7, where an untaken `brset`
+; cost three cycles; here it costs one or two, and the computed goto is only
+; ever smaller.
 ;
 ; AND THE SCAN IS THE FIRST BLOCK'S TEST, not an extra one.  When it finds the
 ; top set bit at k, the accumulator should be exactly a - and r0 still holds a,
@@ -307,73 +315,73 @@ mul_16_x4:
 ; blocks rather than sixteen.  The computed version gets the same thing free
 ; from the arithmetic: base + clz*7 IS the block below the top set bit.
 mul_16_fast:
-        mov     r5, r0                  ; 2   r5 = a, and r0 becomes the sum
-        brset   r1, #0x8000, .b14    ; 3   top bit is 15: sum starts at a
-        brset   r1, #0x4000, .b13    ; 3   top bit is 14: sum starts at a
-        brset   r1, #0x2000, .b12    ; 3   top bit is 13: sum starts at a
-        brset   r1, #0x1000, .b11    ; 3   top bit is 12: sum starts at a
-        brset   r1, #0x0800, .b10    ; 3   top bit is 11: sum starts at a
-        brset   r1, #0x0400, .b9     ; 3   top bit is 10: sum starts at a
-        brset   r1, #0x0200, .b8     ; 3   top bit is 9: sum starts at a
-        brset   r1, #0x0100, .b7     ; 3   top bit is 8: sum starts at a
-        brset   r1, #0x0080, .b6     ; 3   top bit is 7: sum starts at a
-        brset   r1, #0x0040, .b5     ; 3   top bit is 6: sum starts at a
-        brset   r1, #0x0020, .b4     ; 3   top bit is 5: sum starts at a
-        brset   r1, #0x0010, .b3     ; 3   top bit is 4: sum starts at a
-        brset   r1, #0x0008, .b2     ; 3   top bit is 3: sum starts at a
-        brset   r1, #0x0004, .b1     ; 3   top bit is 2: sum starts at a
-        brset   r1, #0x0002, .b0     ; 3   top bit is 1: sum starts at a
-        brset   r1, #0x0001, .short     ; 3   b == 1, and r0 is already a
-        mov     r0, #0                  ; 2   b == 0
+        mov     r5, r0                  ; 1   r5 = a, and r0 becomes the sum
+        brset   r1, #0x8000, .b14    ; 2   top bit is 15: sum starts at a
+        brset   r1, #0x4000, .b13    ; 1   top bit is 14: sum starts at a
+        brset   r1, #0x2000, .b12    ; 2   top bit is 13: sum starts at a
+        brset   r1, #0x1000, .b11    ; 1   top bit is 12: sum starts at a
+        brset   r1, #0x0800, .b10    ; 2   top bit is 11: sum starts at a
+        brset   r1, #0x0400, .b9     ; 1   top bit is 10: sum starts at a
+        brset   r1, #0x0200, .b8     ; 2   top bit is 9: sum starts at a
+        brset   r1, #0x0100, .b7     ; 1   top bit is 8: sum starts at a
+        brset   r1, #0x0080, .b6     ; 2   top bit is 7: sum starts at a
+        brset   r1, #0x0040, .b5     ; 1   top bit is 6: sum starts at a
+        brset   r1, #0x0020, .b4     ; 2   top bit is 5: sum starts at a
+        brset   r1, #0x0010, .b3     ; 1   top bit is 4: sum starts at a
+        brset   r1, #0x0008, .b2     ; 2   top bit is 3: sum starts at a
+        brset   r1, #0x0004, .b1     ; 1   top bit is 2: sum starts at a
+        brset   r1, #0x0002, .b0     ; 2   top bit is 1: sum starts at a
+        brset   r1, #0x0001, .short     ; 1   b == 1, and r0 is already a
+        mov     r0, #0                  ; 1   b == 0
 .short:
-        ret                             ; 1
-.b14:     shl     r0, r0, #1              ; 2
-        brclr   r1, #0x4000, .b13   ; 3
-        add     r0, r0, r5              ; 2
-.b13:     shl     r0, r0, #1              ; 2
-        brclr   r1, #0x2000, .b12   ; 3
-        add     r0, r0, r5              ; 2
-.b12:     shl     r0, r0, #1              ; 2
-        brclr   r1, #0x1000, .b11   ; 3
-        add     r0, r0, r5              ; 2
-.b11:     shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0800, .b10   ; 3
-        add     r0, r0, r5              ; 2
-.b10:     shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0400, .b9    ; 3
-        add     r0, r0, r5              ; 2
-.b9:      shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0200, .b8    ; 3
-        add     r0, r0, r5              ; 2
-.b8:      shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0100, .b7    ; 3
-        add     r0, r0, r5              ; 2
-.b7:      shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0080, .b6    ; 3
-        add     r0, r0, r5              ; 2
-.b6:      shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0040, .b5    ; 3
-        add     r0, r0, r5              ; 2
-.b5:      shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0020, .b4    ; 3
-        add     r0, r0, r5              ; 2
-.b4:      shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0010, .b3    ; 3
-        add     r0, r0, r5              ; 2
-.b3:      shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0008, .b2    ; 3
-        add     r0, r0, r5              ; 2
-.b2:      shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0004, .b1    ; 3
-        add     r0, r0, r5              ; 2
-.b1:      shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0002, .b0    ; 3
-        add     r0, r0, r5              ; 2
-.b0:      shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0001, .done  ; 3
-        add     r0, r0, r5              ; 2
+        ret                             ; 4
+.b14:     shl     r0, r0, #1              ; 1
+        brclr   r1, #0x4000, .b13   ; 2
+        add     r0, r0, r5              ; 1
+.b13:     shl     r0, r0, #1              ; 1
+        brclr   r1, #0x2000, .b12   ; 1
+        add     r0, r0, r5              ; 1
+.b12:     shl     r0, r0, #1              ; 1
+        brclr   r1, #0x1000, .b11   ; 2
+        add     r0, r0, r5              ; 1
+.b11:     shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0800, .b10   ; 1
+        add     r0, r0, r5              ; 1
+.b10:     shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0400, .b9    ; 2
+        add     r0, r0, r5              ; 1
+.b9:      shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0200, .b8    ; 1
+        add     r0, r0, r5              ; 1
+.b8:      shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0100, .b7    ; 2
+        add     r0, r0, r5              ; 1
+.b7:      shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0080, .b6    ; 1
+        add     r0, r0, r5              ; 1
+.b6:      shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0040, .b5    ; 2
+        add     r0, r0, r5              ; 1
+.b5:      shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0020, .b4    ; 1
+        add     r0, r0, r5              ; 1
+.b4:      shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0010, .b3    ; 2
+        add     r0, r0, r5              ; 1
+.b3:      shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0008, .b2    ; 1
+        add     r0, r0, r5              ; 1
+.b2:      shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0004, .b1    ; 2
+        add     r0, r0, r5              ; 1
+.b1:      shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0002, .b0    ; 1
+        add     r0, r0, r5              ; 1
+.b0:      shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0001, .done  ; 2
+        add     r0, r0, r5              ; 1
 .done:
-        ret                             ; 1
+        ret                             ; 4
 
 ; THE PAIRING TRICK DOES NOT COME HERE, and the reason is the dispatch.  This
 ; chain doubles the ACCUMULATOR rather than the multiplicand, so the same
@@ -403,73 +411,73 @@ mul_16_fast_erik:
         mov r5, r0
         ret       ; jmp lr
 .branch_table:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x4000, .b13   ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x4000, .b13   ; 2
+        add     r0, r0, r5              ; 1
 .b13:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x2000, .b12   ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x2000, .b12   ; 1
+        add     r0, r0, r5              ; 1
 .b12:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x1000, .b11   ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x1000, .b11   ; 2
+        add     r0, r0, r5              ; 1
 .b11:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0800, .b10   ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0800, .b10   ; 1
+        add     r0, r0, r5              ; 1
 .b10:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0400, .b9    ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0400, .b9    ; 2
+        add     r0, r0, r5              ; 1
 .b9:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0200, .b8    ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0200, .b8    ; 1
+        add     r0, r0, r5              ; 1
 .b8:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0100, .b7    ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0100, .b7    ; 2
+        add     r0, r0, r5              ; 1
 .b7:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0080, .b6    ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0080, .b6    ; 1
+        add     r0, r0, r5              ; 1
 .b6:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0040, .b5    ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0040, .b5    ; 2
+        add     r0, r0, r5              ; 1
 .b5:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0020, .b4    ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0020, .b4    ; 1
+        add     r0, r0, r5              ; 1
 .b4:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0010, .b3    ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0010, .b3    ; 2
+        add     r0, r0, r5              ; 1
 .b3:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0008, .b2    ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0008, .b2    ; 1
+        add     r0, r0, r5              ; 1
 .b2:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0004, .b1    ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0004, .b1    ; 2
+        add     r0, r0, r5              ; 1
 .b1:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0002, .b0    ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0002, .b0    ; 1
+        add     r0, r0, r5              ; 1
 .b0:
-        shl     r0, r0, #1              ; 2
-        brclr   r1, #0x0001, .done  ; 3
-        add     r0, r0, r5              ; 2
+        shl     r0, r0, #1              ; 1
+        brclr   r1, #0x0001, .done  ; 2
+        add     r0, r0, r5              ; 1
 .done:                                  ; table + 7*15, reached when b == 1
-        pop     lr                      ; 6
-        ret                             ; 1
+        pop     lr                      ; 5
+        ret                             ; 4
 
 ; b == 0 IS THE ONE CASE THE ARITHMETIC DOES NOT COVER.  clz(0) is 16, so the
 ; entry lands on table + 7*16 - one slot past the end of a fifteen-block chain,
-; which is four bytes past this `ret`.  Rather than pay three bytes and three
-; cycles on every call to test for it, the slot is given something to land on:
+; which is four bytes past this `ret`.  Rather than pay three bytes and a cycle
+; on every call to test for it, the slot is given something to land on:
 ; four bytes of nothing, then the answer.
 ;
 ; The two assertions below are what make that safe.  They pin the chain to
@@ -480,8 +488,8 @@ mul_16_fast_erik:
         #res    4
 .zero:                                  ; table + 7*16, reached when b == 0
         mov     r0, #0                  ; 1
-        pop     lr                      ; 6
-        ret                             ; 1
+        pop     lr                      ; 5
+        ret                             ; 4
 
 #assert mul_16_fast_erik.done - mul_16_fast_erik.branch_table == 7 * 15
 #assert mul_16_fast_erik.zero - mul_16_fast_erik.branch_table == 7 * 16
@@ -523,10 +531,12 @@ mul_16_fast_erik:
 ; THE CHAINS ARE A SHORTEST-PATH SEARCH over (accumulator, how far r1 has been
 ; shifted), weighted by bytes and charging each block for the tail shift it
 ; leaves behind.  Every one of the sixteen then fits its block with its tail,
-; so nothing jumps anywhere.
+; so nothing jumps anywhere.  Bytes were cycles on the byte-serial core; on the
+; pipeline it is instructions that cost, and a search weighted by them might
+; come out differently.
 ;
 ; ----------------------------------------------------------------------------
-; HOW IT GOT HERE
+; HOW IT GOT HERE - measured on the byte-serial core, where a cycle was a byte
 ; ----------------------------------------------------------------------------
 ;                                       bytes  cycles  a nibble  work  the rest
 ;       lr as temp, with a loop           279     123    25.75    6.00    19.75
@@ -551,156 +561,144 @@ mul_16_fast_erik:
 ; ----------------------------------------------------------------------------
 ; AND THE RADIX
 ; ----------------------------------------------------------------------------
-;       radix   work a round   + the rest   cycles a bit   table
-;           2   a branch a bit                      6.00   none
-;          16       5.75          15.00             3.75   256 B
-;         256      10.19          19.19             2.40   ~6 KB
+; On the pipeline, measured: a nibble of 15 costs ten cycles, and a random one
+; about 10.75 - 2.7 cycles a bit, where the plain loop is 7 and the unrolled
+; chain about 4.  The block's adds and shifts are a cycle each whatever their
+; length, and the dispatch, a computed `ret', is four.
 ;
-; THE `+ THE REST' COLUMN IS TWO CYCLES WIDER THAN IT WAS, and that is the
-; dispatch: the table entry is reached by a computed `ret', a transfer whose
-; target is a register, and those cost three cycles rather than one.  The
-; radix-256 projection carries the same tax - one dispatch a round either way.
+; The first version of this came to 6.50 cycles a bit, on the byte-serial core,
+; and was pointless beside a shift-and-add loop at 6.00.
 ;
-; The first version of this came to 6.50 cycles a bit and was pointless beside
-; a shift-and-add loop at 6.00.  It is 3.75 now.
-;
-; IT WAS THE FASTEST ROUTINE HERE AND IS NOT ANY MORE, and the reason is one
-; line of the cost model rather than anything in the code.  Each nibble is
-; dispatched by a computed `ret' - the address is built in lr and returned to -
-; and a transfer whose target is a register now costs three cycles rather than
-; one.  That is two cycles a nibble, eight over a full multiplier, and it is
-; the whole of the difference: 113 cycles against mul_16_fast's 103 on a
-; uniformly random 16-bit multiplier, where it used to lead 98 to 101.  Its
-; table lookups now pay an address cycle each on top of that, which is the
-; three cycles between 110 and 113.
-;
-; IT STILL WINS WHEN THE MULTIPLIER IS FULL WIDTH - 106 against 114 on 0xffff -
-; because there its four nibbles all do work and the chain has sixteen blocks
-; to walk.  And on an 8-bit multiplier mul_16_x4 still beats it, 67 against 79,
-; and does it in 32 bytes rather than 274.  Thirty-three cycles of
-; prologue is still the whole story of its narrow-multiplier case.
+; IT WAS THE FASTEST ROUTINE HERE AND IS NOT ANY MORE.  Its steady state is
+; still the best, but it is bracketed by about forty cycles that no other
+; routine pays: a three-register `push` and `pop` at ten and nine, the setup,
+; the first dispatch, and the exit.  The chain's rounds are dearer and it has
+; no such bracket, so even a full-width multiplier, where all four nibbles do
+; work, goes to the chain - 80 cycles against 62 on 0xffff - and a uniformly
+; random one 83 against 70.  On an 8-bit multiplier mul_16_x4 beats it 46
+; against 61, in 32 bytes rather than 274.
 
 mul_16_nib:
-        push    lr, r2, r3              ; 8   three for the price of two
-        mov     r3, r1                  ; 2   the multiplier vacates r1 first
+        push    lr, r2, r3              ; 10  three for the price of two
+        mov     r3, r1                  ; 1   the multiplier vacates r1 first
         mov     r1, r0                  ; 1   ... and the multiplicand takes it
         mov     r0, #0                  ; 1   acc = 0
-        mov     r2, #.table             ; 3
-        mov     r5, #0xf0               ; 3   the mask, in a register again
-        shl     lr, r3, #4              ; 2   nibble 0 has to be scaled by hand
-        and     lr, lr, r5              ; 2
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        mov     r2, #.table             ; 2
+        mov     r5, #0xf0               ; 1   the mask, in a register again
+        shl     lr, r3, #4              ; 1   nibble 0 has to be scaled by hand
+        and     lr, lr, r5              ; 1
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
 .done:
-        pop     r3, r2, lr              ; 10
-        ret                             ; 1
+        pop     r3, r2, lr              ; 9
+        ret                             ; 4
 
 ; --- the table: sixteen blocks on a sixteen-byte stride ---------------------
 .table:
 .k0:
-        br      eq, r3, #0, .done       ; 3   the whole routine's exit test
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #4              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        br      eq, r3, #0, .done       ; 1   the whole routine's exit test
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #4              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k0)
 .k1:   
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #4              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #4              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k1)
 .k2:   
         add     r0, r0, r1
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #4              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #4              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k2)
 .k3:   
         add     r0, r0, r1
         add     r0, r0, r1
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #4              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #4              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k3)
 .k4:   
         shl     r1, r1, #2
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #2              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #2              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k4)
 .k5:   
         add     r0, r0, r1
         shl     r1, r1, #2
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #2              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #2              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k5)
 .k6:   
         shl     r1, r1, #1
         add     r0, r0, r1
         add     r0, r0, r1
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #3              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #3              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k6)
 .k7:   
         rsb     r0, r1, r0
         shl     r1, r1, #3
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #1              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #1              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k7)
 .k8:   
         shl     r1, r1, #3
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #1              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #1              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k8)
 .k9:   
         add     r0, r0, r1
         shl     r1, r1, #3
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #1              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #1              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k9)
 .k10:  
         add     r0, r0, r1
         add     r0, r0, r1
         shl     r1, r1, #3
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #1              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #1              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k10)
 .k11:  
         add     r0, r0, r1
@@ -708,22 +706,22 @@ mul_16_nib:
         add     r0, r0, r1
         shl     r1, r1, #3
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #1              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #1              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k11)
 .k12:  
         shl     r1, r1, #2
         add     r0, r0, r1
         add     r0, r0, r1
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #2              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #2              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k12)
 .k13:  
         add     r0, r0, r1
@@ -731,30 +729,30 @@ mul_16_nib:
         add     r0, r0, r1
         add     r0, r0, r1
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        shl     r1, r1, #2              ; 2   the rest of the nibble step
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        shl     r1, r1, #2              ; 1   the rest of the nibble step
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k13)
 .k14:  
         rsb     r0, r1, r0
         rsb     r0, r1, r0
         shl     r1, r1, #4
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k14)
 .k15:  
         rsb     r0, r1, r0
         shl     r1, r1, #4
         add     r0, r0, r1
-        and     lr, r3, r5              ; 2   next nibble, already times 16
-        lsr     r3, r3, #4              ; 2
-        add     lr, lr, r2              ; 2
-        ret                             ; 1
+        and     lr, r3, r5              ; 1   next nibble, already times 16
+        lsr     r3, r3, #4              ; 1
+        add     lr, lr, r2              ; 1
+        ret                             ; 4
         #res    16 - ($ - .k15)
 
 #assert mul_16_nib.k1  - mul_16_nib.table == 16
@@ -797,51 +795,53 @@ mul_16_nib:
 ; ----------------------------------------------------------------------------
 ; TWO THINGS THE FIRST DRAFT PAID FOR AND DID NOT NEED
 ; ----------------------------------------------------------------------------
-;       first draft   53 bytes   355 cycles
-;       this          52 bytes   316 cycles
+;       first draft   53 bytes   355 cycles      on the byte-serial core
+;       this          52 bytes   316 cycles      on the byte-serial core
+;       this          52 bytes   208 cycles      on the pipeline
 ;
 ; THE LOOP IS ROTATED, as in mul_16: the two conditional branches at the bottom
 ; ARE the loop control, so there is no `jmpr` back to the top and no separate
-; `br eq, r1, #0` to test for the end.  Three cycles a bit.
+; `br eq, r1, #0` to test for the end - a taken branch a bit fewer, four cycles.
 ;
 ; AND THE CARRY BETWEEN THE MULTIPLICAND'S HALVES IS BRANCHLESS.  The bit
 ; leaving the low half is `lsr r5, lr, #15` - 15 is in the shift3 table, so
 ; that is a two-byte three-register form - and it is simply `or`ed into the
-; high half after it shifts.  Four instructions, eight cycles, no branch, where
-; testing bit 15 and conditionally setting bit 0 was nine bytes and 8.5 cycles.
+; high half after it shifts.  Four instructions, four cycles, no branch, where
+; testing bit 15 and conditionally setting bit 0 would be three instructions
+; and a branch taken half the time - four and a half.
 
 mul_16_16_32:
-        br      ls, r1, r0, .smallest   ; 3   b is already the smaller
-        mov     r5, r0                  ; 2
+        br      ls, r1, r0, .smallest   ; 1   b is already the smaller
+        mov     r5, r0                  ; 1
         mov     r0, r1                  ; 1   pinned
-        mov     r1, r5                  ; 2   ... and fall through
+        mov     r1, r5                  ; 1   ... and fall through
 .smallest:
-        push    r2, r3, lr              ; 9
-        lsr     r2, r0, #15             ; 2   multiplicand high = a >> 15
-        shl     lr, r0, #1              ; 2   multiplicand low  = a << 1
-        mov     r3, #0                  ; 2   accumulator high
-        brset   r1, #1, .entry          ; 3   bit 0 set: r0 is already the sum
+        push    r2, r3, lr              ; 10
+        lsr     r2, r0, #15             ; 1   multiplicand high = a >> 15
+        shl     lr, r0, #1              ; 1   multiplicand low  = a << 1
+        mov     r3, #0                  ; 1   accumulator high
+        brset   r1, #1, .entry          ; 1   bit 0 set: r0 is already the sum
         mov     r0, #0                  ; 1   otherwise start it at zero
         jmpr    .entry                  ; 3
 .set:
-        add     r0, r0, lr              ; 2
-        add     r3, r3, r2              ; 2
-        br      hs, r0, lr, .clear      ; 3   sum >= addend means no carry
-        add     r3, r3, #1              ; 2
+        add     r0, r0, lr              ; 1
+        add     r3, r3, r2              ; 1
+        br      hs, r0, lr, .clear      ; 1   sum >= addend means no carry
+        add     r3, r3, #1              ; 1
 .clear:
-        lsr     r5, lr, #15             ; 2   the bit about to leave the low half
-        shl     r2, r2, #1              ; 2
-        or      r2, r2, r5              ; 2
-        shl     lr, lr, #1              ; 2
+        lsr     r5, lr, #15             ; 1   the bit about to leave the low half
+        shl     r2, r2, #1              ; 1
+        or      r2, r2, r5              ; 1
+        shl     lr, lr, #1              ; 1
 .entry:
-        lsr     r1, r1, #1              ; 2   LOGICAL, or the loop never ends
+        lsr     r1, r1, #1              ; 1   LOGICAL, or the loop never ends
 .end:
-        brset   r1, #1, .set            ; 3
-        br      ne, r1, #0, .clear      ; 3
+        brset   r1, #1, .set            ; 2
+        br      ne, r1, #0, .clear      ; 1
 .done:
-        mov     r1, r3                  ; 2
-        pop     lr, r3, r2              ; 8   push order reversed
-        ret                             ; 1
+        mov     r1, r3                  ; 1
+        pop     lr, r3, r2              ; 9   push order reversed
+        ret                             ; 4
 
 ; THE MULTIPLICAND IS PRE-SHIFTED BY ONE at entry, for the same reason mul_16
 ; pre-shifts its copy: bit 0 of the multiplier has already been accounted for,

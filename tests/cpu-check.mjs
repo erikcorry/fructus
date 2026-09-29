@@ -384,7 +384,7 @@ for (let p = 0; p < PROGRAMS; p++) {
     const jm = JUMP_SEM.exec(d.insn.semantics ?? '');
     const jump = !jm ? 0 : /R\[a\]|^pc = lr$/.test(jm[0]) && !(/^lr = pc; pc = R\[a\]$/.test(jm[0]) && d.ops.a === 7) ? 4 : 3;
     const exc = EXC.test(d.insn.mnemonic) ? EXC_CYCLES[d.insn.mnemonic]
-              : d.insn.extra_cycles > 0 ? 4 : 0;
+              : d.insn.extra_cycles > 0 ? 1 + d.insn.extra_cycles : 0;
     const mem = memBytes(d.insn.semantics ?? '');
     const memst = mem && /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(d.insn.semantics);
     // Blit mode makes every load but pop a cycle slower.
@@ -393,10 +393,12 @@ for (let p = 0; p < PROGRAMS; p++) {
     const sp = m.R[6], first = (memst ? sp - mem : sp) & 0xffff, last = (first + mem - 1) & 0xffff;
     const sfault = /^base = sp; /.test(d.insn.semantics ?? '') && ((first | last) & 0x8000) !== 0;
     if (sfault && !fault) fault = { at: trace.length, hash: fold(m.mem) };
+    const before = m.cycles();
     m.step();
-    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, memst, late, sfault, exc, R: Array.from(m.R) });
+    const cyc = m.cycles() - before;   // what the simulator charged it
+    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, memst, late, sfault, exc, cyc, R: Array.from(m.R) });
   }
-  programs.push({ bytes, reg, trace, hash: fold(m.mem), fault, old: m.cycles() });
+  programs.push({ bytes, reg, trace, hash: fold(m.mem), fault });
   writeFileSync(`build/cpu-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
   writeFileSync(`build/cpu-reg-${p}.hex`, reg.map(hex4).join('\n') + '\n');
 }
@@ -480,7 +482,7 @@ if (trace(outCells) !== trace(out)) {
   process.exit(1);
 }
 
-let bad = 0, instructions = 0, cycNew = 0, cycOld = 0, faults = 0;
+let bad = 0, instructions = 0, cycles = 0, faults = 0;
 const complain = (msg) => { if (bad++ < 8) console.log(`  MISMATCH ${msg}`); };
 
 // One run's output against the simulator.  In blit mode ld, ld8 and ldm cost
@@ -495,7 +497,7 @@ function check(out, blit, what) {
     if (f[0] === 'SQUASH') squashes[+f[1]].push(+f[2]);
     if (f[0] === 'END')  ends[+f[1]] = { halted: f[2] === '1', trapped: f[3] === '1', cyc: +f[4], hash: +f[5] };
   }
-  programs.forEach(({ trace: whole, hash: hashAll, fault, old }, p) => {
+  programs.forEach(({ trace: whole, hash: hashAll, fault }, p) => {
     const stop = blit && fault ? fault : null;
     const trace = stop ? whole.slice(0, stop.at) : whole;
     const hash = stop ? stop.hash : hashAll;
@@ -527,8 +529,12 @@ function check(out, blit, what) {
       if (ds[i].pc !== (whole[i]?.pc ?? ds[i].pc)) say(` dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
       if (ds[i].cyc - ds[i - 1].cyc !== want)
         say(` dispatch ${i}: ${ds[i].cyc - ds[i - 1].cyc} cycles after the one at 0x${prev.pc.toString(16)}, want ${want}`);
+      // And tools/sim.js's cost model, which every cycle count in the repo
+      // comes from, must charge what the processor takes.
+      if (!blit && prev.cyc !== want)
+        say(` instruction at 0x${prev.pc.toString(16)}: tools/sim.js charges ${prev.cyc} cycles, the processor takes ${want}`);
     }
-    if (!blit) { cycNew += ends[p]?.cyc ?? 0; cycOld += old; }
+    if (!blit) cycles += ends[p]?.cyc ?? 0;
   });
 }
 check(out, false, '');
@@ -687,9 +693,8 @@ if (bad === 0) {
   console.log(`ok    rtl/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over `
             + `${all.length + brs.length + jumps.length + loads.length + stores.length} forms, `
             + `${taken} branches taken, ${jumped} jumps, ${moved} memory instructions; `
-            + `registers, memory and dispatch cadence agree with tools/sim.js`);
-  console.log(`      ${cycNew} cycles to halt, against ${cycOld} on the byte-serial cost model `
-            + `(${(cycOld / cycNew).toFixed(2)}x fewer)`);
+            + `registers, memory, dispatch cadence and tools/sim.js's cycle counts agree, `
+            + `${cycles} cycles to halt`);
   console.log(`ok    rtl/cpu.sv, interrupted: ${PROGRAMS} programs under ${irqTakes} interrupts, `
             + `the last at each halt, end as tools/sim.js does without them`);
   const lateLoads = programs.reduce((n, { trace, fault }) => n + trace.slice(0, fault?.at).filter((t) => t.late).length, 0);

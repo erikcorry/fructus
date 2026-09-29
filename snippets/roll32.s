@@ -22,7 +22,7 @@
 ; WHAT IT COSTS
 ; ----------------------------------------------------------------------------
 ; The work is always four shifts and two ORs.  Every one of those is a two-byte
-; form, so the floor is 12 bytes and 12 cycles.  What varies is whether the
+; form, so the floor is 12 bytes and 6 cycles.  What varies is whether the
 ; shifts can avoid destroying their sources, which depends entirely on whether
 ; the distance appears in the shift3 table:
 ;
@@ -37,9 +37,9 @@
 ;                     register, and the inputs survive.
 ;   m = 2,3,4,6,      one distance in shift3.  12 bytes, two scratch
 ;       10,12,13,14   registers, inputs consumed.
-;   m = 5,7,9,11      neither distance in shift3.  14 bytes - one extra
-;                     `mov` to put a distance in a register so the
-;                     three-register shift form can be used.
+;   m = 5,7,9,11      neither distance in shift3.  14 bytes and 7 cycles -
+;                     one extra `mov` to put a distance in a register so
+;                     the three-register shift form can be used.
 ;
 ; Worth knowing for SHA-256, whose ten rotations reduce to m = 14, 3, 10, 10,
 ; 5, 7, 9, 14, 15, 3 - so three of them land in the expensive group.
@@ -53,7 +53,7 @@
 ;       L' = (L << 13) | (H >> 3)
 ;       H' = (H << 13) | (L >> 3)
 ;
-; 12 bytes, 12 cycles.
+; 12 bytes, 6 cycles.
 
 roll13:
         lsr     r4, r3, #3      ; r4 = H >> 3   three-register form: 3 is in

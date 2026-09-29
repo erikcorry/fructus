@@ -171,7 +171,7 @@ function verify(name, r, dest, src, n) {
 // Neither shows up as a wrong byte, so the path is measured instead.
 //
 // The two loops are far enough apart to tell by cost alone - the bulk loop runs
-// at 4.75 cycles/byte and the descending byte loop at 18 - so anything under 8
+// at 4.94 cycles/byte and the descending byte loop at 16 - so anything under 8
 // went ascending.  Only lengths of 32 and up are judged, where the byte-loop
 // head and the prologue no longer dominate.
 const ASCENDING = 8;
@@ -242,12 +242,12 @@ function dispatch(name, r, dest, src, n) {
   const a = 64, b = MAXN;
   const cost = (n) => call(entry, BUF + HIGH, BUF + LOW, n).cycles;
   const per = (cost(b) - cost(a)) / (b - a);
-  check('memcpy bulk cost', Math.abs(per - 5.2500) < 0.0001,
-        `${per.toFixed(4)} cycles/byte, the file says 5.2500`);
+  check('memcpy bulk cost', Math.abs(per - 4.9375) < 0.0001,
+        `${per.toFixed(4)} cycles/byte, the file says 4.9375`);
 
   // The byte head is the expensive part, and its worst case is 15 bytes.
   const head = (cost(15) - cost(0)) / 15;
-  check('memcpy head cost', Math.abs(head - 21) < 0.0001, `${head.toFixed(2)} cycles/byte`);
+  check('memcpy head cost', Math.abs(head - 17) < 0.0001, `${head.toFixed(2)} cycles/byte`);
   console.log(`ok    bulk loop ${per.toFixed(4)} cycles/byte, ` +
               `byte head ${head.toFixed(2)} for up to 15 bytes`);
 }
@@ -358,10 +358,10 @@ function dispatch(name, r, dest, src, n) {
   const bulk = (cost(64 + 32 * 32) - cost(64)) / (32 * 32);
   check('memset fill loop', Math.abs(bulk - 1.8750) < 0.0005,
         `${bulk.toFixed(4)} cycles/byte, the file says 1.8750`);
-  // The head pushes words, so it costs 3.5 cycles a byte; measured over a pure
+  // The head pushes words, a push and a branch per word; measured over a pure
   // even length so the odd-byte peel does not muddy it.
   const head = (cost(14) - cost(0)) / 14;
-  check('memset head', Math.abs(head - 4.8571) < 0.0005, `${head.toFixed(4)} cycles/byte`);
+  check('memset head', Math.abs(head - 4.6429) < 0.0005, `${head.toFixed(4)} cycles/byte`);
 
   // TWO STRUCTURAL CLAIMS, neither of which a byte comparison can see.
   //
@@ -374,8 +374,8 @@ function dispatch(name, r, dest, src, n) {
   check('memset seam', cost(32) < cost(31), `n=32 costs ${cost(32)}, n=31 costs ${cost(31)}`);
 
   // Sixteen more bytes on top of a whole number of blocks must go through the
-  // loop's midpoint, not the head.  Through the midpoint that is 20 cycles;
-  // through a word head it would be 62.  This is the assertion that actually
+  // loop's midpoint, not the head.  Through the midpoint that is 27 cycles;
+  // through a word head it would be 80.  This is the assertion that actually
   // pins the boundary at 16 rather than 32 - dropping to `and r2, r2, #-32`
   // still fills every byte correctly and shows up only here.
   for (const n of [0, 32, 64]) {

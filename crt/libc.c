@@ -42,7 +42,7 @@ memchr (const void *s, int c, size_t n)
    objects from libc/ to the archive before this one - so the C copies were
    unreachable
    and only misleading.  Measured, cycles per byte of string against the C at
-   -Os: strlen 4.25 against 13.00, strcmp 17 against 22, strncmp 20 against 23.
+   -Os: strlen 3.5 against 12, strcmp 14 against 19, strncmp 16 against 23.
    strcat and strncat below call strlen, and now get the fast one.  */
 
 char *

@@ -226,83 +226,65 @@ length_from_first_byte = true
 # =============================================================================
 # THE COST MODEL
 # =============================================================================
-# The bus is 6502-like: one cycle carries one byte, and it carries instruction
-# fetch and data alike.  So an instruction costs the bytes it occupies plus the
-# bytes it moves, and tools/sim.js counts exactly that.
+# The processor is a three-stage pipeline - dispatch, decode, ALU - over a
+# memory a word wide, and it DISPATCHES ONE INSTRUCTION A CYCLE when the bytes
+# allow it.  An instruction's cost is the cycles from its dispatch to the next
+# one's; rtl/cpu.sv says why each is what it is, tools/sim.js counts them, and
+# tests/cpu-check.mjs holds the two together instruction by instruction.
 #
-# WITH ONE EXCEPTION, and it is not a rounding error.  A relative branch that is
-# TAKEN costs one cycle more than its length, because the target is pc + off and
-# the adder cannot produce it until the displacement byte has arrived.  There is
-# nothing to fetch during that cycle.  The 6502 charges the same: a branch is
-# two bytes and two cycles when it falls through, three when it is taken.
+#     an ALU instruction, a branch not taken, nop    1
+#       - of three bytes, at an ODD address           2
+#     a conditional branch, taken                    1 + taken_branch_penalty = 4
+#     jmp and call to a target in their bytes        3
+#     jmp ra, call ra, ret - a target in a register  4
+#     mul, clz, popcount                             1 + extra_cycles = 4
+#     a load of N bytes: ld8, ld, pop, ldm           N + 3
+#     a store of N bytes: st8, st, push, stm         N + 4
+#     sei, cli                                       5
+#     brk, rti, and an interrupt                     6
 #
-# AND A ONE-BYTE INSTRUCTION THAT COMPUTES COSTS TWO CYCLES, which is the price
-# of the pipelining rather than of the encoding.  The hardware reads its
-# operands in the cycle BEFORE the ALU sees them - see the byte-serial core's cpu.sv - and every
-# multi-byte instruction has a fetch cycle to do that in.  A one-byte form has
-# no second byte, so it spends a cycle of its own.  It keeps its size, which is
-# what it was for: `add r0, r0, #1` is still one byte where the general form is
-# two, and a program of them is still half the size.
+# LENGTH IS NOT TIME ANY MORE.  The byte-serial core this replaced - rtl/ as of
+# commit 9a1d953 - took a cycle a byte, so a short form was fast as well as
+# small.  Here a one-byte `add` and a three-byte one both take a cycle, and
+# bytes are what they cost in memory, not in time.  The exception is the odd
+# three-byte one: the fetch holds the word after the pc's, and three bytes at an
+# odd address reach into the word after THAT, which arrives a cycle late.
 #
-# nop and halt are not in this: they read nothing and compute nothing.  The
-# alternative was to forward the result being written into the operands, which
-# is a mux in front of the ALU and measured a fifth of the clock - so the
-# machine charges the rare instruction rather than slowing every other one.
+# A TAKEN BRANCH IS FOUR because the pipeline runs on down the fall-through
+# path behind it: the ALU stage decides it, the three instructions behind it are
+# squashed, and the target's word is read.  Not taken, it cost what any
+# instruction does.  Taken means the assignment to pc RAN - a branch to the very
+# next instruction still pays, and tests/branch-cost.s says so.
 #
-# AND A TRANSFER WHOSE TARGET IS A REGISTER COSTS THREE CYCLES, whatever its
-# length.  The register has to be READ before it can be an address, and the
-# read takes a cycle of its own: one to read it, one to present it, and one for
-# the target's own opcode to arrive on the bus.  So `ret` is one byte and three
-# cycles, and `jmp ra` and `call ra` are two bytes and three cycles - the only
-# instructions in the machine that cost more than a cycle a byte for a reason
-# that is not a branch being taken.
+# A JUMP OR CALL STOPS DISPATCH behind it, since its fall-through is never
+# right, and fetches its target in its ALU cycle.  Through a register the
+# target goes through a flop first, a cycle later.  `call lr` goes to the NEW
+# lr - the next instruction - and reads no register, so it costs three.
 #
 # THAT IS WHY `jmp ra` IS NOT ONE BYTE.  It was, pinned to r5, and the byte it
 # saved bought nothing the pin did not take back: an indirect jump through the
 # one register the assembler may clobber is a jump you have to arrange for.
-# Two bytes and any register is the same three cycles.
+# Two bytes and any register is the same four cycles.
 #
-# AND A MEMORY ACCESS COSTS ONE CYCLE MORE THAN ITS BYTES AND THE BYTES IT
-# MOVES, for the add that produces the address.  This is the taken branch's
-# cycle over again and it is the same argument: the operands are read a cycle
-# BEFORE they are used, so `R[a] + off` cannot reach the address bus until the
-# cycle after the instruction's last byte arrived, and there is nothing to
-# fetch while the adder runs.  So `ld r1, [r2, #4]` is two bytes, two data
-# bytes and five cycles.
+# A MEMORY INSTRUCTION STOPS DISPATCH TOO, until its last address is out, so
+# that no fetch shares the bus with it, and it moves a byte a cycle.  A load's
+# first address comes straight from the ALU's adder; a store registers it first,
+# and pays one more.  So `ld r1, [r2, #4]` is five cycles and `push r0-r2`, six
+# bytes, is ten - a memory instruction is the slowest thing a program does
+# often, and keeping a value in a register is worth several ALU instructions.
 #
-# THE ALTERNATIVE WAS MEASURED AND IS WORSE.  Adding the address in the same
-# cycle its last byte arrives - out of the register file, through immgen and an
-# adder, into the memory's address pins - costs no cycles at all, and costs a
-# third of the clock, because that is the exact path the early operand read was
-# introduced to remove.  MEASURED on an iCE40 UP5K with a real SB_SPRAM256KA on
-# the bus, medians of eight placement seeds: 28.95 MHz with the address a cycle
-# later, as here, against 20.54 with it added in the fetch cycle - the same
-# 1141 cells in both, so what is bought is the path and not the hardware.  One cycle on
-# the accesses against a third off every instruction in the machine is not a
-# close call; the byte-serial core's cpu.sv carries the rest of the numbers.
-#
-# AND `pop` PAYS ONE CYCLE MORE STILL, because its last act is to write sp and
-# the register file has ONE write port, so that write cannot share the cycle
-# that writes the last popped register.  `push` has no such conflict: its sp
-# write lands in the cycle the next opcode is dispatched in, which is where
-# every other instruction's result lands too.
-#
-# AND AN INSTRUCTION MAY DECLARE EXTRA CYCLES, with `extra_cycles` on its entry,
-# when the hardware takes its result a cycle after its bytes are in.  clz and
-# popcount do: their logic is registered halfway through, which is what keeps
-# them from setting the clock every other instruction runs at.  tools/sim.js
-# adds the extra cycles to its count.
-#
-# AN ABSOLUTE JUMP PAYS NOTHING, for the same reason in reverse.  `jmp target`
-# and `call target` carry the new pc as immediate bytes, so they are latched as
-# they are fetched and no addition happens; `ret` and `call ra` read the pc from
-# the register file, which is available at once.  Again this is the 6502's
-# behaviour, where JMP absolute is three bytes and exactly three cycles.
+# AND AN INSTRUCTION MAY DECLARE EXTRA CYCLES, with `extra_cycles` on its entry:
+# cycles beyond the one it would otherwise cost.  clz, popcount and mul run a
+# two-step microcode routine - clz and popcount registered halfway so that they
+# do not set the clock every other instruction runs at, mul because the DSP
+# delivers its product a cycle late.
 #
 # The simulator does not need a list of which instructions are which - the
-# semantics already say.  `pc = pc + off` mentions pc on the right and is
-# therefore relative; `pc = target` and `pc = lr` do not and are absolute.
-taken_branch_penalty = 1
+# semantics already say.  `if (...) pc = pc + off` is a conditional branch;
+# any other assignment to pc is a jump; M8[] and M16[] are memory.
+#
+# The cycles beyond one that a TAKEN conditional branch costs.
+taken_branch_penalty = 3
 
 
 # =============================================================================
@@ -1221,9 +1203,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   .1 IS THE REGISTER COLUMN, and it keeps the jump-against-call sense of bit
 #   3 exactly: `jmp ra` above, `call ra` below, the same `0000_0aaa` byte 1 and
-#   the same three cycles - one to read the register, one to present it, one
-#   for the target's opcode.  It used to hold the leftovers, a short `jmpr`
-#   against an indirect `call`, which shared no byte-1 layout at all; giving
+#   the same four cycles - the register goes through a flop on its way to the
+#   fetch.  It used to hold the leftovers, a short `jmpr` against an indirect
+#   `call`, which shared no byte-1 layout at all; giving
 #   the register forms the column and the displacement its own at .3 costs
 #   nothing and makes every column mean one thing again.
 #   ------------------------------------------------------------------------
@@ -2223,9 +2205,9 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
 # THE SLOW PAIR HAS AN OPCODE OF ITS OWN.  clz and popcount are the two deep
 # operations: measured, taking both out of the single-cycle ALU was worth a
 # tenth of the processor's clock, and taking either alone was not, because they
-# are equally deep.  So both sit at 0x33 and take one cycle more than their
-# length, with their result registered between the two - see `extra_cycles` -
-# while sxt8 and bitrev, which are wiring, share 0x32 at one cycle per byte.
+# are equally deep.  So both sit at 0x33 and take four cycles, a two-step
+# routine with their result registered between the steps - see `extra_cycles` -
+# while sxt8 and bitrev, which are wiring, share 0x32 at one cycle.
 # The microcode's entry points are per opcode, which is why the split has to
 # fall on the opcode and not on byte 1.
 #
@@ -2262,9 +2244,9 @@ operands = [
 ]
 syntax   = "{d}, {a}"
 semantics = "R[d] = clz(R[a])"
-# One cycle more than its two bytes: its result is registered halfway.  See
-# `extra_cycles` in the cost model, and the slow pair above.
-extra_cycles = 1
+# Four cycles: its result is registered halfway.  See `extra_cycles` in the
+# cost model, and the slow pair above.
+extra_cycles = 3
 
   [[insn.form]]
   name     = "reg_reg"
@@ -2293,8 +2275,8 @@ operands = [
 ]
 syntax   = "{d}, {a}"
 semantics = "R[d] = popcount(R[a])"
-# One cycle more than its two bytes, like clz.
-extra_cycles = 1
+# Four cycles, like clz.
+extra_cycles = 3
 
   [[insn.form]]
   name     = "reg_reg"
@@ -2308,9 +2290,9 @@ extra_cycles = 1
 #
 # IT IS FAST, BECAUSE SLOW BOUGHT NOTHING.  It can sit on either opcode: at
 # index 2 of 0x32 it is two LUT levels in the single-cycle ALU, at index 3 of
-# 0x33 with `extra_cycles = 1` its partial products are registered like
-# popcount's counts.  Measured both ways on the processor alone behind one
-# SPRAM, medians of sixteen seeds:
+# 0x33 with `extra_cycles` its partial products are registered like
+# popcount's counts.  Measured both ways on the byte-serial processor alone
+# behind one SPRAM, medians of sixteen seeds:
 #
 #                           LUT4    cells    MHz     spread
 #     without clmul         1292    1562    29.22   28.0 .. 30.3
@@ -2320,7 +2302,7 @@ extra_cycles = 1
 # The same fifty-three cells either way - the slow form's flops sit in the
 # cells of the LUT level in front of them - and neither median moves by more
 # than the spread, so the extra cycle buys no clock.  Moving it back is the
-# encoding's first byte, 0011_0011, and `extra_cycles = 1` - byte 1 is
+# encoding's first byte, 0011_0011, and `extra_cycles = 3` - byte 1 is
 # 01aa_addd at both, and the byte-serial core's gen-unary.js builds either.
 [[insn]]
 mnemonic = "clmul"
@@ -2358,11 +2340,11 @@ semantics = "R[d] = clmul(R[a])"
 # reads a register.  See rtl/alu.sv for why the DSP is instantiated.
 # A single-cycle multiply would be the deepest path in the machine: flop to
 # DSP to flop measures about 16 ns under icetime, half of it routing to and
-# from the DSP's column.  So each form takes one cycle more than its length.
+# from the DSP's column.  So each form takes four cycles, a two-step routine.
 #
 # ALL FOUR OPCODES SHARE ONE TAIL.  Once the right-hand operand is in its flop
-# they are the same instruction, so every form ends in SLOW and then EXEC; the
-# three-byte form fetches its last byte on the way.  See the byte-serial core's ucode.sv.
+# they are the same instruction, and every form runs the same routine - see
+# tools/gen-ucode.js.
 #
 # nextpnr-ice40 0.7 DOES NOT TIME THROUGH SB_MAC16, so `just speed` cannot see
 # this path at all; icetime can.
@@ -2380,7 +2362,7 @@ operands = [
 ]
 syntax   = "{d}, {a}, {b}"
 semantics = "R[d] = R[a] * R[b]"
-extra_cycles = 1
+extra_cycles = 3
 
   [[insn.form]]
   name     = "three_reg"
@@ -2397,7 +2379,7 @@ operands = [
 ]
 syntax   = "{d}, {a}, #{imm}"
 semantics = "R[d] = R[a] * imm"
-extra_cycles = 1
+extra_cycles = 3
 
   [[insn.form]]
   name     = "reg_imm5"
@@ -2608,8 +2590,8 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 #   or a 1, in two bytes, with no shift and no mask-then-compare.
 #
 #   BRANCHLESS SELECTION.  A predicate as a VALUE rather than as control flow -
-#   which on a machine whose taken branches cost an extra cycle, and whose
-#   pipeline will be shorter than its memory, is often the cheaper shape.
+#   which on a machine whose taken branches cost four cycles and whose ALU
+#   instructions cost one, is often the cheaper shape.
 #
 #   BOOL-RETURNING FUNCTIONS WITH NO BRANCH AT ALL.  A C function returning
 #   `a == b` compiles to one `iseq` and a `ret`, where before it needed a
@@ -2974,10 +2956,11 @@ semantics = "base = r2; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 #
 # THE WIDE RELATIVE FORMS ARE GONE, and what they cost is why.  `jmpr target'
 # and `callr target' were three bytes reaching the whole address space
-# relatively; `jmp' and `call' are three bytes reaching it absolutely, and a
-# relative target costs a CYCLE MORE because the adder and the verdict land in
-# flops an edge later than the instruction's own bytes do - see the timings in
-# the byte-serial core's cpu.sv.  Three bytes and four cycles against three and three, for
+# relatively; `jmp' and `call' are three bytes reaching it absolutely.  On the
+# byte-serial core a relative target cost a CYCLE MORE, because the adder and
+# the verdict landed in flops an edge later than the instruction's own bytes
+# did: three bytes and four cycles against three and three.  On the pipeline
+# both would be three cycles, so what they cost now is two opcodes, for
 # position independence that a machine with a linker and no address-space
 # randomisation never asked for.
 #
@@ -2991,7 +2974,7 @@ semantics = "base = r2; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 # MNEMONICS.  `jmp` and `call` are absolute; `jmpr` is the two-byte relative
 # form and the only relative transfer left.  An assembler that wanted one
 # mnemonic could relax `jmpr` into `jmp` when the displacement does not fit -
-# same three bytes, one cycle cheaper - which is what gcc's jump pattern does
+# a byte longer and no slower - which is what gcc's jump pattern does
 # for itself.
 [[insn]]
 mnemonic = "jmpr"
@@ -3110,7 +3093,7 @@ semantics = "pc = lr"
 # a switch table, a tail call through a pointer, a dispatch - can choose which
 # register holds the address.  The second half of that is true and the first
 # half was the wrong shape: one opcode and a byte of register field is two
-# bytes, not eight opcodes, and it costs the SAME THREE CYCLES either way,
+# bytes, not eight opcodes, and it costs the SAME FOUR CYCLES either way,
 # because what this instruction pays for is reading a register, not fetching a
 # byte.  So the pin bought one byte of code and charged for it in register
 # allocation - every indirect jump had to get its address into the one

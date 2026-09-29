@@ -32,17 +32,18 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED
 ; ----------------------------------------------------------------------------
-;       digits3         41 bytes, 58 cycles for every n, no branches
+;       digits3         41 bytes, 39 cycles for every n, no branches
 ;
-; Six of those 58 belong to its three stores, which each cost two cycles beyond
-; their bytes and their data: one for the add that produces the address, and one
-; to fill the store-data flop rtl/cpu.sv drives the memory's data pins from.
+; Fifteen of those 39 are its three stores, five cycles each - a store stops
+; the pipeline while it goes out, see the cost model under [cpu] in the spec -
+; and four are the `ret`.  The other twenty are twenty instructions, a cycle
+; each, whatever their length.
 ;
 ; For comparison, a divmod10 by 51/512 with one correction - also exact below
 ; 1000, and needing the fixup because 51/512 undershoots - inlined twice with
-; the same three stores came to 75 bytes and 77..81 cycles.  That figure is not
-; remeasurable: the routine is not in this file.  It predates the store-data
-; flop, so it understates itself by three, one per store, as this one did.
+; the same three stores came to 75 bytes and 77..81 cycles on the byte-serial
+; core, where this one was 58.  That figure is not remeasurable: the routine is
+; not in this file.
 ;
 ; The encodings it leans on, none of which expands through r5:
 ;   0x0fff and 0x30     both in immask5, so the mask and the `+ '0'` (an `or`,

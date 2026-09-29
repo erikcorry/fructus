@@ -3,42 +3,46 @@
 ;                 checked against
 ; ============================================================================
 ;
-; The spec says a relative branch costs one cycle beyond its length WHEN TAKEN,
-; and an absolute one costs nothing beyond its length.  Every performance figure
-; in this repo rests on that, and nothing else in the suite would notice if the
-; simulator stopped applying it - the numbers would all shift together and every
-; assertion would be re-tightened around the new wrong value.
+; The spec says a conditional branch costs what any instruction does when it
+; falls through - one cycle, or two for three bytes at an odd address - and
+; `taken_branch_penalty` more when it is taken; a jump or call three cycles,
+; and four through a register.  Every performance figure in this repo rests on
+; that, and nothing else in the suite would notice if the simulator stopped
+; applying it - the numbers would all shift together and every assertion would
+; be re-tightened around the new wrong value.  tests/cpu-check.mjs holds the
+; simulator to the processor on random programs; this holds it to the spec.
 ;
 ; So each instruction below is stepped ONCE by tests/sim-check.mjs, with its
 ; cost read off directly.  Entered with r0 = 0, so `eq #0` is taken and `ne #0`
-; is not.
+; is not.  THE ADDRESSES MATTER, so nothing may be inserted above the last
+; label without redoing the column on the right.
 ;
-; THE PAIR THAT MATTERS IS THE SAME BRANCH TAKEN AND NOT TAKEN.  Same opcode,
-; same three bytes, same operands - and one cycle apart, which isolates the
-; taking as the thing being paid for rather than the length or the decode.
+; THE PAIR THAT MATTERS IS THE SAME BRANCH TAKEN AND NOT TAKEN, at even
+; addresses.  Same opcode, same three bytes, same operands - and the penalty
+; apart, which isolates the taking as the thing being paid for rather than the
+; length or the decode.  And the same branch not taken at an odd address pays
+; one more: its third byte is in a word the fetch does not have yet.
 ;
-; AND THE REGISTER FORMS COST THREE WHATEVER THEIR LENGTH - `jmp ra` in two
-; bytes and `ret` in one - because what they pay for is reading a register
-; before it can be an address, not fetching a byte.
-;
-; `callr` used to make the same point from the other side: three bytes either
-; way, always taken, one cycle apart from `call`.  It has been removed from the
-; ISA - a relative transfer that reaches the whole address space cost a cycle
-; for position independence nothing here wanted - so the jumps below show the
-; rule by their lengths instead: `jmpr` is two bytes and three cycles, `jmp`
-; three bytes and three.
+; THE REGISTER FORMS COST FOUR WHATEVER THEIR LENGTH - `jmp r0` in two bytes
+; and `ret` in one - because the target goes through a flop before the fetch.
+; `call lr` is the exception that proves it: it goes to the NEW lr, the next
+; instruction, reads no register, and costs three.
 ; ============================================================================
 
-b_taken:        br      eq, r0, #0, b_taken_x   ; 3 bytes, taken     -> 4
+b_taken:        br      eq, r0, #0, b_taken_x   ; 0x00, 3 bytes, taken     -> 4
 b_taken_x:
-b_fall:         br      ne, r0, #0, b_fall_x    ; 3 bytes, not taken -> 3
-b_fall_x:
-j_rel:          jmpr    j_rel_x                 ; 2 bytes, relative  -> 3
+b_odd:          br      ne, r0, #0, b_odd_x     ; 0x03, 3 bytes, odd, not taken  -> 2
+b_odd_x:
+b_even:         br      ne, r0, #0, b_even_x    ; 0x06, 3 bytes, even, not taken -> 1
+b_even_x:
+j_rel:          jmpr    j_rel_x                 ; 0x09, 2 bytes, relative  -> 3
 j_rel_x:
-j_abs:          jmp     j_abs_x                 ; 3 bytes, absolute  -> 3
+j_abs:          jmp     j_abs_x                 ; 0x0b, 3 bytes, absolute  -> 3
 j_abs_x:
-c_abs:          call    c_abs_x                 ; 3 bytes, absolute  -> 3
+c_abs:          call    c_abs_x                 ; 0x0e, 3 bytes, absolute  -> 3
 c_abs_x:
-j_reg:          jmp     r0                      ; 2 bytes, register  -> 3
+c_lr:           call    lr                      ; 0x11, 2 bytes, the new lr -> 3
+c_lr_x:
+j_reg:          jmp     r0                      ; 0x13, 2 bytes, register  -> 4
 j_reg_x:
-i_ret:          ret                             ; 1 byte,  register  -> 3
+i_ret:          ret                             ; 0x15, 1 byte,  register  -> 4

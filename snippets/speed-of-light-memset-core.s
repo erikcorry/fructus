@@ -2,7 +2,7 @@
 ; speed-of-light-memset-core.s - how fast can this machine fill memory?
 ; ============================================================================
 ;
-; `push` writes three registers in one two-byte instruction AND advances the
+; `push` writes three registers in one instruction AND advances the
 ; pointer for free, because that is what a stack pointer does.  Point sp at the
 ; end of the buffer, load the fill value into three registers, and the whole
 ; loop is pushes and a branch.  There is no pointer arithmetic in it anywhere.
@@ -17,38 +17,39 @@
 ; ----------------------------------------------------------------------------
 ; WHY THIS IS SO MUCH FASTER THAN memcpy
 ; ----------------------------------------------------------------------------
-; Two of the three costs disappear.
+; Two of the three costs disappear.  A push stops the pipeline while its six
+; bytes go out, a cycle each, and for four cycles more - see the cost model
+; under [cpu] in the spec.
 ;
-;       1.000   bus: one WRITE per byte, and no read       IRREDUCIBLE
-;       0.333   push fetch: 2 instruction bytes per 6 written
-;       0.167   push addresses: one cycle per push, over the 6 it writes
-;       0.167   push data: one cycle per push to fill the data flop
+;       1.000   one WRITE per byte, and no read            IRREDUCIBLE
+;       0.667   the push: four cycles beyond its bytes, over the 6 it writes
 ;       0.000   pointer maintenance: push does it
 ;       -----
 ;       1.667   the floor, plus the branch
 ;
-; memcpy pays 2.000 on the bus because every byte is read and written, and it
-; pays 1.000 in fetch because the destination goes through `st`, two instruction
-; bytes per two data bytes.  memset reads nothing, and its destination is the
-; side that gets sp - so it collects the 0.333 rate on the only side there is.
+; memcpy pays 2.000 for data because every byte is read and written, and it
+; pays 2.000 more for starting its stores, because the destination goes
+; through `st`, four cycles of overhead per two bytes.  memset reads nothing,
+; and its destination is the side that gets sp - so it collects push's rate on
+; the only side there is.
 ;
 ; The exact cost of P pushes and one branch is
 ;
-;       (2P + 4 + 6P + 2P) / 6P  =  1.6667 + 0.6667/P
+;       (10P + 4) / 6P  =  1.6667 + 0.6667/P
 ;
-; where the branch is three bytes and a fourth cycle for being taken, and the
-; 2P is the two cycles each push pays beyond its bytes and its data: one for
-; the address, one to fill the store-data flop.  So the
-; branch is the entire gap above the floor, and P is capped only by how much
-; code you are willing to spend.  P = 43 fills 258 bytes per iteration in 89
-; bytes of code.
+; where the branch is four cycles, taken.  So the branch is the entire gap
+; above the floor, and P is capped only by how much code you are willing to
+; spend.  P = 43 fills 258 bytes per iteration in 89 bytes of code.  (The
+; byte-serial core charged a push the same ten cycles by a different route -
+; two for its bytes, six for its data, one for the address and one for the
+; data flop - so the figures below did not move.)
 ;
 ; ----------------------------------------------------------------------------
 ; MEASURED
 ; ----------------------------------------------------------------------------
 ;   258 bytes/iteration   89 bytes   1.6822 cycles/byte
 ;
-; Against the memcpy core in the neighbouring file at 4.9333, and against a
+; Against the memcpy core in the neighbouring file at 4.6667, and against a
 ; 6502, which needs about 4 cycles a byte with unrolled self-modifying stores.
 ; Filling is where this machine is furthest ahead of a 6502, because `push` is
 ; doing three things at once that a 6502 does in three instructions.
