@@ -21,10 +21,16 @@
 // and with the length it names the seven classes: ONE_BYTE_ALU is kind 0 and
 // length 1, THREE_BYTE_CONDITIONAL_BRANCH kind 2 and length 3, and so on.
 //
-// WHICH INSTRUCTIONS ARE ALU IS A LIST, NOT A RULE: the instructions whose
-// selects already describe them completely, less the ones that need more than
-// one ALU cycle - clz and popcount, which the spec gives an extra cycle, and
-// mul - which run a microcode routine instead.
+// THE KIND IS READ OFF THE SEMANTICS, so a new instruction lands in the right
+// one without being named here.  ALU is one register written from registers
+// and constants - one `R[x] =` statement, reading no memory - or nothing at
+// all, nop; less what the spec gives an extra cycle, clz, popcount and mul,
+// which run a microcode routine instead.  JUMP is a pc written outright,
+// perhaps with lr taking the return address first, and nothing else.  A
+// conditional branch is whatever predecode found a condition for.  A new
+// instruction that fits none of them is microcoded, and without a routine it
+// traps - which tests/cpu-check.mjs, running every form against the
+// simulator, reports.
 // =============================================================================
 
 import { loadSpec } from './isa.js';
@@ -33,17 +39,22 @@ import { entryOf, entryNamed, ENTRY_BITS } from './ucode.js';
 
 const spec = loadSpec();
 
-const ALU = new Set(['mov', 'movhi', 'sxt8', 'bitrev', 'clmul', 'add', 'rsb', 'xor',
-                     'and', 'or', 'shl', 'lsr', 'asr', 'iseq', 'isset', 'nop']);
+const isAlu = (i) => {
+  const sem = i.semantics ?? '';
+  return !(i.extra_cycles > 0) && (sem === '' || (/^R\[[a-z]\] = /.test(sem) && !/M(8|16)\[|;/.test(sem)));
+};
+const isJump = (i) => {
+  const st = (i.semantics ?? '').split(/;\s*/).filter(Boolean);
+  return st.some((x) => /^pc = /.test(x)) && st.every((x) => /^pc = /.test(x) || x === 'lr = pc');
+};
 const HALT = parseInt(spec.insn.find((i) => i.mnemonic === 'halt')
                           .form[0].encoding.replace(/[\s_]/g, ''), 2);
 
 const KIND = { alu: 0, ucode: 1, cbr: 2, jump: 3 };
-const JUMP = new Set(['jmp', 'jmpr', 'call', 'ret']);
 const kindOf = (r) => {
-  if (r.insns.every((i) => ALU.has(i.mnemonic) && !(i.extra_cycles > 0))) return KIND.alu;
+  if (r.insns.every(isAlu)) return KIND.alu;
   if (r.v.cond !== X) return KIND.cbr;
-  if (r.insns.every((i) => JUMP.has(i.mnemonic))) return KIND.jump;
+  if (r.insns.every(isJump)) return KIND.jump;
   return KIND.ucode;
 };
 

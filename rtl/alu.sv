@@ -21,6 +21,9 @@
 // from the immediate flop, ahead of the register mux the shifts must wait for.
 // =============================================================================
 
+// The unary select, from isa/fructus.toml.
+`include "rtl/isa.svh"
+
 module alu (
     input  logic [15:0] lhs,
     input  logic [15:0] rhs,
@@ -52,7 +55,8 @@ module alu (
             for (int j = 0; j < 8; j++)
                 cm[i + j] = cm[i + j] ^ (a[i] & a[8 + j]);
     end
-    wire [15:0] unf = ~usel[0] ? {1'b0, cm} : usel[1] ? sxt : rev;
+    // Which usel chooses which is the spec's: tools/gen-isa.js.
+    wire [15:0] unf = `FRUCTUS_UNARY_FAST(usel, rev, {1'b0, cm}, sxt);
 
     always_comb case (op)
         4'd0, 4'd1: y = sum;

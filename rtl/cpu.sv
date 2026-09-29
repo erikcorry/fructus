@@ -339,6 +339,9 @@
 // operand flop or the pc, in six or seven cells.
 // =============================================================================
 
+// The vector, sp and lr, and the unary select, from isa/fructus.toml.
+`include "rtl/isa.svh"
+
 module cpu (
     input  logic        clk,
     input  logic        rst,
@@ -392,7 +395,8 @@ module cpu (
 
     wire [7:0] lo = mem_rdata[7:0], hi = mem_rdata[15:8];
     // AN INTERRUPT IS A brk DISPATCHED IN PLACE OF THE INSTRUCTION IT PREEMPTS.
-    // brk is opcode 0, so the substitution is an AND, and everything after it -
+    // brk is opcode 0 - tools/gen-isa.js checks - so the substitution is an
+    // AND, and everything after it -
     // the classifier's row, decode, the routine - is brk's.  The only
     // difference is that the pc does not move on, so the routine saves the
     // preempted instruction's address and rti restarts it.
@@ -570,7 +574,7 @@ module cpu (
     cond cu (.insn(ins), .src(d_cond), .code(ccode), .neg(cneg), .mask(cmask));
     wire [7:0]  last    = (d_len == 2'd2) ? b1 : b2;
     wire        jreg    = (d_pcsrc == 2'd3);
-    wire        calllr  = d_jump & d_wen & jreg & (an == 3'd7);
+    wire        calllr  = d_jump & d_wen & jreg & (an == `FRUCTUS_REG_LR);
     wire [15:0] tgt     = (d_pcsrc == 2'd2) ? ins[23:8]
                         : calllr            ? d_next
                         :                     d_next + {{8{last[7]}}, last};
@@ -773,7 +777,7 @@ module cpu (
     // read changes nothing.
     wire [15:0] sfirst = e_mpush ? aq - {13'd0, e_mN} : aq;
     wire [15:0] slast  = e_mpush ? aq - 16'd1 : aq + {13'd0, e_mN} - 16'd1;
-    wire        sfault = e_useq & ~taken_q & blit & e_mblk & (e_ptr == 3'd6)
+    wire        sfault = e_useq & ~taken_q & blit & e_mblk & (e_ptr == `FRUCTUS_REG_SP)
                        & (sfirst[15] | slast[15]);
     logic       sfq;                       // stays set: the machine has stopped
     always_ff @(posedge clk) sfq <= ~rst & (sfq | sfault);
@@ -841,12 +845,12 @@ module cpu (
     // A stack fault writes nothing: sfq is only ever set under a push or pop,
     // whose routines write no sp or lr, so the data and pointer are all.
     wire [7:0] mwe  = (wdat & ~sfq ? 8'd1 << wreg : 8'd0) | (uP & ~sfq ? 8'd1 << mpr : 8'd0)
-                    | (uWX == 2'd1 ? 8'b0100_0000 : 8'd0)       // sp
-                    | (uWX == 2'd2 ? 8'b1000_0000 : 8'd0);      // lr
+                    | (uWX == 2'd1 ? 8'd1 << `FRUCTUS_REG_SP : 8'd0)
+                    | (uWX == 2'd2 ? 8'd1 << `FRUCTUS_REG_LR : 8'd0);
 `else
     wire [7:0] mwe  = (wdat ? 8'd1 << wreg : 8'd0) | (uP ? 8'd1 << mpr : 8'd0)
-                    | (uWX == 2'd1 ? 8'b0100_0000 : 8'd0)       // sp
-                    | (uWX == 2'd2 ? 8'b1000_0000 : 8'd0);      // lr
+                    | (uWX == 2'd1 ? 8'd1 << `FRUCTUS_REG_SP : 8'd0)
+                    | (uWX == 2'd2 ? 8'd1 << `FRUCTUS_REG_LR : 8'd0);
 `endif
 
     assign mhold = mstart | (mact & ~mdone);
@@ -858,7 +862,7 @@ module cpu (
     // - a word for the later bytes and one for byte 0 - were 186 of its 572
     // LUTs; one port of its own, a byte wide, still 114 more than borrowing.
     wire [2:0] kreg  = mstart ? e_l0 : (uKS == 2'd0) ? ml0 : (uKS == 2'd1) ? ml1
-                     : (uKS == 2'd2) ? ml2 : {2'b11, uKH};      // 3: sp or lr
+                     : (uKS == 2'd2) ? ml2 : {`FRUCTUS_REG_SPLR, uKH};    // 3: sp or lr
     assign kreg_b = kreg;
     wire       khalf = ~mstart & uKH;
     wire [15:0] kword = R[an_rd];
@@ -895,7 +899,7 @@ module cpu (
     // register file nor its write port has anything new in front of it.
     // rti's return address is aq too.  The vector is isa/fructus.toml's
     // [cpu.vectors] brk.
-    localparam [15:0] VECTOR = 16'hfff8;
+    localparam [15:0] VECTOR = `FRUCTUS_VECTOR_BRK;
     logic [15:0] shadow_sp, shadow_lr, shadow_isp;
     logic        ie;
     assign ie_q  = ie;
@@ -906,7 +910,7 @@ module cpu (
     // yosys pushed ldq back into the popcount tree, and the flops it made
     // there took a reset from dispatch.
     wire [15:0] slowv, prod;
-    slow sl (.clk(clk), .a(aq), .pop(e_usel[1]), .y(slowv));
+    slow sl (.clk(clk), .a(aq), .pop(`FRUCTUS_UNARY_POP(e_usel)), .y(slowv));
     mul  mulu (.clk(clk), .a(aq), .b(bq), .p(prod));
     wire [15:0] lqsrc = (uLQ == 3'd1) ? pc : (uLQ == 3'd5) ? prod : (uLQ == 3'd6) ? slowv
                       : (uLQ == 3'd2) ? shadow_sp

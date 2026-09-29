@@ -239,6 +239,14 @@ and on the random programs of `tests/cpu-check.mjs` it runs in fewer cycles than
 the byte-serial cost model `tools/sim.js` keeps. The header of `rtl/cpu.sv` has
 the reasons for each choice and what the alternatives measured.
 
+`rtl/cpu.sv` and `rtl/alu.sv` are written by hand, but what they know about the
+instruction set comes from the spec: the per-opcode control is the generated
+`rtl/classify.sv`, and the rest - the exception vector, which registers sp and
+lr are, which bit of the immediate picks each unary operation - is macros in
+the generated `rtl/isa.svh`. Where the circuit relies on something a macro
+cannot carry, such as `brk` being opcode 0, `tools/gen-isa.js` checks it and
+`npm run rtl` fails with the place to change.
+
 **It replaced a byte-serial core**, which fetched a byte a cycle through a
 microcoded datapath: smaller — 1371 LUT4s against 1674 — but slower. It is in
 the history, as `rtl/` at commit `9a1d953`, for a part too small for this one.

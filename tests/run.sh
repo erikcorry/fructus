@@ -113,16 +113,17 @@ if node tests/microtan-check.mjs; then :; else fail=1; fi
 # Every generated file under rtl/ is regenerated here before it is checked: a
 # committed copy that has drifted from the spec fails rather than being tested
 # in place.  The vectors come from the TOML too, by a path that shares no code
-# with the generators.  rtl/cpu.sv and rtl/alu.sv are written by hand.
+# with the generators.  rtl/cpu.sv and rtl/alu.sv are written by hand, and
+# take the few facts about the instruction set they need from rtl/isa.svh.
 mkdir -p rtl
-for f in immgen lhs dest cond compare classify ucode; do
-    node "tools/gen-$f.js" > "build/_$f.sv"
-    if cmp -s "build/_$f.sv" "rtl/$f.sv"; then
-        printf 'ok    rtl/%s.sv is up to date with isa/fructus.toml\n' "$f"
+for f in immgen.sv lhs.sv dest.sv cond.sv compare.sv classify.sv ucode.sv isa.svh; do
+    node "tools/gen-${f%.*}.js" > "build/_$f"
+    if cmp -s "build/_$f" "rtl/$f"; then
+        printf 'ok    rtl/%s is up to date with isa/fructus.toml\n' "$f"
     else
-        printf 'FAIL  rtl/%s.sv is stale - run `npm run rtl`\n' "$f"; fail=1
+        printf 'FAIL  rtl/%s is stale - run `npm run rtl`\n' "$f"; fail=1
     fi
-    rm -f "build/_$f.sv"
+    rm -f "build/_$f"
 done
 if node tests/rtl-check.mjs; then :; else fail=1; fi
 if node tests/cpu-check.mjs; then :; else fail=1; fi
