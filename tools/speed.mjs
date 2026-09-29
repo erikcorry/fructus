@@ -3,19 +3,24 @@
 // speed.mjs - how fast rtl/ runs on an iCE40 UP5K
 // =============================================================================
 //
-//   node tools/speed.mjs [seeds] [--pipe [--floorplan]]
-//                                   (or: just speed, just speed-pipe)
+//   node tools/speed.mjs [seeds] [--floorplan | --system]
+//                                   (or: just speed, just speed-system)
 //
-// Synthesises rtl/ with tools/fpga-top.sv, places it once per seed, and reports
-// the median maximum frequency.  --pipe measures the pipelined experiment in
-// rtl/pipe/ instead, behind tools/pipe-top.sv; --floorplan places it with
-// tools/pipe-floorplan.py, whose region PIPE_FP in the environment overrides.
+// Synthesises rtl/ with tools/fpga-top.sv - the processor behind one real
+// SPRAM, read a word at a time - places it once per seed, and reports the
+// median maximum frequency.  --floorplan places it with tools/fpga-top.py,
+// whose region CPU_FP in the environment overrides.
 //
-// WHY EIGHT SEEDS AND A MEDIAN.  nextpnr's placer is randomised, and a single
+// --system measures tools/fpga-system.sv instead: the processor built with
+// FRUCTUS_BLIT, its 64 KB, the display and its frame buffers, floorplanned by
+// tools/fpga-system.py.  Its floor is the pixel clock, 25.175 MHz, which is
+// also the processor's clock in that system.
+//
+// WHY SIXTEEN SEEDS AND A MEDIAN.  nextpnr's placer is randomised, and a single
 // placement of this design wanders by two or three MHz - enough to reverse the
-// verdict on a change worth one.  Every figure quoted in rtl/cpu.sv's header is
-// a median of eight, and comparisons are only meaningful against another median
-// of eight taken the same way.
+// verdict on a change worth one.  The newer figures in rtl/cpu.sv's header are
+// medians of sixteen, the older ones of eight, and a comparison is only
+// meaningful against a median taken the same way over the same number.
 //
 // WHAT TO READ.  The median is the number; the spread says how much to trust a
 // difference; the critical path's endpoints say where the time goes, which is
@@ -30,14 +35,12 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 const args = process.argv.slice(2);
-const PIPE = args.includes('--pipe');
-const PLAN = PIPE && args.includes('--floorplan') ? 'tools/pipe-floorplan.py' : null;
-const SEEDS = Number(args.find((a) => !a.startsWith('--')) ?? 8);
-const OUT = PIPE ? 'build/speed-pipe' : 'build/speed';
-const MODULES = PIPE
-  ? ['pipe/cpu', 'pipe/classify', 'pipe/alu', 'pipe/ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare']
-  : ['cpu', 'ucode', 'insn', 'predecode', 'lhs', 'immgen', 'rhs',
-     'unary', 'alu', 'dest', 'cond', 'compare'];
+const SYSTEM = args.includes('--system');
+const PLAN = SYSTEM ? 'tools/fpga-system.py' : args.includes('--floorplan') ? 'tools/fpga-top.py' : null;
+const SEEDS = Number(args.find((a) => !a.startsWith('--')) ?? 16);
+const OUT = SYSTEM ? 'build/speed-system' : 'build/speed';
+const MODULES = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare',
+  ...(SYSTEM ? ['video/video', 'video/timing', 'video/background', 'video/foreground', 'video/sprites'] : [])];
 
 const have = async (cmd) => {
   try { await run('sh', ['-c', `command -v ${cmd}`]); return true; } catch { return false; }
@@ -49,15 +52,17 @@ for (const tool of ['yosys', 'nextpnr-ice40'])
   }
 
 mkdirSync(OUT, { recursive: true });
-const files = [...MODULES.map((m) => `rtl/${m}.sv`), PIPE ? 'tools/pipe-top.sv' : 'tools/fpga-top.sv'];
+const files = [...MODULES.map((m) => `rtl/${m}.sv`), SYSTEM ? 'tools/fpga-system.sv' : 'tools/fpga-top.sv'];
 
 // --- synthesise once; every seed places the same netlist -----------------------
 process.stdout.write('synthesising ... ');
 await run('yosys', ['-q', '-p',
-  `read_verilog -sv ${files.join(' ')}; synth_ice40 -top top -json ${OUT}/top.json; `
+  `read_verilog -sv ${SYSTEM ? '-DFRUCTUS_BLIT ' : ''}${files.join(' ')}; synth_ice40 -top top -json ${OUT}/top.json; `
   + `tee -o ${OUT}/top.stat stat`]);
 const stat = readFileSync(`${OUT}/top.stat`, 'utf8');
-const count = (cell) => Number(new RegExp(`${cell}\\s+(\\d+)`).exec(stat)?.[1] ?? 0);
+// A design with a kept hierarchy has a section per module and then the
+// whole design's, last - which is the one wanted.
+const count = (cell) => Number([...stat.matchAll(new RegExp(`${cell}\\s+(\\d+)`, 'g'))].pop()?.[1] ?? 0);
 console.log(`${count('SB_LUT4')} LUT4, ${count('SB_RAM40_4K')} block RAMs`);
 
 // --- place once per seed, as many at a time as there are cores -----------------

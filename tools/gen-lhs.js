@@ -6,7 +6,7 @@
 //   node tools/gen-lhs.js > rtl/lhs.sv
 //
 // Chooses the register file port A address: a register the microcode names, or
-// one of byte 1's two register fields, read from rtl/insn.sv where they stay put
+// one of byte 1's two register fields, read from the byte-serial core's insn.sv where they stay put
 // for the whole instruction.
 //
 // WHICH OPERAND IS THE LEFT-HAND SIDE is worked out here from each instruction's
@@ -119,7 +119,7 @@ process.stdout.write(`// =======================================================
 //
 // EVERY REGISTER OPERAND IN THE ISA IS IN ONE OF THREE PLACES: byte1[2:0],
 // byte1[5:3], or {byte1[7:6], opcode[0]}.  The third is port B's, and
-// rtl/rhs.sv takes it; the other two are this block's.  The only exceptions are
+// the byte-serial core's rhs.sv takes it; the other two are this block's.  The only exceptions are
 // the one-byte forms, whose operands are all pinned, and \`mov rd, #imm16\`, whose
 // register is in the opcode and is never read.
 //
@@ -150,7 +150,7 @@ ${microText}
 // rhs.sv's lr and r5 codes.  Port A could carry them just as well - nothing
 // below cares - which would put every pc-from-register transfer on one port.
 //
-// NOTHING IS HELD.  rtl/insn.sv puts byte 1 at insn[15:8] from the cycle it
+// NOTHING IS HELD.  The byte-serial core's insn.sv puts byte 1 at insn[15:8] from the cycle it
 // arrives until the next dispatch, so the fields do not move when byte 2 is
 // fetched, and the imm10 forms read ra in the same cycle as their immediate.
 //
@@ -170,7 +170,7 @@ ${microText}
 //
 // An address straight out of a flop is faster still, and with insn.sv it needs
 // no new mechanism: register this block's output from insn.sv's \`view\`, which
-// shows byte 1 in the cycle it is on the bus.  rtl/insn.sv's header measures
+// shows byte 1 in the cycle it is on the bus.  The byte-serial core's insn.sv's header measures
 // that placement against the others.
 //
 // Two traps in measuring this, both of which produced plausible numbers first.
@@ -182,7 +182,7 @@ ${microText}
 // =============================================================================
 
 module lhs (
-    input  logic [23:0] insn,    // the instruction, byte 0 low: rtl/insn.sv
+    input  logic [23:0] insn,    // the instruction, byte 0 low, as rtl/cpu.sv's decode has it
     input  logic [3:0]  src,     // microcode: where the left-hand register comes from
     output logic [2:0]  regnum   // -> register file port A address
 );

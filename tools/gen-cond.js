@@ -134,7 +134,7 @@ ${rows}
 // =============================================================================
 
 module cond (
-    input  logic [23:0] insn,    // the instruction, byte 0 low: rtl/insn.sv
+    input  logic [23:0] insn,    // the instruction, byte 0 low, as rtl/cpu.sv's decode has it
     input  logic [1:0]  src,     // microcode: where the condition comes from
     output logic [2:0]  code,    // -> compare's cond: a cond3 index.  Not
                                  // \`cond\`: a port named after its module is

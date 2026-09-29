@@ -164,17 +164,19 @@ map:
 #
 # nextpnr's placer is randomised, and a single placement of this design wanders
 # by two or three MHz - enough to reverse the verdict on a change worth one.  So
-# the unit every figure in rtl/cpu.sv's header is quoted in is a MEDIAN OF
-# EIGHT, and a comparison against them has to be measured the same way.  The
-# recipe prints the spread alongside it, which is there to be read: a median
-# that moves by less than the spread has not been shown to do anything.
+# the unit the figures in rtl/cpu.sv's header are quoted in is a MEDIAN OF
+# SIXTEEN - the older ones of eight - and a comparison against them has to be
+# measured the same way.  The recipes print the spread alongside it, which is
+# there to be read: a median that moves by less than the spread has not been
+# shown to do anything.
 #
 # Needs yosys and nextpnr-ice40, and skips with a message without them.
 
 # Place rtl/ on an iCE40 UP5K behind a real SPRAM and report the median MHz.
-speed seeds='8':
+speed seeds='16':
     @node tools/speed.mjs {{seeds}}
 
-# The same, for the pipelined experiment in rtl/pipe/.
-speed-pipe seeds='8':
-    @node tools/speed.mjs {{seeds}} --pipe
+# The same for the whole system - tools/fpga-system.sv, the processor with its
+# 64 KB, the display and blit mode - whose floor is the 25.175 MHz pixel clock.
+speed-system seeds='16':
+    @node tools/speed.mjs {{seeds}} --system

@@ -110,12 +110,12 @@ if node tests/libgcc-check.mjs; then :; else fail=1; fi
 if node tests/microtan-check.mjs; then :; else fail=1; fi
 
 # --- the RTL, against the spec's own value tables ----------------------------
-# rtl/immgen.sv is generated from isa/fructus.toml, so it is regenerated here
-# before it is checked: a committed copy that has drifted from the spec fails
-# rather than being tested in place.  The vectors come from the TOML too, by a
-# path that shares no code with the generator.
+# Every generated file under rtl/ is regenerated here before it is checked: a
+# committed copy that has drifted from the spec fails rather than being tested
+# in place.  The vectors come from the TOML too, by a path that shares no code
+# with the generators.  rtl/cpu.sv and rtl/alu.sv are written by hand.
 mkdir -p rtl
-for f in insn immgen rhs unary lhs dest cond alu compare predecode ucode cpu; do
+for f in immgen lhs dest cond compare classify ucode; do
     node "tools/gen-$f.js" > "build/_$f.sv"
     if cmp -s "build/_$f.sv" "rtl/$f.sv"; then
         printf 'ok    rtl/%s.sv is up to date with isa/fructus.toml\n' "$f"
@@ -125,7 +125,8 @@ for f in insn immgen rhs unary lhs dest cond alu compare predecode ucode cpu; do
     rm -f "build/_$f.sv"
 done
 if node tests/rtl-check.mjs; then :; else fail=1; fi
-if node tests/pipe-check.mjs; then :; else fail=1; fi
+if node tests/cpu-check.mjs; then :; else fail=1; fi
+if node tests/blit-check.mjs; then :; else fail=1; fi
 if node tests/background-check.mjs; then :; else fail=1; fi
 if node tests/foreground-check.mjs; then :; else fail=1; fi
 if node tests/video-check.mjs; then :; else fail=1; fi
@@ -326,5 +327,5 @@ else
     printf 'FAIL  tests/longimm.s --noat rejected %s instructions, expected 4\n' "$n"; fail=1
 fi
 
-rm -f build/_t.asm build/_err build/_immgen.sv build/_rhs.sv build/_unary.sv
+rm -f build/_t.asm build/_err
 exit $fail

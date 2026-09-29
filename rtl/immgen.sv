@@ -31,7 +31,7 @@
 //    this reads it from.
 //
 // 2. +6 AND +7 ARE DELIBERATELY UNDEFINED.  Everything there takes its
-//    right-hand side from a register, and rtl/rhs.sv gets that register's
+//    right-hand side from a register, and the byte-serial core's rhs.sv gets that register's
 //    number straight off the instruction bytes rather than from here - so this
 //    block computing it too would be a second copy of the same three wires,
 //    free to drift from the first.
@@ -43,7 +43,7 @@
 //    none.  0x88..0x8f make that concrete - they are `mov rd, #imm16`,
 //    where opcode[2:0] is the DESTINATION REGISTER and not a mode selector at
 //    all, so this block's output there is meaningless for a third reason again.
-//    rtl/rhs.sv gives that instruction its value directly, as code 4.
+//    the byte-serial core's rhs.sv gives that instruction its value directly, as code 4.
 //
 // 3. opcode[0] IS sel[0].  The imm3 index is {byte1[7:6], opcode[0]} - the spec
 //    spells this `imm3[0]`, so the pair of opcodes at +2 and +3 ARE the low
@@ -64,7 +64,7 @@
 //    a shift.  shift3 is an assembler vocabulary - it exists to reject
 //    `shl rd, ra, #-1` - and the datapath never needs to know about it.
 //
-// EVERY FIELD IS AT ONE POSITION FOR THE WHOLE INSTRUCTION.  rtl/insn.sv puts
+// EVERY FIELD IS AT ONE POSITION FOR THE WHOLE INSTRUCTION.  The byte-serial core's insn.sv puts
 // each byte at its place - byte 0 low - so what this block reads is:
 //
 //     sel                                 insn[2:0]
@@ -105,11 +105,11 @@
 //       and the opcodes moved to match       95       158    938     23.3
 //
 // The first three rows read the old opcode map everywhere but here; the last
-// is the processor as generated, whose rtl/predecode.sv table came out 13
+// is the processor as generated, whose predecode.sv table came out 13
 // LUT4 larger once its rows moved, with nothing in it changed but their order.
 //
 // The clock is the same in all four, inside what the seeds wander by: the
-// immediate settles before the register value it meets in rtl/rhs.sv.  What
+// immediate settles before the register value it meets in the byte-serial core's rhs.sv.  What
 // moved is area, and the processor only kept the shifter's saving once the
 // columns made its select a single bit.  Forcing the shifter's output to stay a
 // net, with (* keep *), cost 29 LUT4 and no speed.
@@ -141,7 +141,7 @@
 // =============================================================================
 
 module immgen (
-    input  logic [23:0] insn,   // the instruction, byte 0 low: rtl/insn.sv
+    input  logic [23:0] insn,   // the instruction, byte 0 low, as rtl/cpu.sv's decode has it
     input  logic        cimm,   // microcode: read +0's five bits as condimm5
     output logic [15:0] imm
 );

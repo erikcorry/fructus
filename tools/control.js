@@ -4,7 +4,7 @@
 //
 // The rules that turn an instruction's `semantics` into control, and the codes
 // the RTL uses to carry that control, in one place.  Each rtl generator that
-// used to hold one of these imports it from here, and tools/gen-predecode.js
+// used to hold one of these imports it from here, and the byte-serial core's gen-predecode.js
 // imports all of them - so the predecoded table and the blocks it drives cannot
 // disagree about what a code means or which instruction needs it.
 //
@@ -38,7 +38,7 @@ const regIndex = (name) => regs.names.indexOf(regs.aliases?.[name] ?? name);
 // `sp = sp +/- n` step rather than listed.
 export function lhsOf(insn, form) {
   // A one-byte form has no fields at all; its pinned `b` is port B, which is
-  // how tools/gen-rhs.js reads it too.
+  // how the byte-serial core's gen-rhs.js reads it too.
   const portB = Object.values(form.fields ?? {}).find((v) => /^[a-z]:reg\[0\]$/.test(v))?.[0]
              ?? ('b' in (form.fix ?? {}) ? 'b' : undefined);
   const reads = new Set();
@@ -60,7 +60,7 @@ export function lhsOf(insn, form) {
     // `pc = lr' names its register rather than taking it from a field, and it
     // is still a register the ADDRESS PATH reads - so it belongs on port A
     // with `jmp ra' and `call ra' rather than arriving as a right-hand side.
-    // rtl/cpu.sv's address mux then has one source for all three.
+    // the byte-serial core's cpu.sv's address mux then has one source for all three.
     if (/\bpc\s*$/.test(left) && regIndex(right.trim()) >= 0) pcNamed = right.trim();
     if (!dest) all(left).forEach((r) => reads.add(r));
     if (!memw) all(right).forEach((r) => reads.add(r));
@@ -80,7 +80,7 @@ export const LHS_FIELD = { rd: { code: 8, bits: 'insn[10:8]', of: (b) => b & 7 }
 
 // Port B's field read on port A, which push needs for its third register.  It
 // is not in LHS_FIELD because nothing DECODES to it - no instruction's
-// left-hand operand follows it, so tools/gen-predecode.js must not offer it as
+// left-hand operand follows it, so the byte-serial core's gen-predecode.js must not offer it as
 // a candidate; only a microcode step names it.
 export const LHS_PORTB = 10;
 
@@ -107,7 +107,7 @@ export const destWritesOf = (insn) => [...(insn.semantics ?? '').matchAll(/(?:^|
   .filter((w) => w.operand || regs.names.includes(regs.aliases?.[w.named] ?? w.named));
 
 // =============================================================================
-// rtl/rhs.sv
+// the byte-serial core's rhs.sv
 // =============================================================================
 
 // --- the sixteen codes -------------------------------------------------------
@@ -119,7 +119,7 @@ export const destWritesOf = (insn) => [...(insn.semantics ?? '').matchAll(/(?:^|
 //
 // Codes 2, 3 and 4 are in the register half but are not registers, and between
 // them they have spent every code this field had left.  4 is the 16-bit
-// immediate, straight off the bytes.  2 is a call's return address: rtl/cpu.sv's
+// immediate, straight off the bytes.  2 is a call's return address: the byte-serial core's cpu.sv's
 // pc adder, read before its flop, with its addend forced to 1 so that the sum is
 // pc + 2.  3 is the ADDRESS UNIT's sum, read the same way - which is how push,
 // pop, stm and ldm write back the pointer they walked, through the ALU's
@@ -149,13 +149,13 @@ export const ALU_OPS = [
   { code: 9,  name: 'lsr',   does: 'lhs >> rhs[3:0]' },
   { code: 10, name: 'movhi', does: 'rhs[7:0] over lhs[7:0]' },
   { code: 11, name: 'asr',   does: 'lhs >>> rhs[3:0]' },
-  { code: 12, name: 'unary', does: "rtl/unary.sv's fast operations on lhs" },
-  { code: 13, name: 'slow',  does: "rtl/unary.sv's slow operations, registered a cycle earlier" },
+  { code: 12, name: 'unary', does: "the fast unary operations on lhs" },
+  { code: 13, name: 'slow',  does: "the slow unary operations, clz and popcount, registered" },
   { code: 14, name: 'mul',   does: 'lhs * rhs, low half, from an SB_MAC16 registered a cycle earlier' },
 ];
 
 // The operations whose result is registered, so that an instruction using one
-// must declare `extra_cycles` and nothing else may: rtl/ucode.sv gives exactly
+// must declare `extra_cycles` and nothing else may: the byte-serial core's ucode.sv gives exactly
 // those the SLOW step.
 export const ALU_REGISTERED = new Set(['slow', 'mul']);
 
@@ -181,7 +181,7 @@ export const ALU_RULES = [
   [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
   [/^R\[d\] = \(\((R\[b\]|imm) & 0xff\) << 8\) \| \(R\[a\] & 0xff\)$/, 'movhi'],
   [/^R\[d\] = \(R\[a\] & mask\) != 0$/,                    'isset'],
-  // A call's return address is not computed by the ALU: rtl/rhs.sv hands it the
+  // A call's return address is not computed by the ALU: the byte-serial core's rhs.sv hands it the
   // pc adder's sum and the pass-through carries it to the register file, which
   // is what lets the write port be wired straight from the ALU.
   [/^lr = pc; pc = /,                                      'rhs',   'the return address'],
@@ -189,13 +189,13 @@ export const ALU_RULES = [
   // load.  Their addresses are the address unit's, walked a byte at a time;
   // what reaches the register file is the right-hand operand flop, carrying
   // either the words a pop assembled or the stepped pointer the address unit
-  // handed to rtl/rhs.sv.  One operation covers every register they write.
+  // handed to the byte-serial core's rhs.sv.  One operation covers every register they write.
   [/^base = [a-z][a-z0-9]*; M16\[base/,                     'rhs',   'the stepped pointer'],
   [/^base = [a-z][a-z0-9]*; R\[a\] = M16\[base/,            'rhs',   'the words, then the pointer'],
   // THE EXCEPTIONS ASK FOR THE PASS-THROUGH AND NOTHING ELSE, like a load.
   // Every value brk and rti move is already a whole 16-bit word - the pc, or
   // one of the three shadows - so what the register file needs is a ROUTE from
-  // rtl/cpu.sv's right-hand operand flop, not an operation.  That flop's input
+  // the byte-serial core's cpu.sv's right-hand operand flop, not an operation.  That flop's input
   // mux had a spare arm (`dcap` 3) and taking it is the whole datapath cost.
   //
   // It has to be the pass-through and not a don't-care: these steps write sp
@@ -213,7 +213,7 @@ export const ALU_ELSEWHERE = [
   [/^pc = (lr|R\[a\]|target|pc \+ target)$/,             'the pc and its own adder'],
   [/^if \(/,                                            'rtl/compare.sv'],
   // sei and cli move nothing at all: there is no operand, no result and no
-  // register write, only a flag that lives in rtl/ucode.sv.
+  // register write, only a flag that lives in the byte-serial core's ucode.sv.
   [/^ie = [01]$/,                                       'no datapath'],
 ];
 export const ALU_LATER = new Set([]);
@@ -251,7 +251,7 @@ export const PC_RULES = [
 
 // An instruction whose semantics writes lr before the pc is a call: its
 // right-hand side is the pc adder's sum, and the ALU's pass-through carries
-// that to the register file like any other result.  tools/gen-predecode.js
+// that to the register file like any other result.  The byte-serial core's gen-predecode.js
 // selects RHS_PCSUM from this.
 export const WRITES_LR = /^lr = pc;/;
 
@@ -263,10 +263,10 @@ export const COND_SRC = [
 ];
 
 // =============================================================================
-// rtl/unary.sv - which unary operation sits where
+// the byte-serial core's unary.sv - which unary operation sits where
 // =============================================================================
 // A unary form is a two-byte encoding whose byte 1 is two literal bits followed
-// by \`aaaddd\`.  {byte1[7:6], opcode[0]} is an imm3 index; rtl/unary.sv sees the
+// by \`aaaddd\`.  {byte1[7:6], opcode[0]} is an imm3 index; the byte-serial core's unary.sv sees the
 // imm3 VALUE on the rhs bus, and an operation that declares extra cycles has its
 // result registered.  So the fast operations must share an opcode, the slow
 // ones must share the other, and one bit of the value has to tell each pair's

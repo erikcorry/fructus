@@ -2,10 +2,11 @@
 // predecode-rows.js - one row of instruction-wide control per opcode
 // =============================================================================
 //
-// Moved out of tools/gen-predecode.js so that more than one core can be
-// generated from the same rows: rtl/predecode.sv's table, and the classifier of
-// the pipelined experiment in rtl/pipe/.  Each row carries the selects, and now
-// the instruction's length and mnemonics too, which rtl/predecode.sv ignores.
+// Read by tools/gen-classify.js, which builds rtl/classify.sv from them.
+// They were written for the byte-serial core's predecode.sv - see rtl/cpu.sv
+// for where that core is - and the codes are still that core's, which is why
+// some comments below speak of its datapath.  Each row carries the selects,
+// the instruction's length and its mnemonics.
 // =============================================================================
 
 import { loadSpec } from './isa.js';
@@ -49,13 +50,15 @@ const rhsCode = (d) => {
     if (/^pc = R\[a\]$/.test(sem) && 'a' in fix) return fix.a;
     return X;
   }
-  // A call's right-hand side is the pc adder's sum, which rtl/cpu.sv forces to
-  // pc + 2 while this code is selected.  It is checked first because a call
+  // A call's right-hand side is the pc adder's sum, which the byte-serial
+  // core forced to pc + 2 while this code was selected; rtl/cpu.sv reads it
+  // as the next pc.  It is checked first because a call
   // names a register on the left of the pc as well, and that is port A's.
   if (WRITES_LR.test(sem)) return RHS_PCSUM;
   // AN INSTRUCTION THAT WALKS A POINTER WRITES IT BACK AS A RIGHT-HAND OPERAND:
-  // rtl/cpu.sv's address unit, read before its flop, exactly as a call reads the
-  // pc adder.  It names the pointer on both sides of a step - `sp = sp - 2` for
+  // the byte-serial core read its address unit before the flop, exactly as a
+  // call read the pc adder; rtl/cpu.sv makes it from the pointer in its ALU
+  // cycle.  It names the pointer on both sides of a step - `sp = sp - 2` for
   // push, `r1 = r1 + 2` for stm - and the digit is what keeps `pc = pc + off`
   // out, since a branch's displacement is not a constant here.
   if (/\b[a-z][a-z0-9]* = base [-+] \d/.test(sem)) return RHS_ADR;
@@ -135,7 +138,7 @@ for (let op = 0; op < 256; op++) {
     const v = { alu: aluCode(d.insn), lhs: lhsCode(d, op), rhs: rhsCode(d), dest: destCode(d, op),
                 cond: condCode(d.insn), pc: pcCode(d) };
     // THE PC ADDER READS THIS FIELD, so a row with a relative target may not
-    // leave it to the mapper.  rtl/cpu.sv forces the adder's addend to 1 when
+    // leave it to the mapper.  The byte-serial core forced the adder's addend to 1 when
     // the rhs code is RHS_PCSUM - that is how a call gets pc + 2 - so an x on a
     // row whose target is pc + the displacement would let the mapper pick that
     // code and make the jump one byte short.  It is a don't-care to the ALU and

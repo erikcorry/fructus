@@ -1,9 +1,9 @@
 // =============================================================================
-// pipe-ucode.js - the pipelined experiment's microcode, as data
+// ucode.js - the processor's microcode, as data
 // =============================================================================
 //
-// Shared by tools/gen-pipe-ucode.js, which writes the ROM, and
-// tools/gen-pipe-classify.js, which gives every microcoded opcode the
+// Shared by tools/gen-ucode.js, which writes the ROM, and
+// tools/gen-classify.js, which gives every microcoded opcode the
 // address its routine starts at.  One module, so that the two cannot
 // disagree about where a routine is.
 //
@@ -13,14 +13,14 @@
 // the order the routines are listed here, so one can be added anywhere.
 //
 // The rules for a memory instruction's steps, and why the exception routines
-// are ordered as they are, are in tools/gen-pipe-ucode.js's header.
+// are ordered as they are, are in tools/gen-ucode.js's header.
 // =============================================================================
 
 export const STEPS = 8;
 export const ENTRY_BITS = 5;
 
 // THE WORD, field by field: [name, bit, width, what it does in its step].
-// rtl/pipe/cpu.sv takes the same fields at the same bits.
+// rtl/cpu.sv takes the same fields at the same bits.
 export const FIELDS = [
   ['A',   0, 1, 'an address step: mar, or mar + 1 for a load, and mar steps up'],
   ['C',   1, 1, "a load's byte arrives and shifts into ldq"],
@@ -36,6 +36,7 @@ export const FIELDS = [
   ['WX', 16, 2, 'a register is written from ldq, through the ALU: 1 sp, 2 lr'],
   ['IE', 18, 2, 'ie: 1 cleared, 2 set'],
   ['RJ', 20, 2, 'the fetch goes to: 1 the vector, 2 aq, the register read the step before'],
+  ['L',  22, 1, "C's byte is on mem_late, the word from two edges ago: blit mode"],
 ];
 export const WORD_BITS = 32;
 
@@ -43,9 +44,14 @@ export const WORD_BITS = 32;
 // instruction it is: push and stm step alike, and so do pop and ldm.
 const memKey = ({ st, blk, w2, n }) => `${st ? 'st' : 'ld'}${blk ? 'blk' : ''}${w2 ? 16 : 8}x${n}`;
 
-function memSteps({ st, blk, w2, n }) {
+// BLIT MODE'S LOADS take every byte a cycle late, on mem_late, so their
+// arrivals, their writes, their release and their end each come a step later
+// than the ordinary routine's; the addresses go out as before.  Only ld, ld8
+// and ldm have a late copy - pop keeps its ordinary routine - and a one-byte
+// load's copy releases dispatch in step 1 instead of its ALU cycle.
+function memSteps({ st, blk, w2, n }, late = 0) {
   const B = w2 ? 2 : 1, N = n * B;
-  const step = Array.from({ length: STEPS + 1 }, () => ({}));
+  const step = Array.from({ length: STEPS + 2 }, () => ({}));
   if (st) {
     for (let k = 1; k <= N; k++) step[k].A = 1;
     step[N].R = 1;
@@ -55,13 +61,14 @@ function memSteps({ st, blk, w2, n }) {
     for (let k = 1; k < N; k++) Object.assign(step[k], { WE: 1, KS: Math.floor(k / B), KH: k % B });
   } else {
     for (let k = 1; k <= N - 1; k++) step[k].A = 1;
-    for (let k = 1; k <= N; k++) step[k].C = 1;
-    for (let i = 0; i < n; i++) step[1 + (i + 1) * B].W = i + 1;
-    if (N >= 2) step[N - 1].R = 1;
-    step[N + 1].D = 1;
+    for (let k = 1; k <= N; k++) Object.assign(step[k + late], late ? { C: 1, L: 1 } : { C: 1 });
+    for (let i = 0; i < n; i++) step[1 + late + (i + 1) * B].W = i + 1;
+    if (N - 1 + late >= 1) step[N - 1 + late].R = 1;
+    step[N + 1 + late].D = 1;
     if (blk) step[1].P = 1;
   }
-  return step.slice(1);
+  if (Object.keys(step[STEPS + 1]).length) throw new Error('a routine is longer than eight steps');
+  return step.slice(1, STEPS + 1);
 }
 
 // The literal registers the exception routines read: KS 3, and KH picks.
@@ -115,10 +122,21 @@ for (const st of [0, 1])
         const m = { st, blk, w2, n };
         ROUTINES.push({
           name: st ? (blk ? `push/stm ${n}` : w2 ? 'st' : 'st8') : (blk ? `pop/ldm ${n}` : w2 ? 'ld' : 'ld8'),
-          key: memKey(m), bytes: n * (w2 ? 2 : 1), steps: memSteps(m),
+          key: memKey(m), bytes: n * (w2 ? 2 : 1), steps: memSteps(m), m,
         });
       }
 for (const [name, steps] of Object.entries(EXCEPTIONS)) ROUTINES.push({ name, key: name, steps });
+
+// A LOAD'S LATE COPY SITS AT ITS ENTRY WITH THE TOP BIT SET, so rtl/cpu.sv
+// chooses it by setting that bit, from flops, and needs no second column to
+// say where it is.  The slots between are left idle.
+export const LATE = 1 << (ENTRY_BITS - 1);
+for (const [e, r] of [...ROUTINES.entries()]) {
+  if (!r.m || r.m.st) continue;
+  if (e >= LATE || ROUTINES[e | LATE]) throw new Error(`no room for ${r.name}'s late copy`);
+  ROUTINES[e | LATE] = { name: `${r.name} late`, key: `late:${r.key}`, bytes: r.bytes, steps: memSteps(r.m, 1) };
+}
+for (let e = 0; e < ROUTINES.length; e++) ROUTINES[e] ??= { name: 'idle', steps: [] };
 if (ROUTINES.length > 1 << ENTRY_BITS) throw new Error('more routines than entries');
 if (ROUTINES.some((r) => r.steps.length > STEPS)) throw new Error('a routine is longer than eight steps');
 

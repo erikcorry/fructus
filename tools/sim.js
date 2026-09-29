@@ -391,10 +391,10 @@ export class Machine {
     // operands in the cycle before the ALU sees them, and a one-byte form has
     // no second byte whose fetch cycle could do that - so it spends a cycle of
     // its own instead.  nop and halt are not here: they compute nothing and
-    // read nothing.  See rtl/ucode.sv's one-byte entry words and rtl/cpu.sv.
+    // read nothing.  See the byte-serial core's ucode.sv, its one-byte entry words, and cpu.sv.
     if (d.nbytes === 1 && computes(d.insn.semantics ?? '')) this.slow += 1;
     // AN EXCEPTION IS SIX CYCLES, and it is recognised by naming a shadow -
-    // which only `brk' and `rti' do.  The count comes from rtl/ucode.sv and not
+    // which only `brk' and `rti' do.  The count comes from the byte-serial core's ucode.sv and not
     // from arithmetic here: an entry word that fetches nothing, the four steps
     // that move the shadow registers, and the cycle that dispatches the
     // handler's first opcode.  One byte, so five cycles beyond it.
@@ -402,7 +402,7 @@ export class Machine {
     // FOUR OF THE SIX ARE THE SHADOWS, and they are the price of not putting a
     // mux in front of the register file: two stack pointers moved one way each,
     // plus lr, at one register per cycle.  A swap would be one cycle and 3.3
-    // MHz off every instruction in the machine.  See rtl/cpu.sv.
+    // MHz off every instruction in the machine.  See the byte-serial core's cpu.sv.
     const exception = /shadow_lr|shadow_sp/.test(d.insn.semantics ?? '');
     if (exception) this.slow += 5;
     // A TRANSFER WHOSE TARGET IS A REGISTER COSTS THREE CYCLES, whatever its
@@ -421,7 +421,7 @@ export class Machine {
     // cycle over again, for the same reason: the operands are read a cycle
     // BEFORE they are used, so the address cannot be on the bus until the cycle
     // after the instruction's last byte arrived, and there is nothing to fetch
-    // while the adder runs.  See rtl/cpu.sv's address unit.
+    // while the adder runs.  See the byte-serial core's cpu.sv's address unit.
     if (/M(8|16)\[/.test(d.insn.semantics ?? '')) this.slow += 1;
     // AND A LOADING BLOCK MOVE PAYS ONE MORE - pop and ldm - because its last
     // act is to write the pointer it walked and the register file has ONE write

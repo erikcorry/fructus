@@ -54,10 +54,11 @@
 //
 // So a program in blit mode keeps its code anywhere, and its data, its
 // constants and its stack below 0x8000 - the stack because compiled code
-// reaches its frame with ordinary loads and stores.  pop alone is exempt: it
-// keeps its ordinary routine, and so reads the processor's own memory at any
-// address, and a frame pushed above 0x8000 before blit mode was set still
-// pops correctly inside it.  A push there in blit mode would not land.
+// reaches its frame with ordinary loads and stores.  pop keeps its ordinary
+// routine, and so would read the processor's own memory at any address,
+// while a push's stores above 0x8000 would go to the buffer - so a push or
+// pop that reaches 0x8000 or above in blit mode stops the processor with
+// `trapped`, before it moves a byte, as an unimplemented opcode does.
 //
 // THE REGISTERS ARE WRITTEN THROUGH INTO ram_lo, so a register reads back as
 // what was last written to it - a register block with no read path of its own,
@@ -74,12 +75,12 @@
 // in rtl/ucode.sv say so - on the processor's `mem_late`: the
 // buffer is addressed from `addr_w`, so its word is there two edges after
 // the address, and a word from ram_lo is held a cycle to arrive with it.
-// Which one, and which byte, are flops too.  rtl/cpu.sv's own header has why
-// that byte goes to a port of its own.
+// Which one is a flop too; the processor picks the byte itself.  rtl/cpu.sv's
+// own header has why the word goes to a port of its own.
 //
 // CHANGING MODE NEEDS NO PADDING on the processor's side: the register is
-// written a cycle after the store's last byte, and a following load's first
-// address, where its routine is chosen, is at least three cycles after that
+// written a cycle after the store's last byte, and a following load's decode
+// cycle, where its routine is chosen, is at least three cycles after that
 // byte.
 //
 // THE EXCEPTION VECTORS ARE THE PROCESSOR'S IN EVERY MODE.  Each, at the top
@@ -122,29 +123,36 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
                           .CHIPSELECT(1'b1), .CLOCK(clk), .STANDBY(1'b0),
                           .SLEEP(1'b0), .POWEROFF(1'b1), .DATAOUT(hi_word));
 
-    // The byte and the SPRAM a read came from are chosen a cycle later, with
-    // the data.
-    logic lowbyte, src;
-    always_ff @(posedge clk) begin lowbyte <= ~addr[0]; src <= hi; end
-    wire [15:0] word  = src ? hi_word : lo_word;
-    wire [7:0]  rdata = lowbyte ? word[7:0] : word[15:8];
+    // The SPRAM a read came from is chosen a cycle later, with the data.  The
+    // processor takes the whole word and picks its own byte.
+    logic src;
+    always_ff @(posedge clk) src <= hi;
+    wire [15:0] rdata = src ? hi_word : lo_word;
 
     // --- blit mode's late reads ---------------------------------------------------
     wire [15:0] fb_cpu_word;
-    logic hi1, hi2, lb1, lb2;
+    logic hi1, hi2;
     logic [15:0] lo_hold;
     always_ff @(posedge clk) begin
-        hi1 <= hi;         hi2 <= hi1;
-        lb1 <= ~addr[0];   lb2 <= lb1;
+        hi1 <= hi;  hi2 <= hi1;
         lo_hold <= lo_word;
     end
-    wire [15:0] late_word = hi2 ? fb_cpu_word : lo_hold;
-    wire [7:0]  late      = lb2 ? late_word[7:0] : late_word[15:8];
+    wire [15:0] late = hi2 ? fb_cpu_word : lo_hold;
 
     wire halted, trapped; wire [15:0] result;
+    // THE PROCESSOR IS SYNTHESISED AS A HIERARCHY OF ITS OWN.  Flattened into
+    // the system, abc mapped its decode and register read deeper - ten and
+    // eleven cells from the SPRAM to an operand flop, against seven for the
+    // processor alone behind the same two SPRAMs - and the system placed at
+    // 24.44 MHz, below the pixel clock; 25.38 without blit mode.  Kept apart
+    // it maps as it does alone: eight cells, 27.70 MHz, 26.9 to 29.1 over
+    // sixteen seeds, floorplanned.  The price is the optimisations across its
+    // ports, which here are wiring.
+    (* keep_hierarchy *)
     cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
-           .mem_wdata(wdata), .mem_we(we), .blit(blit), .mem_late(late),
-           .irq(irq_s), .halted(halted), .trapped(trapped), .result(result));
+                .mem_wdata(wdata), .mem_we(we), .blit(blit), .mem_late(late),
+                .irq(irq_s), .halted(halted), .trapped(trapped), .result(result),
+                .retire(), .retire_pc());
     logic [15:0] so;
     always_ff @(posedge clk) so <= rst ? result : {so[14:0], 1'b0};
     assign dout = so[15] ^ halted ^ trapped;

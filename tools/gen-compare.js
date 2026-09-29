@@ -78,12 +78,12 @@ process.stdout.write(`// =======================================================
 // are equal, so the subtract mode's Z is the NOR of lhs ^ rhs, beside the adder
 // rather than after it; the mask mode's is the NOR of lhs & rhs.
 //
-// MEASURED - see rtl/alu.sv, which has the numbers for both units.
+// MEASURED - see the byte-serial core's alu.sv, which had the numbers for both units.
 // =============================================================================
 
 module compare (
     input  logic [15:0] lhs,     // register file port A: rtl/lhs.sv
-    input  logic [15:0] rhs,     // rtl/rhs.sv
+    input  logic [15:0] rhs,     // the right-hand operand
     input  logic [2:0]  cond,    // rtl/cond.sv: a cond3 index
     input  logic        neg,     // rtl/cond.sv: invert the answer
     input  logic        mask,    // rtl/cond.sv: test lhs & rhs rather than subtract

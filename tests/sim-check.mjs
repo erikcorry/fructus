@@ -604,7 +604,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 // looks right from one end and the value is simply lost.
 //
 // AND THE CYCLE COUNT IS PINNED, because the cost model charges it: six cycles,
-// which is rtl/ucode.sv's entry word, the four steps that move the shadows, and
+// which is the byte-serial core's ucode.sv's entry word, the four steps that move the shadows, and
 // the cycle that dispatches the handler's first opcode.  Four of those six are
 // the price of having no mux in front of the register file - two stack pointers
 // moved one way each, plus lr, one register per cycle.
@@ -719,7 +719,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 
 // --- clz: four routines, every input, and the cost of each -------------------
 // The reference is BUILTIN.clz - the same function tools/sim.js evaluates the
-// spec's `semantics` against, and the same one rtl/unary.sv is checked with.
+// spec's `semantics` against, and the same one rtl/alu.sv is checked with.
 // So software, hardware and simulator are all measured against one definition
 // rather than three transcriptions of it.
 //

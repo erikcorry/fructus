@@ -68,15 +68,15 @@
 // four.
 //
 // IT IS NOT THE SLOWEST PATH YET.  Reading a register through rtl/lhs.sv or
-// rtl/rhs.sv and adding measured 37 to 45 MHz, below both numbers here.  But it
-// is the next one, and the cure is the one rtl/insn.sv already measured for
+// the byte-serial core's rhs.sv and adding measured 37 to 45 MHz, below both numbers here.  But it
+// is the next one, and the cure is the one the byte-serial core's insn.sv already measured for
 // port addresses: the instruction's fields do not move, so this block's output
 // can be registered a cycle before the write, at the price of the microcode
 // naming the destination one step early.
 // =============================================================================
 
 module dest (
-    input  logic [23:0] insn,    // the instruction, byte 0 low: rtl/insn.sv
+    input  logic [23:0] insn,    // the instruction, byte 0 low, as rtl/cpu.sv's decode has it
     input  logic [3:0]  src,     // microcode: where the written register comes from
     output logic [2:0]  regnum   // -> register file write address
 );

@@ -1,28 +1,28 @@
 #!/usr/bin/env node
 // =============================================================================
-// pipe-check.mjs - rtl/pipe/, the pipelined experiment, against the simulator
+// cpu-check.mjs - rtl/cpu.sv, the processor, against the simulator
 // =============================================================================
 //
-//   node tests/pipe-check.mjs
+//   node tests/cpu-check.mjs
 //
-// Random programs of every form the experiment runs - each ALU instruction
-// that writes one register from registers and constants, in one cycle, and
-// the conditional branches - ending in halt, run from random registers on
-// rtl/pipe/cpu.sv and tools/sim.js.  The random branches all go FORWARD, to
+// Random programs of every form the instruction set has - the ALU
+// instructions, the conditional branches, the jumps and calls, the memory
+// instructions and the exception ones - ending in halt, run from random registers on
+// rtl/cpu.sv and tools/sim.js.  The random branches all go FORWARD, to
 // an instruction boundary, so every program ends; loops come from a few
 // programs written as source and assembled.
 //
 // WHAT IS COMPARED.  Every instruction that leaves the ALU stage is printed
 // with its pc and the registers after its write, and must match the simulator
 // instruction for instruction - branches included, which write nothing.  And
-// the dispatches must come exactly as rtl/pipe/cpu.sv's header says: one a
+// the dispatches must come exactly as rtl/cpu.sv's header says: one a
 // cycle, except that an instruction of three bytes starting at an odd address
 // is followed by a cycle with none, and a taken branch by three.  The
 // dispatches a taken branch squashes are dropped before that is checked.
 // The forms are drawn so that every length lands at both alignments.
 //
-// Needs iverilog; skips without it.  PIPE_KEEP=1 leaves the programs in
-// build/pipe-prog-N.hex and their registers in build/pipe-reg-N.hex, for
+// Needs iverilog; skips without it.  CPU_KEEP=1 leaves the programs in
+// build/cpu-prog-N.hex and their registers in build/cpu-reg-N.hex, for
 // looking at one that fails.
 // =============================================================================
 
@@ -38,7 +38,7 @@ const have = (cmd) => {
   catch { return false; }
 };
 if (!have('iverilog')) {
-  console.log('skip  tests/pipe-check.mjs: iverilog not installed');
+  console.log('skip  tests/cpu-check.mjs: iverilog not installed');
   process.exit(0);
 }
 
@@ -69,15 +69,14 @@ for (let op = 0; op < 256; op++)
   }
 const all = [...forms.values()];
 
-// THE MEMORY INSTRUCTIONS, from their semantics, in the two pools
-// tests/rtl-check.mjs uses.  A load is safe beside anything: it reads, and
+// THE MEMORY INSTRUCTIONS, from their semantics, in two pools.  A load is safe beside anything: it reads, and
 // whatever it reads the simulator reads too.  A store is not - it could write
 // over the program - so stores and the block moves that store go in programs
 // of their own, whose registers all start in a window far above the program,
 // and in which nothing but a walking pointer writes a register.  pop and ldm
 // write registers from memory, so they go with the loads.
 //
-// `bytes` is what the sequencer moves, and what rtl/pipe/cpu.sv charges: a
+// `bytes` is what the sequencer moves, and what rtl/cpu.sv charges: a
 // memory instruction's next dispatch comes bytes + 4 cycles after its own if
 // it stores, and bytes + 3 if it loads, since a load's first address is the
 // ALU's result, put out in its ALU cycle.
@@ -116,7 +115,7 @@ const brs = [...branches.values()];
 // THE EXCEPTION INSTRUCTIONS.  brk, sei and cli go in the random programs;
 // rti is reached only through brk, since the vector holds nothing but rti in
 // both machines - so a brk is a round trip that leaves every register as it
-// was, through the shadows.  brk and rti cost rtl/pipe/cpu.sv six cycles,
+// was, through the shadows.  brk and rti cost rtl/cpu.sv six cycles,
 // dispatch to dispatch, since they redirect the fetch through taken_q; sei
 // and cli five.
 const oneByte = (mnemonic) => parseInt(spec.insn.find((i) => i.mnemonic === mnemonic)
@@ -294,7 +293,7 @@ const SOURCES = [
 // a call or a jmp to a label is an absolute address, which the assembler
 // has to see move.
 const assembled = SOURCES.flatMap((src, i) => [src, `nop\n${src}`].map((text, j) => {
-  const f = `build/pipe-src-${i}-${j}.s`;
+  const f = `build/cpu-src-${i}-${j}.s`;
   writeFileSync(f, text.split('\n').map((l) => l.trim()).join('\n') + '\n');
   const { code } = assemble(f);
   rmSync(f, { force: true });
@@ -308,6 +307,20 @@ const N_RANDOM = N_ALU + N_LD + N_ST;
 const safe = () => 0x2000 + ((rnd() % 0x1000) & ~1);
 const PROGRAMS = N_RANDOM + assembled.length;
 const programs = [];
+// WHAT A STORE DID IS NOT IN ANY REGISTER, so both machines fold their whole
+// memory into one number at the halt.
+const fold = (mem) => {
+  let hash = 0;
+  for (let k = 0; k < 65536; k++) hash = (Math.imul(hash, 31) + mem[k]) & 0x7fffffff;
+  return hash;
+};
+// Built with FRUCTUS_BLIT, the test bench hands the processor each word again
+// a cycle later, as tools/fpga-system.sv does: \`late\` is the word at the
+// address sampled two edges ago.
+const BLIT_WIRING = `\`ifdef FRUCTUS_BLIT
+    logic [15:0] late;
+    always @(posedge clk) late <= rdata;
+\`endif`;
 mkdirSync('build', { recursive: true });
 for (let p = 0; p < PROGRAMS; p++) {
   let bytes, draws = val;
@@ -360,6 +373,7 @@ for (let p = 0; p < PROGRAMS; p++) {
     return c.pc === ((pc + len + 1) & 0xffff);
   };
   const trace = [];
+  let fault = null;                    // blit mode's first stack fault: where, and memory then
   for (let guard = 0; !m.halted && guard < 1000; guard++) {
     const pc = m.pc;
     const d = decode(dec, [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
@@ -373,19 +387,21 @@ for (let p = 0; p < PROGRAMS; p++) {
               : d.insn.extra_cycles > 0 ? 4 : 0;
     const mem = memBytes(d.insn.semantics ?? '');
     const memst = mem && /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(d.insn.semantics);
+    // Blit mode makes every load but pop a cycle slower.
+    const late = mem && !memst && !/^base = sp; /.test(d.insn.semantics);
+    // And stops at a push or pop any of whose bytes is at 0x8000 or above.
+    const sp = m.R[6], first = (memst ? sp - mem : sp) & 0xffff, last = (first + mem - 1) & 0xffff;
+    const sfault = /^base = sp; /.test(d.insn.semantics ?? '') && ((first | last) & 0x8000) !== 0;
+    if (sfault && !fault) fault = { at: trace.length, hash: fold(m.mem) };
     m.step();
-    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, memst, exc, R: Array.from(m.R) });
+    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, memst, late, sfault, exc, R: Array.from(m.R) });
   }
-  // WHAT A STORE DID IS NOT IN ANY REGISTER, so both machines fold their whole
-  // memory into one number at the halt, as tests/rtl-check.mjs does.
-  let hash = 0;
-  for (let k = 0; k < 65536; k++) hash = (Math.imul(hash, 31) + m.mem[k]) & 0x7fffffff;
-  programs.push({ bytes, reg, trace, hash, old: m.cycles() });
-  writeFileSync(`build/pipe-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
-  writeFileSync(`build/pipe-reg-${p}.hex`, reg.map(hex4).join('\n') + '\n');
+  programs.push({ bytes, reg, trace, hash: fold(m.mem), fault, old: m.cycles() });
+  writeFileSync(`build/cpu-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
+  writeFileSync(`build/cpu-reg-${p}.hex`, reg.map(hex4).join('\n') + '\n');
 }
 
-writeFileSync('build/pipe-tb.sv', `module tb;
+writeFileSync('build/cpu-tb.sv', `module tb;
     logic clk = 0, rst = 1;
     logic [7:0] mem [0:65535];
     logic [15:0] rdata;
@@ -393,8 +409,12 @@ writeFileSync('build/pipe-tb.sv', `module tb;
     wire [15:0] addr, rpc;
     wire [7:0] wdata;
     wire we, halted, trapped, ret;
-    pipe_cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
+${BLIT_WIRING}
+    cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(we), .irq(1'b0),
+\`ifdef FRUCTUS_BLIT
+                .blit(\`BLIT_ON), .mem_late(late),
+\`endif
                 .halted(halted), .trapped(trapped), .result(), .retire(ret), .retire_pc(rpc));
     // A word a cycle, the even byte low, as the SPRAM delivers it; a write goes
     // to the byte mem_addr names, at the same edge, and a read in that cycle
@@ -405,11 +425,22 @@ writeFileSync('build/pipe-tb.sv', `module tb;
     end
     integer p, k, cyc, ev, epc, go, dpc, sq, h;
     reg [8*64:1] name;
+    task step;
+        begin
+            ev = ret; epc = rpc; go = u.go; dpc = u.pc; sq = u.taken_q;
+            #1 clk = 1; #1 clk = 0;
+            if (sq) $display("SQUASH %0d %0d", p, cyc);
+            if (go) $display("DISP %0d %0d %h", p, cyc, dpc[15:0]);
+            if (ev) $display("RET %0d %h %h %h %h %h %h %h %h %h", p, epc[15:0],
+                             u.R[0], u.R[1], u.R[2], u.R[3], u.R[4], u.R[5], u.R[6], u.R[7]);
+            cyc = cyc + 1;
+        end
+    endtask
     initial begin
         for (p = 0; p < ${PROGRAMS}; p = p + 1) begin
             for (k = 0; k < 65536; k = k + 1) mem[k] = 8'h00;
-            $sformat(name, "build/pipe-prog-%0d.hex", p); $readmemh(name, mem);
-            $sformat(name, "build/pipe-reg-%0d.hex", p);  $readmemh(name, regs);
+            $sformat(name, "build/cpu-prog-%0d.hex", p); $readmemh(name, mem);
+            $sformat(name, "build/cpu-reg-%0d.hex", p);  $readmemh(name, regs);
             rst = 1;
             repeat (3) begin #1 clk = 1; #1 clk = 0; end
             for (k = 0; k < 8; k = k + 1) u.R[k] = regs[k];
@@ -417,15 +448,12 @@ writeFileSync('build/pipe-tb.sv', `module tb;
             u.shadow_sp = 0; u.shadow_lr = 0; u.shadow_isp = 0;
             mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
             rst = 0; cyc = 0;
-            while (!halted && !trapped && cyc < 5000) begin
-                ev = ret; epc = rpc; go = u.go; dpc = u.pc; sq = u.taken_q;
-                #1 clk = 1; #1 clk = 0;
-                if (sq) $display("SQUASH %0d %0d", p, cyc);
-                if (go) $display("DISP %0d %0d %h", p, cyc, dpc[15:0]);
-                if (ev) $display("RET %0d %h %h %h %h %h %h %h %h %h", p, epc[15:0],
-                                 u.R[0], u.R[1], u.R[2], u.R[3], u.R[4], u.R[5], u.R[6], u.R[7]);
-                cyc = cyc + 1;
-            end
+            while (!halted && !trapped && cyc < 5000) step;
+            // AND ON A LITTLE: whatever stopped the machine must have stopped
+            // everything, so nothing more may dispatch, retire or be written.
+            k = cyc;
+            repeat (12) step;
+            cyc = k;
             h = 0;
             for (k = 0; k < 65536; k = k + 1) h = (h * 31 + mem[k]) & 32'h7fffffff;
             $display("END %0d %0d %0d %0d %0d", p, halted, trapped, cyc, h);
@@ -434,69 +462,96 @@ writeFileSync('build/pipe-tb.sv', `module tb;
     end
 endmodule
 `);
-const RTL = ['rtl/pipe/cpu.sv', 'rtl/pipe/classify.sv', 'rtl/pipe/alu.sv', 'rtl/pipe/ucode.sv',
+const RTL = ['rtl/cpu.sv', 'rtl/classify.sv', 'rtl/alu.sv', 'rtl/ucode.sv',
              'rtl/lhs.sv', 'rtl/dest.sv', 'rtl/immgen.sv', 'rtl/cond.sv', 'rtl/compare.sv'];
-execFileSync('iverilog', ['-g2012', '-o', 'build/pipe-tb.vvp', ...RTL, 'build/pipe-tb.sv'], { stdio: 'inherit' });
-const out = execFileSync('vvp', ['build/pipe-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+execFileSync('iverilog', ['-g2012', '-o', 'build/cpu-tb.vvp', ...RTL, 'build/cpu-tb.sv'], { stdio: 'inherit' });
+const out = execFileSync('vvp', ['build/cpu-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
 
-// AND AGAIN WITH THE SB_MAC16 THAT SYNTHESIS GETS, as tests/rtl-check.mjs does
-// for rtl/alu.sv: yosys's own model of the DSP, which checks the instance's
-// parameters.  Every line must be the same, less the $finish, whose time unit
+// AND AGAIN WITH THE SB_MAC16 THAT SYNTHESIS GETS: yosys's own model of the
+// DSP, which checks the instance's parameters.  Every line must be the same, less the $finish, whose time unit
 // the cells' `timescale changes.
 const CELLS = '/usr/share/yosys/ice40/cells_sim.v';
-execFileSync('iverilog', ['-g2012', '-DPIPE_CELLS', '-o', 'build/pipe-tb.vvp', CELLS, ...RTL, 'build/pipe-tb.sv'],
+execFileSync('iverilog', ['-g2012', '-DCPU_CELLS', '-o', 'build/cpu-tb.vvp', CELLS, ...RTL, 'build/cpu-tb.sv'],
              { stdio: ['ignore', 'ignore', 'inherit'] });
 const trace = (text) => text.split('\n').filter((l) => !/\$finish/.test(l)).join('\n');
-const outCells = execFileSync('vvp', ['build/pipe-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+const outCells = execFileSync('vvp', ['build/cpu-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
 if (trace(outCells) !== trace(out)) {
-  console.log('FAIL  rtl/pipe/cpu.sv: with yosys\'s SB_MAC16 it runs differently from the plain multiply');
+  console.log('FAIL  rtl/cpu.sv: with yosys\'s SB_MAC16 it runs differently from the plain multiply');
   process.exit(1);
 }
 
-const rets = programs.map(() => []), disps = programs.map(() => []), squashes = programs.map(() => []), ends = [];
-for (const line of out.split('\n')) {
-  const f = line.trim().split(/\s+/);
-  if (f[0] === 'RET')  rets[+f[1]].push({ pc: parseInt(f[2], 16), R: f.slice(3, 11).map((h) => parseInt(h, 16)) });
-  if (f[0] === 'DISP') disps[+f[1]].push({ cyc: +f[2], pc: parseInt(f[3], 16) });
-  if (f[0] === 'SQUASH') squashes[+f[1]].push(+f[2]);
-  if (f[0] === 'END')  ends[+f[1]] = { halted: f[2] === '1', trapped: f[3] === '1', cyc: +f[4], hash: +f[5] };
-}
-
-let bad = 0, instructions = 0, cycNew = 0, cycOld = 0;
+let bad = 0, instructions = 0, cycNew = 0, cycOld = 0, faults = 0;
 const complain = (msg) => { if (bad++ < 8) console.log(`  MISMATCH ${msg}`); };
-programs.forEach(({ trace, hash, old }, p) => {
-  if (ends[p] && ends[p].hash !== hash)
-    complain(`program ${p}: memory folds to ${ends[p].hash} on the RTL and ${hash} on the simulator`);
-  // A squash in cycle T undoes the dispatches of T - 2, T - 1 and T: the
-  // three instructions behind the branch.
-  const got = rets[p];
-  const ds = disps[p].filter((d) => !squashes[p].some((t) => d.cyc >= t - 2 && d.cyc <= t));
-  if (!ends[p]?.halted || ends[p]?.trapped) complain(`program ${p}: ended ${ends[p]?.trapped ? 'trapped' : 'without halting'}`);
-  if (got.length !== trace.length) complain(`program ${p}: ${got.length} retired, the simulator ran ${trace.length}`);
-  for (let i = 0; i < Math.min(got.length, trace.length); i++) {
-    const g = got[i], t = trace[i];
-    if (g.pc !== t.pc || g.R.some((v, k) => v !== t.R[k]))
-      complain(`program ${p} instruction ${i} at 0x${t.pc.toString(16)}: rtl pc ${g.pc.toString(16)} r=${g.R.map(hex4).join(' ')}, sim r=${t.R.map(hex4).join(' ')}`);
-    instructions++;
+
+// One run's output against the simulator.  In blit mode ld, ld8 and ldm cost
+// a cycle more, and the first push or pop that reaches 0x8000 or above stops
+// the machine, trapped, with everything before it done and nothing of it.
+function check(out, blit, what) {
+  const rets = programs.map(() => []), disps = programs.map(() => []), squashes = programs.map(() => []), ends = [];
+  for (const line of out.split('\n')) {
+    const f = line.trim().split(/\s+/);
+    if (f[0] === 'RET')  rets[+f[1]].push({ pc: parseInt(f[2], 16), R: f.slice(3, 11).map((h) => parseInt(h, 16)) });
+    if (f[0] === 'DISP') disps[+f[1]].push({ cyc: +f[2], pc: parseInt(f[3], 16) });
+    if (f[0] === 'SQUASH') squashes[+f[1]].push(+f[2]);
+    if (f[0] === 'END')  ends[+f[1]] = { halted: f[2] === '1', trapped: f[3] === '1', cyc: +f[4], hash: +f[5] };
   }
-  // The dispatch cadence: the halt is dispatched too, so there is one more
-  // dispatch than retirement.
-  for (let i = 1; i < Math.min(ds.length, trace.length + 1); i++) {
-    const prev = trace[i - 1];
-    const want = prev.exc ? prev.exc : prev.mem ? prev.mem + (prev.memst ? 4 : 3) : prev.jump ? prev.jump : prev.taken ? 4
-               : (prev.pc & 1) && prev.len === 3 ? 2 : 1;
-    if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) complain(`program ${p} dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
-    if (ds[i].cyc - ds[i - 1].cyc !== want)
-      complain(`program ${p} dispatch ${i}: ${ds[i].cyc - ds[i - 1].cyc} cycles after the one at 0x${prev.pc.toString(16)}, want ${want}`);
-  }
-  cycNew += ends[p]?.cyc ?? 0;
-  cycOld += old;
-});
-for (const f of ['build/pipe-tb.vvp', 'build/pipe-tb.sv']) rmSync(f, { force: true });
+  programs.forEach(({ trace: whole, hash: hashAll, fault, old }, p) => {
+    const stop = blit && fault ? fault : null;
+    const trace = stop ? whole.slice(0, stop.at) : whole;
+    const hash = stop ? stop.hash : hashAll;
+    if (stop) faults++;
+    const say = (msg) => complain(`${what}program ${p}${msg}`);
+    if (ends[p] && ends[p].hash !== hash)
+      say(`: memory folds to ${ends[p].hash} on the RTL and ${hash} on the simulator`);
+    // A squash in cycle T undoes the dispatches of T - 2, T - 1 and T: the
+    // three instructions behind the branch.
+    const got = rets[p];
+    const ds = disps[p].filter((d) => !squashes[p].some((t) => d.cyc >= t - 2 && d.cyc <= t));
+    if (stop ? !ends[p]?.trapped : !ends[p]?.halted || ends[p]?.trapped)
+      say(`: ended ${ends[p]?.trapped ? 'trapped' : ends[p]?.halted ? 'halted' : 'without halting'}${stop ? `, not trapped at 0x${whole[stop.at].pc.toString(16)}` : ''}`);
+    if (got.length !== trace.length) say(`: ${got.length} retired, the simulator ran ${trace.length}`);
+    for (let i = 0; i < Math.min(got.length, trace.length); i++) {
+      const g = got[i], t = trace[i];
+      if (g.pc !== t.pc || g.R.some((v, k) => v !== t.R[k]))
+        say(` instruction ${i} at 0x${t.pc.toString(16)}: rtl pc ${g.pc.toString(16)} r=${g.R.map(hex4).join(' ')}, sim r=${t.R.map(hex4).join(' ')}`);
+      if (!blit) instructions++;
+    }
+    // The dispatch cadence: the halt is dispatched too, so there is one more
+    // dispatch than retirement - and so is a faulting push or pop.
+    for (let i = 1; i < Math.min(ds.length, trace.length + 1); i++) {
+      const prev = trace[i - 1];
+      const want = prev.exc ? prev.exc
+                 : prev.mem ? prev.mem + (prev.memst ? 4 : 3) + (blit && prev.late ? 1 : 0)
+                 : prev.jump ? prev.jump : prev.taken ? 4
+                 : (prev.pc & 1) && prev.len === 3 ? 2 : 1;
+      if (ds[i].pc !== (whole[i]?.pc ?? ds[i].pc)) say(` dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
+      if (ds[i].cyc - ds[i - 1].cyc !== want)
+        say(` dispatch ${i}: ${ds[i].cyc - ds[i - 1].cyc} cycles after the one at 0x${prev.pc.toString(16)}, want ${want}`);
+    }
+    if (!blit) { cycNew += ends[p]?.cyc ?? 0; cycOld += old; }
+  });
+}
+check(out, false, '');
+
+// AND BUILT WITH FRUCTUS_BLIT: with the mode off it must be the same machine,
+// line for line; with it on, the memory hands every word back a second time,
+// a cycle later, on mem_late, as tools/fpga-system.sv does from its own
+// memory - so a late load finds the same bytes, a cycle later.
+execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', '-DBLIT_ON=1\'b0', '-o', 'build/cpu-tb.vvp', ...RTL, 'build/cpu-tb.sv'],
+             { stdio: 'inherit' });
+const outOff = execFileSync('vvp', ['build/cpu-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+if (trace(outOff) !== trace(out)) {
+  console.log('FAIL  rtl/cpu.sv: built for blit mode with the mode off, it runs differently');
+  process.exit(1);
+}
+execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', '-DBLIT_ON=1\'b1', '-o', 'build/cpu-tb.vvp', ...RTL, 'build/cpu-tb.sv'],
+             { stdio: 'inherit' });
+check(execFileSync('vvp', ['build/cpu-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 }), true, 'in blit mode, ');
+for (const f of ['build/cpu-tb.vvp', 'build/cpu-tb.sv']) rmSync(f, { force: true });
 
 // --- the interrupt line -----------------------------------------------------------
-// THE SAME PROGRAMS, INTERRUPTED EVERY FEW CYCLES, as tests/rtl-check.mjs does
-// for rtl/cpu.sv.  The vector holds nothing but rti, so an interrupt entered
+// THE SAME PROGRAMS, INTERRUPTED EVERY FEW CYCLES.  The vector holds nothing
+// but rti, so an interrupt entered
 // and left must leave a program exactly as if it had never come: the same
 // registers and memory at the halt as the simulator's run without one.  The
 // line goes up 17 to 39 cycles after each take, at random, and down at the
@@ -525,7 +580,7 @@ const finals = programs.map(({ bytes, reg }) => {
   for (let k = 0; k < 65536; k++) hash = (Math.imul(hash, 31) + m.mem[k]) & 0x7fffffff;
   return { R: Array.from(m.R), hash, cli, ie: m.ie };
 });
-writeFileSync('build/pipe-irq-tb.sv', `module tb;
+writeFileSync('build/cpu-irq-tb.sv', `module tb;
     logic clk = 0, rst = 1, irq = 0, drop;
     integer next, lfsr;
     logic [7:0] mem [0:65535];
@@ -534,8 +589,12 @@ writeFileSync('build/pipe-irq-tb.sv', `module tb;
     wire [15:0] addr;
     wire [7:0] wdata;
     wire we, halted, trapped;
-    pipe_cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
+${BLIT_WIRING}
+    cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(we), .irq(irq),
+\`ifdef FRUCTUS_BLIT
+                .blit(\`BLIT_ON), .mem_late(late),
+\`endif
                 .halted(halted), .trapped(trapped), .result(), .retire(), .retire_pc());
     always @(posedge clk) begin
         rdata <= {mem[{addr[15:1], 1'b1}], mem[{addr[15:1], 1'b0}]};
@@ -562,8 +621,8 @@ writeFileSync('build/pipe-irq-tb.sv', `module tb;
     initial begin
         for (p = 0; p < ${PROGRAMS}; p = p + 1) begin
             for (k = 0; k < 65536; k = k + 1) mem[k] = 8'h00;
-            $sformat(name, "build/pipe-prog-%0d.hex", p); $readmemh(name, mem);
-            $sformat(name, "build/pipe-reg-%0d.hex", p);  $readmemh(name, regs);
+            $sformat(name, "build/cpu-prog-%0d.hex", p); $readmemh(name, mem);
+            $sformat(name, "build/cpu-reg-%0d.hex", p);  $readmemh(name, regs);
             mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
             irq = 0;
             rst = 1;
@@ -590,42 +649,54 @@ writeFileSync('build/pipe-irq-tb.sv', `module tb;
     end
 endmodule
 `);
-execFileSync('iverilog', ['-g2012', '-o', 'build/pipe-irq-tb.vvp',
-  ...RTL, 'build/pipe-irq-tb.sv'], { stdio: 'inherit' });
-const irqOut = execFileSync('vvp', ['build/pipe-irq-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+// And in blit mode, where a program that faults must still just trap.
 let irqTakes = 0;
-const irqSeen = new Set();
-for (const line of irqOut.split('\n')) {
-  const f = line.trim().split(/\s+/);
-  if (f[0] !== 'IRQ') continue;
-  const p = +f[1], R = f.slice(6, 14).map((x) => parseInt(x, 16)), fin = finals[p];
-  irqSeen.add(p);
-  irqTakes += +f[4];
-  if (f[2] !== '1' || f[3] !== '0') complain(`program ${p}: ${f[3] === '1' ? 'trapped' : 'did not halt'} under interrupts`);
-  if (!fin.cli && +f[4] < 1) complain(`program ${p}: no interrupt taken`);
-  if (+f[5] !== fin.hash) complain(`program ${p}: memory folds to ${f[5]} under interrupts and ${fin.hash} without`);
-  if (fin.ie && +f[15] !== +f[14] + 1)
-    complain(`program ${p}: waited at 0x${(+f[14]).toString(16)} and ended at 0x${(+f[15]).toString(16)}, not a byte on, after the interrupt at the halt`);
-  if (R.some((v, k) => v !== fin.R[k]))
-    complain(`program ${p}: r=${R.map(hex4).join(' ')} under interrupts, sim r=${fin.R.map(hex4).join(' ')}`);
+for (const blit of [false, true]) {
+  const what = blit ? ' in blit mode' : '';
+  execFileSync('iverilog', ['-g2012', ...(blit ? ['-DFRUCTUS_BLIT', '-DBLIT_ON=1\'b1'] : []),
+    '-o', 'build/cpu-irq-tb.vvp', ...RTL, 'build/cpu-irq-tb.sv'], { stdio: 'inherit' });
+  const irqOut = execFileSync('vvp', ['build/cpu-irq-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+  const irqSeen = new Set();
+  for (const line of irqOut.split('\n')) {
+    const f = line.trim().split(/\s+/);
+    if (f[0] !== 'IRQ') continue;
+    const p = +f[1], R = f.slice(6, 14).map((x) => parseInt(x, 16)), fin = finals[p];
+    irqSeen.add(p);
+    if (!blit) irqTakes += +f[4];
+    if (blit && programs[p].fault) {
+      if (f[3] !== '1') complain(`program ${p}: ${f[2] === '1' ? 'halted' : 'did not stop'} under interrupts${what}, not trapped at its stack fault`);
+      continue;
+    }
+    if (f[2] !== '1' || f[3] !== '0') complain(`program ${p}: ${f[3] === '1' ? 'trapped' : 'did not halt'} under interrupts${what}`);
+    if (!fin.cli && +f[4] < 1) complain(`program ${p}: no interrupt taken${what}`);
+    if (+f[5] !== fin.hash) complain(`program ${p}: memory folds to ${f[5]} under interrupts${what} and ${fin.hash} without`);
+    if (fin.ie && +f[15] !== +f[14] + 1)
+      complain(`program ${p}${what}: waited at 0x${(+f[14]).toString(16)} and ended at 0x${(+f[15]).toString(16)}, not a byte on, after the interrupt at the halt`);
+    if (R.some((v, k) => v !== fin.R[k]))
+      complain(`program ${p}: r=${R.map(hex4).join(' ')} under interrupts${what}, sim r=${fin.R.map(hex4).join(' ')}`);
+  }
+  if (irqSeen.size !== PROGRAMS) complain(`${PROGRAMS - irqSeen.size} programs printed nothing under interrupts${what}`);
 }
-if (irqSeen.size !== PROGRAMS) complain(`${PROGRAMS - irqSeen.size} programs printed nothing under interrupts`);
-for (const f of ['build/pipe-irq-tb.vvp', 'build/pipe-irq-tb.sv']) rmSync(f, { force: true });
-if (!process.env.PIPE_KEEP) for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/pipe-prog-${p}.hex`, `build/pipe-reg-${p}.hex`]) rmSync(f, { force: true });
+for (const f of ['build/cpu-irq-tb.vvp', 'build/cpu-irq-tb.sv']) rmSync(f, { force: true });
+if (!process.env.CPU_KEEP) for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/cpu-prog-${p}.hex`, `build/cpu-reg-${p}.hex`]) rmSync(f, { force: true });
 
 if (bad === 0) {
   const taken = programs.reduce((n, { trace }) => n + trace.filter((t) => t.taken).length, 0);
   const jumped = programs.reduce((n, { trace }) => n + trace.filter((t) => t.jump).length, 0);
   const moved = programs.reduce((n, { trace }) => n + trace.filter((t) => t.mem).length, 0);
-  console.log(`ok    rtl/pipe/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over `
+  console.log(`ok    rtl/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over `
             + `${all.length + brs.length + jumps.length + loads.length + stores.length} forms, `
             + `${taken} branches taken, ${jumped} jumps, ${moved} memory instructions; `
             + `registers, memory and dispatch cadence agree with tools/sim.js`);
   console.log(`      ${cycNew} cycles to halt, against ${cycOld} on the byte-serial cost model `
             + `(${(cycOld / cycNew).toFixed(2)}x fewer)`);
-  console.log(`ok    rtl/pipe/cpu.sv, interrupted: ${PROGRAMS} programs under ${irqTakes} interrupts, `
+  console.log(`ok    rtl/cpu.sv, interrupted: ${PROGRAMS} programs under ${irqTakes} interrupts, `
             + `the last at each halt, end as tools/sim.js does without them`);
+  const lateLoads = programs.reduce((n, { trace, fault }) => n + trace.slice(0, fault?.at).filter((t) => t.late).length, 0);
+  console.log(`ok    rtl/cpu.sv, built for blit mode: the same machine with it off; with it on, `
+            + `${lateLoads} loads a cycle late and ${faults} programs trapped at a stack above 0x8000, `
+            + `interrupted and not, as predicted`);
 } else {
-  console.log(`FAIL  rtl/pipe/cpu.sv: ${bad} disagreements with tools/sim.js`);
+  console.log(`FAIL  rtl/cpu.sv: ${bad} disagreements with tools/sim.js`);
   process.exit(1);
 }

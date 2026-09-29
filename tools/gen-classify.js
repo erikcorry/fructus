@@ -1,20 +1,17 @@
 #!/usr/bin/env node
 // =============================================================================
-// gen-pipe-classify.js - the pipelined experiment's predecode table
+// gen-classify.js - the processor's predecode table
 // =============================================================================
 //
-//   node tools/gen-pipe-classify.js > rtl/pipe/classify.sv
+//   node tools/gen-classify.js > rtl/classify.sv
 //
-// THE EXPERIMENT IN rtl/pipe/ IS NOT THE PROCESSOR.  It is a three-stage
-// pipeline - dispatch/predecode, decode, ALU - over a 16-bit memory port, built
-// to find out what clock such a machine could run at before anything else is
-// committed to it.  So far it runs the one-register ALU instructions and the
-// conditional branches; everything else is classified, so the categories are
-// real, but is stopped at as though it were microcoded.
+// rtl/cpu.sv is a three-stage pipeline - dispatch/predecode, decode, ALU -
+// over a 16-bit memory port.  Its dispatch stage looks the opcode up here, and
+// decides from the kind and the length alone whether the next dispatch can
+// follow at once.
 //
-// ONE ROW PER OPCODE, from tools/predecode-rows.js - the rows rtl/predecode.sv
-// is built from - with two things added: the category, and the instruction's
-// length.  The category is
+// ONE ROW PER OPCODE, from tools/predecode-rows.js, with two things added:
+// the category, and the instruction's length.  The category is
 //
 //     kind   0 ALU     one result into one register, every stage single-cycle
 //            1 UCODE   anything else, and every opcode the spec leaves empty
@@ -24,16 +21,15 @@
 // and with the length it names the seven classes: ONE_BYTE_ALU is kind 0 and
 // length 1, THREE_BYTE_CONDITIONAL_BRANCH kind 2 and length 3, and so on.
 //
-// WHICH INSTRUCTIONS ARE ALU IS A LIST, NOT A RULE, because it is the
-// experiment's scope rather than a property of the instruction set: the
-// instructions whose selects already describe them completely, less the two
-// that need more than one ALU cycle (clz and popcount, which the spec gives an
-// extra cycle) and mul, which is left out of the first step on purpose.
+// WHICH INSTRUCTIONS ARE ALU IS A LIST, NOT A RULE: the instructions whose
+// selects already describe them completely, less the ones that need more than
+// one ALU cycle - clz and popcount, which the spec gives an extra cycle, and
+// mul - which run a microcode routine instead.
 // =============================================================================
 
 import { loadSpec } from './isa.js';
 import { rows, X } from './predecode-rows.js';
-import { entryOf, entryNamed, ENTRY_BITS } from './pipe-ucode.js';
+import { entryOf, entryNamed, ENTRY_BITS } from './ucode.js';
 
 const spec = loadSpec();
 
@@ -65,7 +61,7 @@ const kindOf = (r) => {
 // ALU fields are real and it writes.
 //
 // A MEMORY INSTRUCTION IS MICROCODED - dispatch stops behind it - BUT IT
-// ENTERS THE PIPELINE, and rtl/pipe/cpu.sv's sequencer moves its bytes from
+// ENTERS THE PIPELINE, and rtl/cpu.sv's sequencer moves its bytes from
 // the ALU stage.  Its fields, read off the semantics:
 //
 //     mem    it is one
@@ -93,29 +89,37 @@ const kindOf = (r) => {
 // dispatch is released in the ALU cycle, as a routine whose last write lands
 // before the next instruction reaches decode can.  halt has none: it stops, and an interrupt wakes
 // it.
+//
+// `ulate` marks the loads blit mode makes late - ld, ld8 and ldm, every load
+// but pop, whose base is sp.  It is a table of its own, and exists only in a
+// core built with FRUCTUS_BLIT: as a column of the main table, unread, it
+// still changed how that table mapped, by 16 LUT4s, so the core without blit
+// mode would not have been the core that was measured.
 const ALU_ADD = 0;
 const memOf = (r) => {
   const sem = r.insns[0].semantics ?? '';
   let m;
   if ((m = /^R\[d\] = M(8|16)\[R\[a\] \+ (off|R\[b\])\]$/.exec(sem)))
-    return { st: 0, w2: m[1] === '16' ? 1 : 0, n: 1, blk: 0, push: 0, dest: r.v.dest };
+    return { st: 0, w2: m[1] === '16' ? 1 : 0, n: 1, blk: 0, push: 0, dest: r.v.dest, late: 1 };
   if ((m = /^M(8|16)\[R\[a\] \+ (off|R\[b\])\] = R\[s\]$/.exec(sem)))
-    return { st: 1, w2: m[1] === '16' ? 1 : 0, n: 1, blk: 0, push: 0, dest: 8 };
-  if (/^base = (sp|r1|r2); /.test(sem)) {
+    return { st: 1, w2: m[1] === '16' ? 1 : 0, n: 1, blk: 0, push: 0, dest: 8, late: 0 };
+  if ((m = /^base = (sp|r1|r2); /.exec(sem))) {
     const n = (sem.match(/M16\[/g) ?? []).length;
-    return { st: /M16\[base[^\]]*\] = R/.test(sem) ? 1 : 0, w2: 1, n, blk: 1,
-             push: /base - /.test(sem) ? 1 : 0, dest: 8 };
+    const st = /M16\[base[^\]]*\] = R/.test(sem) ? 1 : 0;
+    return { st, w2: 1, n, blk: 1, push: /base - /.test(sem) ? 1 : 0, dest: 8,
+             late: !st && m[1] !== 'sp' ? 1 : 0 };
   }
   return null;
 };
 const bits = (v, w) => (v === X ? 'x'.repeat(w) : v.toString(2).padStart(w, '0'));
 const W = 35 + ENTRY_BITS;
+const late1 = [], late0 = [];          // the rows with a routine, by ulate
 const counts = [0, 0, 0, 0];
 let memRows = 0, excRows = 0;
 const cases = rows.map((r) => {
   const k = kindOf(r);
   counts[k]++;
-  // The selects matter only to a row that flows; a row the experiment stops
+  // The selects matter only to a row that flows; a row the processor stops
   // at leaves them to the mapper.
   const cbr = k === KIND.cbr, jump = k === KIND.jump;
   const mem = k === KIND.ucode ? memOf(r) : null;
@@ -147,17 +151,18 @@ const cases = rows.map((r) => {
              bits(mem ? 1 : 0, 1), mf(mem?.st, 1), mf(mem?.w2, 1), mf(mem?.n, 2), mf(mem?.blk, 1), mf(mem?.push, 1),
              bits(useq ? 1 : 0, 1), bits(mem ? entryOf(mem) : exc ?? X, ENTRY_BITS),
              bits(useq ? (slow ? 1 : 0) : X, 1), bits(useq ? (urs ? 1 : 0) : X, 1)];
+  if (useq) (mem?.late ? late1 : late0).push(r.op);
   return `        8'h${r.op.toString(16).padStart(2, '0')}: t = ${W}'b${t.join('_')};    // ${r.who}`;
 }).join('\n');
 
 process.stdout.write(`// =============================================================================
-// classify.sv - the pipelined experiment's predecode: what the opcode is
+// classify.sv - the processor's predecode: what the opcode is
 // =============================================================================
 //
-// GENERATED by tools/gen-pipe-classify.js from isa/fructus.toml.  Do not edit.
+// GENERATED by tools/gen-classify.js from isa/fructus.toml.  Do not edit.
 //
 // Combinational, over the opcode byte as it arrives in the dispatch cycle.
-// rtl/pipe/cpu.sv decides from kind and length alone whether the next dispatch
+// rtl/cpu.sv decides from kind and length alone whether the next dispatch
 // can follow at once, and latches the rest for the decode stage.
 //
 // ${rows.length} opcodes: ${counts[0]} ALU, ${counts[1]} microcoded - ${memRows} of them memory instructions and
@@ -190,9 +195,9 @@ module classify (
     output logic [1:0] len,       // 1, 2 or 3 bytes
     output logic       wen,       // an ALU row writes its destination
     output logic       halt,      // it is halt
-    output logic [3:0] alu_op,    // -> rtl/pipe/alu.sv
+    output logic [3:0] alu_op,    // -> rtl/alu.sv
     output logic [3:0] lhs_src,   // -> rtl/lhs.sv
-    output logic [3:0] rhs_src,   // rtl/rhs.sv's codes, read by rtl/pipe/cpu.sv's decode
+    output logic [3:0] rhs_src,   // predecode's rhs codes, read by rtl/cpu.sv's decode
     output logic [3:0] dest_src,  // -> rtl/dest.sv
     output logic [1:0] cond_src,  // -> rtl/cond.sv, for a conditional branch
     output logic [1:0] pc_src,    // a jump's target: 1 relative, 2 absolute, 3 register
@@ -203,8 +208,11 @@ module classify (
     output logic       mblk,      //   a block move, walking and writing back lhs
     output logic       mpush,     //   downward, so its registers lie reversed
     output logic       useq,      // it runs a routine: a memory or exception instruction
-    output logic [${ENTRY_BITS - 1}:0] uent,      // where its routine starts in rtl/pipe/ucode.sv
+    output logic [${ENTRY_BITS - 1}:0] uent,      // where its routine starts in rtl/ucode.sv
     output logic       uslow,     // its ALU cycle puts clz or popcount of aq into ldq
+\`ifdef FRUCTUS_BLIT
+    output logic       ulate,     // blit mode makes it late: ld, ld8 and ldm
+\`endif
     output logic       urs        // dispatch is released in its ALU cycle
 );
 
@@ -220,6 +228,17 @@ ${cases}
     assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src,
             mem, mst, mw2, mn, mblk, mpush, useq, uent, uslow, urs} = t;
     assign halt = (op == 8'h${HALT.toString(16).padStart(2, '0')});
+\`ifdef FRUCTUS_BLIT
+    // Read only for a row with a routine, so the rest are the mapper's.
+    always_comb
+        case (op)
+        ${late1.map((o) => `8'h${o.toString(16).padStart(2, '0')}`).join(', ')}:
+            ulate = 1'b1;
+        ${late0.map((o) => `8'h${o.toString(16).padStart(2, '0')}`).join(', ')}:
+            ulate = 1'b0;
+        default: ulate = 1'bx;
+        endcase
+\`endif
 
 endmodule
 `);

@@ -238,7 +238,7 @@ length_from_first_byte = true
 #
 # AND A ONE-BYTE INSTRUCTION THAT COMPUTES COSTS TWO CYCLES, which is the price
 # of the pipelining rather than of the encoding.  The hardware reads its
-# operands in the cycle BEFORE the ALU sees them - see rtl/cpu.sv - and every
+# operands in the cycle BEFORE the ALU sees them - see the byte-serial core's cpu.sv - and every
 # multi-byte instruction has a fetch cycle to do that in.  A one-byte form has
 # no second byte, so it spends a cycle of its own.  It keeps its size, which is
 # what it was for: `add r0, r0, #1` is still one byte where the general form is
@@ -279,7 +279,7 @@ length_from_first_byte = true
 # later, as here, against 20.54 with it added in the fetch cycle - the same
 # 1141 cells in both, so what is bought is the path and not the hardware.  One cycle on
 # the accesses against a third off every instruction in the machine is not a
-# close call; rtl/cpu.sv carries the rest of the numbers.
+# close call; the byte-serial core's cpu.sv carries the rest of the numbers.
 #
 # AND `pop` PAYS ONE CYCLE MORE STILL, because its last act is to write sp and
 # the register file has ONE write port, so that write cannot share the cycle
@@ -342,7 +342,7 @@ taken_branch_penalty = 1
 [cpu.vectors]
 reset        = 0xfffc   # the board's, not the bare part's: reset presents 0
 brk          = 0xfff8   # IMPLEMENTED: `brk`, and the hardware interrupt line
-illegal_insn = 0xfff4   # reserved: an opcode rtl/ucode.sv does not implement
+illegal_insn = 0xfff4   # reserved: an opcode the processor does not implement
 nmi          = 0xfff0   # reserved
 irq7         = 0xffec   # reserved: hardware interrupt lines, 7 down to 0
 irq6         = 0xffe8
@@ -559,7 +559,7 @@ values = [
 # top index bit complements the lot.  The unused column-2 nibble is a
 # don't-care the override pays for.
 #
-# MEASURED on an iCE40 UP5K, yosys 0.52 + nextpnr-ice40 0.7, beside rtl/rhs.sv
+# MEASURED on an iCE40 UP5K, yosys 0.52 + nextpnr-ice40 0.7, beside the byte-serial core's rhs.sv
 # and inside the processor, with the two mask columns of the opcode map at +4
 # and +5 so that one opcode bit selects this whole block:
 #
@@ -569,10 +569,10 @@ values = [
 #       with every opcode moved to match              158          938      23.3
 #
 # The middle row changed only this block; the last is the processor as
-# generated, where rtl/predecode.sv's table came out 13 LUT4 larger for rows
+# generated, where the byte-serial core's predecode.sv's table came out 13 LUT4 larger for rows
 # that only moved.  The clock did not move - medians of eight seeds, all well
 # inside what the seeds wander by - because the immediate settles before the
-# register it competes with at rtl/rhs.sv's mux.  It is area.
+# register it competes with at the byte-serial core's rhs.sv's mux.  It is area.
 #
 # NONE OF THIS CONSTRAINED THE CONTENTS, which were chosen for the compiler;
 # only their order is the circuit's.  tools/check.js says what an edit that
@@ -1182,7 +1182,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   THE SHORT FORMS SIT IN ADJACENT COLUMNS, which is why jmp and call put
 #   their imm16 form at .1 and their register form at .2 rather than the other
 #   way round.  Nothing in this implementation reads a length from the opcode -
-#   rtl/ucode.sv's entry word says how many bytes to fetch, and binutils
+#   the byte-serial core's ucode.sv's entry word says how many bytes to fetch, and binutils
 #   carries a 256-entry table - so the arrangement buys it nothing.  It is for
 #   a decoder that wants the answer from the bits alone, where `is this three
 #   bytes' is the most critical question asked and the one that cannot wait.
@@ -2195,7 +2195,7 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
 # these columns.  The hardware selects the operation with bits 2:1 of the imm3
 # VALUE, after the lookup, on the right-hand-side bus the ALU already reads -
 # so no selector lines run from decode to the ALU, and each operation sits at
-# the index whose value carries its code.  See rtl/unary.sv.
+# the index whose value carries its code.  See the byte-serial core's unary.sv.
 #
 #     byte 0:  0 0 1 1 0 0 1 s    opcode pair 0x32/0x33, s = index bit 0
 #     byte 1:  s s a a a d d d    index bits 2 and 1, source, destination
@@ -2321,7 +2321,7 @@ extra_cycles = 1
 # cells of the LUT level in front of them - and neither median moves by more
 # than the spread, so the extra cycle buys no clock.  Moving it back is the
 # encoding's first byte, 0011_0011, and `extra_cycles = 1` - byte 1 is
-# 01aa_addd at both, and tools/gen-unary.js builds either.
+# 01aa_addd at both, and the byte-serial core's gen-unary.js builds either.
 [[insn]]
 mnemonic = "clmul"
 summary  = "rd = carry-less product of ra's low and high bytes"
@@ -2362,7 +2362,7 @@ semantics = "R[d] = clmul(R[a])"
 #
 # ALL FOUR OPCODES SHARE ONE TAIL.  Once the right-hand operand is in its flop
 # they are the same instruction, so every form ends in SLOW and then EXEC; the
-# three-byte form fetches its last byte on the way.  See rtl/ucode.sv.
+# three-byte form fetches its last byte on the way.  See the byte-serial core's ucode.sv.
 #
 # nextpnr-ice40 0.7 DOES NOT TIME THROUGH SB_MAC16, so `just speed` cannot see
 # this path at all; icetime can.
@@ -2770,7 +2770,7 @@ semantics = "R[d] = (R[a] & mask) != 0"
 #
 # IT IS ALSO WHAT THE HARDWARE DOES FOR ITS OWN REASONS.  The register file has
 # ONE write port, and a pop already fills it with the words it is loading, so
-# the pointer's own write is left until last - see rtl/ucode.sv.  The rule above
+# the pointer's own write is left until last - see the byte-serial core's ucode.sv.  The rule above
 # is that ordering, described rather than imposed.
 #
 # THE SEMANTICS BELOW SAY SO with a name for the pointer's entry value, `base`.
@@ -2977,7 +2977,7 @@ semantics = "base = r2; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 # relatively; `jmp' and `call' are three bytes reaching it absolutely, and a
 # relative target costs a CYCLE MORE because the adder and the verdict land in
 # flops an edge later than the instruction's own bytes do - see the timings in
-# rtl/cpu.sv.  Three bytes and four cycles against three and three, for
+# the byte-serial core's cpu.sv.  Three bytes and four cycles against three and three, for
 # position independence that a machine with a linker and no address-space
 # randomisation never asked for.
 #
@@ -3287,7 +3287,7 @@ semantics = "halted = 1"
 # `sp` AND `shadow_isp` ARE NEVER EXCHANGED IN ONE CYCLE, and that is the whole
 # reason there are two shadows rather than one.  A swap needs the old value of
 # each side while the new one arrives, which on this machine means a mux in
-# front of the register file's write port - measured at 3.3 MHz, see rtl/cpu.sv,
+# front of the register file's write port - measured at 3.3 MHz, see the byte-serial core's cpu.sv,
 # and paid by every instruction rather than by the two that need it.  Two
 # one-way moves in two cycles cost the datapath nothing and the exception a
 # cycle, and the exception is where a cycle is affordable.

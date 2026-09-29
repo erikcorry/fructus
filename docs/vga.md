@@ -400,11 +400,13 @@ flops. With the sprite engine a line must be at least 705 cycles.
 ### The whole system on a UP5K
 
 `tools/fpga-system.sv` puts the CPU, its 64 KB in two SPRAMs, the display and
-both frame buffers on one part: about 2,700 logic cells (51%), 13 of 30 block
-RAMs, all 4 SPRAMs, and 7 of 8 global buffers. The DSP multipliers are
-unused. It places at 27.8 MHz, medians of eight seeds, and every seed clears
-the 25.175 MHz pixel clock. The CPU alone with 64 KB places at 28.6, so the
-display costs it little. That result depends on three rules:
+both frame buffers on one part: about 3,300 logic cells (63%), 10 of 30 block
+RAMs, all 4 SPRAMs, and one of the 8 DSP multipliers, for `mul`. It places at
+27.7 MHz (`just speed-system`, medians of sixteen seeds, 26.9 to 29.1), and
+every seed clears the 25.175 MHz pixel clock. The CPU alone with 64 KB places
+at 29.2, and alone with 32 KB at 31.8. Built without blit mode the system
+places at 27.9, so blit mode costs it little. That result depends on four
+rules:
 
 - **Nothing combinational joins the CPU's address to the frame buffers.**
   The UP5K's SPRAMs are two pairs at opposite corners of the die, so a CPU
@@ -423,6 +425,11 @@ display costs it little. That result depends on three rules:
 - **The display chooses its read address by schedule** (see
   [Text generator](#text-generator)). Before that change, its own address
   path sometimes set the clock of the whole system.
+- **The CPU is synthesised as a hierarchy of its own** (`keep_hierarchy` in
+  `tools/fpga-system.sv`). Flattened into the system, yosys mapped the CPU's
+  decode deeper than it maps the CPU alone - ten or eleven cells from the
+  SPRAM to an operand flop instead of seven - and the system placed at 24.4
+  MHz, below the pixel clock.
 
 **The mode** is the control register at 0x0241. Bit 2 says which buffer the
 display shows, and bits 1:0 what happens to the other one:
@@ -446,14 +453,16 @@ direction would cost 45 logic cells.
   shown or copied into are dropped, so after a change of buffer, or after
   COPY, BLIT and WRITETHRU wait for the next vertical sync.
 - **BLIT** makes the CPU the blitter. Loads and stores above 0x8000 go to the
-  buffer not shown, but instruction fetches and `pop` do not. So the
-  exception vectors at the top of memory are safe in every mode: each is a
-  jump the CPU fetches and executes, not an address it loads, and entering an
-  exception reads no memory at all. A handler does inherit the mode, though,
-  so its own loads and stores above 0x8000 go to the buffer. ld, ld8 and ldm cost a cycle
+  buffer not shown, but instruction fetches do not. So the exception vectors
+  at the top of memory are safe in every mode: each is a jump the CPU fetches
+  and executes, not an address it loads, and entering an exception reads no
+  memory at all. A handler does inherit the mode, though, so its own loads and
+  stores above 0x8000 go to the buffer. `ld`, `ld8` and `ldm` cost a cycle
   more, and the CPU has separate microcode routines for them. Code running in
-  this mode keeps its data, constants and stack below 0x8000. Without
-  `` `define FRUCTUS_BLIT `` the CPU is built exactly as before.
+  this mode keeps its data, constants and stack below 0x8000: a `push` or
+  `pop` that reaches 0x8000 or above stops the CPU with `trapped`, because
+  `pop` reads the CPU's own memory there while `push` would write the buffer.
+  Without `` `define FRUCTUS_BLIT `` the CPU is built exactly as before.
 - **WRITETHRU** suits text, where the screen is small. The CPU keeps its own
   copy of the screen above 0x8000 and reads it at full speed, and the buffer
   not shown follows every write.

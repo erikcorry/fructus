@@ -27,9 +27,10 @@ BELS = {"ram_lo_RAM": "X0/Y0/spram_1", "ram_hi_RAM": "X0/Y0/spram_2",
         "fba_RAM": "X25/Y0/spram_3", "fbb_RAM": "X25/Y0/spram_4"}
 
 # The processor, and the top level's cells that sit between it and its own
-# two SPRAMs: the byte and bank selects, blit mode's late path, the write
-# enables, and the observation shift register.
-GLUE = ("u.", "lowbyte", "src", "ram_", "hi", "lo_", "lb", "late", "we", "wdata",
+# two SPRAMs: the bank select, blit mode's late path, the write enables, and
+# the observation shift register.  The processor picks its own byte, so there
+# is no byte select.
+GLUE = ("u.", "src", "rdata", "ram_", "hi", "lo_", "late", "we", "wdata",
         "so", "irq", "rst", "dout")
 
 for name, cell in ctx.cells:

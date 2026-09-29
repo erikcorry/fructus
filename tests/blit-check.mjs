@@ -5,8 +5,8 @@
 //
 //   node tests/blit-check.mjs
 //
-// tests/rtl-check.mjs already runs every load in blit mode against the
-// simulator, with an idealised memory handing the bytes back late.  This runs a
+// tests/cpu-check.mjs already runs every load in blit mode against the
+// simulator, with an idealised memory handing the words back late.  This runs a
 // program on the WHOLE SYSTEM instead - the processor built with FRUCTUS_BLIT,
 // its two SPRAMs, the frame buffers, the register block and the display, with
 // yosys's own model of the SPRAM - so what is checked is the memory map and
@@ -20,8 +20,10 @@
 //   - st and st8 into it, each read back by the very next instruction;
 //   - ldm, reading the back buffer, and push and pop with the stack below
 //     0x8000;
-//   - a frame pushed above 0x8000 in processor mode, popped in blit mode: pop
-//     keeps its ordinary routine and reads ram_hi, not the buffer;
+//   - a frame pushed and popped in blit mode just below 0x8000, which is
+//     allowed; and, in two programs of their own, a pop from 0xf000 and a
+//     push that would store at 0x8000, each of which must stop the processor
+//     with `trapped` before it moves a byte;
 //   - a copy loop inside the back buffer, and the sum of what it copied;
 //   - brk, and then the interrupt line, both in blit mode.  The vector at
 //     0xfff8 is a jump the processor fetches, so it comes from ram_hi however
@@ -88,16 +90,16 @@ const src = `
         st8  r0, [r1, #6]
         mov  r0, #0
         st8  r0, [r1, #7]
-        mov  sp, #0xf000
-        mov  r0, #0x3141
-        mov  r3, #0x5926
-        push r0, r3                ; processor mode: into ram_hi at 0xeffc
+        mov  sp, #0x8000
         mov  r1, #0x241
         mov  r0, #2
         st8  r0, [r1]              ; blit on
+        mov  r0, #0x3141
+        mov  r3, #0x5926
+        push r0, r3                ; 0x7ffc: just below 0x8000, so no fault
         mov  r0, #0
         mov  r3, #0
-        pop  r3, r0                ; still ram_hi's, not the back buffer's
+        pop  r3, r0
         mov  r4, #${RESULT}
         st   r3, [r4, #26]
         st   r0, [r4, #28]
@@ -263,8 +265,8 @@ const results = [
   ['writethru: a load above 0x8000 is ram_hi\'s',             hiC(257)],
   ['writethru: st, then ld of it at once',                     0x4242],
   ['blit off: ram_hi\'s word 0, stored in processor mode',     0x1111],
-  ['a high frame popped in blit mode, first',                  0x5926],
-  ['a high frame popped in blit mode, second',                 0x3141],
+  ['a frame just below 0x8000, in blit mode, first',          0x5926],
+  ['a frame just below 0x8000, in blit mode, second',         0x3141],
   ['blit off: ram_hi\'s word 1, untouched',                    hiC(1)],
   ['blit to B: a table word is the copy of A\'s',              fbA(0x3800)],
   ['blit to B: st, then ld of it at once',                     0x6161],
@@ -321,22 +323,67 @@ ${words.map(([mem, w], k) => {
   return `        $display("W ${k} %h", dut.${inst}.mem[${w}]);`;
 }).join('\n')}
         for (k = 0; k < ${WORDS}; k = k + 1) $display("AB %0d %h %h", k, dut.fba.mem[k], dut.fbb.mem[k]);
+        // For the programs that fault: the marker, and the words a push at
+        // 0x8000 would have written.
+        $display("F %h %h %h %h %h", dut.ram_lo.mem[${RESULT >> 1}],
+                 dut.fba.mem[0], dut.fba.mem[1], dut.ram_hi.mem[0], dut.ram_hi.mem[1]);
         $finish;
     end
 endmodule
 `);
 
-const RTL = ['rtl/cpu.sv', 'rtl/ucode.sv', 'rtl/insn.sv', 'rtl/predecode.sv', 'rtl/lhs.sv', 'rtl/immgen.sv',
-             'rtl/rhs.sv', 'rtl/unary.sv', 'rtl/alu.sv', 'rtl/dest.sv', 'rtl/cond.sv', 'rtl/compare.sv'];
+const RTL = ['rtl/cpu.sv', 'rtl/classify.sv', 'rtl/alu.sv', 'rtl/ucode.sv',
+             'rtl/lhs.sv', 'rtl/dest.sv', 'rtl/immgen.sv', 'rtl/cond.sv', 'rtl/compare.sv'];
 const VIDEO = ['rtl/video/video.sv', 'rtl/video/timing.sv', 'rtl/video/background.sv',
                'rtl/video/foreground.sv', 'rtl/video/sprites.sv'];
 execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', '-DNO_ICE40_DEFAULT_ASSIGNMENTS', '-o', 'build/blit-tb.vvp',
   ...RTL, ...VIDEO, CELLS, 'tools/fpga-system.sv', 'build/blit-tb.sv'], { stdio: ['ignore', 'ignore', 'inherit'] });
 const out = execFileSync('vvp', ['-n', 'build/blit-tb.vvp'], { encoding: 'utf8' });
+
+// --- a stack above 0x8000 in blit mode: a fault --------------------------------------
+// Each program stores a marker, sets blit mode and then pushes or pops where
+// it may not.  The processor must stop there, trapped: the marker's second
+// value never stored, nothing written above 0x8000 in ram_hi or A - which is
+// where a push at 0x8000 would land in blit mode - and, for the pop, no
+// register changed that the marker would show.
+const faults = [
+  ['a pop from 0xf000', `mov sp, #0xf000`, `pop r3, r0`],
+  ['a push that would store at 0x8000', `mov sp, #0x8004`, `push r0, r3`],
+].map(([what, setsp, insn]) => {
+  writeFileSync('build/blit-fault.s', `
+        ${setsp}
+        mov  r4, #${RESULT}
+        mov  r1, #0x241
+        mov  r0, #2
+        st8  r0, [r1]
+        mov  r0, #1
+        st   r0, [r4]
+        ${insn}
+        mov  r0, #2
+        st   r0, [r4]
+        halt
+`.split('\n').map((l) => l.trim()).join('\n'));
+  const { code: fc } = assemble('build/blit-fault.s');
+  rmSync('build/blit-fault.s', { force: true });
+  writeFileSync('build/blit-lo.hex', hex((w) => (fc[2 * w] ?? 0) | ((fc[2 * w + 1] ?? 0) << 8)));
+  return [what, execFileSync('vvp', ['-n', 'build/blit-tb.vvp'], { encoding: 'utf8' })];
+});
 for (const f of ['blit-lo.hex', 'blit-hi.hex', 'blit-fba.hex', 'blit-fbb.hex', 'blit-tb.sv', 'blit-tb.vvp'])
   rmSync(`build/${f}`, { force: true });
 
 let bad = 0;
+for (const [what, fout] of faults) {
+  const e = fout.match(/^END (\d) (\d) (\d+)/m), f = fout.match(/^F (\S+) (\S+) (\S+) (\S+) (\S+)/m);
+  const got = f ? f.slice(1).map((x) => parseInt(x, 16)) : [];
+  const want = [1, fbA(0), fbA(1), hiC(0), hiC(1)];
+  if (!e || e[2] !== '1' || e[1] !== '0') {
+    console.log(`  MISMATCH ${what} in blit mode ${e ? (e[1] === '1' ? 'halted' : 'did not stop') : 'printed nothing'}, not trapped`);
+    bad++;
+  } else if (want.some((v, k) => got[k] !== v)) {
+    console.log(`  MISMATCH ${what} in blit mode: marker, A's words 0 and 1, ram_hi's 0 and 1 are ${got.map((v) => v?.toString(16)).join(' ')}, want ${want.map((v) => v.toString(16)).join(' ')}`);
+    bad++;
+  }
+}
 const end = out.match(/^END (\d) (\d) (\d+)/m);
 if (!end || end[1] !== '1' || end[2] !== '0') {
   console.log(`  the program ${end ? (end[2] === '1' ? 'trapped' : 'did not halt') : 'printed nothing'} after ${end?.[3]} cycles`);
@@ -366,4 +413,5 @@ for (let n = 0; n < LINES; n++)
     if (B[t + n] !== A[t + n] && bad++ < 8)
       console.log(`  MISMATCH line ${n}'s table word ${(t + n).toString(16)} was not copied into B`);
 if (bad) { console.log(`FAIL  tests/blit-check.mjs: ${bad} wrong`); process.exit(1); }
-console.log(`ok    tests/blit-check.mjs: tools/fpga-system.sv's modes, ${results.length} results, ${words.length - results.length} memory words and ${copied} words copied into B, in ${end[3]} cycles`);
+console.log(`ok    tests/blit-check.mjs: tools/fpga-system.sv's modes, ${results.length} results, ${words.length - results.length} memory words and ${copied} words copied into B, in ${end[3]} cycles; `
+          + `${faults.length} stacks above 0x8000 in blit mode trapped`);
