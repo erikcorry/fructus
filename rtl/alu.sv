@@ -4,9 +4,9 @@
 //
 // WRITTEN BY HAND, as rtl/cpu.sv is.  The operation codes are
 // tools/control.js's, so tools/predecode-rows.js's rows mean the same thing
-// here.  mul, whose SB_MAC16 delivers a cycle late, is not in the ALU: it is
-// `mul` below, rtl/classify.sv makes it microcoded, and a routine takes its
-// result into the sequencer's word a cycle after the ALU cycle.
+// here.  mul's SB_MAC16, `mul` below, delivers a cycle late: its product is
+// op 14, and rtl/cpu.sv holds a mul in the ALU stage a second cycle, as it
+// does clz and popcount, so the second writes the right product.
 //
 // clz AND popcount ARE THE UNARY CODE, with `two` set, and take two cycles
 // here: the first half's result goes into a flop of the ALU's own, q, and the
@@ -40,6 +40,7 @@ module alu (
     input  logic [3:0]  op,
     input  logic [2:0]  lsel,    // with op 4: which of the fast group - flops of their own
     input  logic        two,     // with the unary code: clz or popcount, from q
+    input  logic [15:0] prod,    // the SB_MAC16's product, op 14: mul, held until it is right
     input  logic [15:0] mdata,   // the memory sequencer's word: what a load or a
                                  // block move's pointer writes: the fast group's member 5
     output logic [15:0] y,
@@ -117,6 +118,7 @@ module alu (
         4'd9:       y = lhs >> amt;
         4'd11:      y = $signed(lhs) >>> amt;
         4'd12:      y = two ? half2 : unf;
+        4'd14:      y = prod;
         default:    y = 16'hxxxx;
     endcase
 
@@ -127,8 +129,8 @@ endmodule
 // =============================================================================
 //
 // THE SB_MAC16 MULTIPLIES aq BY bq EVERY CYCLE into its own output register,
-// so the product of a mul's ALU-cycle operands is there in the step after,
-// which takes it into ldq.  The product never meets the ALU's result mux.
+// so the product of a mul's first ALU cycle's operands is there in its
+// second, through the result mux's op 14; the first writes a wrong one.
 // Its inputs are the operand flops themselves, with nothing between: a bare
 // wire from a flop is all that pulls toward the DSP's column, which is how it
 // avoids what yosys's -dsp did to the byte-serial core's alu.sv - copy the flops in front of it

@@ -8,8 +8,8 @@
 // rtl/cpu.sv decides from kind, length and `two` whether the next dispatch
 // can follow at once, and latches the rest for the decode stage.
 //
-// 149 opcodes: 87 ALU, 49 microcoded - 40 of them memory instructions and
-// 8 exception instructions or mul - 7 conditional branches, 6 jumps.
+// 149 opcodes: 91 ALU, 45 microcoded - 40 of them memory instructions and
+// 4 exception instructions or mul - 7 conditional branches, 6 jumps.
 // AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
 // MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
 // pc was worked out behind it, so the length is never used.  Pinned at one, as
@@ -52,7 +52,7 @@ module classify (
     output logic       mpush,     //   downward, so its registers lie reversed
     output logic       useq,      // it runs a routine: a memory or exception instruction
     output logic [4:0] uent,      // where its routine starts in rtl/ucode.sv
-    output logic       two,       // two cycles in the ALU stage: clz and popcount
+    output logic [1:0] ext,       // extra cycles in the ALU stage: clz, popcount, mul
 `ifdef FRUCTUS_BLIT
     output logic       ulate,     // blit mode makes it late: ld, ld8 and ldm
 `endif
@@ -60,165 +60,165 @@ module classify (
     output logic [2:0] lsel       // with alu_op 4: which of the fast group - rtl/alu.sv
 );
 
-    logic [42:0] t;
+    logic [43:0] t;
     always_comb begin
         (* rom_style = "logic" *)
         case (op)
-        8'h00: t = 43'b01_01_0_xxxx_xxxx_xxxx_0111_xx_xx_0_0_0_00_0_0_1_01011_0_0_xxx;    // brk
-        8'h01: t = 43'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_x_x_xxx;    // halt
-        8'h02: t = 43'b01_01_0_xxxx_0111_xxxx_0111_xx_xx_0_0_0_00_0_0_1_01100_0_0_xxx;    // rti
-        8'h03: t = 43'b01_01_0_0000_0000_1000_0000_xx_xx_1_0_1_01_0_0_1_00010_0_0_xxx;    // ld
-        8'h04: t = 43'b01_01_0_0000_0000_1000_0000_xx_xx_1_0_0_01_0_0_1_00001_0_1_xxx;    // ld8
-        8'h05: t = 43'b00_01_1_0000_0000_1001_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h06: t = 43'b00_01_1_0000_0000_1111_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h07: t = 43'b00_01_1_0000_0000_1010_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h09: t = 43'b01_11_0_0000_1001_1011_1000_xx_xx_1_1_1_01_0_0_1_00111_0_0_xxx;    // st
-        8'h0a: t = 43'b01_10_0_0000_1001_1011_1000_xx_xx_1_1_1_01_0_0_1_00111_0_0_xxx;    // st
-        8'h0b: t = 43'b01_10_0_0000_1001_1011_1000_xx_xx_1_1_1_01_0_0_1_00111_0_0_xxx;    // st
-        8'h0e: t = 43'b01_10_0_0000_1001_1101_1000_xx_xx_1_1_1_01_0_0_1_00111_0_0_xxx;    // st
-        8'h0f: t = 43'b01_10_0_0000_1001_1101_1000_xx_xx_1_1_1_01_0_0_1_00111_0_0_xxx;    // st
-        8'h11: t = 43'b01_11_0_0000_1001_1011_1000_xx_xx_1_1_0_01_0_0_1_00110_0_0_xxx;    // st8
-        8'h12: t = 43'b01_10_0_0000_1001_1011_1000_xx_xx_1_1_0_01_0_0_1_00110_0_0_xxx;    // st8
-        8'h13: t = 43'b01_10_0_0000_1001_1011_1000_xx_xx_1_1_0_01_0_0_1_00110_0_0_xxx;    // st8
-        8'h16: t = 43'b01_10_0_0000_1001_1101_1000_xx_xx_1_1_0_01_0_0_1_00110_0_0_xxx;    // st8
-        8'h17: t = 43'b01_10_0_0000_1001_1101_1000_xx_xx_1_1_0_01_0_0_1_00110_0_0_xxx;    // st8
-        8'h18: t = 43'b01_10_0_0000_1000_1011_1000_xx_xx_1_0_1_01_0_0_1_00010_0_0_xxx;    // ld
-        8'h19: t = 43'b01_11_0_0000_1001_1011_1000_xx_xx_1_0_1_01_0_0_1_00010_0_0_xxx;    // ld
-        8'h1a: t = 43'b01_10_0_0000_1001_1011_1000_xx_xx_1_0_1_01_0_0_1_00010_0_0_xxx;    // ld
-        8'h1b: t = 43'b01_10_0_0000_1001_1011_1000_xx_xx_1_0_1_01_0_0_1_00010_0_0_xxx;    // ld
-        8'h1e: t = 43'b01_10_0_0000_1001_1101_1000_xx_xx_1_0_1_01_0_0_1_00010_0_0_xxx;    // ld
-        8'h1f: t = 43'b01_10_0_0000_1001_1101_1000_xx_xx_1_0_1_01_0_0_1_00010_0_0_xxx;    // ld
-        8'h20: t = 43'b01_10_0_0000_1000_1011_1000_xx_xx_1_0_0_01_0_0_1_00001_0_1_xxx;    // ld8
-        8'h21: t = 43'b01_11_0_0000_1001_1011_1000_xx_xx_1_0_0_01_0_0_1_00001_0_1_xxx;    // ld8
-        8'h22: t = 43'b01_10_0_0000_1001_1011_1000_xx_xx_1_0_0_01_0_0_1_00001_0_1_xxx;    // ld8
-        8'h23: t = 43'b01_10_0_0000_1001_1011_1000_xx_xx_1_0_0_01_0_0_1_00001_0_1_xxx;    // ld8
-        8'h26: t = 43'b01_10_0_0000_1001_1101_1000_xx_xx_1_0_0_01_0_0_1_00001_0_1_xxx;    // ld8
-        8'h27: t = 43'b01_10_0_0000_1001_1101_1000_xx_xx_1_0_0_01_0_0_1_00001_0_1_xxx;    // ld8
-        8'h28: t = 43'b00_10_1_0100_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // mov
-        8'h29: t = 43'b00_11_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_100;    // movhi
-        8'h2c: t = 43'b00_10_1_0100_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // mov
-        8'h2d: t = 43'b00_10_1_0100_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // mov
-        8'h2e: t = 43'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_100;    // movhi
-        8'h2f: t = 43'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_100;    // movhi
-        8'h30: t = 43'b01_10_0_xxxx_1000_1011_1000_xx_xx_0_0_0_00_0_0_1_01111_0_1_xxx;    // mul
-        8'h31: t = 43'b01_11_0_xxxx_1001_1011_1000_xx_xx_0_0_0_00_0_0_1_01111_0_1_xxx;    // mul
-        8'h32: t = 43'b00_10_1_1100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // clmul bitrev sxt8
-        8'h33: t = 43'b00_10_1_1100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_1_x_xxx;    // clz popcount
-        8'h36: t = 43'b01_10_0_xxxx_1001_1101_1000_xx_xx_0_0_0_00_0_0_1_01111_0_1_xxx;    // mul
-        8'h37: t = 43'b01_10_0_xxxx_1001_1101_1000_xx_xx_0_0_0_00_0_0_1_01111_0_1_xxx;    // mul
-        8'h38: t = 43'b00_10_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h39: t = 43'b00_11_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h3a: t = 43'b00_10_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h3b: t = 43'b00_10_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h3c: t = 43'b00_10_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h3d: t = 43'b00_10_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h3e: t = 43'b00_10_1_0000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h3f: t = 43'b00_10_1_0000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h40: t = 43'b00_10_1_0001_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // rsb
-        8'h41: t = 43'b00_11_1_0001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // rsb
-        8'h42: t = 43'b00_10_1_0001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // rsb
-        8'h43: t = 43'b00_10_1_0001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // rsb
-        8'h46: t = 43'b00_10_1_0001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // rsb
-        8'h47: t = 43'b00_10_1_0001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // rsb
-        8'h48: t = 43'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_000;    // xor
-        8'h49: t = 43'b00_11_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_000;    // xor
-        8'h4a: t = 43'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_000;    // xor
-        8'h4b: t = 43'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_000;    // xor
-        8'h4c: t = 43'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_000;    // xor
-        8'h4d: t = 43'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_000;    // xor
-        8'h4e: t = 43'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_000;    // xor
-        8'h4f: t = 43'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_000;    // xor
-        8'h50: t = 43'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_001;    // or
-        8'h51: t = 43'b00_11_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_001;    // or
-        8'h52: t = 43'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_001;    // or
-        8'h53: t = 43'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_001;    // or
-        8'h54: t = 43'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_001;    // or
-        8'h55: t = 43'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_001;    // or
-        8'h56: t = 43'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_001;    // or
-        8'h57: t = 43'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_001;    // or
-        8'h58: t = 43'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_010;    // and
-        8'h59: t = 43'b00_11_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_010;    // and
-        8'h5a: t = 43'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_010;    // and
-        8'h5b: t = 43'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_010;    // and
-        8'h5c: t = 43'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_010;    // and
-        8'h5d: t = 43'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_010;    // and
-        8'h5e: t = 43'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_010;    // and
-        8'h5f: t = 43'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_010;    // and
-        8'h60: t = 43'b00_10_1_1000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // shl
-        8'h62: t = 43'b00_10_1_1000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // shl
-        8'h63: t = 43'b00_10_1_1000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // shl
-        8'h66: t = 43'b00_10_1_1000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // shl
-        8'h67: t = 43'b00_10_1_1000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // shl
-        8'h68: t = 43'b00_10_1_1011_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // asr
-        8'h6a: t = 43'b00_10_1_1011_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // asr
-        8'h6b: t = 43'b00_10_1_1011_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // asr
-        8'h6e: t = 43'b00_10_1_1011_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // asr
-        8'h6f: t = 43'b00_10_1_1011_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // asr
-        8'h70: t = 43'b00_10_1_1001_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // lsr
-        8'h72: t = 43'b00_10_1_1001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // lsr
-        8'h73: t = 43'b00_10_1_1001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // lsr
-        8'h76: t = 43'b00_10_1_1001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // lsr
-        8'h77: t = 43'b00_10_1_1001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // lsr
-        8'h78: t = 43'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_110;    // iseq
-        8'h79: t = 43'b00_11_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_110;    // iseq
-        8'h7a: t = 43'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_110;    // iseq
-        8'h7b: t = 43'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_110;    // iseq
-        8'h7c: t = 43'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_111;    // isset
-        8'h7d: t = 43'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_111;    // isset
-        8'h7e: t = 43'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_110;    // iseq
-        8'h7f: t = 43'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_110;    // iseq
-        8'h80: t = 43'b00_01_1_0000_0001_0000_0001_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h81: t = 43'b00_01_1_0100_0001_1000_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_001;    // or
-        8'h82: t = 43'b00_01_1_0100_0000_1000_0001_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_001;    // or
-        8'h83: t = 43'b00_01_1_0100_xxxx_1000_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // mov
-        8'h84: t = 43'b00_01_1_0100_0000_1001_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_000;    // xor
-        8'h85: t = 43'b00_01_1_0000_0000_0001_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // add
-        8'h87: t = 43'b00_01_0_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // nop
-        8'h88: t = 43'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // mov
-        8'h89: t = 43'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // mov
-        8'h8a: t = 43'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // mov
-        8'h8b: t = 43'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // mov
-        8'h8c: t = 43'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // mov
-        8'h8d: t = 43'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // mov
-        8'h8e: t = 43'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // mov
-        8'h8f: t = 43'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // mov
-        8'h90: t = 43'b01_10_0_0000_0110_0011_1000_xx_xx_1_1_1_01_1_1_1_01000_0_0_xxx;    // push
-        8'h91: t = 43'b01_10_0_0000_0001_0011_1000_xx_xx_1_1_1_01_1_0_1_01000_0_0_xxx;    // stm
-        8'h92: t = 43'b01_10_0_0000_0110_0011_1000_xx_xx_1_1_1_10_1_1_1_01001_0_0_xxx;    // push
-        8'h93: t = 43'b01_10_0_0000_0001_0011_1000_xx_xx_1_1_1_10_1_0_1_01001_0_0_xxx;    // stm
-        8'h94: t = 43'b01_10_0_0000_0001_0011_1000_xx_xx_1_1_1_11_1_0_1_01010_0_0_xxx;    // stm
-        8'h95: t = 43'b01_10_0_0000_0001_0011_1000_xx_xx_1_1_1_11_1_0_1_01010_0_0_xxx;    // stm
-        8'h96: t = 43'b01_10_0_0000_0110_0011_1000_xx_xx_1_1_1_11_1_1_1_01010_0_0_xxx;    // push
-        8'h97: t = 43'b01_10_0_0000_0110_0011_1000_xx_xx_1_1_1_11_1_1_1_01010_0_0_xxx;    // push
-        8'h98: t = 43'b01_10_0_0000_0110_0011_1000_xx_xx_1_0_1_01_1_0_1_00011_0_0_xxx;    // pop
-        8'h99: t = 43'b01_10_0_0000_0010_0011_1000_xx_xx_1_0_1_01_1_0_1_00011_0_0_xxx;    // ldm
-        8'h9a: t = 43'b01_10_0_0000_0110_0011_1000_xx_xx_1_0_1_10_1_0_1_00100_0_0_xxx;    // pop
-        8'h9b: t = 43'b01_10_0_0000_0010_0011_1000_xx_xx_1_0_1_10_1_0_1_00100_0_0_xxx;    // ldm
-        8'h9c: t = 43'b01_10_0_0000_0010_0011_1000_xx_xx_1_0_1_11_1_0_1_00101_0_0_xxx;    // ldm
-        8'h9d: t = 43'b01_10_0_0000_0010_0011_1000_xx_xx_1_0_1_11_1_0_1_00101_0_0_xxx;    // ldm
-        8'h9e: t = 43'b01_10_0_0000_0110_0011_1000_xx_xx_1_0_1_11_1_0_1_00101_0_0_xxx;    // pop
-        8'h9f: t = 43'b01_10_0_0000_0110_0011_1000_xx_xx_1_0_1_11_1_0_1_00101_0_0_xxx;    // pop
-        8'ha0: t = 43'b10_11_0_xxxx_1000_1100_xxxx_01_01_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // br
-        8'ha1: t = 43'b11_11_0_xxxx_xxxx_xxxx_xxxx_xx_10_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // jmp
-        8'ha2: t = 43'b11_10_0_xxxx_1000_xxxx_xxxx_xx_11_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // jmp
-        8'ha3: t = 43'b11_10_0_xxxx_xxxx_1011_xxxx_xx_01_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // jmpr
-        8'ha4: t = 43'b10_11_0_xxxx_1000_1011_xxxx_10_01_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // brclr
-        8'ha5: t = 43'b10_11_0_xxxx_1000_1011_xxxx_10_01_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // brclr
-        8'ha6: t = 43'b10_11_0_xxxx_1001_1101_xxxx_00_01_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // br
-        8'ha7: t = 43'b10_11_0_xxxx_1001_1101_xxxx_00_01_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // br
-        8'ha9: t = 43'b11_11_1_0100_xxxx_0010_0111_xx_10_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // call
-        8'haa: t = 43'b11_10_1_0100_1000_0010_0111_xx_11_0_x_x_xx_x_x_0_xxxxx_0_x_011;    // call
-        8'hab: t = 43'b11_01_0_xxxx_0111_0111_xxxx_xx_11_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // ret
-        8'hac: t = 43'b10_11_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // brset
-        8'had: t = 43'b10_11_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x_0_xxxxx_0_x_xxx;    // brset
-        8'hae: t = 43'b01_01_0_xxxx_xxxx_xxxx_xxxx_xx_xx_0_0_0_00_0_0_1_01101_0_0_xxx;    // sei
-        8'haf: t = 43'b01_01_0_xxxx_xxxx_xxxx_xxxx_xx_xx_0_0_0_00_0_0_1_01110_0_0_xxx;    // cli
-        default: t = 43'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_x_x;
+        8'h00: t = 44'b01_01_0_xxxx_xxxx_xxxx_0111_xx_xx_0_0_0_00_0_0_1_01011_00_0_xxx;    // brk
+        8'h01: t = 44'b01_01_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xx_x_xxx;    // halt
+        8'h02: t = 44'b01_01_0_xxxx_0111_xxxx_0111_xx_xx_0_0_0_00_0_0_1_01100_00_0_xxx;    // rti
+        8'h03: t = 44'b01_01_0_0000_0000_1000_0000_xx_xx_1_0_1_01_0_0_1_00010_00_0_xxx;    // ld
+        8'h04: t = 44'b01_01_0_0000_0000_1000_0000_xx_xx_1_0_0_01_0_0_1_00001_00_1_xxx;    // ld8
+        8'h05: t = 44'b00_01_1_0000_0000_1001_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h06: t = 44'b00_01_1_0000_0000_1111_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h07: t = 44'b00_01_1_0000_0000_1010_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h09: t = 44'b01_11_0_0000_1001_1011_1000_xx_xx_1_1_1_01_0_0_1_00111_00_0_xxx;    // st
+        8'h0a: t = 44'b01_10_0_0000_1001_1011_1000_xx_xx_1_1_1_01_0_0_1_00111_00_0_xxx;    // st
+        8'h0b: t = 44'b01_10_0_0000_1001_1011_1000_xx_xx_1_1_1_01_0_0_1_00111_00_0_xxx;    // st
+        8'h0e: t = 44'b01_10_0_0000_1001_1101_1000_xx_xx_1_1_1_01_0_0_1_00111_00_0_xxx;    // st
+        8'h0f: t = 44'b01_10_0_0000_1001_1101_1000_xx_xx_1_1_1_01_0_0_1_00111_00_0_xxx;    // st
+        8'h11: t = 44'b01_11_0_0000_1001_1011_1000_xx_xx_1_1_0_01_0_0_1_00110_00_0_xxx;    // st8
+        8'h12: t = 44'b01_10_0_0000_1001_1011_1000_xx_xx_1_1_0_01_0_0_1_00110_00_0_xxx;    // st8
+        8'h13: t = 44'b01_10_0_0000_1001_1011_1000_xx_xx_1_1_0_01_0_0_1_00110_00_0_xxx;    // st8
+        8'h16: t = 44'b01_10_0_0000_1001_1101_1000_xx_xx_1_1_0_01_0_0_1_00110_00_0_xxx;    // st8
+        8'h17: t = 44'b01_10_0_0000_1001_1101_1000_xx_xx_1_1_0_01_0_0_1_00110_00_0_xxx;    // st8
+        8'h18: t = 44'b01_10_0_0000_1000_1011_1000_xx_xx_1_0_1_01_0_0_1_00010_00_0_xxx;    // ld
+        8'h19: t = 44'b01_11_0_0000_1001_1011_1000_xx_xx_1_0_1_01_0_0_1_00010_00_0_xxx;    // ld
+        8'h1a: t = 44'b01_10_0_0000_1001_1011_1000_xx_xx_1_0_1_01_0_0_1_00010_00_0_xxx;    // ld
+        8'h1b: t = 44'b01_10_0_0000_1001_1011_1000_xx_xx_1_0_1_01_0_0_1_00010_00_0_xxx;    // ld
+        8'h1e: t = 44'b01_10_0_0000_1001_1101_1000_xx_xx_1_0_1_01_0_0_1_00010_00_0_xxx;    // ld
+        8'h1f: t = 44'b01_10_0_0000_1001_1101_1000_xx_xx_1_0_1_01_0_0_1_00010_00_0_xxx;    // ld
+        8'h20: t = 44'b01_10_0_0000_1000_1011_1000_xx_xx_1_0_0_01_0_0_1_00001_00_1_xxx;    // ld8
+        8'h21: t = 44'b01_11_0_0000_1001_1011_1000_xx_xx_1_0_0_01_0_0_1_00001_00_1_xxx;    // ld8
+        8'h22: t = 44'b01_10_0_0000_1001_1011_1000_xx_xx_1_0_0_01_0_0_1_00001_00_1_xxx;    // ld8
+        8'h23: t = 44'b01_10_0_0000_1001_1011_1000_xx_xx_1_0_0_01_0_0_1_00001_00_1_xxx;    // ld8
+        8'h26: t = 44'b01_10_0_0000_1001_1101_1000_xx_xx_1_0_0_01_0_0_1_00001_00_1_xxx;    // ld8
+        8'h27: t = 44'b01_10_0_0000_1001_1101_1000_xx_xx_1_0_0_01_0_0_1_00001_00_1_xxx;    // ld8
+        8'h28: t = 44'b00_10_1_0100_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
+        8'h29: t = 44'b00_11_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_100;    // movhi
+        8'h2c: t = 44'b00_10_1_0100_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
+        8'h2d: t = 44'b00_10_1_0100_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
+        8'h2e: t = 44'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_100;    // movhi
+        8'h2f: t = 44'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_100;    // movhi
+        8'h30: t = 44'b00_10_1_1110_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_xxx;    // mul
+        8'h31: t = 44'b00_11_1_1110_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_xxx;    // mul
+        8'h32: t = 44'b00_10_1_1100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // clmul bitrev sxt8
+        8'h33: t = 44'b00_10_1_1100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_xxx;    // clz popcount
+        8'h36: t = 44'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_xxx;    // mul
+        8'h37: t = 44'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_xxx;    // mul
+        8'h38: t = 44'b00_10_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h39: t = 44'b00_11_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h3a: t = 44'b00_10_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h3b: t = 44'b00_10_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h3c: t = 44'b00_10_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h3d: t = 44'b00_10_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h3e: t = 44'b00_10_1_0000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h3f: t = 44'b00_10_1_0000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h40: t = 44'b00_10_1_0001_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // rsb
+        8'h41: t = 44'b00_11_1_0001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // rsb
+        8'h42: t = 44'b00_10_1_0001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // rsb
+        8'h43: t = 44'b00_10_1_0001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // rsb
+        8'h46: t = 44'b00_10_1_0001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // rsb
+        8'h47: t = 44'b00_10_1_0001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // rsb
+        8'h48: t = 44'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_000;    // xor
+        8'h49: t = 44'b00_11_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_000;    // xor
+        8'h4a: t = 44'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_000;    // xor
+        8'h4b: t = 44'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_000;    // xor
+        8'h4c: t = 44'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_000;    // xor
+        8'h4d: t = 44'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_000;    // xor
+        8'h4e: t = 44'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_000;    // xor
+        8'h4f: t = 44'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_000;    // xor
+        8'h50: t = 44'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_001;    // or
+        8'h51: t = 44'b00_11_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_001;    // or
+        8'h52: t = 44'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_001;    // or
+        8'h53: t = 44'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_001;    // or
+        8'h54: t = 44'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_001;    // or
+        8'h55: t = 44'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_001;    // or
+        8'h56: t = 44'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_001;    // or
+        8'h57: t = 44'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_001;    // or
+        8'h58: t = 44'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_010;    // and
+        8'h59: t = 44'b00_11_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_010;    // and
+        8'h5a: t = 44'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_010;    // and
+        8'h5b: t = 44'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_010;    // and
+        8'h5c: t = 44'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_010;    // and
+        8'h5d: t = 44'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_010;    // and
+        8'h5e: t = 44'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_010;    // and
+        8'h5f: t = 44'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_010;    // and
+        8'h60: t = 44'b00_10_1_1000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // shl
+        8'h62: t = 44'b00_10_1_1000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // shl
+        8'h63: t = 44'b00_10_1_1000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // shl
+        8'h66: t = 44'b00_10_1_1000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // shl
+        8'h67: t = 44'b00_10_1_1000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // shl
+        8'h68: t = 44'b00_10_1_1011_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // asr
+        8'h6a: t = 44'b00_10_1_1011_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // asr
+        8'h6b: t = 44'b00_10_1_1011_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // asr
+        8'h6e: t = 44'b00_10_1_1011_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // asr
+        8'h6f: t = 44'b00_10_1_1011_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // asr
+        8'h70: t = 44'b00_10_1_1001_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // lsr
+        8'h72: t = 44'b00_10_1_1001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // lsr
+        8'h73: t = 44'b00_10_1_1001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // lsr
+        8'h76: t = 44'b00_10_1_1001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // lsr
+        8'h77: t = 44'b00_10_1_1001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // lsr
+        8'h78: t = 44'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_110;    // iseq
+        8'h79: t = 44'b00_11_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_110;    // iseq
+        8'h7a: t = 44'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_110;    // iseq
+        8'h7b: t = 44'b00_10_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_110;    // iseq
+        8'h7c: t = 44'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_111;    // isset
+        8'h7d: t = 44'b00_10_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_111;    // isset
+        8'h7e: t = 44'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_110;    // iseq
+        8'h7f: t = 44'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_110;    // iseq
+        8'h80: t = 44'b00_01_1_0000_0001_0000_0001_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h81: t = 44'b00_01_1_0100_0001_1000_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_001;    // or
+        8'h82: t = 44'b00_01_1_0100_0000_1000_0001_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_001;    // or
+        8'h83: t = 44'b00_01_1_0100_xxxx_1000_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
+        8'h84: t = 44'b00_01_1_0100_0000_1001_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_000;    // xor
+        8'h85: t = 44'b00_01_1_0000_0000_0001_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
+        8'h87: t = 44'b00_01_0_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // nop
+        8'h88: t = 44'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
+        8'h89: t = 44'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
+        8'h8a: t = 44'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
+        8'h8b: t = 44'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
+        8'h8c: t = 44'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
+        8'h8d: t = 44'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
+        8'h8e: t = 44'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
+        8'h8f: t = 44'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
+        8'h90: t = 44'b01_10_0_0000_0110_0011_1000_xx_xx_1_1_1_01_1_1_1_01000_00_0_xxx;    // push
+        8'h91: t = 44'b01_10_0_0000_0001_0011_1000_xx_xx_1_1_1_01_1_0_1_01000_00_0_xxx;    // stm
+        8'h92: t = 44'b01_10_0_0000_0110_0011_1000_xx_xx_1_1_1_10_1_1_1_01001_00_0_xxx;    // push
+        8'h93: t = 44'b01_10_0_0000_0001_0011_1000_xx_xx_1_1_1_10_1_0_1_01001_00_0_xxx;    // stm
+        8'h94: t = 44'b01_10_0_0000_0001_0011_1000_xx_xx_1_1_1_11_1_0_1_01010_00_0_xxx;    // stm
+        8'h95: t = 44'b01_10_0_0000_0001_0011_1000_xx_xx_1_1_1_11_1_0_1_01010_00_0_xxx;    // stm
+        8'h96: t = 44'b01_10_0_0000_0110_0011_1000_xx_xx_1_1_1_11_1_1_1_01010_00_0_xxx;    // push
+        8'h97: t = 44'b01_10_0_0000_0110_0011_1000_xx_xx_1_1_1_11_1_1_1_01010_00_0_xxx;    // push
+        8'h98: t = 44'b01_10_0_0000_0110_0011_1000_xx_xx_1_0_1_01_1_0_1_00011_00_0_xxx;    // pop
+        8'h99: t = 44'b01_10_0_0000_0010_0011_1000_xx_xx_1_0_1_01_1_0_1_00011_00_0_xxx;    // ldm
+        8'h9a: t = 44'b01_10_0_0000_0110_0011_1000_xx_xx_1_0_1_10_1_0_1_00100_00_0_xxx;    // pop
+        8'h9b: t = 44'b01_10_0_0000_0010_0011_1000_xx_xx_1_0_1_10_1_0_1_00100_00_0_xxx;    // ldm
+        8'h9c: t = 44'b01_10_0_0000_0010_0011_1000_xx_xx_1_0_1_11_1_0_1_00101_00_0_xxx;    // ldm
+        8'h9d: t = 44'b01_10_0_0000_0010_0011_1000_xx_xx_1_0_1_11_1_0_1_00101_00_0_xxx;    // ldm
+        8'h9e: t = 44'b01_10_0_0000_0110_0011_1000_xx_xx_1_0_1_11_1_0_1_00101_00_0_xxx;    // pop
+        8'h9f: t = 44'b01_10_0_0000_0110_0011_1000_xx_xx_1_0_1_11_1_0_1_00101_00_0_xxx;    // pop
+        8'ha0: t = 44'b10_11_0_xxxx_1000_1100_xxxx_01_01_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // br
+        8'ha1: t = 44'b11_11_0_xxxx_xxxx_xxxx_xxxx_xx_10_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // jmp
+        8'ha2: t = 44'b11_10_0_xxxx_1000_xxxx_xxxx_xx_11_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // jmp
+        8'ha3: t = 44'b11_10_0_xxxx_xxxx_1011_xxxx_xx_01_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // jmpr
+        8'ha4: t = 44'b10_11_0_xxxx_1000_1011_xxxx_10_01_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // brclr
+        8'ha5: t = 44'b10_11_0_xxxx_1000_1011_xxxx_10_01_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // brclr
+        8'ha6: t = 44'b10_11_0_xxxx_1001_1101_xxxx_00_01_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // br
+        8'ha7: t = 44'b10_11_0_xxxx_1001_1101_xxxx_00_01_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // br
+        8'ha9: t = 44'b11_11_1_0100_xxxx_0010_0111_xx_10_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // call
+        8'haa: t = 44'b11_10_1_0100_1000_0010_0111_xx_11_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // call
+        8'hab: t = 44'b11_01_0_xxxx_0111_0111_xxxx_xx_11_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // ret
+        8'hac: t = 44'b10_11_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // brset
+        8'had: t = 44'b10_11_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // brset
+        8'hae: t = 44'b01_01_0_xxxx_xxxx_xxxx_xxxx_xx_xx_0_0_0_00_0_0_1_01101_00_0_xxx;    // sei
+        8'haf: t = 44'b01_01_0_xxxx_xxxx_xxxx_xxxx_xx_xx_0_0_0_00_0_0_1_01110_00_0_xxx;    // cli
+        default: t = 44'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_x_x;
         endcase
     end
 
     assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src,
-            mem, mst, mw2, mn, mblk, mpush, useq, uent, two, urs, lsel} = t;
+            mem, mst, mw2, mn, mblk, mpush, useq, uent, ext, urs, lsel} = t;
     assign halt = (op == 8'h01);
 `ifdef FRUCTUS_BLIT
     // Read only for a row with a routine, so the rest are the mapper's.
@@ -226,7 +226,7 @@ module classify (
         case (op)
         8'h03, 8'h04, 8'h18, 8'h19, 8'h1a, 8'h1b, 8'h1e, 8'h1f, 8'h20, 8'h21, 8'h22, 8'h23, 8'h26, 8'h27, 8'h99, 8'h9b, 8'h9c, 8'h9d:
             ulate = 1'b1;
-        8'h00, 8'h02, 8'h09, 8'h0a, 8'h0b, 8'h0e, 8'h0f, 8'h11, 8'h12, 8'h13, 8'h16, 8'h17, 8'h30, 8'h31, 8'h36, 8'h37, 8'h90, 8'h91, 8'h92, 8'h93, 8'h94, 8'h95, 8'h96, 8'h97, 8'h98, 8'h9a, 8'h9e, 8'h9f, 8'hae, 8'haf:
+        8'h00, 8'h02, 8'h09, 8'h0a, 8'h0b, 8'h0e, 8'h0f, 8'h11, 8'h12, 8'h13, 8'h16, 8'h17, 8'h90, 8'h91, 8'h92, 8'h93, 8'h94, 8'h95, 8'h96, 8'h97, 8'h98, 8'h9a, 8'h9e, 8'h9f, 8'hae, 8'haf:
             ulate = 1'b0;
         default: ulate = 1'bx;
         endcase

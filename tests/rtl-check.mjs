@@ -481,7 +481,7 @@ endmodule
             rr = $fscanf(f, "%d %h %h %h\\n", op, l, r, want_);
             if (rr == 4) begin
                 // one clock, so slow and mul have their answers too
-                #1 clk = 1; #1 clk = 0; #1; n = n + 1;
+                #1 clk = 1; #1 clk = 0; #1 clk = 1; #1 clk = 0; #1; n = n + 1;
                 got = op == 17 ? py : y;
                 if (got !== want_) begin
                     bad = bad + 1;

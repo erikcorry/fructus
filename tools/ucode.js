@@ -32,7 +32,7 @@ export const FIELDS = [
   ['KS',  8, 2, 'the register read this step: 0 .. 2 of the list, 3 a literal'],
   ['KH', 10, 1, "which half of it a store's next byte is - or, when KS is 3, lr and not sp"],
   ['SH', 11, 2, 'a shadow takes aq, the register read the step before: 1 shadow_sp, 2 shadow_lr, 3 shadow_isp'],
-  ['LQ', 13, 3, 'ldq takes: 1 the pc, 2 shadow_sp, 3 shadow_lr, 4 shadow_isp, 5 the product'],
+  ['LQ', 13, 3, 'ldq takes: 1 the pc, 2 shadow_sp, 3 shadow_lr, 4 shadow_isp'],
   ['WX', 16, 2, 'a register is written from ldq, through the ALU: 1 sp, 2 lr'],
   ['IE', 18, 2, 'ie: 1 cleared, 2 set'],
   ['RJ', 20, 2, 'the fetch goes to: 1 the vector, 2 aq, the register read the step before'],
@@ -99,16 +99,11 @@ const EXCEPTIONS = {
         { SH: 3, WX: 1, D: 1 }],
   sei: [{ IE: 2, R: 1, D: 1 }],
   cli: [{ IE: 1, R: 1, D: 1 }],
-  // mul, WHICH RELEASES DISPATCH IN ITS ALU CYCLE, as a one-byte load does.
-  // Its SB_MAC16 works on aq and bq every cycle into its own output register,
-  // so the product of the ALU cycle's operands is there in step 1, which takes
-  // it into ldq; step 2 writes rd.  The product goes nowhere near the ALU's
-  // result mux.  (clz and popcount ran this way too, through a unit with a
-  // flop in the middle; they are two ALU operations now - rtl/cpu.sv.)
-  mul:  [{ LQ: 5 }, { W: 1, D: 1 }],
+  // mul, clz and popcount ran routines here once, taking their results into
+  // ldq; the ALU stage holds them a second cycle now - rtl/cpu.sv.
 };
 // Which routine an instruction that is not a memory instruction runs.
-const NAMED = { brk: 'brk', rti: 'rti', sei: 'sei', cli: 'cli', mul: 'mul' };
+const NAMED = { brk: 'brk', rti: 'rti', sei: 'sei', cli: 'cli' };
 
 // The shapes the instruction set has: ld, ld8, st and st8 move one register
 // and are no block; the block moves are two bytes a register.

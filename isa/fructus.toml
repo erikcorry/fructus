@@ -2370,7 +2370,7 @@ operands = [
 ]
 syntax   = "{d}, {a}, {b}"
 semantics = "R[d] = R[a] * R[b]"
-extra_cycles = 3
+extra_cycles = 1
 
   [[insn.form]]
   name     = "three_reg"
@@ -2387,7 +2387,7 @@ operands = [
 ]
 syntax   = "{d}, {a}, #{imm}"
 semantics = "R[d] = R[a] * imm"
-extra_cycles = 3
+extra_cycles = 1
 
   [[insn.form]]
   name     = "reg_imm5"

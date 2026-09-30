@@ -204,7 +204,11 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     THE ALU'S FAST GROUP AND TWO ADDERS, as here   1954    30.95  29.6 .. 32.9   (32 seeds)
+//     mul HELD IN THE ALU STAGE, 2 cycles, as here   1972    30.30  28.7 .. 31.4   (32 seeds)
+//       registered at the SB_MAC16's inputs instead: the same netlist, and
+//       icetime, which times through it, still found decode's path worst;
+//       at both ends, 3 cycles and a second dispatch bubble: 31.43
+//     the ALU's fast group and two adders            1954    30.95  29.6 .. 32.9   (32 seeds)
 //       no seed's critical path in the ALU loop; in the same text as the rows
 //       below it: one adder 30.71, two 31.04, group alone 30.12, both 31.29
 //     clz and popcount in two cycles                 1937    31.34  29.7 .. 32.2   (32 seeds)
@@ -243,13 +247,14 @@
 // of `stop` and the dispatch enables; predecode's `urs` column, which the
 // two-cycle operations needed anyway, makes it one flop.  Put back, the old
 // expression measured 30.21 - so the design is faster than before these
-// operations for that reason, and no seed's critical path touches them.  mul's SB_MAC16 and clz and popcount's unit
-// work on the operand flops every cycle into registers of their own, a flop
-// in the middle of the popcount's tree, and a routine takes the result into
-// ldq - so neither meets the ALU's result mux, and the only thing pulling
-// toward the DSP's column is a bare wire from a flop.  nextpnr cannot time
-// through the SB_MAC16, so the path out of its output register - about 2 ns
-// clock to out on the part's own figures, then a mux into ldq - is not in
+// operations for that reason, and no seed's critical path touches them.  mul's SB_MAC16
+// works on the operand flops every cycle into its own output register, which
+// reaches the ALU's result mux as op 14 in a mul's second, held cycle - so
+// the only thing pulling toward the DSP's column is a bare wire from a flop.
+// (It and clz and popcount were once routines into ldq instead, at four
+// cycles.)  nextpnr cannot time through the SB_MAC16, so the path out of its
+// output register - about 2 ns clock to out on the part's own figures, then
+// the result mux - is not in
 // these numbers.  The whole of clz and popcount computed in the ALU cycle and
 // chosen into ldq was 26.40: yosys pushed ldq back into the popcount tree, and
 // the flops it made there took a reset from dispatch.  The slow seeds are decode's: from the SPRAM, through a register
@@ -434,7 +439,8 @@ module cpu (
     wire [7:0] op = opraw & {8{~take}};
 
     wire [1:0] kind, len, c_cond, c_pcsrc, c_mn;
-    wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush, c_useq, c_two, c_urs;
+    wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush, c_useq, c_urs;
+    wire [1:0] c_ext;                  // extra cycles in the ALU stage
 `ifdef FRUCTUS_BLIT
     wire       c_ulate;
     logic      d_ulate;
@@ -450,7 +456,7 @@ module cpu (
 `ifdef FRUCTUS_BLIT
                 .ulate(c_ulate),
 `endif
-                .two(c_two), .urs(c_urs), .lsel(c_lsel));
+                .ext(c_ext), .urs(c_urs), .lsel(c_lsel));
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
     // down the fall-through path behind it, which costs nothing if the branch
@@ -515,7 +521,7 @@ module cpu (
         end else if (go) begin
             pcb     <= pch;
             {pcc, pcl} <= pcs;
-            go      <= flows & ~span3 & ~c_two;
+            go      <= flows & ~span3 & (c_ext == 2'd0);
             stop    <= ~flows;
             use_nxt <= ~pc[0] & (len == 2'd1);
         end else if (!stop) begin
@@ -531,7 +537,8 @@ module cpu (
     logic        d_mem, d_mst, d_mw2, d_mblk, d_mpush;
     logic [1:0]  d_mn;
     logic [4:0]  d_uent;
-    logic        d_useq, d_two, d_urs;
+    logic        d_useq, d_urs;
+    logic [1:0]  d_ext;
     logic [7:0]  d_op, d_b1;
     logic [3:0]  d_alu, d_lhs, d_rhs, d_dest;
     logic [1:0]  d_cond, d_pcsrc, d_len;
@@ -544,7 +551,7 @@ module cpu (
         {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
         d_uent  <= c_uent;
         d_useq  <= c_useq;
-        {d_two, d_urs} <= {c_two, c_urs};
+        {d_ext, d_urs} <= {c_ext, c_urs};
         d_lsel  <= c_lsel;
 `ifdef FRUCTUS_BLIT
         d_ulate <= c_ulate;
@@ -686,20 +693,25 @@ module cpu (
     // a flop of its own - rtl/alu.sv - and writes rd twice: a wrong value in
     // the first cycle, which nothing reads, and the right one in the second,
     // which the instruction then in decode takes through the bypass as usual.
-    logic        e_two, e_2nd;
-    wire         e_hold = e_two & ~e_2nd;
+    logic [1:0]  e_cnt;               // held cycles still to come
+    logic        e_two;               // held: clz or popcount's unary arm reads q
+    wire         e_hold = e_cnt != 2'd0;
+    wire         e_keep = e_hold & ~taken_q;   // held on; a squash ends it
     logic        e_valid;             // for the harness
     logic [15:0] e_pc;                // for the harness
     always_ff @(posedge clk) begin
-        e_valid <= e_hold | (keep & ~d_two);   // the second cycle retires
-        e_two   <= ~rst & (e_hold | (keep & d_two));
-        e_2nd   <= ~rst & e_hold;
+        // A squash lands in the held instruction's first ALU cycle, if it is
+        // the one behind a taken branch - and must end the hold there, or its
+        // later cycles would write and retire it after all.
+        e_valid <= e_hold ? (e_cnt == 2'd1) & ~taken_q : (keep & (d_ext == 2'd0));   // the last cycle retires
+        e_cnt   <= (rst | taken_q) ? 2'd0 : e_hold ? e_cnt - 2'd1 : keep ? d_ext : 2'd0;
+        e_two   <= ~rst & (e_hold ? e_two : keep & (d_ext != 2'd0));
         aq      <= fwd_a ? y : R[an_rd];
         bq      <= fwd_b ? y : rb;
-        if (!e_hold) e_we <= (keep & d_wen) ? 8'd1 << wn : 8'd0;
+        if (!e_keep) e_we <= (keep & d_wen) ? 8'd1 << wn : 8'd0;
         // The sequencer holds the ALU on its word: the fast group's member 5.
-        if (!e_hold) e_op <= mhold ? 4'd4 : d_alu;
-        if (!e_hold) e_lsel <= mhold ? 3'd5 : d_lsel;
+        if (!e_keep) e_op <= mhold ? 4'd4 : d_alu;
+        if (!e_keep) e_lsel <= mhold ? 3'd5 : d_lsel;
         e_cbr   <= keep & d_cbr;
         e_jump  <= keep & d_jump;
         e_jreg  <= jreg & ~calllr;
@@ -725,12 +737,13 @@ module cpu (
         e_urs   <= d_urs;
 `endif
         e_halt  <= d_halt;
-        if (!e_hold) e_pc <= d_pc;
+        if (!e_keep) e_pc <= d_pc;
     end
 
     logic [15:0] ldq;                   // the sequencer's word: below
     wire [15:0] asum;
-    alu a (.clk(clk), .lhs(aq), .rhs(bq), .op(e_op), .lsel(e_lsel), .two(e_two), .mdata(ldq),
+    wire [15:0] prod;                  // the SB_MAC16's, below
+    alu a (.clk(clk), .lhs(aq), .rhs(bq), .op(e_op), .lsel(e_lsel), .two(e_two), .prod(prod), .mdata(ldq),
            .y(y), .sum(asum));
 
     // THE CONDITION HAS ITS OWN UNIT, as in the byte-serial core's cpu.sv: rtl/compare.sv's
@@ -851,7 +864,7 @@ module cpu (
     assign aphase   = uw[0];
     wire   mcap     = uw[1];
     // A one-byte load releases dispatch in its ALU cycle, before any word.
-    // A routine done in one step - a one-byte load, clz, popcount, mul -
+    // A routine done in one step - a one-byte load -
     // releases dispatch in its ALU cycle, before any word: predecode says so.
 `ifdef FRUCTUS_BLIT
     assign mrestart = (uw[2] & ~sfq) | (mstart & e_urs);   // a stack fault never releases
@@ -946,15 +959,13 @@ module cpu (
     logic [15:0] shadow_sp, shadow_lr, shadow_isp;
     logic        ie;
     assign ie_q  = ie;
-    // clz and popcount of aq, with a flop in the middle, and the product of aq
-    // and bq, each worked on every cycle and each a cycle late: the routine
-    // takes the one it wants in its first step.  With the whole of clz and
-    // popcount chosen into ldq in the ALU cycle instead, it measured 26.40 MHz:
-    // yosys pushed ldq back into the popcount tree, and the flops it made
-    // there took a reset from dispatch.
-    wire [15:0] prod;
+    // THE PRODUCT OF aq AND bq, worked on every cycle and a cycle late: the ALU
+    // takes it as op 14 in a mul's second, held cycle.  (clz and popcount chosen
+    // whole into ldq in the ALU cycle once measured 26.40 MHz: yosys pushed ldq
+    // back into the popcount tree, and the flops it made there took a reset
+    // from dispatch.)
     mul  mulu (.clk(clk), .a(aq), .b(bq), .p(prod));
-    wire [15:0] lqsrc = (uLQ == 3'd1) ? pc : (uLQ == 3'd5) ? prod
+    wire [15:0] lqsrc = (uLQ == 3'd1) ? pc
                       : (uLQ == 3'd2) ? shadow_sp
                       : (uLQ == 3'd3) ? shadow_lr : shadow_isp;
     assign urj    = uRJ != 2'd0;

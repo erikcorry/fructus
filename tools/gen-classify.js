@@ -42,7 +42,10 @@ import { entryOf, entryNamed, ENTRY_BITS } from './ucode.js';
 const spec = loadSpec();
 
 // A unary operation with extra cycles takes two cycles in the ALU stage.
-const isTwo = (i) => i.extra_cycles > 0 && /^R\[d\] = \w+\(R\[a\]\)$/.test(i.semantics ?? '');
+// An instruction the ALU stage holds for its extra cycles: a unary operation,
+// or mul, which reads the SB_MAC16 beside the ALU.
+const isTwo = (i) => i.extra_cycles > 0
+  && /^R\[d\] = (\w+\(R\[a\]\)|R\[a\] \* (R\[b\]|imm))$/.test(i.semantics ?? '');
 const isAlu = (i) => {
   const sem = i.semantics ?? '';
   return (!(i.extra_cycles > 0) || isTwo(i))
@@ -133,7 +136,7 @@ const memOf = (r) => {
   return null;
 };
 const bits = (v, w) => (v === X ? 'x'.repeat(w) : v.toString(2).padStart(w, '0'));
-const W = 38 + ENTRY_BITS;
+const W = 39 + ENTRY_BITS;
 const late1 = [], late0 = [];          // the rows with a routine, by ulate
 const counts = [0, 0, 0, 0];
 let memRows = 0, excRows = 0;
@@ -155,10 +158,15 @@ const cases = rows.map((r) => {
   // mapper hold any instruction a second cycle.
   const two = r.insns.every(isTwo);
   if (two !== r.insns.some(isTwo)) throw new Error(`opcode ${r.op}: two cycles for some forms only`);
+  const ext = two ? r.insns[0].extra_cycles : 0;
+  if (r.insns.some((i) => (two ? i.extra_cycles : 0) !== ext)) throw new Error(`opcode ${r.op}: extra cycles differ`);
+  // rtl/cpu.sv's dispatch leaves one bubble.  Two held cycles - mul with its
+  // SB_MAC16 registered at both ends - measured no faster and put a second
+  // bubble's flop on dispatch's path; it would need that back.
+  if (ext > 1) throw new Error(`opcode ${r.op}: ${ext} extra cycles, and rtl/cpu.sv holds one`);
   // Released in the ALU cycle: whatever finishes in its first step, so that
   // the next instruction reaches decode as its write lands.
-  const urs = (mem && !mem.st && !mem.w2 && mem.n === 1)
-           || r.insns.every((i) => i.mnemonic === 'mul');
+  const urs = (mem && !mem.st && !mem.w2 && mem.n === 1);
   if (mem) memRows++;
   if (exc !== null) excRows++;
   const writes = (k === KIND.alu || jump) && r.v.dest !== X;
@@ -177,7 +185,7 @@ const cases = rows.map((r) => {
              bits(f(r.v.pc, jump || cbr), 2),
              bits(mem ? 1 : 0, 1), mf(mem?.st, 1), mf(mem?.w2, 1), mf(mem?.n, 2), mf(mem?.blk, 1), mf(mem?.push, 1),
              bits(useq ? 1 : 0, 1), bits(mem ? entryOf(mem) : exc ?? X, ENTRY_BITS),
-             bits(piped ? (two ? 1 : 0) : X, 1), bits(useq ? (urs ? 1 : 0) : X, 1),
+             bits(piped ? ext : X, 2), bits(useq ? (urs ? 1 : 0) : X, 1),
              bits(mem ? X : f(lselOf(r.v.alu), writes), 3)];
   if (useq) (mem?.late ? late1 : late0).push(r.op);
   return `        8'h${r.op.toString(16).padStart(2, '0')}: t = ${W}'b${t.join('_')};    // ${r.who}`;
@@ -237,7 +245,7 @@ module classify (
     output logic       mpush,     //   downward, so its registers lie reversed
     output logic       useq,      // it runs a routine: a memory or exception instruction
     output logic [${ENTRY_BITS - 1}:0] uent,      // where its routine starts in rtl/ucode.sv
-    output logic       two,       // two cycles in the ALU stage: clz and popcount
+    output logic [1:0] ext,       // extra cycles in the ALU stage: clz, popcount, mul
 \`ifdef FRUCTUS_BLIT
     output logic       ulate,     // blit mode makes it late: ld, ld8 and ldm
 \`endif
@@ -255,7 +263,7 @@ ${cases}
     end
 
     assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src,
-            mem, mst, mw2, mn, mblk, mpush, useq, uent, two, urs, lsel} = t;
+            mem, mst, mw2, mn, mblk, mpush, useq, uent, ext, urs, lsel} = t;
     assign halt = (op == 8'h${HALT.toString(16).padStart(2, '0')});
 \`ifdef FRUCTUS_BLIT
     // Read only for a row with a routine, so the rest are the mapper's.
