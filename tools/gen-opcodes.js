@@ -49,6 +49,13 @@ const sigOf = (c) => {
 };
 const itypeName = (sig) => 'FRUCTUS_' + sig.toUpperCase().replace(/[^A-Z0-9]/g, '_');
 
+// --- nop, which gas pads code with --------------------------------------------
+// One byte, or gas could not fill an odd gap with it: its alignment fill
+// repeats a single byte.  Checked here rather than assumed.
+const nopEnc = spec.insn.find((i) => i.mnemonic === 'nop').form[0].encoding.replace(/[\s_]/g, '');
+if (!/^[01]{8}$/.test(nopEnc)) throw new Error(`nop is not one fixed byte: ${nopEnc}`);
+const NOP = parseInt(nopEnc, 2);
+
 const sigs = new Set();
 for (let b = 0; b < 256; b++) if (table[b][0]) sigs.add(sigOf(table[b][0]));
 const ordered = [...sigs].sort();
@@ -123,6 +130,11 @@ extern const short         fructus_condimm5_imm[32];
 
 extern const char * const  fructus_reg_names[8];
 extern const char * const  fructus_cond_names[8];
+
+/* nop, one byte.  gas pads code with it: its default is 0x00, which here is
+   brk, so a program that fell into the padding before an aligned label
+   would trap.  */
+#define FRUCTUS_NOP 0x${NOP.toString(16).padStart(2, '0')}
 
 #endif /* _FRUCTUS_H_ */
 `);

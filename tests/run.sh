@@ -231,6 +231,24 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     done
     rm -f build/_mul build/_mul.bin
 
+    # --- gas pads code with nop, not brk ------------------------------------
+    # gas's default fill for a .p2align in code is 0x00, which is brk, so a
+    # loop that -falign-loops padded and the program fell into trapped.
+    # tc-fructus.h sets NOP_OPCODE from include/opcode/fructus.h, which
+    # tools/gen-opcodes.js writes from the spec's nop.  Both halves: the
+    # padding bytes, and a padded program that runs.
+    printf '\t.text\n\tret\n\t.p2align 2\n\tret\n' > build/_pad.s
+    if build/cross-bin/fructus-elf-as build/_pad.s -o build/_pad.o 2>build/_err \
+       && [ "$(build/cross-bin/fructus-elf-objdump -d build/_pad.o | grep -c 'nop$')" = 3 ] \
+       && tools/fcc -O2 -mmul -falign-loops=2 tests/mul.c -o build/_al 2>>build/_err \
+       && node tools/fcc-run.mjs build/_al.bin; then
+        printf 'ok    gas pads code with nop, and -falign-loops code runs\n'
+    else
+        printf 'FAIL  gas pads code with something other than nop\n'
+        head -10 build/_err; fail=1
+    fi
+    rm -f build/_pad.s build/_pad.o build/_al build/_al.bin
+
     # --- setjmp and longjmp, which no epilogue unwinds ----------------------
     # tests/setjmp.c sets three locals before the setjmp and checks them after
     # a longjmp from twenty frames down, so it fails if libc/setjmp.s restores
