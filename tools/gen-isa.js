@@ -53,8 +53,9 @@ if (brk !== 0)
   fail(`brk is opcode 0x${brk.toString(16)}: rtl/cpu.sv makes an interrupt a brk by ANDing the opcode to 0, which must become a mux`);
 
 // --- the unary operations ------------------------------------------------------------
-// rtl/alu.sv computes these five; unaryLayout() says which bit of the right-hand
-// immediate's bits 2:1 - `usel` - tells them apart.
+// rtl/alu.sv computes these five; unaryLayout() says which of bits 2:1 of the
+// right-hand operand - `sel`, the imm3 value the encoding names - tells them
+// apart.
 const u = unaryLayout();
 const FAST = ['bitrev', 'clmul', 'sxt8'], SLOW = ['clz', 'popcount'];
 const fastHas = [...u.fast, u.fastThird?.mnemonic].filter(Boolean).sort();
@@ -62,11 +63,11 @@ const slowHas = [...u.slow, u.slowThird?.mnemonic].filter(Boolean).sort();
 if (fastHas.join() !== FAST.join() || slowHas.join() !== SLOW.join())
   fail(`the spec's unary operations are ${fastHas.join(', ')} and, slow, ${slowHas.join(', ')}; `
        + `rtl/alu.sv computes ${FAST.join(', ')} and ${SLOW.join(', ')}`);
-const s = u.selBit - 1, o = u.otherBit - 1;     // usel's bit for the pair, and for a third
-const bit = (i, level) => (level ? `usel[${i}]` : `~usel[${i}]`);
-const fastPair = `usel[${s}] ? ${u.fast[1]} : ${u.fast[0]}`;
+const s = u.selBit - 1, o = u.otherBit - 1;     // sel's bit for the pair, and for a third
+const bit = (i, level) => (level ? `sel[${i}]` : `~sel[${i}]`);
+const fastPair = `sel[${s}] ? ${u.fast[1]} : ${u.fast[0]}`;
 const fast = u.fastThird ? `${bit(o, u.fastThird.level)} ? ${u.fastThird.mnemonic} : ${fastPair}` : fastPair;
-const pop = u.slow[1] === 'popcount' ? `usel[${s}]` : `~usel[${s}]`;
+const pop = u.slow[1] === 'popcount' ? `sel[${s}]` : `~sel[${s}]`;
 
 const hex = (v, w) => v.toString(16).padStart(w, '0');
 process.stdout.write(`// =============================================================================
@@ -90,11 +91,12 @@ process.stdout.write(`// =======================================================
 \`define FRUCTUS_REG_LR 3'd${lr}
 \`define FRUCTUS_REG_SPLR 2'd${sp >> 1}   // sp and lr but for bit 0, which is 1 for lr
 
-// The fast unary operations, by usel - the right-hand immediate's bits 2:1.
-\`define FRUCTUS_UNARY_FAST(usel, bitrev, clmul, sxt8) (${fast})
+// The fast unary operations, by sel - the right-hand operand's bits 2:1, which
+// for a unary instruction is the imm3 value its encoding names.
+\`define FRUCTUS_UNARY_FAST(sel, bitrev, clmul, sxt8) (${fast})
 
 // The slow pair, clz and popcount: popcount when this is 1.
-\`define FRUCTUS_UNARY_POP(usel) (${pop})
+\`define FRUCTUS_UNARY_POP(sel) (${pop})
 
 \`endif
 `);

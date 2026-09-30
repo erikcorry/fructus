@@ -16,9 +16,9 @@
 // file's write port has no second source in front of it.
 //
 // The fast unary operations are selected as the byte-serial core selected
-// them - by bits 2:1 of the right-hand immediate, which is the
-// imm3 value their encoding carries.  `usel` is those two bits taken straight
-// from the immediate flop, ahead of the register mux the shifts must wait for.
+// them - by bits 2:1 of the right-hand operand, which for a unary
+// instruction is the imm3 value its encoding carries.  No separate select:
+// rhs is a flop, and for a unary instruction it always holds that value.
 // =============================================================================
 
 // The unary select, from isa/fructus.toml.
@@ -27,7 +27,6 @@
 module alu (
     input  logic [15:0] lhs,
     input  logic [15:0] rhs,
-    input  logic [1:0]  usel,    // the fast unary operation: the immediate's bits 2:1
     input  logic [3:0]  op,
     input  logic [15:0] mdata,   // the memory sequencer's word: what a load or a
                                  // block move's pointer writes, under op 13
@@ -55,8 +54,9 @@ module alu (
             for (int j = 0; j < 8; j++)
                 cm[i + j] = cm[i + j] ^ (a[i] & a[8 + j]);
     end
-    // Which usel chooses which is the spec's: tools/gen-isa.js.
-    wire [15:0] unf = `FRUCTUS_UNARY_FAST(usel, rev, {1'b0, cm}, sxt);
+    // Which of rhs[2:1] chooses which is the spec's: tools/gen-isa.js.
+    wire [1:0]  sel = rhs[2:1];
+    wire [15:0] unf = `FRUCTUS_UNARY_FAST(sel, rev, {1'b0, cm}, sxt);
 
     always_comb case (op)
         4'd0, 4'd1: y = sum;

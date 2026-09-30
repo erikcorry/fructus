@@ -77,8 +77,8 @@ const want = (insn, cimm) => {
 // --- where each unary operation sits ------------------------------------------
 // Worked out from real bytes, not the generator: decode every unary instruction,
 // look its imm3 index up in the spec's table, take bits 2:1 of the value - what
-// reaches rtl/alu.sv as `usel` - and note whether the spec gives it an extra
-// cycle.  The
+// selects the operation in rtl/alu.sv, from the right-hand operand the value
+// arrives as - and note whether the spec gives it an extra cycle.  The
 // bit that tells a pair apart is whichever bit of the code differs within that
 // opcode's pair.
 const unaryOps = () => {
@@ -89,7 +89,8 @@ const unaryOps = () => {
       const m = /^R\[d\] = (\w+)\(R\[a\]\)$/.exec(d?.insn.semantics ?? '');
       if (!m || d.nbytes !== 2 || !(m[1] in BUILTIN)) continue;
       const index = ((b1 >> 6) << 1) | (op & 1);
-      ops.push({ name: m[1], op, code: (u16(t.imm3.values[index]) >> 1) & 3, slow: (d.insn.extra_cycles ?? 0) > 0 });
+      ops.push({ name: m[1], op, value: u16(t.imm3.values[index]),
+                 code: (u16(t.imm3.values[index]) >> 1) & 3, slow: (d.insn.extra_cycles ?? 0) > 0 });
     }
   // An opcode with THREE operations needs both bits of rhs[2:1], and then the
   // block's select is the code itself rather than one bit of it.
@@ -431,55 +432,55 @@ endmodule
     if (/FAIL/.test(o)) failed = true;
   };
 
-  // --- the ALU: op usel lhs rhs want ------------------------------------------
+  // --- the ALU: op lhs rhs want -----------------------------------------------
   // rtl/alu.sv's `alu` for every one-cycle operation, its `slow` for clz and
   // popcount and its `mul` for the product, each of which answers for the
   // operands of the edge before.  Op 13 is the sequencer's word, which the
   // bench drives with rhs; 16 and 17 name `slow` and `mul` here, not codes
   // the processor has.
   const rows = [];
-  const row = (op, us, l, r, w) => `${op} ${us} ${hex4(l)} ${hex4(r)} ${hex4(w)}`;
-  const us = () => rnd() & 3;                 // usel, where it does not matter
+  const row = (op, l, r, w) => `${op} ${hex4(l)} ${hex4(r)} ${hex4(w)}`;
   for (const [l, r] of pairs) {
-    rows.push(row(OP.add, us(), l, r, l + r));
-    rows.push(row(OP.rsb, us(), l, r, r - l));
-    rows.push(row(OP.iseq, us(), l, r, l === r ? 1 : 0));
-    rows.push(row(OP.isset, us(), l, r, (l & r) !== 0 ? 1 : 0));
-    rows.push(row(OP.xor, us(), l, r, l ^ r));
-    rows.push(row(OP.or,  us(), l, r, l | r));
-    rows.push(row(OP.and, us(), l, r, l & r));
-    rows.push(row(OP.rhs, us(), l, r, r));
-    rows.push(row(OP.movhi, us(), l, r, ((r & 0xff) << 8) | (l & 0xff)));
-    rows.push(row(13, us(), l, r, r));
-    rows.push(row(17, us(), l, r, Math.imul(l, r)));
-    for (const nm of ['shl', 'lsr', 'asr']) rows.push(row(OP[nm], us(), l, r, BUILTIN[nm](l, r & 15)));
-    // the operation rides usel, bits 2:1 of the immediate; the slow pair is
-    // read through `slow`, whose choice is usel's high bit
-    for (const o of UN) rows.push(row(o.slow ? 16 : OP.unary, o.code, l, r, BUILTIN[o.name](l)));
+    rows.push(row(OP.add, l, r, l + r));
+    rows.push(row(OP.rsb, l, r, r - l));
+    rows.push(row(OP.iseq, l, r, l === r ? 1 : 0));
+    rows.push(row(OP.isset, l, r, (l & r) !== 0 ? 1 : 0));
+    rows.push(row(OP.xor, l, r, l ^ r));
+    rows.push(row(OP.or,  l, r, l | r));
+    rows.push(row(OP.and, l, r, l & r));
+    rows.push(row(OP.rhs, l, r, r));
+    rows.push(row(OP.movhi, l, r, ((r & 0xff) << 8) | (l & 0xff)));
+    rows.push(row(13, l, r, r));
+    rows.push(row(17, l, r, Math.imul(l, r)));
+    for (const nm of ['shl', 'lsr', 'asr']) rows.push(row(OP[nm], l, r, BUILTIN[nm](l, r & 15)));
+    // the operation rides bits 2:1 of the right-hand operand, which is the
+    // imm3 value its encoding names - exactly what the processor puts there;
+    // the slow pair is read through `slow`, whose choice is bit 2
+    for (const o of UN) rows.push(row(o.slow ? 16 : OP.unary, l, o.value, BUILTIN[o.name](l)));
   }
   const aluRows = rows.join('\n') + '\n';
   writeFileSync('build/alu-tb.txt', aluRows);
   const aluTb = `module tb;
     logic clk = 0;
     logic [4:0] op;
-    logic [1:0] us;
     logic [15:0] l, r, want_, y, sy, py, got;
     integer f, n = 0, bad = 0, rr;
-    alu  u (.lhs(l), .rhs(r), .usel(us), .op(op[3:0]), .mdata(r), .y(y), .sum());
-    slow s (.clk(clk), .a(l), .pop(us[1]), .y(sy));
+    alu  u (.lhs(l), .rhs(r), .op(op[3:0]), .mdata(r), .y(y), .sum());
+    wire [1:0] rsel = r[2:1];
+    slow s (.clk(clk), .a(l), .pop(\`FRUCTUS_UNARY_POP(rsel)), .y(sy));
     mul  m (.clk(clk), .a(l), .b(r), .p(py));
     initial begin
         f = $fopen("build/alu-tb.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
         while (!$feof(f)) begin
-            rr = $fscanf(f, "%d %d %h %h %h\\n", op, us, l, r, want_);
-            if (rr == 5) begin
+            rr = $fscanf(f, "%d %h %h %h\\n", op, l, r, want_);
+            if (rr == 4) begin
                 // one clock, so slow and mul have their answers too
                 #1 clk = 1; #1 clk = 0; #1; n = n + 1;
                 got = op == 16 ? sy : op == 17 ? py : y;
                 if (got !== want_) begin
                     bad = bad + 1;
-                    if (bad < 6) $display("  MISMATCH op=%0d usel=%0d lhs=%h rhs=%h: want %h got %h", op, us, l, r, want_, got);
+                    if (bad < 6) $display("  MISMATCH op=%0d lhs=%h rhs=%h: want %h got %h", op, l, r, want_, got);
                 end
             end
         end

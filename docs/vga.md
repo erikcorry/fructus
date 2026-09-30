@@ -404,7 +404,7 @@ both frame buffers on one part: about 3,300 logic cells (63%), 10 of 30 block
 RAMs, all 4 SPRAMs, and one of the 8 DSP multipliers, for `mul`. It places at
 27.7 MHz (`just speed-system`, medians of sixteen seeds, 26.9 to 29.1), and
 every seed clears the 25.175 MHz pixel clock. The CPU alone with 64 KB places
-at 29.2, and alone with 32 KB at 31.8. Built without blit mode the system
+at 29.2, and alone with 32 KB at 30.8. Built without blit mode the system
 places at 27.9, so blit mode costs it little. That result depends on four
 rules:
 

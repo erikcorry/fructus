@@ -13,7 +13,7 @@
 // `trapped`.
 //
 // IT REPLACED A BYTE-SERIAL CORE, which fetched and moved a byte a cycle
-// through a microcoded datapath: smaller - 1371 LUT4s against 1674, though it
+// through a microcoded datapath: smaller - 1371 LUT4s against 1651, though it
 // took five block RAMs to this one's two - and slower per instruction, since
 // an instruction of n bytes took at least n cycles where this one runs most
 // ALU instructions in one.  In the whole system, tools/fpga-system.sv, the two
@@ -204,7 +204,8 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     REGISTER JUMPS THROUGH taken_q, as here        1946    31.81  30.0 .. 32.6
+//     THE UNARY SELECT FROM bq[2:1], as here         1926    30.75  29.9 .. 32.1
+//     register jumps through taken_q, usel flops     1946    31.81  30.0 .. 32.6
 //     and the SPRAM pinned at the bottom left        1946    31.77  29.2 .. 32.8
 //     and the SPRAM pinned at the bottom right       1946    31.29  30.4 .. 32.0
 //     the pc's carry added a cycle late              1953    31.05  29.5 .. 32.6
@@ -320,6 +321,17 @@
 // aq.  Through tgt_q and taken_q, a cycle late, as rti's return does - jmp ra,
 // call ra and ret take four cycles, not three - the ALU loop left all but two
 // critical paths of sixteen, and the median rose to 31.81.
+//
+// THE UNARY SELECT IS bq[2:1], AND IT COSTS A MEGAHERTZ.  For a unary
+// instruction the right-hand operand is the imm3 value its encoding names,
+// so bits 2:1 of bq are the select, and rtl/alu.sv and the slow unit read
+// them there.  Until 2026-09-30 two flops, e_usel, held a copy loaded from
+// the same bval.  They were logically redundant and measured anything but:
+// without them the median fell from 31.81 to 30.75, 13 seeds of 16 slower,
+// for 20 cells fewer - the critical paths are still the memory into aq, bq
+// and wq, so it is placement, bq's fanout growing by the select's.  Taken
+// anyway, for the simpler datapath.  Putting e_usel back is the known way to
+// buy the megahertz back.
 //
 // PINNING THE SPRAM DOES NOT HELP, in either corner.  The placer uses both,
 // seed by seed; pinned at the left, decode settles beside it and the ALU loop
@@ -639,7 +651,6 @@ module cpu (
     wire mhold;                        // the sequencer holds e_op at 13
 
     logic [3:0]  e_op;
-    logic [1:0]  e_usel;              // the fast unary operation: bval[2:1]
     logic [15:0] aq, bq;
     logic        e_cbr, e_neg, e_mask, e_ucode, e_halt, e_jump, e_jreg;
     logic [2:0]  e_code;
@@ -655,7 +666,6 @@ module cpu (
         e_valid <= keep;
         aq      <= fwd_a ? y : R[an_rd];
         bq      <= fwd_b ? y : rb;
-        e_usel  <= bval[2:1];
         e_we    <= (keep & d_wen) ? 8'd1 << wn : 8'd0;
         e_op    <= mhold ? 4'd13 : d_alu;
         e_cbr   <= keep & d_cbr;
@@ -688,7 +698,7 @@ module cpu (
 
     logic [15:0] ldq;                   // the sequencer's word: below
     wire [15:0] asum;
-    alu a (.lhs(aq), .rhs(bq), .usel(e_usel), .op(e_op), .mdata(ldq), .y(y), .sum(asum));
+    alu a (.lhs(aq), .rhs(bq), .op(e_op), .mdata(ldq), .y(y), .sum(asum));
 
     // THE CONDITION HAS ITS OWN UNIT, as in the byte-serial core's cpu.sv: rtl/compare.sv's
     // subtractor reads the same operand flops as the ALU and none of its
@@ -910,7 +920,8 @@ module cpu (
     // yosys pushed ldq back into the popcount tree, and the flops it made
     // there took a reset from dispatch.
     wire [15:0] slowv, prod;
-    slow sl (.clk(clk), .a(aq), .pop(`FRUCTUS_UNARY_POP(e_usel)), .y(slowv));
+    wire [1:0] bsel = bq[2:1];         // clz or popcount: the imm3 value's bits 2:1
+    slow sl (.clk(clk), .a(aq), .pop(`FRUCTUS_UNARY_POP(bsel)), .y(slowv));
     mul  mulu (.clk(clk), .a(aq), .b(bq), .p(prod));
     wire [15:0] lqsrc = (uLQ == 3'd1) ? pc : (uLQ == 3'd5) ? prod : (uLQ == 3'd6) ? slowv
                       : (uLQ == 3'd2) ? shadow_sp

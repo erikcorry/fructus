@@ -238,7 +238,7 @@ one at an odd address, which spans three words and takes two. A conditional
 branch flows through all three stages and is decided in the ALU stage, beside
 the ALU: not taken it costs nothing extra, taken it costs four cycles. Jumps and
 calls take three, or four through a register. Measured behind a real SPRAM,
-the processor runs at 31.8 MHz (`just speed`, medians of sixteen placements).
+the processor runs at 30.8 MHz (`just speed`, medians of sixteen placements).
 `tools/sim.js` counts the same cycles, and `tests/cpu-check.mjs` holds the two
 together instruction by instruction on random programs. The header of
 `rtl/cpu.sv` has the reasons for each choice and what the alternatives measured.
@@ -252,7 +252,7 @@ cannot carry, such as `brk` being opcode 0, `tools/gen-isa.js` checks it and
 `npm run rtl` fails with the place to change.
 
 **It replaced a byte-serial core**, which fetched a byte a cycle through a
-microcoded datapath: smaller — 1371 LUT4s against 1674 — but slower. It is in
+microcoded datapath: smaller — 1371 LUT4s against 1651 — but slower. It is in
 the history, as `rtl/` at commit `9a1d953`, for a part too small for this one.
 Its instruction register, its microcode-field blocks and its predecode table
 are gone with it; `tools/predecode-rows.js` still holds the rows the

@@ -19,10 +19,11 @@
 `define FRUCTUS_REG_LR 3'd7
 `define FRUCTUS_REG_SPLR 2'd3   // sp and lr but for bit 0, which is 1 for lr
 
-// The fast unary operations, by usel - the right-hand immediate's bits 2:1.
-`define FRUCTUS_UNARY_FAST(usel, bitrev, clmul, sxt8) (~usel[0] ? clmul : usel[1] ? sxt8 : bitrev)
+// The fast unary operations, by sel - the right-hand operand's bits 2:1, which
+// for a unary instruction is the imm3 value its encoding names.
+`define FRUCTUS_UNARY_FAST(sel, bitrev, clmul, sxt8) (~sel[0] ? clmul : sel[1] ? sxt8 : bitrev)
 
 // The slow pair, clz and popcount: popcount when this is 1.
-`define FRUCTUS_UNARY_POP(usel) (usel[1])
+`define FRUCTUS_UNARY_POP(sel) (sel[1])
 
 `endif
