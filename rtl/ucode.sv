@@ -21,8 +21,8 @@
 //     entry 12  rti          3 steps
 //     entry 13  sei          1 step
 //     entry 14  cli          1 step
-//     entry 15  slow         2 steps
-//     entry 16  mul          2 steps
+//     entry 15  mul          2 steps
+//     entry 16  idle        
 //     entry 17  ld8 late     1 byte
 //     entry 18  ld late      2 bytes
 //     entry 19  pop/ldm 1 late 2 bytes
@@ -41,7 +41,7 @@
 //     9:8    KS  the register read this step: 0 .. 2 of the list, 3 a literal
 //     10     KH  which half of it a store's next byte is - or, when KS is 3, lr and not sp
 //     12:11  SH  a shadow takes aq, the register read the step before: 1 shadow_sp, 2 shadow_lr, 3 shadow_isp
-//     15:13  LQ  ldq takes: 1 the pc, 2 shadow_sp, 3 shadow_lr, 4 shadow_isp, 5 the product, 6 clz or popcount
+//     15:13  LQ  ldq takes: 1 the pc, 2 shadow_sp, 3 shadow_lr, 4 shadow_isp, 5 the product
 //     17:16  WX  a register is written from ldq, through the ALU: 1 sp, 2 lr
 //     19:18  IE  ie: 1 cleared, 2 set
 //     21:20  RJ  the fetch goes to: 1 the vector, 2 aq, the register read the step before
@@ -176,7 +176,7 @@ module ucode (
         rom[8'h75] = 32'h00000000;
         rom[8'h76] = 32'h00000000;
         rom[8'h77] = 32'h00000000;
-        rom[8'h78] = 32'h0000c000;
+        rom[8'h78] = 32'h0000a000;
         rom[8'h79] = 32'h00000018;
         rom[8'h7a] = 32'h00000000;
         rom[8'h7b] = 32'h00000000;
@@ -184,8 +184,8 @@ module ucode (
         rom[8'h7d] = 32'h00000000;
         rom[8'h7e] = 32'h00000000;
         rom[8'h7f] = 32'h00000000;
-        rom[8'h80] = 32'h0000a000;
-        rom[8'h81] = 32'h00000018;
+        rom[8'h80] = 32'h00000000;
+        rom[8'h81] = 32'h00000000;
         rom[8'h82] = 32'h00000000;
         rom[8'h83] = 32'h00000000;
         rom[8'h84] = 32'h00000000;

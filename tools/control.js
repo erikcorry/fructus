@@ -175,8 +175,9 @@ export const ALU_RULES = [
   [/^R\[d\] = R\[a\] \| (R\[b\]|imm)$/,                    'or'],
   [/^R\[d\] = R\[a\] & (R\[b\]|imm)$/,                     'and'],
   [/^R\[d\] = (shl|asr|lsr)\(R\[a\], (R\[b\]|imm) & 15\)$/, (m) => m[1]],
-  // an operation that declares extra cycles is one whose result is registered
-  [/^R\[d\] = (sxt8|clz|bitrev|popcount|clmul)\(R\[a\]\)$/, (m, insn) => (insn.extra_cycles ? 'slow' : 'unary')],
+  // EVERY UNARY OPERATION IS THE ONE CODE.  clz and popcount, which declare an
+  // extra cycle, finish in the ALU's second cycle on them - rtl/alu.sv.
+  [/^R\[d\] = (sxt8|clz|bitrev|popcount|clmul)\(R\[a\]\)$/, 'unary'],
   [/^R\[d\] = R\[a\] \* (R\[b\]|imm)$/,                    'mul'],
   [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
   [/^R\[d\] = \(\((R\[b\]|imm) & 0xff\) << 8\) \| \(R\[a\] & 0xff\)$/, 'movhi'],

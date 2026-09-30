@@ -357,7 +357,7 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     ['mul_16',      UNIFORM, 112], ['mul_16',      SMALL_A, 112],
     ['mul_16_x4',   UNIFORM,  87], ['mul_16_x4',   SMALL_A,  87],
     ['mul_16_fast', UNIFORM,  70], ['mul_16_fast', SMALL_A,  70],
-    ['mul_16_fast_erik', UNIFORM, 89], ['mul_16_fast_erik', SMALL_A, 89],
+    ['mul_16_fast_erik', UNIFORM, 87], ['mul_16_fast_erik', SMALL_A, 87],
     ['mul_16_nib', UNIFORM,  83], ['mul_16_nib', SMALL_A,  83],
     ['mul_16_min',  UNIFORM, 111], ['mul_16_min',  SMALL_A,  60],
   ];

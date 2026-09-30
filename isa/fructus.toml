@@ -2254,7 +2254,7 @@ syntax   = "{d}, {a}"
 semantics = "R[d] = clz(R[a])"
 # Four cycles: its result is registered halfway.  See `extra_cycles` in the
 # cost model, and the slow pair above.
-extra_cycles = 3
+extra_cycles = 1
 
   [[insn.form]]
   name     = "reg_reg"
@@ -2284,7 +2284,7 @@ operands = [
 syntax   = "{d}, {a}"
 semantics = "R[d] = popcount(R[a])"
 # Four cycles, like clz.
-extra_cycles = 3
+extra_cycles = 1
 
   [[insn.form]]
   name     = "reg_reg"

@@ -455,7 +455,7 @@ endmodule
     for (const nm of ['shl', 'lsr', 'asr']) rows.push(row(OP[nm], l, r, BUILTIN[nm](l, r & 15)));
     // the operation rides bits 2:1 of the right-hand operand, which is the
     // imm3 value its encoding names - exactly what the processor puts there;
-    // the slow pair is read through `slow`, whose choice is bit 2
+    // clz and popcount are the ALU's too, a clock later - 16 below
     for (const o of UN) rows.push(row(o.slow ? 16 : OP.unary, l, o.value, BUILTIN[o.name](l)));
   }
   const aluRows = rows.join('\n') + '\n';
@@ -465,9 +465,10 @@ endmodule
     logic [4:0] op;
     logic [15:0] l, r, want_, y, sy, py, got;
     integer f, n = 0, bad = 0, rr;
-    alu  u (.lhs(l), .rhs(r), .op(op[3:0]), .mdata(r), .y(y), .sum());
-    wire [1:0] rsel = r[2:1];
-    slow s (.clk(clk), .a(l), .pop(\`FRUCTUS_UNARY_POP(rsel)), .y(sy));
+    // 16 is clz or popcount: the unary code with two set, finished from the
+    // ALU's own flop after the bench's one clock.
+    alu  u (.clk(clk), .lhs(l), .rhs(r), .op(op == 16 ? 4'd12 : op[3:0]), .two(op == 16),
+            .mdata(r), .y(y), .sum());
     mul  m (.clk(clk), .a(l), .b(r), .p(py));
     initial begin
         f = $fopen("build/alu-tb.txt", "r");
@@ -477,7 +478,7 @@ endmodule
             if (rr == 4) begin
                 // one clock, so slow and mul have their answers too
                 #1 clk = 1; #1 clk = 0; #1; n = n + 1;
-                got = op == 16 ? sy : op == 17 ? py : y;
+                got = op == 17 ? py : y;
                 if (got !== want_) begin
                     bad = bad + 1;
                     if (bad < 6) $display("  MISMATCH op=%0d lhs=%h rhs=%h: want %h got %h", op, l, r, want_, got);

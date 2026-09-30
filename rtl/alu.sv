@@ -1,14 +1,23 @@
 // =============================================================================
-// alu.sv - the ALU, and the two units beside it that take a cycle longer
+// alu.sv - the ALU, and the multiplier beside it
 // =============================================================================
 //
 // WRITTEN BY HAND, as rtl/cpu.sv is.  The operation codes are
 // tools/control.js's, so tools/predecode-rows.js's rows mean the same thing
-// here, but the arms that are not a function of this cycle's inputs are not
-// in the ALU: clz and popcount, whose result is registered half way, are
-// `slow` below, and mul, whose SB_MAC16 delivers a cycle late, is `mul`.
-// rtl/classify.sv makes all three microcoded, and a routine takes their
+// here.  mul, whose SB_MAC16 delivers a cycle late, is not in the ALU: it is
+// `mul` below, rtl/classify.sv makes it microcoded, and a routine takes its
 // result into the sequencer's word a cycle after the ALU cycle.
+//
+// clz AND popcount ARE THE UNARY CODE, with `two` set, and take two cycles
+// here: the first half's result goes into a flop of the ALU's own, q, and the
+// second half works on q and reaches the result through the unary arm.  The
+// first cycle's result is wrong - q from the cycle before - and rtl/cpu.sv
+// holds the instruction a second cycle, whose result is right:
+//
+//     popcount  half1  each nibble's count, 0 to 4, in that nibble
+//               half2  the four nibbles added
+//     clz       half1  {z, z ? lhs[7:0] : lhs[15:8]}, z = the top byte is 0
+//               half2  (q[8] ? 8 : 0) + the leading zeros of q[7:0], 8 for 0
 //
 // CODE 13 IS THE MEMORY SEQUENCER'S WORD, which is how a load's bytes and a
 // block move's pointer reach the register file: through the ALU's result, as
@@ -25,9 +34,11 @@
 `include "rtl/isa.svh"
 
 module alu (
+    input  logic        clk,
     input  logic [15:0] lhs,
     input  logic [15:0] rhs,
     input  logic [3:0]  op,
+    input  logic        two,     // with the unary code: clz or popcount, from q
     input  logic [15:0] mdata,   // the memory sequencer's word: what a load or a
                                  // block move's pointer writes, under op 13
     output logic [15:0] y,
@@ -58,6 +69,24 @@ module alu (
     wire [1:0]  sel = rhs[2:1];
     wire [15:0] unf = `FRUCTUS_UNARY_FAST(sel, rev, {1'b0, cm}, sxt);
 
+    // --- clz and popcount, a half a cycle ---------------------------------------
+    function automatic [3:0] cnt4(input [3:0] n);
+        cnt4 = {3'd0, n[0]} + {3'd0, n[1]} + {3'd0, n[2]} + {3'd0, n[3]};
+    endfunction
+    function automatic [3:0] clz8(input [7:0] b);
+        clz8 = b[7] ? 4'd0 : b[6] ? 4'd1 : b[5] ? 4'd2 : b[4] ? 4'd3
+             : b[3] ? 4'd4 : b[2] ? 4'd5 : b[1] ? 4'd6 : b[0] ? 4'd7 : 4'd8;
+    endfunction
+    wire        popsel = `FRUCTUS_UNARY_POP(sel);
+    wire        ztop   = ~|lhs[15:8];
+    wire [15:0] half1  = popsel ? {cnt4(lhs[15:12]), cnt4(lhs[11:8]), cnt4(lhs[7:4]), cnt4(lhs[3:0])}
+                                : {7'd0, ztop, ztop ? lhs[7:0] : lhs[15:8]};
+    logic [16:0] q;                   // {popcount, half1} of the cycle before
+    always_ff @(posedge clk) q <= {popsel, half1};
+    wire [4:0]  c8     = {1'b0, clz8(q[7:0])};
+    wire [15:0] half2  = q[16] ? {11'd0, {2'd0, q[2:0]} + {2'd0, q[6:4]} + {2'd0, q[10:8]} + {2'd0, q[14:12]}}
+                               : {11'd0, q[8] ? c8 + 5'd8 : c8};
+
     always_comb case (op)
         4'd0, 4'd1: y = sum;
         4'd2:       y = {15'd0, ~|xorv};
@@ -70,96 +99,10 @@ module alu (
         4'd9:       y = lhs >> amt;
         4'd10:      y = hiv;
         4'd11:      y = $signed(lhs) >>> amt;
-        4'd12:      y = unf;
+        4'd12:      y = two ? half2 : unf;
         4'd13:      y = mdata;
         default:    y = 16'hxxxx;
     endcase
-
-endmodule
-
-// =============================================================================
-// slow - clz and popcount, with a flop in the middle
-// =============================================================================
-//
-// THE SPEC GIVES THEM AN EXTRA CYCLE, AND THE CYCLE DOES HALF THE WORK: the
-// flop is in the middle of the logic, not after it, as the byte-serial core's unary.sv had it -
-// so neither cycle holds the whole tree.  In the ALU cycle each nibble's count
-// - one LUT level - and clz's priority encoder go into the flop, with which of
-// the two was asked for; the step after, the adds run from the flop, and the
-// routine takes the result into ldq.  The byte-serial core's unary.sv measured the split there,
-// after the counts and before the adds, as the one that leaves the critical
-// path: 30.19 MHz against 28.57 with the 3-bit adds before the flop too.
-//
-// NOT PART OF THE ALU: nothing here reaches the ALU's result mux or the
-// register file's write port.  The adds are written as gates for the reason
-// the byte-serial core's unary.sv gives: as `+` they take the carry chain, whose cells must stand
-// in a column.  It works on aq every cycle, as the SB_MAC16 multiplies aq by
-// bq every cycle; the routine takes the one it wants a step later.
-module slow (
-    input  logic        clk,
-    input  logic [15:0] a,
-    input  logic        pop,     // popcount, not clz
-    output logic [15:0] y        // of the last edge's a and pop
-);
-
-    logic [4:0] cl;
-    always_comb casez (a)
-        16'b1???????????????: cl = 5'd0;
-        16'b01??????????????: cl = 5'd1;
-        16'b001?????????????: cl = 5'd2;
-        16'b0001????????????: cl = 5'd3;
-        16'b00001???????????: cl = 5'd4;
-        16'b000001??????????: cl = 5'd5;
-        16'b0000001?????????: cl = 5'd6;
-        16'b00000001????????: cl = 5'd7;
-        16'b000000001???????: cl = 5'd8;
-        16'b0000000001??????: cl = 5'd9;
-        16'b00000000001?????: cl = 5'd10;
-        16'b000000000001????: cl = 5'd11;
-        16'b0000000000001???: cl = 5'd12;
-        16'b00000000000001??: cl = 5'd13;
-        16'b000000000000001?: cl = 5'd14;
-        16'b0000000000000001: cl = 5'd15;
-        default:  cl = 5'd16;                   // a == 0
-    endcase
-
-    // A nibble's count as a table: each of its three bits is one LUT4.
-    function automatic [2:0] cnt4(input [3:0] n);
-        case (n)
-        4'h0: cnt4 = 3'd0;  4'h1: cnt4 = 3'd1;  4'h2: cnt4 = 3'd1;  4'h3: cnt4 = 3'd2;
-        4'h4: cnt4 = 3'd1;  4'h5: cnt4 = 3'd2;  4'h6: cnt4 = 3'd2;  4'h7: cnt4 = 3'd3;
-        4'h8: cnt4 = 3'd1;  4'h9: cnt4 = 3'd2;  4'ha: cnt4 = 3'd2;  4'hb: cnt4 = 3'd3;
-        4'hc: cnt4 = 3'd2;  4'hd: cnt4 = 3'd3;  4'he: cnt4 = 3'd3;  4'hf: cnt4 = 3'd4;
-        endcase
-    endfunction
-    function automatic [3:0] add3(input [2:0] x, input [2:0] z);
-        logic [2:0] c;
-        c[0] = x[0] & z[0];
-        c[1] = (x[1] & z[1]) | (c[0] & (x[1] ^ z[1]));
-        c[2] = (x[2] & z[2]) | (c[1] & (x[2] ^ z[2]));
-        add3 = {c[2], x[2] ^ z[2] ^ c[1], x[1] ^ z[1] ^ c[0], x[0] ^ z[0]};
-    endfunction
-    function automatic [4:0] add4(input [3:0] x, input [3:0] z);
-        logic [3:0] c;
-        c[0] = x[0] & z[0];
-        c[1] = (x[1] & z[1]) | (c[0] & (x[1] ^ z[1]));
-        c[2] = (x[2] & z[2]) | (c[1] & (x[2] ^ z[2]));
-        c[3] = (x[3] & z[3]) | (c[2] & (x[3] ^ z[3]));
-        add4 = {c[3], x[3] ^ z[3] ^ c[2], x[2] ^ z[2] ^ c[1], x[1] ^ z[1] ^ c[0], x[0] ^ z[0]};
-    endfunction
-
-    // --- the flop in the middle -------------------------------------------------
-    logic        pop_q;
-    logic [4:0]  cl_q;
-    logic [11:0] n_q;                            // the four nibble counts
-    always_ff @(posedge clk) begin
-        pop_q <= pop;
-        cl_q  <= cl;
-        n_q   <= {cnt4(a[15:12]), cnt4(a[11:8]), cnt4(a[7:4]), cnt4(a[3:0])};
-    end
-
-    wire [4:0] pc = add4(add3(n_q[2:0], n_q[5:3]), add3(n_q[8:6], n_q[11:9]));
-    assign y = {11'd0, pop_q ? pc : cl_q};
 
 endmodule
 

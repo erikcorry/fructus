@@ -204,7 +204,10 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     THE UNARY SELECT FROM bq[2:1], as here         1926    30.75  29.9 .. 32.1
+//     clz AND popcount IN TWO CYCLES, as here        1937    31.34  29.7 .. 32.2   (32 seeds)
+//       held in the ALU stage, a flop in the ALU;
+//       reissued by decode instead: 29.6 .. 30.6
+//     the unary select from bq[2:1]                  1926    30.75  29.9 .. 32.1
 //     the same, its shifts through named wires       1920    31.94  30.5 .. 33.4
 //     and the bypass chosen in the ALU cycle         1955    28.45  26.9 .. 29.3
 //     register jumps through taken_q, usel flops     1946    31.81  30.0 .. 32.6
@@ -428,7 +431,7 @@ module cpu (
     wire [7:0] op = opraw & {8{~take}};
 
     wire [1:0] kind, len, c_cond, c_pcsrc, c_mn;
-    wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush, c_useq, c_uslow, c_urs;
+    wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush, c_useq, c_two, c_urs;
 `ifdef FRUCTUS_BLIT
     wire       c_ulate;
     logic      d_ulate;
@@ -442,7 +445,7 @@ module cpu (
 `ifdef FRUCTUS_BLIT
                 .ulate(c_ulate),
 `endif
-                .uslow(c_uslow), .urs(c_urs));
+                .two(c_two), .urs(c_urs));
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
     // down the fall-through path behind it, which costs nothing if the branch
@@ -461,6 +464,8 @@ module cpu (
     // with it.
     wire piped   = flows | is_jump | c_useq;
     wire span3   = pc[0] & (len == 2'd3);  // three bytes starting odd: three words
+    // clz AND popcount TAKE TWO CYCLES IN THE ALU STAGE, and leave a cycle with
+    // no dispatch after them, as span3 does: see the ALU stage.
 
     // The candidates for the next pc come off the pc flop in parallel, so the
     // classifier's length only picks one.
@@ -505,7 +510,7 @@ module cpu (
         end else if (go) begin
             pcb     <= pch;
             {pcc, pcl} <= pcs;
-            go      <= flows & ~span3;
+            go      <= flows & ~span3 & ~c_two;
             stop    <= ~flows;
             use_nxt <= ~pc[0] & (len == 2'd1);
         end else if (!stop) begin
@@ -521,7 +526,7 @@ module cpu (
     logic        d_mem, d_mst, d_mw2, d_mblk, d_mpush;
     logic [1:0]  d_mn;
     logic [4:0]  d_uent;
-    logic        d_useq, d_uslow, d_urs;
+    logic        d_useq, d_two, d_urs;
     logic [7:0]  d_op, d_b1;
     logic [3:0]  d_alu, d_lhs, d_rhs, d_dest;
     logic [1:0]  d_cond, d_pcsrc, d_len;
@@ -534,7 +539,7 @@ module cpu (
         {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
         d_uent  <= c_uent;
         d_useq  <= c_useq;
-        {d_uslow, d_urs} <= {c_uslow, c_urs};
+        {d_two, d_urs} <= {c_two, c_urs};
 `ifdef FRUCTUS_BLIT
         d_ulate <= c_ulate;
 `endif
@@ -669,15 +674,24 @@ module cpu (
     logic [2:0]  e_mN, e_l0, e_l1, e_l2, e_ptr;
     logic [4:0]  e_uent;               // where the microcode routine starts
     logic        e_useq;               // it runs one
-    logic        e_uslow, e_urs;       // clz or popcount into ldq; released at once
+    logic        e_urs;                // released at once
+    // clz AND popcount STAY IN THE ALU STAGE A SECOND CYCLE, which dispatch
+    // left empty, so decode has nothing to hand on.  The ALU finishes them from
+    // a flop of its own - rtl/alu.sv - and writes rd twice: a wrong value in
+    // the first cycle, which nothing reads, and the right one in the second,
+    // which the instruction then in decode takes through the bypass as usual.
+    logic        e_two, e_2nd;
+    wire         e_hold = e_two & ~e_2nd;
     logic        e_valid;             // for the harness
     logic [15:0] e_pc;                // for the harness
     always_ff @(posedge clk) begin
-        e_valid <= keep;
+        e_valid <= e_hold | (keep & ~d_two);   // the second cycle retires
+        e_two   <= ~rst & (e_hold | (keep & d_two));
+        e_2nd   <= ~rst & e_hold;
         aq      <= fwd_a ? y : R[an_rd];
         bq      <= fwd_b ? y : rb;
-        e_we    <= (keep & d_wen) ? 8'd1 << wn : 8'd0;
-        e_op    <= mhold ? 4'd13 : d_alu;
+        if (!e_hold) e_we <= (keep & d_wen) ? 8'd1 << wn : 8'd0;
+        if (!e_hold) e_op <= mhold ? 4'd13 : d_alu;
         e_cbr   <= keep & d_cbr;
         e_jump  <= keep & d_jump;
         e_jreg  <= jreg & ~calllr;
@@ -696,19 +710,19 @@ module cpu (
         // so tests/cpu-check.mjs cannot see it either way.
         e_uent  <= d_uent | {blit & d_ulate, 4'd0};
         e_useq  <= keep & d_useq;
-        {e_uslow, e_urs} <= {d_uslow, d_urs & ~(blit & d_ulate)};
+        e_urs   <= d_urs & ~(blit & d_ulate);
 `else
         e_uent  <= d_uent;
         e_useq  <= keep & d_useq;
-        {e_uslow, e_urs} <= {d_uslow, d_urs};
+        e_urs   <= d_urs;
 `endif
         e_halt  <= d_halt;
-        e_pc    <= d_pc;
+        if (!e_hold) e_pc <= d_pc;
     end
 
     logic [15:0] ldq;                   // the sequencer's word: below
     wire [15:0] asum;
-    alu a (.lhs(aq), .rhs(bq), .op(e_op), .mdata(ldq), .y(y), .sum(asum));
+    alu a (.clk(clk), .lhs(aq), .rhs(bq), .op(e_op), .two(e_two), .mdata(ldq), .y(y), .sum(asum));
 
     // THE CONDITION HAS ITS OWN UNIT, as in the byte-serial core's cpu.sv: rtl/compare.sv's
     // subtractor reads the same operand flops as the ALU and none of its
@@ -929,11 +943,9 @@ module cpu (
     // popcount chosen into ldq in the ALU cycle instead, it measured 26.40 MHz:
     // yosys pushed ldq back into the popcount tree, and the flops it made
     // there took a reset from dispatch.
-    wire [15:0] slowv, prod;
-    wire [1:0] bsel = bq[2:1];         // clz or popcount: the imm3 value's bits 2:1
-    slow sl (.clk(clk), .a(aq), .pop(`FRUCTUS_UNARY_POP(bsel)), .y(slowv));
+    wire [15:0] prod;
     mul  mulu (.clk(clk), .a(aq), .b(bq), .p(prod));
-    wire [15:0] lqsrc = (uLQ == 3'd1) ? pc : (uLQ == 3'd5) ? prod : (uLQ == 3'd6) ? slowv
+    wire [15:0] lqsrc = (uLQ == 3'd1) ? pc : (uLQ == 3'd5) ? prod
                       : (uLQ == 3'd2) ? shadow_sp
                       : (uLQ == 3'd3) ? shadow_lr : shadow_isp;
     assign urj    = uRJ != 2'd0;
