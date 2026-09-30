@@ -312,9 +312,9 @@ simulator counts.
 `mul` takes the low half of a 16×16 product from an `SB_MAC16`, at 0x30
 (`rd, rd, #imm5`), 0x31 (`rd, ra, #imm10`) and 0x36/0x37 (`rd, ra, rb`) — the
 unary row's free columns, in the ALU groups' shapes. Like `clz` and `popcount`
-it takes four cycles, a two-step routine. gcc emits it only with `-mmul`,
-since a part without a multiplier has no `mul`; without it a product is a call
-to libgcc's `__mulhi3`. `rtl/alu.sv` instantiates the DSP rather
+it takes two cycles: the ALU stage holds it while the DSP's registered product
+arrives. gcc emits it only with `-mmul`, since a part without a multiplier has
+no `mul`; without it a product is a call to libgcc's `__mulhi3`. `rtl/alu.sv` instantiates the DSP rather
 than letting yosys's `-dsp` infer it, because the inference copies the operand
 flops into the DSP's input registers and drags the logic in front of them to
 its column. nextpnr doesn't time through `SB_MAC16` at all — see [the
@@ -458,7 +458,7 @@ one-byte region reaches.
 ALU instruction or an untaken branch is one cycle, or two for three bytes at an
 odd address; a taken branch four; a jump or call three, or four through a
 register; a load of N bytes N + 3 and a store N + 4, so `ld` is five and a
-three-register `push` ten; mul, clz and popcount four. A taken branch is what
+three-register `push` ten; mul, clz and popcount two. A taken branch is what
 makes a longer unrolled loop worth anything once the instruction mix is fixed,
 and a memory instruction is the slowest thing a program does often. The
 simulator does not keep a list of which instructions are which: the semantics

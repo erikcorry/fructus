@@ -237,7 +237,7 @@ length_from_first_byte = true
 #     a conditional branch, taken                    1 + taken_branch_penalty = 4
 #     jmp and call to a target in their bytes        3
 #     jmp ra, call ra, ret - a target in a register  4
-#     mul, clz, popcount                             1 + extra_cycles = 4
+#     mul, clz, popcount                             1 + extra_cycles = 2
 #     a load of N bytes: ld8, ld, pop, ldm           N + 3
 #     a store of N bytes: st8, st, push, stm         N + 4
 #     sei, cli                                       5
@@ -282,10 +282,12 @@ length_from_first_byte = true
 # often, and keeping a value in a register is worth several ALU instructions.
 #
 # AND AN INSTRUCTION MAY DECLARE EXTRA CYCLES, with `extra_cycles` on its entry:
-# cycles beyond the one it would otherwise cost.  clz, popcount and mul run a
-# two-step microcode routine - clz and popcount registered halfway so that they
-# do not set the clock every other instruction runs at, mul because the DSP
-# delivers its product a cycle late.
+# cycles beyond the one it would otherwise cost.  clz, popcount and mul take
+# one: the ALU stage holds them a second cycle, and their results come from a
+# register - clz and popcount's registered halfway so that they do not set the
+# clock every other instruction runs at, mul's because the DSP delivers its
+# product a cycle late.  The first cycle writes a wrong result, the second the
+# right one - see rtl/cpu.sv.
 #
 # The simulator does not need a list of which instructions are which - the
 # semantics already say.  `if (...) pc = pc + off` is a conditional branch;
@@ -2213,7 +2215,7 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
 # THE SLOW PAIR HAS AN OPCODE OF ITS OWN.  clz and popcount are the two deep
 # operations: measured, taking both out of the single-cycle ALU was worth a
 # tenth of the processor's clock, and taking either alone was not, because they
-# are equally deep.  So both sit at 0x33 and take four cycles, a two-step
+# are equally deep.  So both sit at 0x33 and take two cycles, a two-step
 # routine with their result registered between the steps - see `extra_cycles` -
 # while sxt8 and bitrev, which are wiring, share 0x32 at one cycle.
 # The microcode's entry points are per opcode, which is why the split has to
@@ -2252,7 +2254,7 @@ operands = [
 ]
 syntax   = "{d}, {a}"
 semantics = "R[d] = clz(R[a])"
-# Four cycles: its result is registered halfway.  See `extra_cycles` in the
+# Two cycles: its result is registered halfway.  See `extra_cycles` in the
 # cost model, and the slow pair above.
 extra_cycles = 1
 
@@ -2283,7 +2285,7 @@ operands = [
 ]
 syntax   = "{d}, {a}"
 semantics = "R[d] = popcount(R[a])"
-# Four cycles, like clz.
+# Two cycles, like clz.
 extra_cycles = 1
 
   [[insn.form]]
@@ -2342,17 +2344,16 @@ semantics = "R[d] = clmul(R[a])"
 # immediates are sign extended like every other ALU group's: `mul rd, rd, #-3`
 # is what it looks like.
 #
-# THE PRODUCT IS AN SB_MAC16's, AND IT IS REGISTERED, like popcount's counts.
-# The DSP's own register sits after the adder that combines its four 8x8
-# partial products, so the whole multiply happens in the SLOW step and EXEC
-# reads a register.  See rtl/alu.sv for why the DSP is instantiated.
-# A single-cycle multiply would be the deepest path in the machine: flop to
-# DSP to flop measures about 16 ns under icetime, half of it routing to and
-# from the DSP's column.  So each form takes four cycles, a two-step routine.
+# THE PRODUCT IS AN SB_MAC16's, AND IT IS REGISTERED.  The DSP's own register
+# sits after the adder that combines its four 8x8 partial products, so the
+# whole multiply happens in a mul's first ALU cycle and its second reads a
+# register.  See rtl/alu.sv for why the DSP is instantiated.  A single-cycle
+# multiply would be the deepest path in the machine: flop to DSP to flop
+# measures about 16 ns under icetime, half of it routing to and from the
+# DSP's column.  So each form takes two cycles.
 #
 # ALL FOUR OPCODES SHARE ONE TAIL.  Once the right-hand operand is in its flop
-# they are the same instruction, and every form runs the same routine - see
-# tools/gen-ucode.js.
+# they are the same instruction: the ALU's op 14, held a second cycle.
 #
 # nextpnr-ice40 0.7 DOES NOT TIME THROUGH SB_MAC16, so `just speed` cannot see
 # this path at all; icetime can.

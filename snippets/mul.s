@@ -10,7 +10,7 @@
 ; is no prologue and no epilogue anywhere in this file.
 ;
 ; THE PROCESSOR HAS A `mul` NOW - the low half of a 16x16 product from the
-; UP5K's DSP, in four cycles; see isa/fructus.toml.  Everything here is for a
+; UP5K's DSP, in two cycles; see isa/fructus.toml.  Everything here is for a
 ; part without a multiplier, which is what gcc assumes unless told otherwise.
 ;
 ; The column beside each instruction is its cycles on the pipeline - see the
@@ -286,8 +286,8 @@ mul_16_x4:
 ;
 ; So: 23, not 28, in 132 bytes rather than 158 - on the byte-serial core.  On
 ; the pipeline the same code costs more than its bytes: `push lr` and `pop lr`
-; are memory instructions at six and five cycles, `clz` a two-step routine at
-; four, and the jump into the chain goes through a register, at four.
+; are memory instructions at six and five cycles, `clz` takes two, and the
+; jump into the chain goes through a register, at four.
 ;
 ; SO THE LINEAR SCAN OF brset WINS OUTRIGHT.  Sixteen tests, falling through
 ; until one hits: a cycle for each bit that is clear - two for the half of them

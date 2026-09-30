@@ -53,7 +53,7 @@ const val = () => (rnd() % 4 === 0 ? EDGE[rnd() % EDGE.length] : rnd() & 0xffff)
 // --- the forms: decided from the semantics, not from the classifier ----------
 // One register written, no memory, no second statement.  nop comes too.  The
 // two-cycle ones - mul, clz, popcount, which the spec gives an extra cycle -
-// run a routine and cost four cycles, dispatch to dispatch.
+// are held in the ALU stage and cost two cycles, dispatch to dispatch.
 const forms = new Map();
 for (let op = 0; op < 256; op++)
   for (let b1 = 0; b1 < 256; b1++) {
