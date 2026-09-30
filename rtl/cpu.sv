@@ -205,6 +205,7 @@
 //
 //                                                   cells     MHz   spread
 //     THE UNARY SELECT FROM bq[2:1], as here         1926    30.75  29.9 .. 32.1
+//     the same, its shifts through named wires       1920    31.94  30.5 .. 33.4
 //     and the bypass chosen in the ALU cycle         1955    28.45  26.9 .. 29.3
 //     register jumps through taken_q, usel flops     1946    31.81  30.0 .. 32.6
 //     and the SPRAM pinned at the bottom left        1946    31.77  29.2 .. 32.8
@@ -323,16 +324,15 @@
 // call ra and ret take four cycles, not three - the ALU loop left all but two
 // critical paths of sixteen, and the median rose to 31.81.
 //
-// THE UNARY SELECT IS bq[2:1], AND IT COSTS A MEGAHERTZ.  For a unary
-// instruction the right-hand operand is the imm3 value its encoding names,
-// so bits 2:1 of bq are the select, and rtl/alu.sv and the slow unit read
-// them there.  Until 2026-09-30 two flops, e_usel, held a copy loaded from
-// the same bval.  They were logically redundant and measured anything but:
-// without them the median fell from 31.81 to 30.75, 13 seeds of 16 slower,
-// for 20 cells fewer - the critical paths are still the memory into aq, bq
-// and wq, so it is placement, bq's fanout growing by the select's.  Taken
-// anyway, for the simpler datapath.  Putting e_usel back is the known way to
-// buy the megahertz back.
+// THE UNARY SELECT IS bq[2:1].  For a unary instruction the right-hand
+// operand is the imm3 value its encoding names, so bits 2:1 of bq are the
+// select, and rtl/alu.sv and the slow unit read them there.  Until
+// 2026-09-30 two flops, e_usel, held a copy loaded from the same bval.
+// Without them the median measured 30.75 against 31.81 - but that is inside
+// what the text alone moves this design: the same logic with its shifts
+// spelled through named wires measured 31.94.  The critical paths end at
+// decode's flops, not in the ALU cycle where e_usel's loads were, so there
+// is no reason to think the two flops bought anything.
 //
 // THE BYPASS STAYS IN DECODE.  Latching R[an] and R[bn] alone, with the
 // forwarding answers in two flops and the ALU's result in a third register,
