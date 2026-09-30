@@ -204,7 +204,10 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     clz AND popcount IN TWO CYCLES, as here        1937    31.34  29.7 .. 32.2   (32 seeds)
+//     THE ALU'S FAST GROUP AND TWO ADDERS, as here   1954    30.95  29.6 .. 32.9   (32 seeds)
+//       no seed's critical path in the ALU loop; in the same text as the rows
+//       below it: one adder 30.71, two 31.04, group alone 30.12, both 31.29
+//     clz and popcount in two cycles                 1937    31.34  29.7 .. 32.2   (32 seeds)
 //       held in the ALU stage, a flop in the ALU;
 //       reissued by decode instead: 29.6 .. 30.6
 //     the unary select from bq[2:1]                  1926    30.75  29.9 .. 32.1
@@ -437,6 +440,8 @@ module cpu (
     logic      d_ulate;
 `endif
     wire [3:0] c_alu, c_lhs, c_rhs, c_dest;
+    wire  [2:0] c_lsel;                // which of the ALU's fast group, with code 4
+    logic [2:0] d_lsel, e_lsel;
     wire [4:0] c_uent;
     classify c (.op(op), .kind(kind), .len(len), .wen(c_wen), .halt(c_halt),
                 .alu_op(c_alu), .lhs_src(c_lhs), .rhs_src(c_rhs), .dest_src(c_dest),
@@ -445,7 +450,7 @@ module cpu (
 `ifdef FRUCTUS_BLIT
                 .ulate(c_ulate),
 `endif
-                .two(c_two), .urs(c_urs));
+                .two(c_two), .urs(c_urs), .lsel(c_lsel));
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
     // down the fall-through path behind it, which costs nothing if the branch
@@ -540,6 +545,7 @@ module cpu (
         d_uent  <= c_uent;
         d_useq  <= c_useq;
         {d_two, d_urs} <= {c_two, c_urs};
+        d_lsel  <= c_lsel;
 `ifdef FRUCTUS_BLIT
         d_ulate <= c_ulate;
 `endif
@@ -663,7 +669,7 @@ module cpu (
     // Everything decode hands on is dropped in a cycle that squashes: the
     // instruction in decode then is one of the three behind a taken branch.
     wire keep = d_valid & ~taken_q;
-    wire mhold;                        // the sequencer holds e_op at 13
+    wire mhold;                        // the sequencer holds the ALU on its word
 
     logic [3:0]  e_op;
     logic [15:0] aq, bq;
@@ -691,7 +697,9 @@ module cpu (
         aq      <= fwd_a ? y : R[an_rd];
         bq      <= fwd_b ? y : rb;
         if (!e_hold) e_we <= (keep & d_wen) ? 8'd1 << wn : 8'd0;
-        if (!e_hold) e_op <= mhold ? 4'd13 : d_alu;
+        // The sequencer holds the ALU on its word: the fast group's member 5.
+        if (!e_hold) e_op <= mhold ? 4'd4 : d_alu;
+        if (!e_hold) e_lsel <= mhold ? 3'd5 : d_lsel;
         e_cbr   <= keep & d_cbr;
         e_jump  <= keep & d_jump;
         e_jreg  <= jreg & ~calllr;
@@ -722,7 +730,8 @@ module cpu (
 
     logic [15:0] ldq;                   // the sequencer's word: below
     wire [15:0] asum;
-    alu a (.clk(clk), .lhs(aq), .rhs(bq), .op(e_op), .two(e_two), .mdata(ldq), .y(y), .sum(asum));
+    alu a (.clk(clk), .lhs(aq), .rhs(bq), .op(e_op), .lsel(e_lsel), .two(e_two), .mdata(ldq),
+           .y(y), .sum(asum));
 
     // THE CONDITION HAS ITS OWN UNIT, as in the byte-serial core's cpu.sv: rtl/compare.sv's
     // subtractor reads the same operand flops as the ALU and none of its

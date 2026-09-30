@@ -111,6 +111,12 @@ const kindOf = (r) => {
 // still changed how that table mapped, by 16 LUT4s, so the core without blit
 // mode would not have been the core that was measured.
 const ALU_ADD = 0;
+// THE FAST GROUP: xor, or, and, the pass-through, movhi, the sequencer's word,
+// iseq and isset - control.js's 4, 5, 6, 7, 10, 13, 2 and 3 - reach rtl/alu.sv
+// as one code, 4, and a select column of their own, `lsel`.  See rtl/alu.sv.
+const LSEL = { 4: 0, 5: 1, 6: 2, 7: 3, 10: 4, 13: 5, 2: 6, 3: 7 };
+const aluOf = (a) => (a !== X && a in LSEL ? 4 : a);
+const lselOf = (a) => (a !== X && a in LSEL ? LSEL[a] : X);
 const memOf = (r) => {
   const sem = r.insns[0].semantics ?? '';
   let m;
@@ -127,7 +133,7 @@ const memOf = (r) => {
   return null;
 };
 const bits = (v, w) => (v === X ? 'x'.repeat(w) : v.toString(2).padStart(w, '0'));
-const W = 35 + ENTRY_BITS;
+const W = 38 + ENTRY_BITS;
 const late1 = [], late0 = [];          // the rows with a routine, by ulate
 const counts = [0, 0, 0, 0];
 let memRows = 0, excRows = 0;
@@ -166,12 +172,13 @@ const cases = rows.map((r) => {
   // to the mapper, mul could as well have written the reversed list.
   const mf = (v, w) => bits(mem ? v : useq ? 0 : X, w);
   const t = [bits(k, 2), bits(r.nbytes, 2), bits(wen, 1),
-             bits(mem ? ALU_ADD : f(r.v.alu, writes), 4), bits(f(r.v.lhs, piped), 4), bits(f(r.v.rhs, piped), 4),
+             bits(mem ? ALU_ADD : f(aluOf(r.v.alu), writes), 4), bits(f(r.v.lhs, piped), 4), bits(f(r.v.rhs, piped), 4),
              bits(mem ? mem.dest : f(r.v.dest, writes || useq), 4), bits(f(r.v.cond, cbr), 2),
              bits(f(r.v.pc, jump || cbr), 2),
              bits(mem ? 1 : 0, 1), mf(mem?.st, 1), mf(mem?.w2, 1), mf(mem?.n, 2), mf(mem?.blk, 1), mf(mem?.push, 1),
              bits(useq ? 1 : 0, 1), bits(mem ? entryOf(mem) : exc ?? X, ENTRY_BITS),
-             bits(piped ? (two ? 1 : 0) : X, 1), bits(useq ? (urs ? 1 : 0) : X, 1)];
+             bits(piped ? (two ? 1 : 0) : X, 1), bits(useq ? (urs ? 1 : 0) : X, 1),
+             bits(mem ? X : f(lselOf(r.v.alu), writes), 3)];
   if (useq) (mem?.late ? late1 : late0).push(r.op);
   return `        8'h${r.op.toString(16).padStart(2, '0')}: t = ${W}'b${t.join('_')};    // ${r.who}`;
 }).join('\n');
@@ -234,7 +241,8 @@ module classify (
 \`ifdef FRUCTUS_BLIT
     output logic       ulate,     // blit mode makes it late: ld, ld8 and ldm
 \`endif
-    output logic       urs        // dispatch is released in its ALU cycle
+    output logic       urs,       // dispatch is released in its ALU cycle
+    output logic [2:0] lsel       // with alu_op 4: which of the fast group - rtl/alu.sv
 );
 
     logic [${W - 1}:0] t;
@@ -247,7 +255,7 @@ ${cases}
     end
 
     assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src,
-            mem, mst, mw2, mn, mblk, mpush, useq, uent, two, urs} = t;
+            mem, mst, mw2, mn, mblk, mpush, useq, uent, two, urs, lsel} = t;
     assign halt = (op == 8'h${HALT.toString(16).padStart(2, '0')});
 \`ifdef FRUCTUS_BLIT
     // Read only for a row with a routine, so the rest are the mapper's.

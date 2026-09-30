@@ -467,8 +467,12 @@ endmodule
     integer f, n = 0, bad = 0, rr;
     // 16 is clz or popcount: the unary code with two set, finished from the
     // ALU's own flop after the bench's one clock.
-    alu  u (.clk(clk), .lhs(l), .rhs(r), .op(op == 16 ? 4'd12 : op[3:0]), .two(op == 16),
-            .mdata(r), .y(y), .sum());
+    // The fast group is one code, 4, and a select, as rtl/classify.sv makes it:
+    // the bench's codes for its eight members become that select.
+    wire grp = op == 2 || op == 3 || (op >= 4 && op <= 7) || op == 10 || op == 13;
+    wire [2:0] ls = op == 2 ? 3'd6 : op == 3 ? 3'd7 : op == 10 ? 3'd4 : op == 13 ? 3'd5 : op[2:0] - 3'd4;
+    alu  u (.clk(clk), .lhs(l), .rhs(r), .op(op == 16 ? 4'd12 : grp ? 4'd4 : op[3:0]), .two(op == 16),
+            .lsel(ls), .mdata(r), .y(y), .sum());
     mul  m (.clk(clk), .a(l), .b(r), .p(py));
     initial begin
         f = $fopen("build/alu-tb.txt", "r");

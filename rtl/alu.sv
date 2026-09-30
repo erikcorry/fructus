@@ -38,16 +38,21 @@ module alu (
     input  logic [15:0] lhs,
     input  logic [15:0] rhs,
     input  logic [3:0]  op,
+    input  logic [2:0]  lsel,    // with op 4: which of the fast group - flops of their own
     input  logic        two,     // with the unary code: clz or popcount, from q
     input  logic [15:0] mdata,   // the memory sequencer's word: what a load or a
-                                 // block move's pointer writes, under op 13
+                                 // block move's pointer writes: the fast group's member 5
     output logic [15:0] y,
     output logic [15:0] sum      // the adder alone, ahead of the result mux: a
                                  // load's first address, for the address pins
 );
 
-    wire        sub  = op[0];
-    assign      sum  = rhs + (lhs ^ {16{sub}}) + {15'd0, sub};
+    // TWO ADDERS, NOT ONE THAT INVERTS FOR rsb.  Measured with the fast group
+    // below, over 32 seeds: 31.29 MHz against 30.12 for one adder, and the ALU
+    // loop left the critical paths altogether.  A load's first address is add.
+    wire [15:0] addv = lhs + rhs;
+    wire [15:0] rsbv = rhs - lhs;
+    assign      sum  = addv;
     wire [15:0] xorv = lhs ^ rhs;
     wire [15:0] andv = lhs & rhs;
     wire [15:0] hiv  = {rhs[7:0], lhs[7:0]};
@@ -87,20 +92,31 @@ module alu (
     wire [15:0] half2  = q[16] ? {11'd0, {2'd0, q[2:0]} + {2'd0, q[6:4]} + {2'd0, q[10:8]} + {2'd0, q[14:12]}}
                                : {11'd0, q[8] ? c8 + 5'd8 : c8};
 
+    // THE FAST GROUP IS ONE ARM OF THE RESULT MUX.  Eight results that need
+    // little or no logic - xor, or, and, the pass-through, movhi, the
+    // sequencer's word, iseq and isset - are chosen by lsel, three flops of
+    // their own set from rtl/classify.sv's `lsel` column, and the result mux
+    // sees them as op 4: seven arms, where there were thirteen.
+    logic [15:0] logv;
+    always_comb case (lsel)
+        3'd0: logv = xorv;
+        3'd1: logv = lhs | rhs;
+        3'd2: logv = andv;
+        3'd3: logv = rhs;
+        3'd4: logv = hiv;
+        3'd5: logv = mdata;
+        3'd6: logv = {15'd0, ~|xorv};
+        3'd7: logv = {15'd0, |andv};
+    endcase
+
     always_comb case (op)
-        4'd0, 4'd1: y = sum;
-        4'd2:       y = {15'd0, ~|xorv};
-        4'd3:       y = {15'd0, |andv};
-        4'd4:       y = xorv;
-        4'd5:       y = lhs | rhs;
-        4'd6:       y = andv;
-        4'd7:       y = rhs;
+        4'd0:       y = addv;
+        4'd1:       y = rsbv;
+        4'd4:       y = logv;
         4'd8:       y = lhs << amt;
         4'd9:       y = lhs >> amt;
-        4'd10:      y = hiv;
         4'd11:      y = $signed(lhs) >>> amt;
         4'd12:      y = two ? half2 : unf;
-        4'd13:      y = mdata;
         default:    y = 16'hxxxx;
     endcase
 
