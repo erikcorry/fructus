@@ -205,6 +205,7 @@
 //
 //                                                   cells     MHz   spread
 //     THE UNARY SELECT FROM bq[2:1], as here         1926    30.75  29.9 .. 32.1
+//     and the bypass chosen in the ALU cycle         1955    28.45  26.9 .. 29.3
 //     register jumps through taken_q, usel flops     1946    31.81  30.0 .. 32.6
 //     and the SPRAM pinned at the bottom left        1946    31.77  29.2 .. 32.8
 //     and the SPRAM pinned at the bottom right       1946    31.29  30.4 .. 32.0
@@ -332,6 +333,15 @@
 // and wq, so it is placement, bq's fanout growing by the select's.  Taken
 // anyway, for the simpler datapath.  Putting e_usel back is the known way to
 // buy the megahertz back.
+//
+// THE BYPASS STAYS IN DECODE.  Latching R[an] and R[bn] alone, with the
+// forwarding answers in two flops and the ALU's result in a third register,
+// and choosing in the ALU cycle, is the same value a mux later - and 28.45
+// against 30.75.  Decode got no shorter: its worst paths still run from the
+// memory into aq, 8 cells, because what costs there is the register read
+// selected by bytes that arrive that cycle, not the bypass mux.  And the ALU
+// loop gained the mux: bq to yq and e_fb to the register file became the
+// worst path in 5 seeds of 16, against 1 before.
 //
 // PINNING THE SPRAM DOES NOT HELP, in either corner.  The placer uses both,
 // seed by seed; pinned at the left, decode settles beside it and the ALU loop
