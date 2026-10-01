@@ -391,8 +391,8 @@ class      = 32              # ELFCLASS32: the CONTAINER is elf32, the addresses
 max_page   = 4               # no MMU, so do not align sections to 4 KiB and
                              # spend most of a 64 KiB address space on padding
 
-# THE RELOCATIONS, all four of them generic.  Every address in a Fructus program
-# is one of three things, so the port needs no relocation of its own:
+# THE RELOCATIONS, four of them generic and one Fructus's own.  Every address
+# in a Fructus program is one of three things, and the generic four cover them:
 #
 #   pcrel = true   the field holds a displacement from the address of the NEXT
 #                  instruction, not from the field's own address.  Getting that
@@ -428,6 +428,32 @@ bits   = 8
 pcrel  = false
 signed = false
 used_by = "the #d8 directive"
+
+# THE ZERO PAGE, 0x0000-0x03ff, is the fourth thing: an address reached as a
+# displacement from a base register that holds `bias'.  imm10 is signed, so
+# -512..511 from 0x0200 is the whole kilobyte, which is why the base is in the
+# middle and not at 0 - and why there are two halves to choose from, zp_lo
+# below the base and zp_hi above it (ld/fructus-*.ld).  0x0200 is also a
+# single set bit, so loading the base is `mov rb, #0x200', two bytes by
+# immbit5.  The I/O page is 0x0400-0x04ff, just above it and out of its reach
+# on purpose: a port is not touched often enough to be worth the base.
+#
+#     mov  r4, #0x200
+#     ld   r0, [r4, #zp(count)]       ; R_FRUCTUS_ZP10 against count
+#     st   r1, [r4, #zp(flags)]
+#
+# The linker places S + A - bias in the field and refuses an address outside
+# 0x0000..0x03ff.  The field is not whole bytes - offset bits 1:0 sit above
+# byte 1's registers - so gen-asm.js checks its exact shape in every imm10
+# form instead of the end-of-instruction rule the other four obey, and gas
+# takes a symbol in an imm10 field only when it is written through zp().
+[[reloc]]
+name   = "BFD_RELOC_FRUCTUS_ZP10"
+bits   = 10
+pcrel  = false
+signed = true
+bias   = 0x200
+used_by = "#zp(sym) in any imm10 field: ld, st, ld8, st8, and the ALU forms"
 
 
 # =============================================================================

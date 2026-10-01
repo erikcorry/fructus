@@ -517,23 +517,71 @@ frequency of the operand pattern it pins, and that is a question about real
 code rather than about the instruction set. Now that gcc works, the way to spend
 it is to compile a corpus, count, and pin the winner.
 
-### Not an opcode: a zero page, and a stack guard in the I/O page
+### A stack guard in the I/O page
 
-These two are about the memory map, and they are why `tools/fpga-system.sv`
-puts its I/O page at 0x0200.
+The stack grows down towards the I/O page at 0x0400 (see [The zero
+page](#the-zero-page)). If writing any of the page's top 16 registers,
+0x04f0–0x04ff, raised an interrupt, a push past the bottom of the stack would
+trap. It is a debugging aid, not something to recover from: the handler can
+report the overflow, and it has a stack to do it on, since interrupt entry
+moves `sp` to `shadow_isp`. The guard is 16 bytes, so a frame larger than that
+could step over it with an `sp`-relative store and not trap.
 
-**A zero page.** A mode could pin a register at zero, so that `[rz, #imm10]`
-reaches low memory directly, with no base register to set up, as the 6502's
-zero page did. `imm10` is signed, so that is the first 512 bytes, and those
-are kept free for it; the I/O page starts just above them.
+## The zero page
 
-**A stack guard.** The stack grows down towards the I/O page. If writing any
-of the page's top 16 registers, 0x02f0–0x02ff, raised an interrupt, a push
-past the bottom of the stack would trap. It is a debugging aid, not
-something to recover from: the handler can report the overflow, and it has
-a stack to do it on, since interrupt entry moves `sp` to `shadow_isp`. The
-guard is 16 bytes, so a frame larger than that could step over it with an
-`sp`-relative store and not trap.
+Not an addressing mode, a convention with a relocation behind it. A register
+holding 0x0200 is a base from which `[rb, #imm10]` reaches the whole of
+0x0000–0x03ff, since imm10 is signed, and 0x0200 is a single set bit, so the
+base costs a two-byte `mov`. The 6502's zero page was the same idea with the
+base wired to zero.
+
+```
+0x0000 - 0x01ff  zp_lo   .zplo, .zplo.bss    [rb, #-512..-1]
+0x0200 - 0x03ff  zp_hi   .zphi, .zphi.bss    [rb, #0..511]
+0x0400 - 0x04ff  the I/O page
+0x0500 - ...     the stack, growing down towards the I/O page from wherever
+                 the system puts its top
+```
+
+In assembly, `.zplo` and `.zphi` switch to the two halves, and `#zp(sym)` in
+any imm10 field is the symbol's displacement from the base, placed by the
+linker as `R_FRUCTUS_ZP10`:
+
+```
+        .zplo
+count:  .2byte  0
+        .text
+        mov     r4, #0x200
+        ld      r0, [r4, #zp(count)]     ; 3 bytes, the imm10 form always
+        st      r1, [r4, #zp(count)+2]
+```
+
+The linker refuses an address outside 0x0000–0x03ff, and the linker scripts
+refuse a half that overflows. A program that wants zp_hi for something else
+never says `.zphi`. A symbol is taken in an imm10 field only through `zp()`,
+so `ld r0, [r4, #count]` is still an error rather than an address quietly
+read as a displacement.
+
+In C, `__attribute__ ((zp))` puts a variable with static storage in zp_lo and
+`__attribute__ ((zp ("hi")))` in zp_hi. Its address stays an ordinary one, so
+`mov rd, #x` then `[rd, #0]` still reaches it, and gcc decides per function
+which way is smaller: through the base, a function touching d zero page
+variables r times costs about 2 + 3r bytes in one register, and directly
+3d + 2r in d of them. So the base wins with several variables and loses with
+one variable used often. An element at a variable index is reached
+`[rt, ri]` either way and counts for neither. `-mzp-base=always` and
+`-mzp-base=never` override the choice. The base is one pseudo set at the top
+of the function, so the register allocator decides whether to keep it or to
+rematerialize the `mov` where it is used.
+
+On the simulator, `ld/fructus-sim.ld` keeps 0x0000–0x0002 for a `jmp _start`,
+since the CPU starts at 0, and links the program at `__stack_top`, 0x2000
+unless `-Wl,--defsym=__stack_top=...` says otherwise. The console is at
+0x0400. The `jmp` also keeps every object off address 0, which is NULL;
+`ld/fructus-rom16k.ld` keeps the two bytes free for the same reason.
+`tools/fpga-system.sv` has its registers in the I/O page. The Microtan board in
+`tools/microtan.js` keeps the original's map, with its screen at 0x0200,
+because it is a copy of a real machine.
 
 ## Status
 

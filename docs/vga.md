@@ -431,7 +431,7 @@ rules:
   SPRAM to an operand flop instead of seven - and the system placed at 24.4
   MHz, below the pixel clock.
 
-**The mode** is the control register at 0x0241. Bit 2 says which buffer the
+**The mode** is the control register at 0x0441. Bit 2 says which buffer the
 display shows, and bits 1:0 what happens to the other one:
 
 | bits 1:0 | the buffer not shown |
@@ -877,8 +877,8 @@ columns.
 
 Under 64 bytes of registers in an I/O page, plus the sprites' 2 KB of
 patterns and attributes (see [Sprites](#sprites)). `tools/fpga-system.sv`
-puts the page at 0x0200, above 512 bytes kept free for a zero page, so
-everything from 0x0300 up is one linear area. There the registers are written
+puts the page at 0x0400, just above the zero page (0x0000-0x03ff), so
+everything from 0x0500 up is one linear area. There the registers are written
 through into RAM, so they read back as last written, and a CPU write reaches
 them a cycle after the store.
 

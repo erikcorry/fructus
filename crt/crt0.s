@@ -7,10 +7,18 @@
 ; leaves .bss to the loader - the simulator's memory starts zeroed, so there
 ; is nothing to copy and nothing to clear.
 ;
+; THE CPU STARTS AT 0, which is the zero page now, so all that goes there is
+; a jump to _start: three bytes of zp_lo, which also keep every object off
+; address 0.  The program itself is linked at __stack_top, with the stack
+; below it growing down towards the I/O page at 0x0400.
+;
 ; THE EXIT STATUS IS r0 AT THE `halt'.  exit() is therefore nothing but a
 ; halt: its argument is already in r0.  abort() halts with 134, which is what
 ; a shell reports for SIGABRT, so a test runner can tell the two apart.
 ; ============================================================================
+
+        .section .reset,"ax"
+        jmp     _start
 
         .section .text.startup,"ax"
         .globl  _start

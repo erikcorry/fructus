@@ -41,10 +41,16 @@ const TABLES = { imm3: 'FR_T_IMM3', shift3: 'FR_T_SHIFT3',
 // displacement, can carry a relocation.  A five-bit immediate or a table index
 // cannot, so a symbol simply does not fit those forms - which is the same
 // "does it fit" test the constant case uses, and needs no special case.
+//
+// The one exception is imm10, which carries a zero page address written
+// `#zp(sym)': the displacement from a base register holding the spec's
+// zp_base.  A bare symbol still does not fit it - gas takes a symbol there
+// only when it is written through zp(), and zp() only there.
 function relocFor(et, pcrel) {
   if (et.kind !== 'int') return 'FR_R_NONE';
   if (et.bits === 8)  return pcrel ? 'FR_R_8_PCREL'  : 'FR_R_8';
   if (et.bits === 16) return pcrel ? 'FR_R_16_PCREL' : 'FR_R_16';
+  if (et.bits === 10 && et.signed && !pcrel) return 'FR_R_ZP10';
   return 'FR_R_NONE';
 }
 
@@ -226,7 +232,8 @@ firstCand.push(cand.length);
 //                                next instruction for all eleven pcrel forms,
 //                                and tc_gen_reloc's addend bias is fx_size
 for (const r of rows) {
-  const wanted = r.slots.map((s, i) => [s, i]).filter(([s]) => s.reloc !== 'FR_R_NONE');
+  const wanted = r.slots.map((s, i) => [s, i])
+    .filter(([s]) => s.reloc !== 'FR_R_NONE' && s.reloc !== 'FR_R_ZP10');
   for (const [slot, i] of wanted) {
     const ps = r.places.filter((p) => p.slot === i);
     const lo = Math.min(...ps.map((p) => p.ilo));
@@ -246,6 +253,22 @@ for (const r of rows) {
                     + ps.map((p) => `value[${p.vlo + p.width - 1}:${p.vlo}] at insn bit ${p.ilo}`).join(', ')
                     + `)`);
   }
+}
+
+// The zero page relocation has a shape of its own, and bfd's howto for it is
+// written for exactly this one: the last two bytes of a three-byte form,
+// offset bits 1:0 at the top of byte 1 and bits 9:2 as byte 2.  Read as the
+// little-endian halfword at byte 1 that is bits 15:6, the howto's bitpos 6 and
+// mask 0xffc0, and byte 1's low six bits - registers - are left alone.
+for (const r of rows) {
+  r.slots.forEach((s, i) => {
+    if (s.reloc !== 'FR_R_ZP10') return;
+    const ps = r.places.filter((p) => p.slot === i)
+      .map((p) => `${p.vlo}:${p.width}@${p.ilo}`).sort().join(' ');
+    if (r.nbytes !== 3 || ps !== '0:2@14 2:8@0')
+      throw new Error(`${r.tag}: imm10 field is ${ps} in ${r.nbytes} bytes, `
+                    + `not the zero page relocation's 0:2@14 2:8@0 in 3`);
+  });
 }
 
 // A slot is determined exactly once: pinned, tied, or placed.  An operand that
@@ -412,7 +435,7 @@ enum fructus_valtab
    the same "does it fit" test again, with no special case.  */
 enum fructus_reloc
 {
-  FR_R_NONE, FR_R_8, FR_R_16, FR_R_8_PCREL, FR_R_16_PCREL
+  FR_R_NONE, FR_R_8, FR_R_16, FR_R_8_PCREL, FR_R_16_PCREL, FR_R_ZP10
 };
 
 typedef struct fructus_opnd

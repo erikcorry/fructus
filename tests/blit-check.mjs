@@ -80,7 +80,7 @@ const hex = (f) => Array.from({ length: WORDS }, (_, w) => f(w).toString(16).pad
 const RESULT = 0x6000;
 const LINES = 8;          // the visible lines of the short frame
 const src = `
-        mov  r1, #0x208            ; vertical timing, while the first front porch
+        mov  r1, #0x408            ; vertical timing, while the first front porch
         mov  r0, #2                ; still runs: porch 2, sync 2, back 3, and
         st8  r0, [r1, #0]          ; ${LINES} lines - a frame of 15 lines
         st8  r0, [r1, #2]
@@ -91,7 +91,7 @@ const src = `
         mov  r0, #0
         st8  r0, [r1, #7]
         mov  sp, #0x8000
-        mov  r1, #0x241
+        mov  r1, #0x441
         mov  r0, #2
         st8  r0, [r1]              ; blit on
         mov  r0, #0x3141
@@ -109,7 +109,7 @@ const src = `
         mov  r1, #0x8000
         mov  r0, #0x1111
         st   r0, [r1]              ; processor mode: ram_hi's word 0
-        mov  r1, #0x241
+        mov  r1, #0x441
         mov  r0, #2
         st8  r0, [r1]              ; blit on
         mov  r2, #0x8010
@@ -163,7 +163,7 @@ irqw:   ld   r0, [r4, #40]         ; until the handler has run twice
         add  r0, r0, #-2
         br   ne, r0, #0, irqw
         cli
-        mov  r1, #0x241
+        mov  r1, #0x441
         mov  r0, #3
         st8  r0, [r1]              ; writethru
         mov  r2, #0x8200
@@ -354,7 +354,7 @@ const faults = [
   writeFileSync('build/blit-fault.s', `
         ${setsp}
         mov  r4, #${RESULT}
-        mov  r1, #0x241
+        mov  r1, #0x441
         mov  r0, #2
         st8  r0, [r1]
         mov  r0, #1

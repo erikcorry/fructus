@@ -36,7 +36,7 @@ for (const [name, fns] of Object.entries(KERNELS)) {
   execFileSync(cc, [...flags, `tests/bench/${name}.c`, '-o', out]);
   const m = new Machine(spec);
   m.load(readFileSync(out + '.bin'));
-  m.pc = 0; m.R[m.named.sp] = 0xff00;
+  m.pc = 0; m.R[m.named.sp] = 0;   // crt0 sets it
   const why = m.run({ max: 5e7 });
   let b = 0;
   for (const l of execFileSync('fructus-elf-readelf', ['-s', out]).toString().split('\n')) {

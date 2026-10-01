@@ -6,13 +6,14 @@
 //   node tools/fcc-run.mjs prog.bin [--max N] [--stats]
 //
 // prog.bin is the flat image tools/fcc writes: ld/fructus-sim.ld linked at 0,
-// objcopied to binary.  The program starts at 0 and runs until `halt'.
+// objcopied to binary.  The program starts at 0, where crt/crt0.s has put a
+// jump over the zero page to _start, and runs until `halt'.
 //
 // THE EXIT STATUS IS r0 AT THE HALT, which is what crt/crt0.s arranges: main's
 // return value falls into exit, exit is a halt, and abort halts with 134.  A
 // program that never halts exits 125 with the pc it was at.
 //
-// A byte stored to 0xff00 (`__console' in the linker script) is printed.
+// A byte stored to 0x0400 (`__console' in the linker script) is printed.
 // That is the whole of the I/O model; nothing in tools/sim.js knows about it,
 // it is this runner intercepting the store.
 // =============================================================================
@@ -21,7 +22,7 @@ import { readFileSync } from 'node:fs';
 import { loadSpec } from './isa.js';
 import { Machine } from './sim.js';
 
-const CONSOLE = 0xff00;
+const CONSOLE = 0x0400;
 
 const args = process.argv.slice(2);
 let file = null, max = 5e7, stats = false;
@@ -38,7 +39,7 @@ if (!file) {
 const m = new Machine(loadSpec());
 m.load(readFileSync(file));
 m.pc = 0;
-m.R[m.named.sp] = CONSOLE;
+m.R[m.named.sp] = 0;      // crt0 sets it from __stack_top
 
 const wr8 = m.wr8.bind(m);
 m.wr8 = (a, v) => {

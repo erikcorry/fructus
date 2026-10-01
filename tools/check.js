@@ -111,6 +111,19 @@ for (const [name, t] of Object.entries(types)) {
   // The relocations only have to be internally coherent - a pc-relative field
   // that is not signed cannot reach backwards, which is never what is meant.
   for (const r of spec.reloc ?? []) {
+    if (r.bias !== undefined) {
+      // The zero page's: imm10, with its bias written into bfd by hand.
+      if (r.bits !== 10 || !r.signed || r.pcrel)
+        err(`reloc ${r.name}: a biased relocation must be the signed imm10`);
+      const h = join(root, 'vendor/binutils-gdb/include/elf/fructus.h');
+      if (existsSync(h)) {
+        const m = /#define\s+FRUCTUS_ZP_BASE\s+(0x[0-9a-f]+|\d+)/i.exec(readFileSync(h, 'utf8'));
+        if (!m || Number(m[1]) !== r.bias)
+          err(`reloc ${r.name}: bias 0x${r.bias.toString(16)}, but include/elf/fructus.h's `
+            + `FRUCTUS_ZP_BASE is ${m ? m[1] : 'missing'}`);
+      }
+      continue;
+    }
     if (![8, 16].includes(r.bits))
       err(`reloc ${r.name}: ${r.bits} bits, but every Fructus field is 8 or 16`);
     if (r.pcrel && !r.signed)

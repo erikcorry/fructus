@@ -237,6 +237,45 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     done
     rm -f build/_mul build/_mul.bin
 
+    # --- the zero page --------------------------------------------------------
+    # tests/zp.c puts variables in both halves with the zp attribute and
+    # tests/zp.s reads them through R_FRUCTUS_ZP10 by hand.  Every -mzp-base
+    # mode must agree on the answers; auto must use the base somewhere and
+    # never nowhere.  Then the two things that must fail: a zp_hi that runs
+    # into the I/O page is a link error, and a symbol written into an imm10
+    # field without zp() is refused rather than taken as an address.
+    for o in -O2 -Os -O0 '-O2 -mzp-base=always' '-O2 -mzp-base=never'; do
+        if tools/fcc $o tests/zp.c tests/zp.s -o build/_zp 2>build/_err \
+           && node tools/fcc-run.mjs build/_zp.bin; then
+            printf 'ok    zero page variables at %s\n' "$o"
+        else
+            printf 'FAIL  zero page variables at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    if tools/fcc -Os -S tests/zp.c -o - 2>/dev/null | grep -q '#zp(' \
+       && ! tools/fcc -Os -mzp-base=never -S tests/zp.c -o - 2>/dev/null | grep -q 'zp('; then
+        printf 'ok    -mzp-base=auto reaches the zero page through the base, =never does not\n'
+    else
+        printf 'FAIL  -mzp-base: auto never uses the base, or never does\n'; fail=1
+    fi
+    printf '\t.zphi\n\t.skip 0x201\n' > build/_zpbig.s
+    # --no-gc-sections: nothing refers to the blob, and it would be dropped.
+    if tools/fcc tests/zp.c tests/zp.s build/_zpbig.s -Wl,--no-gc-sections -o build/_zp 2>build/_err; then
+        printf 'FAIL  a zp_hi of 0x201 bytes linked\n'; fail=1
+    elif grep -q 'zp_hi overflows' build/_err; then
+        printf 'ok    a zp_hi that reaches the I/O page is a link error\n'
+    else
+        printf 'FAIL  an oversized zp_hi failed, but not as an overflow\n'; head -5 build/_err; fail=1
+    fi
+    printf '\tld r0, [r1, #x]\nx:\t.2byte 0\n' > build/_zpbare.s
+    if build/cross-bin/fructus-elf-as -o build/_zpbare.o build/_zpbare.s 2>/dev/null; then
+        printf 'FAIL  gas took a bare symbol as an imm10 displacement\n'; fail=1
+    else
+        printf 'ok    gas takes a symbol in imm10 only through zp()\n'
+    fi
+    rm -f build/_zp build/_zp.bin build/_zpbig.s build/_zpbare.s build/_zpbare.o
+
     # --- gas pads code with nop, not brk ------------------------------------
     # gas's default fill for a .p2align in code is 0x00, which is brk, so a
     # loop that -falign-loops padded and the program fell into trapped.

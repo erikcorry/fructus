@@ -11,7 +11,7 @@
 // bit 15.  fba and fbb are frame buffers A and B, used alike: the display
 // shows one, and the processor may reach the other.
 //
-// THE MODE is the register at 0x0241.  Bit 2 says which buffer is shown - 0
+// THE MODE is the register at 0x0441.  Bit 2 says which buffer is shown - 0
 // B, 1 A - and bits 1:0 what happens to the OTHER one:
 //
 //     0  CPU        nothing: the processor's data is its own memory
@@ -43,13 +43,13 @@
 // fetch.  Its data accesses do too, except in BLIT mode, when the top 32 KB of
 // data - loads and stores, not fetches - is the buffer not shown:
 //
-//     0x0000 - 0x01ff   ram_lo, kept free for a zero page (README, "Possible
-//                       enhancements")
-//     0x0200 - 0x02ff   the registers, written through into ram_lo as well
-//     0x0300 - 0x7fff   ram_lo
+//     0x0000 - 0x03ff   ram_lo, the zero page: [rb, #imm10] with rb = 0x200
+//                       reaches all of it (isa/fructus.toml, [[reloc]])
+//     0x0400 - 0x04ff   the registers, written through into ram_lo as well
+//     0x0500 - 0x7fff   ram_lo
 //     0x8000 - 0xffff   ram_hi; in blit mode, data is the buffer not shown
 //
-// So everything from 0x0300 up is one linear area for a program that never
+// So everything from 0x0500 up is one linear area for a program that never
 // uses blit mode.
 //
 // So a program in blit mode keeps its code anywhere, and its data, its
@@ -181,7 +181,7 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     // software says otherwise - room for 256 glyphs of 16 rows.  Its bit 15 is
     // ignored, like every pointer's.
     logic [14:0] font = 15'h6000;
-    wire rw = we_w && addr_w[15:8] == 8'h02;
+    wire rw = we_w && addr_w[15:8] == 8'h04;
     // 0x00-0x0f: timing, a byte at a time - a block per length, since iverilog
     // refuses a variable index into a packed array on the left.
     for (genvar i = 0; i < 4; i++) begin : g_len
