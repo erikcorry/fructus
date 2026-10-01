@@ -65,10 +65,16 @@
 // `trapped`, before it moves a byte, as an unimplemented opcode does.
 //
 // THE REGISTERS ARE WRITTEN THROUGH INTO ram_lo, so a register reads back as
-// what was last written to it - a register block with no read path of its own,
-// which is what keeps its address decode off the memory's write enable.  A
-// register whose value the hardware changes, a status register, would need a
-// read path; there is none yet.
+// what was last written to it from the memory itself, which is what keeps its
+// address decode off the memory's write enable.  Only the four words the
+// hardware changes have a read path: the status register and the arrays'
+// three addresses.  They are chosen from the processor's address into a flop
+// a cycle later, beside the memory's word, as `src' chooses between the two
+// SPRAMs, and reach the processor on `mem_data', the port only its loads
+// read, so that the choice is not in front of decode - and on blit mode's
+// late port, through `lo_hold'.  An
+// array's data register reads as the word last written to it, and moves
+// nothing: the block RAMs' read ports are the display's.
 //
 // EVERY WRITE TO THE REGISTERS AND THE FRAME BUFFERS LANDS A CYCLE LATE, out of
 // flops (`addr_w`, `wword_w`, `we_w`), so nothing combinational joins the
@@ -132,7 +138,11 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     // processor takes the whole word and picks its own byte.
     logic src;
     always_ff @(posedge clk) src <= hi;
+    // `io_q': the word read was one of the four registers with a read path,
+    // and `io_word' is it; see the registers below.
+    logic io_q = 1'b0; logic [15:0] io_word;
     wire [15:0] rdata = src ? hi_word : lo_word;
+    wire [15:0] dword = io_q ? io_word : rdata;    // a load's: the processor's mem_data
 
     // --- blit mode's late reads ---------------------------------------------------
     wire [15:0] fb_cpu_word;
@@ -140,7 +150,7 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     logic [15:0] lo_hold;
     always_ff @(posedge clk) begin
         hi1 <= hi;  hi2 <= hi1;
-        lo_hold <= lo_word;
+        lo_hold <= io_q ? io_word : lo_word;
     end
     wire [15:0] late = hi2 ? fb_cpu_word : lo_hold;
 
@@ -155,7 +165,7 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     // ports, which here are wiring.
     (* keep_hierarchy *)
     cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
-                .mem_wdata(wdata), .mem_we(lanes), .blit(blit), .mem_late(late),
+                .mem_wdata(wdata), .mem_we(lanes), .blit(blit), .mem_late(late), .mem_data(dword),
                 .irq(irq_s), .halted(halted), .trapped(trapped), .result(result),
                 .retire(), .retire_pc());
     logic [15:0] so;
@@ -256,6 +266,18 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     assign fb_cpu_word = to_a_2 ? fba_word : fbb_word;
 
     wire [9:0] line; wire vblank;
+
+    // --- the registers the hardware changes, read -------------------------------
+    // 0x0484 status: bit 15 vertical blank, bits 9:0 the line.  0x04a0, 0x04a4
+    // and 0x04a8 the palette's, the patterns' and the attributes' addresses.
+    // Either byte of each word; the processor picks its own.
+    wire [15:0] status = {vblank, 5'd0, line};
+    always_ff @(posedge clk) begin
+        io_q    <= addr[15:7] == 9'h009 && (addr[6:1] == 6'h02 || addr[6:1] == 6'h10
+                                         || addr[6:1] == 6'h12 || addr[6:1] == 6'h14);
+        io_word <= !addr[5] ? status : addr[3] ? {10'd0, attr_i}
+                 : addr[2] ? {6'd0, pat_i} : {11'd0, pal_i};
+    end
     video vid (.clk, .h_len, .v_len, .font,
                .pal_we, .pal_addr(pal_i), .pal_data(wword_w[7:0]),
                .spr_pat_we(pat_we), .spr_pat_addr(pat_i), .spr_pat_data(wword_w),

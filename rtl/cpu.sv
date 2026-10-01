@@ -124,6 +124,12 @@
 // across the chip, reaches ldq and nothing else, and no path from it runs
 // in front of decode.  pop keeps its ordinary routine.
 //
+// AND A LOAD'S BYTES COME FROM `mem_data`, not `mem_rdata`, in the same
+// build: the word the system says a load reads, which is mem_rdata except
+// where it substitutes one of its own - tools/fpga-system.sv's I/O registers.
+// Only captures read it, so the system's choice is in front of ldq and not
+// of decode; in front of decode it cost a LUT level, 27.35 MHz to 25.58.
+//
 // SO A STACK ABOVE 0x8000 IS A FAULT IN BLIT MODE: a push's bytes there are
 // stores, which the system sends to the buffer, while pop's are read from
 // the processor's own memory.  A push or pop that would touch 0x8000 or above
@@ -397,6 +403,8 @@ module cpu (
     input  logic        blit,        // <- the system: ld, ld8 and ldm's bytes come late
     input  logic [15:0] mem_late,    // <- the word at the address sampled two edges ago;
                                      //    read only by those loads' captures
+    input  logic [15:0] mem_data,    // <- mem_rdata, or the system's word in its place:
+                                     //    read only by every other load's captures
 `endif
     input  logic        irq,        // <- the interrupt line, synchronised: level
                                      //    sensitive, taken where an instruction
@@ -911,8 +919,9 @@ module cpu (
     wire         uL  = uw[22];
     logic        mlane2;
     always_ff @(posedge clk) mlane2 <= mlane;
-    wire  [15:0] mword = uL ? mem_late : mem_rdata;
-    wire   [7:0] mbyte = uL ? (mlane2 ? mem_late[15:8] : mem_late[7:0]) : mlane ? hi : lo;
+    wire  [15:0] mword = uL ? mem_late : mem_data;
+    wire   [7:0] mbyte = uL ? (mlane2 ? mem_late[15:8] : mem_late[7:0])
+                            : mlane ? mem_data[15:8] : mem_data[7:0];
 `else
     wire  [15:0] mword = mem_rdata;
     wire   [7:0] mbyte = mlane ? hi : lo;

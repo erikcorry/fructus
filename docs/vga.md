@@ -882,22 +882,32 @@ aligned `st`. A register of 8 bits or fewer can also take `st8` to its even
 address, and a write to the odd byte alone is dropped. A large array is an
 address register and a data register: every write to the data register
 writes the entry the address names and increments the address, which wraps
-at the array's size. `tools/fpga-system.sv` implements the writes. The page
-is written through into RAM, so a register reads back as last written, and
-a CPU write reaches the registers a cycle after the store.
+at the array's size. `tools/fpga-system.sv` implements them. The page is
+written through into RAM, so a register reads back as last written, and a
+CPU write reaches the registers a cycle after the store. The four words the
+hardware changes have a read path of their own: status and the three array
+addresses. An array's data register reads as the word last written to it
+and does not move the address, because the block RAMs' read ports are the
+display's.
+
+THE READ PATH IS ON THE CPU'S `mem_data`, a port only its loads read. The
+same choice in front of `mem_rdata`, which decode reads as well, put a LUT
+level on the SPRAM-to-decode path and cost the system 1.8 MHz, 27.35 to
+25.58 over 16 seeds, with the slowest seed below the pixel clock. On
+`mem_data` it measured 27.64.
 
 | address | register | contents | access |
 |---|---|---|---|
 | 0x0480 | mode | bit 2 the buffer shown; bits 1:0 CPU, COPY, BLIT or WRITETHRU for the other | write |
 | 0x0482 | font | the font's address, 15 bits; even for a 16-pixel font | write |
-| 0x0484 | status | current line (10 bits), vertical blank, write-through in progress | read; not built |
+| 0x0484 | status | bit 15 vertical blank, bits 9:0 the current line | read |
 | 0x0490-0x0496 | `timing_h` | `struct timing`, 4 words, 10 bits each | write only |
 | 0x0498-0x049e | `timing_v` | `struct timing`, 4 words, 10 bits each | write only |
-| 0x04a0 | palette address | 5 bits | write |
+| 0x04a0 | palette address | 5 bits | read and write |
 | 0x04a2 | palette data | 8 bits, through the EBR's second port | write |
-| 0x04a4 | pattern address | 10 bits: 16 sprites × 64 words | write |
+| 0x04a4 | pattern address | 10 bits: 16 sprites × 64 words | read and write |
 | 0x04a6 | pattern data | 16 bits, through the block RAMs' second ports | write |
-| 0x04a8 | attribute address | 6 bits: 16 sprites × 4 words | write |
+| 0x04a8 | attribute address | 6 bits: 16 sprites × 4 words | read and write |
 | 0x04aa | attribute data | 16 bits, through its block RAM's second port | write |
 
 The timing registers are write only because reading them back would need a

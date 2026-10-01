@@ -598,6 +598,8 @@ writes exactly one register and a wide data bus never has to merge two
 unrelated ones. A register of 8 bits or fewer takes `st8` there as well. **A
 large array is an address and a data register**, a word each: the address
 increments on every access to the data register and wraps at the array's size.
+A register the hardware changes, like a status word or an array's address,
+reads as its current value.
 So the GPU's 2 KB of sprite patterns cost the page four bytes.
 
 **The shadows have a word each**, so a handler can read the interrupted code's

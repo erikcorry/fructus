@@ -420,7 +420,7 @@ ${BLIT_WIRING}
     cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(we), .irq(1'b0),
 \`ifdef FRUCTUS_BLIT
-                .blit(\`BLIT_ON), .mem_late(late),
+                .blit(\`BLIT_ON), .mem_late(late), .mem_data(rdata),
 \`endif
                 .halted(halted), .trapped(trapped), .result(), .retire(ret), .retire_pc(rpc));
     // A word a cycle, the even byte low, as the SPRAM delivers it; a write goes
@@ -613,7 +613,7 @@ ${BLIT_WIRING}
     cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(we), .irq(irq),
 \`ifdef FRUCTUS_BLIT
-                .blit(\`BLIT_ON), .mem_late(late),
+                .blit(\`BLIT_ON), .mem_late(late), .mem_data(rdata),
 \`endif
                 .halted(halted), .trapped(trapped), .result(), .retire(), .retire_pc());
     always @(posedge clk) begin

@@ -214,6 +214,42 @@ wait2:  add  r3, r3, #-1
         mov  r3, #3000
 wait3:  add  r3, r3, #-1
         br   ne, r3, #0, wait3
+        mov  r1, #0x480            ; the registers, read back
+        mov  r0, #0x3fe
+        st   r0, [r1, #0x24]       ; the patterns' address, 0x3fe
+        st   r0, [r1, #0x26]       ; and three pattern words: 0x3fe, 0x3ff, 0
+        st   r0, [r1, #0x26]
+        st   r0, [r1, #0x26]
+        ld   r3, [r1, #0x24]       ; 1: wrapped at 1024
+        st   r3, [r4, #46]
+        mov  r0, #30
+        st   r0, [r1, #0x20]       ; the palette's address, 30
+        st8  r0, [r1, #0x22]       ; and two entries, by st8: 30, 31
+        st8  r0, [r1, #0x22]
+        ld   r3, [r1, #0x20]       ; 0: wrapped at 32
+        st   r3, [r4, #48]
+        mov  r0, #5
+        st   r0, [r1, #0x28]       ; the attributes' address, 5
+        st   r0, [r1, #0x2a]
+        ld8  r3, [r1, #0x28]       ; 6, by ld8
+        st   r3, [r4, #50]
+vb1:    ld   r0, [r1, #4]          ; status, until vertical blank
+        brclr r0, #0x8000, vb1
+        and  r3, r0, #0x8000
+        st   r3, [r4, #52]
+vb2:    ld   r0, [r1, #4]          ; and until the first visible line
+        brset r0, #0x8000, vb2
+        st   r0, [r4, #54]         ; line 0, not blank
+        ld   r3, [r1, #0]          ; the mode, through ram_lo: 0
+        st   r3, [r4, #56]
+        mov  r0, #2
+        st8  r0, [r1]              ; blit on: loads take the late port
+        ld   r3, [r1, #0x28]       ; still 6
+        st   r3, [r4, #58]
+        ld   r3, [r1, #0]          ; the mode, 2, through lo_hold
+        st   r3, [r4, #60]
+        mov  r0, #0
+        st8  r0, [r1]
         halt
 
 handler:                           ; brk and the interrupt line, in blit mode
@@ -272,6 +308,15 @@ const results = [
   ['the handler, in blit mode, loaded A\'s word 8',             fbA(8)],
   ['the handler ran twice: brk, then the interrupt line',      2],
   ['brk returned to the instruction after it',                 0x5e5e],
+  ['the word that asked for the interrupt line',               1],
+  ['the patterns\' address, read: three writes on, wrapped',   0x001],
+  ['the palette\'s address, read: two st8 on, wrapped',        0],
+  ['the attributes\' address, read by ld8',                   6],
+  ['status: vertical blank seen',                              0x8000],
+  ['status: the first visible line, line 0',                   0],
+  ['the mode reads back from ram_lo',                          0],
+  ['blit mode: the attributes\' address, by the late port',   6],
+  ['blit mode: the mode, from ram_lo by the late port',        2],
 ];
 const words = [
   ...results.map(([what, v], k) => ['lo', (RESULT >> 1) + k, v, what]),

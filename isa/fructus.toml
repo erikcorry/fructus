@@ -394,7 +394,9 @@ io_guard     = 0xffcc
 #
 # A LARGE ARRAY IS AN ADDRESS AND A DATA REGISTER, a word each, rather than a
 # window onto it: the address increments on every access to the data register
-# and wraps at the array's size.  So the GPU's 2 KB of sprite patterns cost the
+# and wraps at the array's size.  A register the hardware changes - a status
+# word, an array's address - reads as its current value; the rest may read as
+# the value last written.  So the GPU's 2 KB of sprite patterns cost the
 # page four bytes.
 #
 # THE SHADOWS HAVE A WORD EACH, which is the one way to reach them other than
