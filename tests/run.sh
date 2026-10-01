@@ -78,6 +78,9 @@ if node tests/sim-check.mjs; then :; else fail=1; fi
 # --- libc, against a reference rather than a second copy of the algorithm ----
 if node tests/libc-check.mjs; then :; else fail=1; fi
 
+# --- libc/strcmp.s at every alignment, against C's definition ----------------
+if node tests/string-check.mjs; then :; else fail=1; fi
+
 # --- nothing may need the assembler scratch ----------------------------------
 # THE RULE IS: DO NOT KEEP ANYTHING IN r5 THAT HAS TO SURVIVE.  r5 is a normal
 # caller-saved register and also the one the assembler borrows when an

@@ -7,60 +7,24 @@
 ;
 ; Both return with r0 untouched, so memset's return value costs nothing.
 ;
-; THE TRICK IS THAT `push` WRITES THREE REGISTERS IN ONE INSTRUCTION and steps
-; the pointer itself.  memset never reads, so there is no second pointer
-; to maintain and no load to pay for - which is why the fill loop gets closer to
-; its floor than the copy loop in memcpy.s gets to its own.  It runs backwards,
-; from the end of the region down to the start, because that is the direction
-; push goes; nothing about memset cares which way it is filled.
-;
-; INTERRUPTS MUST HAVE THEIR OWN STACK POINTER.  sp is the fill cursor for the
-; whole routine, so anything that pushed to it would land in the buffer.
+; THE TRICK IS THAT `stm` WRITES THREE REGISTERS IN ONE INSTRUCTION and steps
+; its pointer, r1, itself.  memset never reads, so there is no second pointer
+; to maintain and no load to pay for.  sp is never touched, so an interrupt
+; in the middle of a fill is harmless.
 ;
 ; ----------------------------------------------------------------------------
 ; MEASURED, by tests/libc-check.mjs
 ; ----------------------------------------------------------------------------
-;                       even buffer     odd buffer
-;       fill loop       1.3750          1.8750 cycles/byte  32 bytes an iteration
-;       head            4.1429          4.6429 cycles/byte  up to 15 bytes, in words
-;       sizes           bzero 12 bytes, memset 54, 66 together
+;       fill loop       1.5625 cycles/byte  16 bytes an iteration, even or odd
+;       tail            1.5000 cycles/byte  up to 15 bytes, straight-line
+;       sizes           bzero 12 bytes, memset 55, 67 together
 ;
-; The floor is 0.50 - one cycle to write each aligned word - or 1.00 a byte at
-; a time, and 15 bytes of loop get to 1.38, or 1.88.  A push stops the
-; pipeline for four cycles beyond its accesses, however many registers it
-; carries - see the cost model under [cpu] in the spec - which is 0.75 of that
-; over six pushes and 32 bytes, and the taken branch is the other 0.125.
-; snippets/speed-of-light-memset-core.s reached 1.6822 a byte a cycle, and
-; spends 89 bytes doing it: its branch is 4 cycles over 258 bytes, and it
-; pushes triples alone.  It has not been measured with aligned words.
-;
-; THE HEAD ONLY HAS TO REACH 15 BYTES, because the fill loop can be entered at
-; its midpoint - see the loop itself.  Everything from 16 bytes up runs at the
-; loop's rate, and the head pushes words rather than bytes, so what began as a
-; 7-cycles-a-byte tail is now 4.14 over at most fifteen bytes - 4.64 odd.
-;
-; The two steps together, measured, against the original byte head.  Only the
-; last two columns are code that still exists and is measured as it stands, on
-; the pipeline, with the buffer even and odd; the first two are the earlier
-; heads as they were measured on the byte-serial core, before an access was
-; charged for its address or a store for its data flop:
-;
-;       n        byte head    word head    + midpoint entry    odd
-;       16         138           94              46             54
-;       24         194          126              77             89
-;       31         243          152             107            122
-;       32          76           80              71             87
-;
-; and the cost of each is exact and small: word pushes were 5 bytes and 4 cycles
-; on multiples of 32, the midpoint 4 more bytes and 4 more cycles on lengths
-; whose bit 4 is clear.  Averaged over every length from 0 to 512 the midpoint
-; alone was worth 17.8 cycles a call: 40 saved on half the lengths, 4 spent on
-; the other half.  That average is not remeasurable - the variant without the
-; midpoint entry is not in this file - and it is a byte-serial figure.  On the
-; pipeline sixteen bytes through the midpoint cost 19 cycles against 72 for
-; eight word pushes - 27 against 80 with the buffer odd - so the saving is
-; larger.  These are the sizes a compiler
-; emits to clear a struct, which is most memset calls in most programs.
+; An odd buffer runs the loop at the even rate because one byte stored first
+; makes the pointer even; without it every stm would go a byte at a time, at
+; 2.06 cycles a byte.  The floor is 0.50 - one cycle to write each aligned
+; word.  A stm stops the pipeline for four cycles beyond its accesses -
+; 0.75 a byte over three of them and 16 bytes - and the add and the taken
+; branch are the other 0.31.
 ; ============================================================================
 
 
@@ -88,125 +52,44 @@ bzero:
 
 
 ; ============================================================================
-; memset                                                            54 bytes
+; memset
 ; ============================================================================
-; sp walks down from the end of the region to the start, in three phases:
-;
-;       s                        s + (n & ~15)      s + n - 1   s + n
-;       |-------- fill loop ----------|--- words --------|-byte-|
-;                                                         <----- filled first
-;
-; The fill loop moves 32 bytes an iteration but can be entered halfway, so the
-; boundary is a multiple of 16 rather than 32 and the head never exceeds 15
-; bytes.  That is the whole reason for the loop's 3-3-2 3-3-2 shape.
-;
-; The head runs FIRST because it is the high end and push descends.  The odd
-; byte goes at the very TOP rather than the bottom, which is a choice and not
-; forced: putting it at s would work too, but then the fill loop would have to
-; stop at s + 1 instead of s, and its exit test compares against r0 directly.
-; At the top it costs nothing - the head simply starts one byte lower.
-
-; --- double the byte, before anything else ---------------------------------
-; r5 is the temporary here and takes the real sp immediately afterwards, which
-; is the whole reason this can come first: there is no third register free once
-; sp has been captured, and the head needs the doubled byte to push words.
-;
-; C says memset takes an int and uses `(unsigned char)c`, so a caller passing
-; 0x12ff must fill with 0xff.  The and is what makes that true, not decoration.
+; ONE BYTE TO MAKE THE POINTER EVEN, then a 16-byte loop of stm, then what is
+; left - 0 to 15 bytes - by its bits: 8, 4, 2 and 1.  stm stores through r1 and
+; steps it, so r1 becomes the cursor and r0, the return value, is never
+; touched.  The fill word goes in r5, the one register free once r1 is the
+; pointer: r5 is the assembler's scratch, and tests/run.sh's --noat assembly
+; of libc proves nothing here expands through it.
 
 memset:
-        and     r1, r1, #0x00ff         ; (unsigned char)c is the contract
-        shl     r5, r1, #8              ; 8 is in shift3, so this is two bytes
-        or      r1, r1, r5              ; r1 = c:c
-        mov     r5, sp                  ; the real stack, out of the way
-        add     sp, r0, r2              ; sp = one past the end
-
-; --- the head: at most 31 bytes, in words ----------------------------------
-; An odd length gets one byte peeled off the top, and everything below that is
-; pushed two bytes at a time.  Words rather than bytes is worth 4.14 cycles a
-; byte instead of 7 - 4.64 with the buffer odd - which is most of what a small
-; memset costs.  (The 7 is the
-; byte head, which is no longer in this file, on the byte-serial core.)
-;
-; NO `add r2, r2, #-1` AFTER THE PEEL, and that is exact rather than lucky: an
-; odd n is never a multiple of 32, so subtracting one from it cannot cross a
-; block boundary, and n & ~31 is the same either way.
-
-        brclr   r2, #1, .even           ; even length: no byte to peel
-        add     sp, sp, #-1             ; the odd byte, at the very top    1
-        st8     r1, [sp, #0]            ;                                  5
-.even:
-        and     r2, r2, #-16            ; the length, rounded down to a half block
-        add     r2, r0, r2              ; ... as an address: where the head stops
-
-        br      eq, sp, r2, .headdone   ; nothing between the block and the end
-.head:
-        push    r1                      ;                               5
-        br      ne, sp, r2, .head       ;                               4
-.headdone:
-
-; --- the fill loop, 32 bytes an iteration, in two identical halves ---------
-; Sixteen words as 3-3-2 twice over, rather than five triples and a single.
-; Both spellings are twelve bytes and both cost 40 cycles, so the shape is free
-; - but this one has a USABLE MIDPOINT, and that is the whole point.  Entering
-; at .mid fills exactly 16 bytes and then falls into the loop test, so the
-; routine can start on a half block without a second copy of the code.
-;
-; That is what lets the head round to 16 rather than 32.  Half the work that
-; used to go through the head at 4.86 cycles a byte now goes through the loop at
-; 1.375, and the entry ladder costs five bytes: one `sub` to get the length back
-; out of the boundary address, and one `brset` on bit 4.
-;
-; THE `sub` IS NOT BOOKKEEPING.  r2 has been the boundary ADDRESS since the head
-; needed something to stop against, and the bit that decides where to enter is
-; bit 4 of the LENGTH.  r2 - r0 recovers it, and no register was free to keep
-; the length in.  (`xor r2, r2, r0` would do as well, and for a reason worth
-; knowing: r2 and r0 agree in bits 0-3, so the subtraction cannot borrow into
-; bit 4.  Same two bytes, less obvious, so sub it is.)
-
-        sub     r2, r2, r0              ; the length back: a multiple of 16
-        brset   r2, #16, .mid           ; an odd multiple starts halfway in
-        jmpr    .bottom
-.top:
-        push    r1, r1, r1              ;                               7
-        push    r1, r1, r1              ;                               7
-        push    r1, r1                  ;                               6
-.mid:
-        push    r1, r1, r1              ;                               7
-        push    r1, r1, r1              ;                               7
-        push    r1, r1                  ;                               6
-.bottom:
-        br      ne, sp, r0, .top        ;                               4
-
-        mov     sp, r5                  ; hand the real stack back
+        movhi   r5, r1, r1              ; r5 = c:c - (unsigned char)c, twice
+        mov     r1, r0                  ; stm's pointer; r0 stays the result
+        brclr   r1, #1, .aligned        ; already even
+        br      eq, r2, #0, .done       ; nothing to fill
+        st8     r5, [r1]                ; one byte makes the pointer even
+        add     r1, r1, #1
+        add     r2, r2, #-1
+.aligned:
+        brclr   r2, #0xfff0, .tail      ; fewer than 16
+.loop:
+        stm     r5, r5, r5              ; +0  .. +5
+        stm     r5, r5, r5              ; +6  .. +11
+        stm     r5, r5                  ; +12 .. +15
+        add     r2, r2, #-16
+        brset   r2, #0xfff0, .loop      ; 16 or more left
+.tail:
+        brclr   r2, #8, .lt8
+        stm     r5, r5
+        stm     r5, r5
+.lt8:
+        brclr   r2, #4, .lt4
+        stm     r5, r5
+.lt4:
+        brclr   r2, #3, .done           ; a multiple of four, the common case
+        brclr   r2, #2, .lt2
+        stm     r5
+.lt2:
+        brclr   r2, #1, .done
+        st8     r5, [r1]
+.done:
         ret
-
-; r5 HOLDS THE REAL STACK POINTER, AND r5 IS THE ASSEMBLER'S SCRATCH.  Any
-; immediate that does not fit its instruction expands through r5, which here
-; would silently destroy the saved sp rather than fail.  It is safe only because
-; nothing in this file needs an expansion - and that is not a matter of opinion:
-; tests/run.sh assembles libc against the --noat ruledef, which omits every rule
-; that borrows the scratch, so a future edit that needs one fails to assemble
-; instead of corrupting the stack.  Do not remove that check.
-;
-; WHY THE GRANULARITY STOPS AT 16, which is not squeamishness but arithmetic.
-; An entry point is only useful if it leaves a POWER OF TWO to be pushed, since
-; that is what one `brset` can select; and the arrangement of a 16-byte half
-; decides which remainders exist.  Eight words - sixteen bytes - in six bytes of
-; code cost 20 cycles, and every 20-cycle spelling is two triples and a double:
-;
-;       3-3-2   leaves 16, 10, 4        20 cycles       <- what we use
-;       3-2-3   leaves 16, 10, 6        20
-;       2-3-3   leaves 16, 12, 6        20
-;       3-1-3-1 leaves 16, 10, 8, 2     24              <- an 8, at a price
-;       2-2-2-2 leaves 16, 12, 8, 4     24
-;
-; A push costs four cycles beyond its accesses whatever it carries, so a
-; spelling is dearer exactly in proportion to how many pushes it uses: one more
-; push, four more cycles.
-;
-; So 8-byte granularity exists, but only in a spelling that costs four more
-; cycles per half - eight per 32-byte block, sixty-four on a 256-byte fill - to
-; save at most a few cycles on a quarter of the short calls.  The trade goes
-; the wrong way, and it goes the wrong way by a wide enough margin that it is
-; not worth re-measuring on a whim.
