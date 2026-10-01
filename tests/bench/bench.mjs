@@ -7,7 +7,8 @@
 //
 // Compiles each kernel in tests/bench with the compiler (tools/fcc when none
 // is named), runs it on tools/sim.js, and prints its cycles, the cycles lost
-// to three-byte instructions at odd addresses, the bytes of its noinline
+// to three-byte instructions at odd addresses and to data words at odd
+// addresses - each a byte at a time, a cycle more - the bytes of its noinline
 // functions - the kernel alone, not main or libc - and its exit status, which
 // is a checksum: the same at every optimisation level, or something is wrong.
 //
@@ -29,7 +30,7 @@ const KERNELS = { crc: ['crc16'], sort: ['isort'], sieve: ['sieve'],
                   matmul: ['matmul', 'scale'], interp: ['run', 'walk'] };
 const spec = loadSpec();
 mkdirSync('build', { recursive: true });
-let cycles = 0, odd = 0, bytes = 0;
+let cycles = 0, odd = 0, split = 0, bytes = 0;
 for (const [name, fns] of Object.entries(KERNELS)) {
   const out = `build/bench-${name}`;
   execFileSync(cc, [...flags, `tests/bench/${name}.c`, '-o', out]);
@@ -42,8 +43,10 @@ for (const [name, fns] of Object.entries(KERNELS)) {
     const f = l.trim().split(/\s+/);
     if (f.length >= 8 && fns.includes(f[7])) b += Number(f[2]);
   }
-  cycles += m.cycles(); odd += m.odd; bytes += b;
+  cycles += m.cycles(); odd += m.odd; split += m.split; bytes += b;
   console.log(`${name.padEnd(7)} ${String(m.cycles()).padStart(8)} cycles ${String(m.odd).padStart(6)} odd ` +
+              `${String(m.split).padStart(6)} split ` +
               `${String(b).padStart(5)} bytes  exit ${m.R[0] & 0xff}${why === 'halted' ? '' : ` (${why})`}`);
 }
-console.log(`total   ${String(cycles).padStart(8)} cycles ${String(odd).padStart(6)} odd ${String(bytes).padStart(5)} bytes`);
+console.log(`total   ${String(cycles).padStart(8)} cycles ${String(odd).padStart(6)} odd ` +
+            `${String(split).padStart(6)} split ${String(bytes).padStart(5)} bytes`);

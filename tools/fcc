@@ -86,8 +86,19 @@ for a in "$@"; do
 done
 
 # crt0 and libc, rebuilt whenever a source is newer than the archive.
+#
+# ONE COMPILE AT A TIME DECIDES AND REBUILDS, under a lock.  tools/torture.mjs
+# runs this script on every core at once, and a new cc1 or an edited libc
+# source made every one of them find the archive stale together and rebuild
+# it over the others - `file truncated', `malformed archive', and links that
+# lost memcpy, which read as compiler results.  The rest wait at the lock and
+# then find it fresh.  And the archive and crt0.o are built under other names
+# and renamed into place, so a compile already linking against the old ones,
+# outside the lock, never sees half of a new one.
 lib=$B/crt/libc.a
 mkdir -p $B/crt
+exec 9>$B/crt/.lock
+command -v flock >/dev/null && flock 9
 stale=
 [ -f $lib ] || stale=1
 for s in $root/crt/crt0.s $root/crt/*.c $root/crt/*.cc $root/crt/include/*.h \
@@ -96,8 +107,9 @@ for s in $root/crt/crt0.s $root/crt/*.c $root/crt/*.cc $root/crt/include/*.h \
     [ $s -nt $lib ] && stale=1
 done
 if [ -n "$stale" ]; then
-    rm -f $lib
-    $X/fructus-elf-as -o $B/crt/crt0.o $root/crt/crt0.s
+    new=$lib.new
+    rm -f $new
+    $X/fructus-elf-as -o $B/crt/crt0.o.new $root/crt/crt0.s
     # snippets/digits3.s comes along because printf's decimal conversion calls
     # it: three digits at a time, with no divide anywhere.
     for s in $root/libc/*.s $root/snippets/digits3.s; do
@@ -112,7 +124,7 @@ if [ -n "$stale" ]; then
           sed 's/^\([A-Za-z_][A-Za-z0-9_]*\):/\t.section\t.text.\1,"ax"\n\t.globl\t\1\n\1:/' $s
         } > $B/crt/$n.s
         $X/fructus-elf-as -o $B/crt/$n.o $B/crt/$n.s
-        $X/fructus-elf-ar rc $lib $B/crt/$n.o
+        $X/fructus-elf-ar rc $new $B/crt/$n.o
     done
     # The C half of the library: the odds and ends in libc.c, and the heap.
     # Each is one object, but a section per function, and the link below
@@ -128,7 +140,7 @@ if [ -n "$stale" ]; then
     # failures.
     for c in libc malloc; do
         $CCC -Os -Wall -Werror -ffunction-sections -c $root/crt/$c.c -o $B/crt/$c.o
-        $X/fructus-elf-ar rc $lib $B/crt/$c.o
+        $X/fructus-elf-ar rc $new $B/crt/$c.o
     done
     # THE C++ RUNTIME SUPPORT, ALWAYS BUILT AND ALWAYS ARCHIVED.  A C program
     # pays nothing for it: a member is extracted from an archive only to
@@ -136,9 +148,12 @@ if [ -n "$stale" ]; then
     # resolve.  Building it unconditionally is what keeps the archive the same
     # whichever language the caller brought.
     $CXXC -Os -Wall -Werror -ffunction-sections -c $root/crt/new.cc -o $B/crt/new.o
-    $X/fructus-elf-ar rc $lib $B/crt/new.o
-    $X/fructus-elf-ranlib $lib
+    $X/fructus-elf-ar rc $new $B/crt/new.o
+    $X/fructus-elf-ranlib $new
+    mv -f $B/crt/crt0.o.new $B/crt/crt0.o
+    mv -f $new $lib
 fi
+exec 9>&-
 
 # The image is RAM, code and data alike, so the one segment is RWX on purpose.
 $CC -nostdlib -T $root/ld/fructus-sim.ld -Wl,--no-warn-rwx-segments,--gc-sections \

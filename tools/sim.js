@@ -233,6 +233,7 @@ export class Machine {
     this.odd     = 0;      // of them, cycles lost to a three-byte instruction at an odd address
     this.bus     = 0;      // data bytes read or written
     this.xfer    = 0;      // data accesses: a byte, or an aligned word
+    this.split   = 0;      // of them, cycles lost to words at odd addresses
     this.penalty = spec.cpu.taken_branch_penalty ?? 0;
 
     // WHICH INSTRUCTIONS PAY IT COMES FROM THE SEMANTICS, not from a list here
@@ -270,12 +271,12 @@ export class Machine {
   rd8 (a)    { this.bus += 1; this.xfer += 1; return this.mem[a & MASK]; }
   wr8 (a, v) { this.bus += 1; this.xfer += 1; this.mem[a & MASK] = v & 0xff; }
   rd16(a)    {
-    this.bus += 2; this.xfer += a & 1 ? 2 : 1;
+    this.bus += 2; this.xfer += a & 1 ? 2 : 1; this.split += a & 1;
     const lo = this.mem[a & MASK], hi = this.mem[(a + 1) & MASK];
     return this.little ? lo | (hi << 8) : hi | (lo << 8);
   }
   wr16(a, v) {
-    this.bus += 2; this.xfer += a & 1 ? 2 : 1;
+    this.bus += 2; this.xfer += a & 1 ? 2 : 1; this.split += a & 1;
     const lo = v & 0xff, hi = (v >>> 8) & 0xff;
     this.mem[a & MASK]       = this.little ? lo : hi;
     this.mem[(a + 1) & MASK] = this.little ? hi : lo;
@@ -450,7 +451,7 @@ export class Machine {
   // Zero the cost counters.  Tests used to open-code this, and open-coded the
   // SUM as well - which is how the taken-branch penalty went unnoticed by every
   // cycle assertion in the suite the moment it was added.  One definition.
-  reset() { this.cyc = this.odd = this.bus = this.xfer = 0; return this; }
+  reset() { this.cyc = this.odd = this.bus = this.xfer = this.split = 0; return this; }
   cycles() { return this.cyc; }
 }
 
