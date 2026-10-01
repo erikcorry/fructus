@@ -43,6 +43,13 @@ const reg = (name) => {
   return k;
 };
 const sp = reg('sp'), lr = reg('lr');
+
+// [cpu.io]'s shadow words.  rtl/cpu.sv decodes them from bits 15:1 of the
+// address, so each must be a word at an even address, and three distinct ones.
+const io = spec.cpu.io;
+const shadowWords = ['shadow_sp', 'shadow_lr', 'shadow_isp'].map((n) => io?.[n]);
+if (shadowWords.some((a) => typeof a !== 'number' || a & 1) || new Set(shadowWords).size !== 3)
+  fail(`[cpu.io]'s shadow_sp, shadow_lr and shadow_isp must be three distinct even addresses`);
 if ((sp ^ lr) !== 1 || (sp & 1) !== 0)
   fail(`sp is r${sp} and lr r${lr}: rtl/cpu.sv's kreg names them as {${sp >> 1}, which}, so they must be an even register and the one after it`);
 
@@ -85,6 +92,11 @@ process.stdout.write(`// =======================================================
 
 // [cpu.vectors] brk: where brk and the interrupt line go.
 \`define FRUCTUS_VECTOR_BRK 16'h${hex(vector, 4)}
+
+// [cpu.io]: the shadows' words in the I/O page, which loads and stores reach.
+\`define FRUCTUS_IO_SHADOW_SP  16'h${hex(io.shadow_sp, 4)}
+\`define FRUCTUS_IO_SHADOW_LR  16'h${hex(io.shadow_lr, 4)}
+\`define FRUCTUS_IO_SHADOW_ISP 16'h${hex(io.shadow_isp, 4)}
 
 // The registers the exception routines and the block moves name.
 \`define FRUCTUS_REG_SP 3'd${sp}

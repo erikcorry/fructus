@@ -14,6 +14,11 @@
 // [cpu.vectors] brk: where brk and the interrupt line go.
 `define FRUCTUS_VECTOR_BRK 16'hfff8
 
+// [cpu.io]: the shadows' words in the I/O page, which loads and stores reach.
+`define FRUCTUS_IO_SHADOW_SP  16'h0410
+`define FRUCTUS_IO_SHADOW_LR  16'h0412
+`define FRUCTUS_IO_SHADOW_ISP 16'h0414
+
 // The registers the exception routines and the block moves name.
 `define FRUCTUS_REG_SP 3'd6
 `define FRUCTUS_REG_LR 3'd7

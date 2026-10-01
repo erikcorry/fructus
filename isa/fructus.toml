@@ -403,9 +403,9 @@ io_guard     = 0xffcc
 # brk and rti.  A handler can read the interrupted code's sp and lr for a crash
 # report, and a scheduler can swap them; boot code can set shadow_isp with one
 # store instead of the `rti' it otherwise needs.  They are still not
-# registers - nothing in the register file reaches them.  tools/sim.js maps
-# them; rtl/cpu.sv does not yet, and in tools/fpga-system.sv these addresses
-# are ordinary memory.
+# registers - nothing in the register file reaches them.  tools/sim.js and
+# rtl/cpu.sv both map them, and a store writes the memory beneath as well,
+# which no load can see.
 [cpu.io]
 page        = 0x0400
 guard_bytes = 16       # at each end of the page

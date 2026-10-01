@@ -198,6 +198,39 @@ const shuffle = (xs) => xs.map((x) => [rnd(), x]).sort((a, b) => a[0] - b[0]).ma
 // is run twice: as written, and a byte later behind a nop, so that every
 // branch in it lands at the other alignment too.
 const SOURCES = [
+  // THE SHADOWS' WORDS, [cpu.io]: stored and loaded by word, by byte, at odd
+  // addresses a byte at a time, by ldm and stm, and moved by brk and rti in
+  // between.  cli first, since an interrupt rewrites them, and again after
+  // brk, whose rti sets ie: one taken between the two parks the sp and lr
+  // brk parked and leaves shadow_isp, so it changes nothing.  The simulator
+  // runs it with the I/O page.
+  `       cli
+          mov  r1, #0x410
+          mov  r0, #0x1234
+          st   r0, [r1, #0]
+          mov  r0, #0x5678
+          st   r0, [r1, #2]
+          mov  r0, #0x3000
+          st   r0, [r1, #4]
+          mov  r2, #0xab
+          st8  r2, [r1, #1]
+          ld   r3, [r1, #0]
+          ld8  r4, [r1, #3]
+          ld   r5, [r1, #3]
+          add  r3, r3, r4
+          add  r3, r3, r5
+          brk
+          cli
+          mov  r2, #0x410
+          ldm  r0, r4, r5
+          add  r3, r3, r0
+          add  r3, r3, r4
+          add  r3, r3, r5
+          mov  r1, #0x411
+          stm  r3, r4
+          ld   r0, [r1, #-5]
+          ld   r5, [r1, #-1]
+          halt`,
   `       mov  r0, #5
           mov  r1, #0
   loop:   add  r1, r1, r0
@@ -358,7 +391,10 @@ for (let p = 0; p < PROGRAMS; p++) {
     bytes = assembled[p - N_RANDOM];
   }
   const reg = Array.from({ length: 8 }, draws);
-  const m = new Machine(spec).load(bytes, 0);
+  // The assembled programs run with the I/O page, which one of them is about;
+  // the random ones load from anywhere, guards included.
+  const io = p >= N_RANDOM;
+  const m = new Machine(spec, { io }).load(bytes, 0);
   m.mem[VECTOR] = RTI;
   reg.forEach((v, k) => { m.R[k] = v; });
   // WHETHER A BRANCH IS TAKEN IS NOT WHERE THE pc LANDS: a branch to the
@@ -367,7 +403,7 @@ for (let p = 0; p < PROGRAMS; p++) {
   // whose offset byte is 1, and it was taken if that copy's pc moved by one
   // more than the branch's length.
   const takes = (pc, len) => {
-    const c = new Machine(spec).load(m.mem, 0);
+    const c = new Machine(spec, { io }).load(m.mem, 0);
     c.R.set(m.R);
     c.pc = pc;
     c.mem[(pc + 2) & 0xffff] = 1;
@@ -402,7 +438,7 @@ for (let p = 0; p < PROGRAMS; p++) {
     const acc = mem ? m.xfer - xfer0 : 0;
     if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, acc, memst, late, sfault, exc, cyc, R: Array.from(m.R) });
   }
-  programs.push({ bytes, reg, trace, hash: fold(m.mem), fault });
+  programs.push({ bytes, reg, trace, hash: fold(m.mem), fault, io });
   writeFileSync(`build/cpu-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
   writeFileSync(`build/cpu-reg-${p}.hex`, reg.map(hex4).join('\n') + '\n');
 }
@@ -584,8 +620,8 @@ for (const f of ['build/cpu-tb.vvp', 'build/cpu-tb.sv']) rmSync(f, { force: true
 // A PROGRAM THAT RAN cli may rightly take none, and one whose ie is clear at
 // the halt is not woken; the simulator, started with ie set as the test bench
 // sets the RTL's, says which those are.
-const finals = programs.map(({ bytes, reg }) => {
-  const m = new Machine(spec).load(bytes, 0);
+const finals = programs.map(({ bytes, reg, io }) => {
+  const m = new Machine(spec, { io }).load(bytes, 0);
   m.mem[VECTOR] = RTI;
   m.ie = 1;
   reg.forEach((v, k) => { m.R[k] = v; });

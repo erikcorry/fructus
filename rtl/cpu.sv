@@ -912,19 +912,39 @@ module cpu (
     wire   [1:0] uWX = uw[17:16];
     wire   [1:0] uIE = uw[19:18];
     wire   [1:0] uRJ = uw[21:20];
+    // THE SHADOWS' WORDS IN THE I/O PAGE, isa/fructus.toml's [cpu.io].  At a
+    // load's capture `mar' is the address whose word is arriving - it went
+    // out the cycle before, and mar moves only with an address - and a
+    // store's address is mar, so both are decoded from a flop and not from
+    // the adder.  A load takes the shadow in place of memory's word, at the
+    // capture only, so nothing new is in front of decode; a store writes its
+    // lanes into the shadow, and into memory as well, which reads nothing.
+    logic [15:0] shadow_sp, shadow_lr, shadow_isp;
+    localparam [15:0] SH_SP = `FRUCTUS_IO_SHADOW_SP, SH_LR = `FRUCTUS_IO_SHADOW_LR,
+                      SH_ISP = `FRUCTUS_IO_SHADOW_ISP;
+    wire         sh_sp  = mar[15:1] == SH_SP[15:1];
+    wire         sh_lr  = mar[15:1] == SH_LR[15:1];
+    wire         sh_isp = mar[15:1] == SH_ISP[15:1];
+    wire  [15:0] shword = sh_sp ? shadow_sp : sh_lr ? shadow_lr : shadow_isp;
+    wire         shrd   = sh_sp | sh_lr | sh_isp;
 `ifdef FRUCTUS_BLIT
     // A late routine's capture takes its byte from mem_late, whose lane is the
     // one mlane held a cycle before.  Only the word's L bit chooses it, so an
-    // instruction byte never comes from there, nor a byte of pop's.
+    // instruction byte never comes from there, nor a byte of pop's.  Its
+    // address was mar a cycle before, so whether it was a shadow's is too.
     wire         uL  = uw[22];
-    logic        mlane2;
-    always_ff @(posedge clk) mlane2 <= mlane;
-    wire  [15:0] mword = uL ? mem_late : mem_data;
-    wire   [7:0] mbyte = uL ? (mlane2 ? mem_late[15:8] : mem_late[7:0])
-                            : mlane ? mem_data[15:8] : mem_data[7:0];
+    logic        mlane2, shrd2;
+    logic [15:0] shword2;
+    always_ff @(posedge clk) begin mlane2 <= mlane; shrd2 <= shrd; shword2 <= shword; end
+    wire  [15:0] mlw   = shrd2 ? shword2 : mem_late;
+    wire  [15:0] mdw   = shrd  ? shword  : mem_data;
+    wire  [15:0] mword = uL ? mlw : mdw;
+    wire   [7:0] mbyte = uL ? (mlane2 ? mlw[15:8] : mlw[7:0])
+                            : mlane ? mdw[15:8] : mdw[7:0];
 `else
-    wire  [15:0] mword = mem_rdata;
-    wire   [7:0] mbyte = mlane ? hi : lo;
+    wire  [15:0] mdw   = shrd ? shword : mem_rdata;
+    wire  [15:0] mword = mdw;
+    wire   [7:0] mbyte = mlane ? mdw[15:8] : mdw[7:0];
 `endif
 
     // A loaded register that is the pointer is not written: the pointer's own
@@ -989,14 +1009,14 @@ module cpu (
         end
     end
     // --- the exception state ----------------------------------------------------
-    // THREE SHADOWS AND ie, reached only by microcode: a shadow takes aq -
+    // THREE SHADOWS AND ie, reached by microcode - and the shadows by loads
+    // and stores, at THE SHADOWS' WORDS above: a shadow takes aq -
     // the word the borrowed port read the step before - and gives its value to
     // ldq, which the ALU's pass-through writes to sp or lr, so neither the
     // register file nor its write port has anything new in front of it.
     // rti's return address is aq too.  The vector is isa/fructus.toml's
     // [cpu.vectors] brk.
     localparam [15:0] VECTOR = `FRUCTUS_VECTOR_BRK;
-    logic [15:0] shadow_sp, shadow_lr, shadow_isp;
     logic        ie;
     assign ie_q  = ie;
     // THE PRODUCT OF aq AND bq, worked on every cycle and a cycle late: the ALU
@@ -1015,6 +1035,14 @@ module cpu (
         if (uSH == 2'd1) shadow_sp  <= aq;
         if (uSH == 2'd2) shadow_lr  <= aq;
         if (uSH == 2'd3) shadow_isp <= aq;
+        // A store's lanes, at mar: never in the same cycle as uSH, which only
+        // brk's and rti's routines set, and they store nothing.
+        if (sh_sp  & mem_we[0]) shadow_sp[7:0]   <= mem_wdata[7:0];
+        if (sh_sp  & mem_we[1]) shadow_sp[15:8]  <= mem_wdata[15:8];
+        if (sh_lr  & mem_we[0]) shadow_lr[7:0]   <= mem_wdata[7:0];
+        if (sh_lr  & mem_we[1]) shadow_lr[15:8]  <= mem_wdata[15:8];
+        if (sh_isp & mem_we[0]) shadow_isp[7:0]  <= mem_wdata[7:0];
+        if (sh_isp & mem_we[1]) shadow_isp[15:8] <= mem_wdata[15:8];
         if (rst)                ie <= 1'b0;
         else if (uIE == 2'd1)   ie <= 1'b0;
         else if (uIE == 2'd2)   ie <= 1'b1;

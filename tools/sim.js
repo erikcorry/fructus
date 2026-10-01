@@ -318,6 +318,9 @@ export class Machine {
     const shift = ((a & 1) === 1) === this.little ? 8 : 0;
     if (v === undefined) return (this[name] >>> shift) & 0xff;
     this[name] = (this[name] & ~(0xff << shift) | ((v & 0xff) << shift)) & 0xffff;
+    // AND THE MEMORY BENEATH, as rtl/cpu.sv's store writes it too.  No load
+    // can see it; tests/cpu-check.mjs compares the two machines' memories.
+    this.mem[a] = v & 0xff;
   }
 
   // --- evaluating one instruction's semantics --------------------------------

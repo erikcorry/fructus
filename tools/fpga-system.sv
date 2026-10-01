@@ -47,9 +47,10 @@
 //                       reaches all of it (isa/fructus.toml, [[reloc]])
 //     0x0400 - 0x04ff   the I/O page, isa/fructus.toml's [cpu.io]: the GPU's
 //                       registers at 0x0480 - 0x04ef, docs/vga.md "Registers",
-//                       written through into ram_lo as well; the rest is
-//                       ram_lo for now, since rtl/cpu.sv neither maps the
-//                       shadows at 0x0410 nor traps on the guards yet
+//                       written through into ram_lo as well.  The shadows'
+//                       words at 0x0410 are the processor's own, and ram_lo
+//                       beneath them; the guards are ram_lo, since
+//                       rtl/cpu.sv does not trap on them yet
 //     0x0500 - 0x7fff   ram_lo
 //     0x8000 - 0xffff   ram_hi; in blit mode, data is the buffer not shown
 //

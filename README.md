@@ -610,9 +610,9 @@ are still not registers: no instruction names them.
 `tools/sim.js` implements all of this for a machine made with `io`, which is
 `tools/fcc-run.mjs`'s. A program that touches a guard there exits 124, naming
 the instruction. `tests/stack-guard.c` recurses into the top guard.
-`tools/fpga-system.sv` has the GPU's registers, but `rtl/cpu.sv` neither maps
-the shadows nor traps on the guards yet, so those addresses are still ordinary
-memory on the FPGA.
+`rtl/cpu.sv` maps the shadows too, and `tools/fpga-system.sv` has the GPU's
+registers. The CPU core doesn't trap on the guards yet, so on the FPGA they
+are still ordinary memory.
 
 ## Status
 

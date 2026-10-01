@@ -711,7 +711,8 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     const n = run(`        mov  r1, #${io.shadow_sp + 1}\n        mov  r2, #0xab\n        st8  r2, [r1, #0]`,
                   { setup: (mm) => { mm.shadow_sp = 0x1111; } });
     check('st8 to shadow_sp\'s high byte', n.shadow_sp === 0xab11, `shadow_sp=${hex(n.shadow_sp)}`);
-    check('and none of it reached memory', n.mem[io.shadow_sp + 1] === 0, `mem=${hex(n.mem[io.shadow_sp + 1])}`);
+    check('and the memory beneath, as the hardware writes it', n.mem[io.shadow_sp + 1] === 0xab,
+          `mem=${hex(n.mem[io.shadow_sp + 1])}`);
   }
   // Without `io': memory, and nothing traps.
   {
