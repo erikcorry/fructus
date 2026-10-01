@@ -171,7 +171,7 @@ function verify(name, r, dest, src, n) {
 // Neither shows up as a wrong byte, so the path is measured instead.
 //
 // The two loops are far enough apart to tell by cost alone - the bulk loop runs
-// at 4.94 cycles/byte and the descending byte loop at 16 - so anything under 8
+// at 3.94 cycles/byte, or 4.94 odd, and the descending byte loop at 16 - so anything under 8
 // went ascending.  Only lengths of 32 and up are judged, where the byte-loop
 // head and the prologue no longer dominate.
 const ASCENDING = 8;
@@ -242,8 +242,8 @@ function dispatch(name, r, dest, src, n) {
   const a = 64, b = MAXN;
   const cost = (n) => call(entry, BUF + HIGH, BUF + LOW, n).cycles;
   const per = (cost(b) - cost(a)) / (b - a);
-  check('memcpy bulk cost', Math.abs(per - 4.9375) < 0.0001,
-        `${per.toFixed(4)} cycles/byte, the file says 4.9375`);
+  check('memcpy bulk cost', Math.abs(per - 3.9375) < 0.0001,
+        `${per.toFixed(4)} cycles/byte, the file says 3.9375`);
 
   // The byte head is the expensive part, and its worst case is 15 bytes.
   const head = (cost(15) - cost(0)) / 15;
@@ -356,12 +356,12 @@ function dispatch(name, r, dest, src, n) {
   // Cost, differenced so the head and the prologue cancel.
   const cost = (n) => shot(memset, { 0: BUF + AT, 1: 0xff, 2: n }).cycles;
   const bulk = (cost(64 + 32 * 32) - cost(64)) / (32 * 32);
-  check('memset fill loop', Math.abs(bulk - 1.8750) < 0.0005,
-        `${bulk.toFixed(4)} cycles/byte, the file says 1.8750`);
+  check('memset fill loop', Math.abs(bulk - 1.3750) < 0.0005,
+        `${bulk.toFixed(4)} cycles/byte, the file says 1.3750`);
   // The head pushes words, a push and a branch per word; measured over a pure
   // even length so the odd-byte peel does not muddy it.
   const head = (cost(14) - cost(0)) / 14;
-  check('memset head', Math.abs(head - 4.6429) < 0.0005, `${head.toFixed(4)} cycles/byte`);
+  check('memset head', Math.abs(head - 4.1429) < 0.0005, `${head.toFixed(4)} cycles/byte`);
 
   // TWO STRUCTURAL CLAIMS, neither of which a byte comparison can see.
   //

@@ -393,10 +393,12 @@ for (let p = 0; p < PROGRAMS; p++) {
     const sp = m.R[6], first = (memst ? sp - mem : sp) & 0xffff, last = (first + mem - 1) & 0xffff;
     const sfault = /^base = sp; /.test(d.insn.semantics ?? '') && ((first | last) & 0x8000) !== 0;
     if (sfault && !fault) fault = { at: trace.length, hash: fold(m.mem) };
-    const before = m.cycles();
+    const before = m.cycles(), xfer0 = m.xfer;
     m.step();
     const cyc = m.cycles() - before;   // what the simulator charged it
-    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, memst, late, sfault, exc, cyc, R: Array.from(m.R) });
+    // A memory instruction's accesses: an aligned word is one, a byte one.
+    const acc = mem ? m.xfer - xfer0 : 0;
+    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, acc, memst, late, sfault, exc, cyc, R: Array.from(m.R) });
   }
   programs.push({ bytes, reg, trace, hash: fold(m.mem), fault });
   writeFileSync(`build/cpu-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
@@ -409,8 +411,9 @@ writeFileSync('build/cpu-tb.sv', `module tb;
     logic [15:0] rdata;
     logic [15:0] regs [0:7];
     wire [15:0] addr, rpc;
-    wire [7:0] wdata;
-    wire we, halted, trapped, ret;
+    wire [15:0] wdata;
+    wire [1:0] we;
+    wire halted, trapped, ret;
 ${BLIT_WIRING}
     cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(we), .irq(1'b0),
@@ -419,11 +422,12 @@ ${BLIT_WIRING}
 \`endif
                 .halted(halted), .trapped(trapped), .result(), .retire(ret), .retire_pc(rpc));
     // A word a cycle, the even byte low, as the SPRAM delivers it; a write goes
-    // to the byte mem_addr names, at the same edge, and a read in that cycle
+    // to the lanes mem_we names, at the same edge, and a read in that cycle
     // sees what was there before.
     always @(posedge clk) begin
         rdata <= {mem[{addr[15:1], 1'b1}], mem[{addr[15:1], 1'b0}]};
-        if (we) mem[addr] <= wdata;
+        if (we[0]) mem[{addr[15:1], 1'b0}] <= wdata[7:0];
+        if (we[1]) mem[{addr[15:1], 1'b1}] <= wdata[15:8];
     end
     integer p, k, cyc, ev, epc, go, dpc, sq, h;
     reg [8*64:1] name;
@@ -523,7 +527,7 @@ function check(out, blit, what) {
     for (let i = 1; i < Math.min(ds.length, trace.length + 1); i++) {
       const prev = trace[i - 1];
       const want = prev.exc ? prev.exc
-                 : prev.mem ? prev.mem + (prev.memst ? 4 : 3) + (blit && prev.late ? 1 : 0)
+                 : prev.mem ? prev.acc + (prev.memst ? 4 : 3) + (blit && prev.late ? 1 : 0)
                  : prev.jump ? prev.jump : prev.taken ? 4
                  : (prev.pc & 1) && prev.len === 3 ? 2 : 1;
       if (ds[i].pc !== (whole[i]?.pc ?? ds[i].pc)) say(` dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
@@ -593,8 +597,9 @@ writeFileSync('build/cpu-irq-tb.sv', `module tb;
     logic [15:0] rdata;
     logic [15:0] regs [0:7];
     wire [15:0] addr;
-    wire [7:0] wdata;
-    wire we, halted, trapped;
+    wire [15:0] wdata;
+    wire [1:0] we;
+    wire halted, trapped;
 ${BLIT_WIRING}
     cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(we), .irq(irq),
@@ -604,7 +609,8 @@ ${BLIT_WIRING}
                 .halted(halted), .trapped(trapped), .result(), .retire(), .retire_pc());
     always @(posedge clk) begin
         rdata <= {mem[{addr[15:1], 1'b1}], mem[{addr[15:1], 1'b0}]};
-        if (we) mem[addr] <= wdata;
+        if (we[0]) mem[{addr[15:1], 1'b0}] <= wdata[7:0];
+        if (we[1]) mem[{addr[15:1], 1'b1}] <= wdata[15:8];
     end
     integer p, k, cyc, takes, h, pc1;
     reg [8*64:1] name;
@@ -690,9 +696,12 @@ if (bad === 0) {
   const taken = programs.reduce((n, { trace }) => n + trace.filter((t) => t.taken).length, 0);
   const jumped = programs.reduce((n, { trace }) => n + trace.filter((t) => t.jump).length, 0);
   const moved = programs.reduce((n, { trace }) => n + trace.filter((t) => t.mem).length, 0);
+  // A word instruction took its words whole when it made fewer accesses than
+  // it moved bytes: aligned.
+  const whole = programs.reduce((n, { trace }) => n + trace.filter((t) => t.mem && t.acc < t.mem).length, 0);
   console.log(`ok    rtl/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over `
             + `${all.length + brs.length + jumps.length + loads.length + stores.length} forms, `
-            + `${taken} branches taken, ${jumped} jumps, ${moved} memory instructions; `
+            + `${taken} branches taken, ${jumped} jumps, ${moved} memory instructions, ${whole} a word at a time; `
             + `registers, memory, dispatch cadence and tools/sim.js's cycle counts agree, `
             + `${cycles} cycles to halt`);
   console.log(`ok    rtl/cpu.sv, interrupted: ${PROGRAMS} programs under ${irqTakes} interrupts, `

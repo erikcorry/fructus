@@ -31,10 +31,12 @@
 // halt stops; an interrupt with ie set wakes it through the bubble, and the
 // brk dispatched then saves the address after the halt.
 //
-// MEMORY IS A WORD WIDE.  `mem_addr` is a byte address whose bit 0 is always
-// clear; the word at that address, the even byte low, is on `mem_rdata` the
-// cycle after the edge that sampled it - the UP5K's SPRAM exactly, with no
-// byte select in front of it.
+// MEMORY IS A WORD WIDE.  `mem_addr` is a byte address whose bit 0 is clear
+// for every fetch; the word at that address, the even byte low, is on
+// `mem_rdata` the cycle after the edge that sampled it - the UP5K's SPRAM
+// exactly, with no byte select in front of it.  A write names its lanes on
+// `mem_we`, the SPRAM's nibble mask a lane at a time: one for a byte, both
+// for an aligned word.
 //
 // THREE STAGES, ONE INSTRUCTION A CYCLE when the bytes allow it:
 //
@@ -96,12 +98,14 @@
 // bytes are the last thing the fetch reads, and by its ALU cycle the port is
 // idle.  The ALU computes the first address - base plus offset, op 0 - and a
 // load puts it straight out from the adder, while a store registers it first;
-// a sequencer then moves one byte a cycle, writes registers through the ALU's
-// result, and releases dispatch as its last address goes out.  N bytes cost
-// N + 3 cycles from one dispatch to the next for a load and N + 4 for a store:
-// 4 for ld8, 5 for ld and a one-register pop, 5 for st8, 6 for st and a
-// one-register push, 9 and 10 for three registers.  See THE MEMORY SEQUENCER
-// below.
+// a sequencer then makes one access a cycle - a whole word when the first
+// address is even, a byte when it is odd - writes registers through the ALU's
+// result, and releases dispatch as its last address goes out.  N accesses
+// cost N + 3 cycles from one dispatch to the next for a load and N + 4 for a
+// store: 4 for ld8, and for ld and a one-register pop aligned, 5 for them at
+// an odd address; 5 for st8 and an aligned st or one-register push, 6 odd;
+// 6 and 7 for three registers aligned, 9 and 10 odd.  See THE MEMORY
+// SEQUENCER below.
 //
 // BLIT MODE, ONLY WHEN `FRUCTUS_BLIT IS DEFINED.  A system whose data can come
 // from memory at the far side of the die - the display's frame buffers,
@@ -204,7 +208,11 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     mul HELD IN THE ALU STAGE, 2 cycles, as here   1972    30.30  28.7 .. 31.4   (32 seeds)
+//     ALIGNED WORDS IN ONE ACCESS, as here           1998    31.16  30.4 .. 31.9
+//       1706 LUT4 against 1673, and in the same run the design before it
+//       measured 30.84, 29.1 .. 32.4 - no seed's critical path at the new
+//       release or the ROM's address; the system 27.95 against 27.44
+//     mul HELD IN THE ALU STAGE, 2 cycles           1972    30.30  28.7 .. 31.4   (32 seeds)
 //       registered at the SB_MAC16's inputs instead: the same netlist, and
 //       icetime, which times through it, still found decode's path worst;
 //       at both ends, 3 cycles and a second dispatch bubble: 31.43
@@ -378,11 +386,13 @@
 module cpu (
     input  logic        clk,
     input  logic        rst,
-    output logic [15:0] mem_addr,    // -> memory: the word is [15:1]; [0] is the byte lane
-                                     //    a store writes, and clear for every fetch
+    output logic [15:0] mem_addr,    // -> memory: the word is [15:1]; [0] is clear for
+                                     //    every fetch, and for a store says nothing
+                                     //    mem_we does not
     input  logic [15:0] mem_rdata,   // <- the word sampled at the last edge
-    output logic [7:0]  mem_wdata,   // -> memory: the byte to write, in lane mem_addr[0]
-    output logic        mem_we,      // -> memory: write it at this edge
+    output logic [15:0] mem_wdata,   // -> memory: the word to write, even byte low
+    output logic [1:0]  mem_we,      // -> memory: write these lanes at this edge -
+                                     //    [0] the even byte, [1] the odd
 `ifdef FRUCTUS_BLIT
     input  logic        blit,        // <- the system: ld, ld8 and ldm's bytes come late
     input  logic [15:0] mem_late,    // <- the word at the address sampled two edges ago;
@@ -785,12 +795,14 @@ module cpu (
     // =========================================================================
     // It starts in a memory instruction's ALU cycle, whose ALU computes the
     // first address - a load puts it out at once, from the adder, and a store
-    // keeps it in `mar` - and then takes one cycle a byte:
+    // keeps it in `mar` - and then takes one cycle an access, a byte or an
+    // aligned word:
     //
-    //     address steps  the address is mar, or mar + 1 for a load; a store
-    //                    writes the byte `wq` holds, filled the step before
+    //     address steps  the address is mar, or the next access's for a load;
+    //                    a store writes what `wq` holds, filled the step before
     //     arrivals       a load's byte comes back, from the lane its address
-    //                    had, and shifts into `ldq` - low byte first
+    //                    had, and shifts into `ldq` - low byte first - or its
+    //                    aligned word, whole
     //     release        dispatch is let go as the last address goes out
     //
     // AND IT WRITES REGISTERS THROUGH THE ALU: e_op is held at 13, whose result
@@ -810,8 +822,16 @@ module cpu (
     // flop, the RAM's own.  Only what happens IN the ALU cycle is logic here:
     // no word can have been read for it.
     //
-    // A BYTE AT A TIME, aligned or not: two bytes of a word cost two cycles,
-    // which a later version may take in one.
+    // A WORD AT A TIME WHEN IT IS ALIGNED, a byte at a time when not.  An
+    // ld, st, push, pop, ldm or stm whose first address is even takes each
+    // register's two bytes in one access - a block move's addresses all have
+    // its first one's parity - and runs the routine's ALIGNED COPY, at the
+    // entry with bit 3 set: the byte routine's shape with one access a
+    // register.  The ALU cycle chooses it, from bit 0 of the first address,
+    // which is aq[0] ^ bq[0] and no carry: one LUT from the operand flops
+    // into the ROM's address, and none of the adder's chain.  From then on
+    // `mal` says every access moves a word: a capture takes the whole word,
+    // a store writes both lanes, and mar steps by two.
 `ifdef FRUCTUS_BLIT
     // A STACK ABOVE 0x8000 IS A FAULT IN BLIT MODE.  There a push's bytes are
     // stores, and go to the frame buffer, while pop keeps its ordinary routine
@@ -840,13 +860,14 @@ module cpu (
 `endif
     wire mstart = e_useq & ~taken_q;
     wire [15:0] ea   = asum;
+    wire        al   = e_mw2 & ~ea[0];     // a word instruction, aligned: bit 3
     wire [15:0] ptrv = e_mpush ? ea : aq + {13'd0, e_mN};   // where the pointer ends
 
-    logic       mact, mst, mw2, mblk, mlane, weq;
+    logic       mact, mst, mw2, mblk, mlane, weq, mal, wsel;
     logic [2:0] mu;                        // the step, less one
     logic [4:0] ment;                      // the routine's entry
     logic [2:0] ml0, ml1, ml2, mpr;
-    logic [7:0] wq;
+    logic [15:0] wq;
     logic [15:0] mpc;
 
     // A load puts its first address out in its ALU cycle, from the adder.
@@ -856,20 +877,22 @@ module cpu (
     // carried here like any other field, so any opcode can start anywhere.
     wire [31:0] uw;
     wire        mdone = uw[3];
-    wire [7:0]  uaddr = mstart          ? {e_uent, 3'd0}
+    wire [4:0]  uent  = {e_uent[4], e_uent[3] | al, e_uent[2:0]};
+    wire [7:0]  uaddr = mstart          ? {uent, 3'd0}
                       : (mact & ~mdone) ? {ment, mu + 3'd1}
                       :                   8'd0;
     ucode u (.clk(clk), .addr(uaddr), .word(uw));
 
     assign aphase   = uw[0];
     wire   mcap     = uw[1];
-    // A one-byte load releases dispatch in its ALU cycle, before any word.
-    // A routine done in one step - a one-byte load -
-    // releases dispatch in its ALU cycle, before any word: predecode says so.
+    // A routine done in one step - a load of one register in one access -
+    // releases dispatch in its ALU cycle, before any word: predecode says so
+    // for ld8, and for ld, pop and ldm of one register if they are aligned.
+    wire   rs_now   = mstart & e_urs & ~(e_mw2 & ea[0]);
 `ifdef FRUCTUS_BLIT
-    assign mrestart = (uw[2] & ~sfq) | (mstart & e_urs);   // a stack fault never releases
+    assign mrestart = (uw[2] & ~sfq) | rs_now;   // a stack fault never releases
 `else
-    assign mrestart = uw[2] | (mstart & e_urs);
+    assign mrestart = uw[2] | rs_now;
 `endif
     wire   [1:0] uW  = uw[5:4];
     wire         uP  = uw[6];
@@ -888,8 +911,10 @@ module cpu (
     wire         uL  = uw[22];
     logic        mlane2;
     always_ff @(posedge clk) mlane2 <= mlane;
+    wire  [15:0] mword = uL ? mem_late : mem_rdata;
     wire   [7:0] mbyte = uL ? (mlane2 ? mem_late[15:8] : mem_late[7:0]) : mlane ? hi : lo;
 `else
+    wire  [15:0] mword = mem_rdata;
     wire   [7:0] mbyte = mlane ? hi : lo;
 `endif
 
@@ -911,8 +936,8 @@ module cpu (
 
     assign mhold = mstart | (mact & ~mdone);
 
-    // A store's next byte: the first register's low byte in the ALU cycle, and
-    // after that the one the word names.  It is read through DECODE'S LEFT
+    // A store's next access: the first register in the ALU cycle, and after
+    // that the one the word names.  It is read through DECODE'S LEFT
     // PORT, which has nothing to do from a memory instruction's ALU cycle
     // until the sequencer releases dispatch.  Two ports of the sequencer's own
     // - a word for the later bytes and one for byte 0 - were 186 of its 572
@@ -922,7 +947,10 @@ module cpu (
     assign kreg_b = kreg;
     wire       khalf = ~mstart & uKH;
     wire [15:0] kword = R[an_rd];
-    wire [7:0]  kbyte = khalf ? kword[15:8] : kword[7:0];
+    // wq TAKES THE WHOLE REGISTER, and `wsel` which half a byte store writes,
+    // so the half is chosen after the flop, on its way to the memory, and not
+    // between the register file's read and wq, where decode's longest path
+    // - from the SPRAM, through a register number and the read - ended.
 
     always_ff @(posedge clk) begin
         if (rst)         mact <= 1'b0;
@@ -930,21 +958,24 @@ module cpu (
         else if (mdone)  mact <= 1'b0;
         if (mstart) begin
             mu  <= 3'd0;
-            ment <= e_uent;
+            ment <= uent;
             mar <= ea;
             mlane <= ea[0];
+            mal <= al;
             ldq <= ptrv;                   // a block's pointer, written from here
             {mst, mw2, mblk} <= {e_mst, e_mw2, e_mblk};
             {ml0, ml1, ml2, mpr} <= {e_l0, e_l1, e_l2, e_ptr};
             mpc <= e_pc;
-            wq  <= kbyte;
+            wq  <= kword;
+            wsel <= khalf;
             weq <= e_mst;
         end else begin
             mu  <= mu + 3'd1;
-            if (aphase) begin mar <= mar + 16'd1; mlane <= maddr[0]; end
-            if (mcap)   ldq <= mw2 ? {mbyte, ldq[15:8]} : {8'h00, mbyte};
+            if (aphase) begin mar <= mar + {14'd0, mal, ~mal}; mlane <= maddr[0]; end
+            if (mcap)   ldq <= mal ? mword : mw2 ? {mbyte, ldq[15:8]} : {8'h00, mbyte};
             else if (uLQ != 3'd0) ldq <= lqsrc;
-            wq  <= kbyte;
+            wq  <= kword;
+            wsel <= khalf;
             weq <= uWE;
         end
     end
@@ -981,14 +1012,17 @@ module cpu (
     end
 
     // A store's address is mar; a load's, whose mar is the address it last
-    // put out, the one after.
-    assign maddr = mar + {15'd0, ~mst};
-    assign mem_wdata = wq;
+    // put out, the one after - a word on, if aligned.
+    assign maddr = mar + {14'd0, ~mst & mal, ~mst & ~mal};
+    // A word goes out as it is; a byte in both lanes, and only its own lane
+    // is written.
+    assign mem_wdata = {(mal | wsel) ? wq[15:8] : wq[7:0], (~mal & wsel) ? wq[15:8] : wq[7:0]};
+    wire [1:0] wlanes = {mal | mar[0], mal | ~mar[0]};
 `ifdef FRUCTUS_BLIT
-    assign mem_we    = weq & aphase & ~sfq;
+    assign mem_we    = {2{weq & aphase & ~sfq}} & wlanes;
     assign retire    = (e_valid & ~taken_q & ~e_useq) | (mdone & ~sfq);
 `else
-    assign mem_we    = weq & aphase;
+    assign mem_we    = {2{weq & aphase}} & wlanes;
 
     assign retire    = (e_valid & ~taken_q & ~e_useq) | mdone;
 `endif

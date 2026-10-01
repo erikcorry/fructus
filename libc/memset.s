@@ -20,35 +20,36 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED, by tests/libc-check.mjs
 ; ----------------------------------------------------------------------------
-;       fill loop       1.8750 cycles/byte      32 bytes an iteration
-;       head            4.6429 cycles/byte      up to 15 bytes, in words
+;                       even buffer     odd buffer
+;       fill loop       1.3750          1.8750 cycles/byte  32 bytes an iteration
+;       head            4.1429          4.6429 cycles/byte  up to 15 bytes, in words
 ;       sizes           bzero 12 bytes, memset 54, 66 together
 ;
-; The floor is 1.00 - one cycle to write each byte - and 15 bytes of loop get
-; to 1.88.  A push stops the pipeline for four cycles beyond the bytes it
-; writes, however many registers it carries - see the cost model under [cpu]
-; in the spec - which is 0.75 of that over six pushes and 32 bytes, and the
-; taken branch is the other 0.125.  snippets/speed-of-light-memset-core.s
-; reaches 1.6822 and spends 89 bytes doing it, so this gives up 11% for a
-; quarter of the code: its branch is 4 cycles over 258 bytes, and it pushes
-; triples alone.
+; The floor is 0.50 - one cycle to write each aligned word - or 1.00 a byte at
+; a time, and 15 bytes of loop get to 1.38, or 1.88.  A push stops the
+; pipeline for four cycles beyond its accesses, however many registers it
+; carries - see the cost model under [cpu] in the spec - which is 0.75 of that
+; over six pushes and 32 bytes, and the taken branch is the other 0.125.
+; snippets/speed-of-light-memset-core.s reached 1.6822 a byte a cycle, and
+; spends 89 bytes doing it: its branch is 4 cycles over 258 bytes, and it
+; pushes triples alone.  It has not been measured with aligned words.
 ;
 ; THE HEAD ONLY HAS TO REACH 15 BYTES, because the fill loop can be entered at
 ; its midpoint - see the loop itself.  Everything from 16 bytes up runs at the
 ; loop's rate, and the head pushes words rather than bytes, so what began as a
-; 7-cycles-a-byte tail is now 4.64 over at most fifteen bytes.
+; 7-cycles-a-byte tail is now 4.14 over at most fifteen bytes - 4.64 odd.
 ;
 ; The two steps together, measured, against the original byte head.  Only the
-; last column is code that still exists and is measured as it stands, on the
-; pipeline; the first two are the earlier heads as they were measured on the
-; byte-serial core, before an access was charged for its address or a store for
-; its data flop:
+; last two columns are code that still exists and is measured as it stands, on
+; the pipeline, with the buffer even and odd; the first two are the earlier
+; heads as they were measured on the byte-serial core, before an access was
+; charged for its address or a store for its data flop:
 ;
-;       n        byte head    word head    + midpoint entry
-;       16         138           94              54
-;       24         194          126              89
-;       31         243          152             122
-;       32          76           80              87
+;       n        byte head    word head    + midpoint entry    odd
+;       16         138           94              46             54
+;       24         194          126              77             89
+;       31         243          152             107            122
+;       32          76           80              71             87
 ;
 ; and the cost of each is exact and small: word pushes were 5 bytes and 4 cycles
 ; on multiples of 32, the midpoint 4 more bytes and 4 more cycles on lengths
@@ -56,8 +57,9 @@
 ; alone was worth 17.8 cycles a call: 40 saved on half the lengths, 4 spent on
 ; the other half.  That average is not remeasurable - the variant without the
 ; midpoint entry is not in this file - and it is a byte-serial figure.  On the
-; pipeline sixteen bytes through the midpoint cost 27 cycles against 80 for
-; eight word pushes, so the saving is larger.  These are the sizes a compiler
+; pipeline sixteen bytes through the midpoint cost 19 cycles against 72 for
+; eight word pushes - 27 against 80 with the buffer odd - so the saving is
+; larger.  These are the sizes a compiler
 ; emits to clear a struct, which is most memset calls in most programs.
 ; ============================================================================
 
@@ -121,8 +123,9 @@ memset:
 
 ; --- the head: at most 31 bytes, in words ----------------------------------
 ; An odd length gets one byte peeled off the top, and everything below that is
-; pushed two bytes at a time.  Words rather than bytes is worth 4.64 cycles a
-; byte instead of 7, which is most of what a small memset costs.  (The 7 is the
+; pushed two bytes at a time.  Words rather than bytes is worth 4.14 cycles a
+; byte instead of 7 - 4.64 with the buffer odd - which is most of what a small
+; memset costs.  (The 7 is the
 ; byte head, which is no longer in this file, on the byte-serial core.)
 ;
 ; NO `add r2, r2, #-1` AFTER THE PEEL, and that is exact rather than lucky: an
@@ -138,20 +141,20 @@ memset:
 
         br      eq, sp, r2, .headdone   ; nothing between the block and the end
 .head:
-        push    r1                      ;                               6
+        push    r1                      ;                               5
         br      ne, sp, r2, .head       ;                               4
 .headdone:
 
 ; --- the fill loop, 32 bytes an iteration, in two identical halves ---------
 ; Sixteen words as 3-3-2 twice over, rather than five triples and a single.
-; Both spellings are twelve bytes and both cost 56 cycles, so the shape is free
+; Both spellings are twelve bytes and both cost 40 cycles, so the shape is free
 ; - but this one has a USABLE MIDPOINT, and that is the whole point.  Entering
 ; at .mid fills exactly 16 bytes and then falls into the loop test, so the
 ; routine can start on a half block without a second copy of the code.
 ;
 ; That is what lets the head round to 16 rather than 32.  Half the work that
 ; used to go through the head at 4.86 cycles a byte now goes through the loop at
-; 1.875, and the entry ladder costs five bytes: one `sub` to get the length back
+; 1.375, and the entry ladder costs five bytes: one `sub` to get the length back
 ; out of the boundary address, and one `brset` on bit 4.
 ;
 ; THE `sub` IS NOT BOOKKEEPING.  r2 has been the boundary ADDRESS since the head
@@ -165,13 +168,13 @@ memset:
         brset   r2, #16, .mid           ; an odd multiple starts halfway in
         jmpr    .bottom
 .top:
-        push    r1, r1, r1              ;                              10
-        push    r1, r1, r1              ;                              10
-        push    r1, r1                  ;                               8
+        push    r1, r1, r1              ;                               7
+        push    r1, r1, r1              ;                               7
+        push    r1, r1                  ;                               6
 .mid:
-        push    r1, r1, r1              ;                              10
-        push    r1, r1, r1              ;                              10
-        push    r1, r1                  ;                               8
+        push    r1, r1, r1              ;                               7
+        push    r1, r1, r1              ;                               7
+        push    r1, r1                  ;                               6
 .bottom:
         br      ne, sp, r0, .top        ;                               4
 
@@ -190,15 +193,15 @@ memset:
 ; An entry point is only useful if it leaves a POWER OF TWO to be pushed, since
 ; that is what one `brset` can select; and the arrangement of a 16-byte half
 ; decides which remainders exist.  Eight words - sixteen bytes - in six bytes of
-; code cost 28 cycles, and every 28-cycle spelling is two triples and a double:
+; code cost 20 cycles, and every 20-cycle spelling is two triples and a double:
 ;
-;       3-3-2   leaves 16, 10, 4        28 cycles       <- what we use
-;       3-2-3   leaves 16, 10, 6        28
-;       2-3-3   leaves 16, 12, 6        28
-;       3-1-3-1 leaves 16, 10, 8, 2     32              <- an 8, at a price
-;       2-2-2-2 leaves 16, 12, 8, 4     32
+;       3-3-2   leaves 16, 10, 4        20 cycles       <- what we use
+;       3-2-3   leaves 16, 10, 6        20
+;       2-3-3   leaves 16, 12, 6        20
+;       3-1-3-1 leaves 16, 10, 8, 2     24              <- an 8, at a price
+;       2-2-2-2 leaves 16, 12, 8, 4     24
 ;
-; A push costs four cycles beyond the bytes it writes whatever it carries, so a
+; A push costs four cycles beyond its accesses whatever it carries, so a
 ; spelling is dearer exactly in proportion to how many pushes it uses: one more
 ; push, four more cycles.
 ;

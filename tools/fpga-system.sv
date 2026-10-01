@@ -103,8 +103,9 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     logic irq_q, irq_s;
     always_ff @(posedge clk) begin irq_q <= irq; irq_s <= irq_q; end
 
-    wire [15:0] addr; wire [7:0] wdata; wire we;
-    wire [3:0] mask = addr[0] ? 4'b1100 : 4'b0011;
+    wire [15:0] addr; wire [15:0] wdata; wire [1:0] lanes;
+    wire we = |lanes;
+    wire [3:0] mask = {lanes[1], lanes[1], lanes[0], lanes[0]};
     wire hi = addr[15];
 
     // The mode, decoded as it is written, so that each use is one flop.
@@ -114,11 +115,11 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
 
     // --- the processor's own 64 KB ----------------------------------------------
     wire [15:0] lo_word, hi_word;
-    SB_SPRAM256KA ram_lo (.ADDRESS(addr[14:1]), .DATAIN({wdata, wdata}),
+    SB_SPRAM256KA ram_lo (.ADDRESS(addr[14:1]), .DATAIN(wdata),
                           .MASKWREN(we && !hi ? mask : 4'h0), .WREN(we && !hi),
                           .CHIPSELECT(1'b1), .CLOCK(clk), .STANDBY(1'b0),
                           .SLEEP(1'b0), .POWEROFF(1'b1), .DATAOUT(lo_word));
-    SB_SPRAM256KA ram_hi (.ADDRESS(addr[14:1]), .DATAIN({wdata, wdata}),
+    SB_SPRAM256KA ram_hi (.ADDRESS(addr[14:1]), .DATAIN(wdata),
                           .MASKWREN(we && hi && !blit ? mask : 4'h0), .WREN(we && hi && !blit),
                           .CHIPSELECT(1'b1), .CLOCK(clk), .STANDBY(1'b0),
                           .SLEEP(1'b0), .POWEROFF(1'b1), .DATAOUT(hi_word));
@@ -150,7 +151,7 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     // ports, which here are wiring.
     (* keep_hierarchy *)
     cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
-                .mem_wdata(wdata), .mem_we(we), .blit(blit), .mem_late(late),
+                .mem_wdata(wdata), .mem_we(lanes), .blit(blit), .mem_late(late),
                 .irq(irq_s), .halted(halted), .trapped(trapped), .result(result),
                 .retire(), .retire_pc());
     logic [15:0] so;
@@ -160,9 +161,15 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     // --- the registers, a cycle after the processor's write ----------------------
     // `to_a_w`: the processor's buffer, the one not to be shown, is A - with
     // the write, and a cycle later still for blit mode's late reads.
-    logic [15:0] addr_w; logic [7:0] wdata_w; logic we_w, fb_w, to_a_w, to_a_2;
+    // THE REGISTERS ARE WRITTEN A BYTE AT A TIME, from the lane addr's bit 0
+    // names, which is right for st8 and for any store at an odd address.  An
+    // aligned word store writes both lanes of memory in one cycle, but only
+    // its even byte reaches a register here: the register block is not
+    // finished, and what a word store to it should mean is not decided.
+    logic [15:0] addr_w; logic [15:0] wword_w; logic [3:0] mask_w; logic we_w, fb_w, to_a_w, to_a_2;
+    wire  [7:0]  wdata_w = addr_w[0] ? wword_w[15:8] : wword_w[7:0];
     always_ff @(posedge clk) begin
-        addr_w <= addr; wdata_w <= wdata; we_w <= we;
+        addr_w <= addr; wword_w <= wdata; we_w <= we; mask_w <= mask;
         fb_w <= blit | wthru; to_a_w <= !want_a; to_a_2 <= to_a_w;
     end
     // [0] front porch, [1] sync, [2] back porch, [3] pixels or lines.
@@ -229,14 +236,13 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     wire cpu_w   = we_w && addr_w[15] && fb_w && !copy_on;
     wire cpu_w_a = cpu_w &&  to_a_w && !on_a;
     wire cpu_w_b = cpu_w && !to_a_w &&  on_a;
-    wire [3:0] mask_w = addr_w[0] ? 4'b1100 : 4'b0011;
     wire copy_w_b = into_b && vrd_q;
-    SB_SPRAM256KA fba (.ADDRESS(on_a ? vaddr : addr_w[14:1]), .DATAIN({wdata_w, wdata_w}),
+    SB_SPRAM256KA fba (.ADDRESS(on_a ? vaddr : addr_w[14:1]), .DATAIN(wword_w),
                        .MASKWREN(cpu_w_a ? mask_w : 4'h0), .WREN(cpu_w_a),
                        .CHIPSELECT(1'b1), .CLOCK(clk), .STANDBY(1'b0),
                        .SLEEP(1'b0), .POWEROFF(1'b1), .DATAOUT(fba_word));
     SB_SPRAM256KA fbb (.ADDRESS(!on_a ? vaddr : into_b ? vaddr_q : addr_w[14:1]),
-                       .DATAIN(into_b ? fba_word : {wdata_w, wdata_w}),
+                       .DATAIN(into_b ? fba_word : wword_w),
                        .MASKWREN(copy_w_b ? 4'hf : cpu_w_b ? mask_w : 4'h0),
                        .WREN(copy_w_b || cpu_w_b),
                        .CHIPSELECT(1'b1), .CLOCK(clk), .STANDBY(1'b0),

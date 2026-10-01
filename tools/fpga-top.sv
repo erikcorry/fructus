@@ -7,9 +7,8 @@
 // tools/fpga-system.sv is the whole system.
 //
 // THE SPRAM IS READ A WORD AT A TIME - there is no byte select behind it and
-// no flop remembering which half was asked for.  A store writes one byte: it
-// is presented on both halves, and the nibble mask - from the address's bit
-// 0 - chooses which half takes it.
+// no flop remembering which half was asked for.  A store writes the lanes
+// mem_we names, a byte or an aligned word, and the nibble mask is those.
 //
 // Everything the core does is observed through `dout`, so nothing is
 // optimised away.
@@ -29,12 +28,11 @@ module top (input logic clk, input logic din, input logic irq, output wire dout)
 
     wire [15:0] addr;
     wire [15:0] word;
-    wire [7:0]  wdata;
-    wire        we;
-    wire [3:0]  mask = addr[0] ? 4'b1100 : 4'b0011;
+    wire [15:0] wdata;
+    wire [1:0]  we;
 
-    SB_SPRAM256KA ram (.ADDRESS(addr[14:1]), .DATAIN({wdata, wdata}),
-                       .MASKWREN(we ? mask : 4'h0), .WREN(we),
+    SB_SPRAM256KA ram (.ADDRESS(addr[14:1]), .DATAIN(wdata),
+                       .MASKWREN({we[1], we[1], we[0], we[0]}), .WREN(|we),
                        .CHIPSELECT(1'b1), .CLOCK(clk), .STANDBY(1'b0),
                        .SLEEP(1'b0), .POWEROFF(1'b1), .DATAOUT(word));
 

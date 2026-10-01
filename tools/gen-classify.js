@@ -165,8 +165,10 @@ const cases = rows.map((r) => {
   // bubble's flop on dispatch's path; it would need that back.
   if (ext > 1) throw new Error(`opcode ${r.op}: ${ext} extra cycles, and rtl/cpu.sv holds one`);
   // Released in the ALU cycle: whatever finishes in its first step, so that
-  // the next instruction reaches decode as its write lands.
-  const urs = (mem && !mem.st && !mem.w2 && mem.n === 1);
+  // the next instruction reaches decode as its write lands - a load of one
+  // register, in one access.  ld8's is always one; ld's, pop's and ldm's of
+  // one register only when aligned, which rtl/cpu.sv learns in that cycle.
+  const urs = (mem && !mem.st && mem.n === 1);
   if (mem) memRows++;
   if (exc !== null) excRows++;
   const writes = (k === KIND.alu || jump) && r.v.dest !== X;
@@ -249,7 +251,8 @@ module classify (
 \`ifdef FRUCTUS_BLIT
     output logic       ulate,     // blit mode makes it late: ld, ld8 and ldm
 \`endif
-    output logic       urs,       // dispatch is released in its ALU cycle
+    output logic       urs,       // dispatch is released in its ALU cycle - a word
+                                  //   only when aligned
     output logic [2:0] lsel       // with alu_op 4: which of the fast group - rtl/alu.sv
 );
 

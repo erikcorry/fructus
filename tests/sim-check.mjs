@@ -219,10 +219,13 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 // clean step rather than drifting with the buffer size.
 {
   const { code, syms } = assemble('snippets/memcpy.s');
-  const SRC = 0x1000, DST = 0x4000, RET = 0x8000, GUARD = 0xa5;
+  const RET = 0x8000, GUARD = 0xa5;
 
-  // Run one copy and return both what it wrote and what it cost.
-  const copy = (entry, n) => {
+  // Run one copy and return both what it wrote and what it cost.  `odd` puts
+  // both buffers a byte up, where no word is aligned and every word
+  // instruction goes a byte at a time.
+  const copy = (entry, n, odd = 0) => {
+    const SRC = 0x1000 + odd, DST = 0x4000 + odd;
     m.mem.fill(GUARD);
     m.load(code);
     for (let i = 0; i < n; i++) m.mem[SRC + i] = (i * 7 + 13) & 0xff;
@@ -241,15 +244,16 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     return { why, wrong, over, cycles: m.cycles(), sp: m.R[m.named.sp] };
   };
 
+  // Each rung's loop with both buffers even, and with both odd.
   const rungs = [
-    ['memcpy',                 16.0000, 1],
-    ['memcpy2',                 9.0000, 1],
-    ['memcpy3',                 8.5000, 1],
-    ['memcpy4',                 7.0000, 1],
-    ['memcpy_divisible_by_32',  5.0000, 32],
+    ['memcpy',                 16.0000, 16.0000, 1],
+    ['memcpy2',                 8.0000,  9.0000, 1],
+    ['memcpy3',                 7.5000,  8.5000, 1],
+    ['memcpy4',                 6.0000,  7.0000, 1],
+    ['memcpy_divisible_by_32',  3.7500,  4.7500, 32],   // its own block is on the even stack
   ];
 
-  for (const [name, want, unit] of rungs) {
+  for (const [name, want, wantOdd, unit] of rungs) {
     const entry = syms.get(name);
     check(name, entry !== undefined, 'no such symbol');
     if (entry === undefined) continue;
@@ -259,8 +263,8 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     const lengths = unit === 1
       ? [0, 1, 2, 3, 4, 5, 7, 8, 13, 16, 31, 32, 33, 63, 101, 256]
       : [32, 64, 96, 256];
-    for (const n of lengths) {
-      const r = copy(entry, n);
+    for (const n of lengths) for (const odd of [0, 1]) {
+      const r = copy(entry, n, odd);
       check(name, r.why === 'stopped', `n=${n} did not return: ${r.why}`);
       if (r.why !== 'stopped') continue;
       check(name, r.wrong < 0, `n=${n} wrong byte at +${r.wrong}`);
@@ -270,11 +274,14 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 
     // Differencing: (cost of a+k*unit) - (cost of a) over the extra bytes.
     const a = 32 * unit, b = a + 64 * unit;
-    const per = (copy(entry, b).cycles - copy(entry, a).cycles) / (b - a);
-    check(name, Math.abs(per - want) < 0.0001,
-          `loop costs ${per.toFixed(4)} cycles/byte, the file says ${want.toFixed(4)}`);
+    for (const [odd, w] of [[0, want], [1, wantOdd]]) {
+      const per = (copy(entry, b, odd).cycles - copy(entry, a, odd).cycles) / (b - a);
+      check(name, Math.abs(per - w) < 0.0001,
+            `loop costs ${per.toFixed(4)} cycles/byte ${odd ? 'odd' : 'even'}, the file says ${w.toFixed(4)}`);
+    }
+    if (process.env.LADDER) console.log(name, [0, 1].map((o) => (copy(entry, 256, o).cycles / 256).toFixed(2)).join(' '));
   }
-  console.log('ok    snippets/memcpy.s on the simulator: 5 rungs, bytes and cycles');
+  console.log('ok    snippets/memcpy.s on the simulator: 5 rungs, bytes and cycles, even and odd');
 }
 
 // --- mul.s: four multiplies, all of them the same function -------------------
@@ -357,8 +364,8 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     ['mul_16',      UNIFORM, 112], ['mul_16',      SMALL_A, 112],
     ['mul_16_x4',   UNIFORM,  87], ['mul_16_x4',   SMALL_A,  87],
     ['mul_16_fast', UNIFORM,  70], ['mul_16_fast', SMALL_A,  70],
-    ['mul_16_fast_erik', UNIFORM, 87], ['mul_16_fast_erik', SMALL_A, 87],
-    ['mul_16_nib', UNIFORM,  83], ['mul_16_nib', SMALL_A,  83],
+    ['mul_16_fast_erik', UNIFORM, 85], ['mul_16_fast_erik', SMALL_A, 85],
+    ['mul_16_nib', UNIFORM,  77], ['mul_16_nib', SMALL_A,  77],
     ['mul_16_min',  UNIFORM, 111], ['mul_16_min',  SMALL_A,  60],
   ];
   for (const [entry, gen, target] of want) {
@@ -377,16 +384,17 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
         call('mul_16_fast', 0xbeef, 3).cycles > call('mul_16', 0xbeef, 3).cycles,
         'the unrolled chain no longer loses on a 2-bit multiplier');
 
-  // THE TWO DISPATCHES NO LONGER CROSS.  On the byte-serial core an untaken
-  // brset cost three cycles and the computed goto won below clz = 7; on the
+  // THE TWO DISPATCHES CROSS LOW.  On the byte-serial core an untaken brset
+  // cost three cycles and the computed goto won below clz = 7; on the
   // pipeline it costs one or two, while the computed goto pays for push and
-  // pop of lr, a clz and a jump through a register - so the scan is never
-  // behind.  If that stops holding, mul_16_fast_erik has a reason to exist
-  // again and the file's header should say so.
-  for (const b of [0xffff, 0x0fff, 0x00ff, 0x000f])
-    check('mul: the scan is never behind the computed goto',
-          call('mul_16_fast', 0xbeef, b).cycles <= call('mul_16_fast_erik', 0xbeef, b).cycles,
-          `the computed goto beats the scan at b = 0x${b.toString(16)}`);
+  // pop of lr, a clz and a jump through a register - so the scan is ahead down
+  // to a six-bit multiplier, and behind only below.  If the crossing moves
+  // up, mul_16_fast_erik has a reason to exist again and the file's header
+  // should say so.
+  for (const b of [0xffff, 0x0fff, 0x00ff, 0x003f])
+    check('mul: the scan is ahead of the computed goto down to six bits',
+          call('mul_16_fast', 0xbeef, b).cycles < call('mul_16_fast_erik', 0xbeef, b).cycles,
+          `the computed goto is not behind the scan at b = 0x${b.toString(16)}`);
   check('mul: swapping beats all of it when the operands are lopsided',
         mean('mul_16_min', SMALL_A) < mean('mul_16_fast', SMALL_A),
         'the swap prologue no longer beats the unrolled chain on a small multiplicand');
@@ -455,10 +463,10 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
       return tot / 400;
     };
     const wide16 = w((r) => [r(16), r(16)]), wide8 = w((r) => [r(16), r(8)]);
-    check('mul_16_16_32 cost', Math.abs(wide16 - 208) < 2,
-          `16x16 costs ${wide16.toFixed(1)} cycles, the file says 208`);
-    check('mul_16_16_32 narrow', Math.abs(wide8 - 116) < 2,
-          `16x8 costs ${wide8.toFixed(1)} cycles, the file says 116`);
+    check('mul_16_16_32 cost', Math.abs(wide16 - 202) < 2,
+          `16x16 costs ${wide16.toFixed(1)} cycles, the file says 202`);
+    check('mul_16_16_32 narrow', Math.abs(wide8 - 110) < 2,
+          `16x8 costs ${wide8.toFixed(1)} cycles, the file says 110`);
     // The swap is load-bearing here too: a narrow multiplicand must be moved
     // into the multiplier, or the loop runs over all sixteen bits.
     check('mul_16_16_32 swaps', w((r) => [r(8), r(16)]) < wide16 * 0.75,

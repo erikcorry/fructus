@@ -30,9 +30,14 @@
 ;       mul_16              21       112        56        112
 ;       mul_16_x4           32        87        46         87
 ;       mul_16_fast        158        70        48         70
-;       mul_16_fast_erik   132        87        53         87
-;       mul_16_nib         274        83        61         83
+;       mul_16_fast_erik   132        85        51         85
+;       mul_16_nib         274        77        55         77
 ;       mul_16_min           8       111        60         60
+;
+; WITH sp EVEN, as the tests call them.  The two that push and pop take their
+; stack a word at a time there; with sp odd a push or pop goes a byte at a
+; time, and mul_16_fast_erik is 87, 53, 87 and mul_16_nib 83, 61, 83.  The
+; others touch no memory.
 ;
 ; THE FIRST THREE ROWS HAVE IDENTICAL FIRST AND LAST COLUMNS, and that is the
 ; whole argument for the fourth.  Their cost is a function of the MULTIPLIER
@@ -93,12 +98,13 @@
 ; to lose to it on eight-bit ones.  The other two are here because the
 ; dispatch question is interesting, and on this core they are both beaten by
 ; mul_16_fast in every column.  mul_16_fast_erik's computed goto costs more
-; than the scan it replaces, at every width - see below.  mul_16_nib still has
-; the best steady state of any of them, 2.5 to 2.75 cycles a bit, and the
-; worst prologue and exit, about forty cycles between them: its dispatch is a
-; computed `ret', four cycles a nibble, and it saves and restores three
-; registers.  Even a full-width multiplier, where all four nibbles do work,
-; does not pay that back - 80 cycles against the chain's 62 on 0xffff.
+; than the scan it replaces down to a multiplier of six significant bits, and
+; less only below that - see below.  mul_16_nib still has the best steady
+; state of any of them, 2.5 to 2.75 cycles a bit, and the worst prologue and
+; exit, about thirty-five cycles between them: its dispatch is a computed
+; `ret', four cycles a nibble, and it saves and restores three registers.
+; Even a full-width multiplier, where all four nibbles do work, does not pay
+; that back - 74 cycles against the chain's 62 on 0xffff.
 ; ============================================================================
 
 
@@ -286,28 +292,32 @@ mul_16_x4:
 ;
 ; So: 23, not 28, in 132 bytes rather than 158 - on the byte-serial core.  On
 ; the pipeline the same code costs more than its bytes: `push lr` and `pop lr`
-; are memory instructions at six and five cycles, `clz` takes two, and the
-; jump into the chain goes through a register, at four.
+; are memory instructions at five and four cycles - six and five with sp odd -
+; `clz` takes two, and the jump into the chain goes through a register, at four.
 ;
-; SO THE LINEAR SCAN OF brset WINS OUTRIGHT.  Sixteen tests, falling through
+; SO THE LINEAR SCAN OF brset WINS WHERE IT MATTERS.  Sixteen tests, falling through
 ; until one hits: a cycle for each bit that is clear - two for the half of them
 ; that start at an odd address, since every one is three bytes - and four for
 ; the one that is set, so about 1.5c + 4 for c leading zeros.  The computed
-; goto's prologue and its exit through `pop lr` cost more than that at every
-; width, and they only meet at the bottom, where both are nearly all overhead:
+; goto's prologue and its exit through `pop lr` cost more than that down to
+; six significant bits, and they cross below that, where both are
+; nearly all overhead - measured with a = 0xbeef, sp even and odd:
 ;
-;       b        clz    scan   computed
-;       0xffff     0      62         82
-;       0x0fff     4      54         68
-;       0x03ff     6      50         61
-;       0x00ff     8      46         54
-;       0x000f    12      38         40
-;       0            16      30         30
+;       b        clz    scan   computed   computed, sp odd
+;       0xffff     0      62         78         80
+;       0x0fff     4      54         64         66
+;       0x03ff     6      50         57         59
+;       0x00ff     8      46         50         52
+;       0x003f    10      42         43         45
+;       0x000f    12      38         36         38
+;       0x0003    14      34         29         31
+;       0            16      30         26         28
 ;
 ; On the byte-serial core the two crossed at c = 7, where an untaken `brset`
-; cost three cycles; here it costs one or two, and the computed goto is only
-; ever smaller.
-;
+; cost three cycles; here it costs one or two, and the crossing is down at
+; c = 11 with sp even and c = 12 with it odd: a multiplier of four or five
+; bits.
+
 ; AND THE SCAN IS THE FIRST BLOCK'S TEST, not an extra one.  When it finds the
 ; top set bit at k, the accumulator should be exactly a - and r0 still holds a,
 ; because nothing has overwritten it yet.  So the scan jumps to block k-1 with
@@ -471,7 +481,7 @@ mul_16_fast_erik:
         brclr   r1, #0x0001, .done  ; 2
         add     r0, r0, r5              ; 1
 .done:                                  ; table + 7*15, reached when b == 1
-        pop     lr                      ; 5
+        pop     lr                      ; 4
         ret                             ; 4
 
 ; b == 0 IS THE ONE CASE THE ARITHMETIC DOES NOT COVER.  clz(0) is 16, so the
@@ -488,7 +498,7 @@ mul_16_fast_erik:
         #res    4
 .zero:                                  ; table + 7*16, reached when b == 0
         mov     r0, #0                  ; 1
-        pop     lr                      ; 5
+        pop     lr                      ; 4
         ret                             ; 4
 
 #assert mul_16_fast_erik.done - mul_16_fast_erik.branch_table == 7 * 15
@@ -571,15 +581,15 @@ mul_16_fast_erik:
 ;
 ; IT WAS THE FASTEST ROUTINE HERE AND IS NOT ANY MORE.  Its steady state is
 ; still the best, but it is bracketed by about forty cycles that no other
-; routine pays: a three-register `push` and `pop` at ten and nine, the setup,
-; the first dispatch, and the exit.  The chain's rounds are dearer and it has
-; no such bracket, so even a full-width multiplier, where all four nibbles do
-; work, goes to the chain - 80 cycles against 62 on 0xffff - and a uniformly
-; random one 83 against 70.  On an 8-bit multiplier mul_16_x4 beats it 46
-; against 61, in 32 bytes rather than 274.
+; routine pays: a three-register `push` and `pop` at seven and six - ten and
+; nine with sp odd - the setup, the first dispatch, and the exit.  The chain's
+; rounds are dearer and it has no such bracket, so even a full-width
+; multiplier, where all four nibbles do work, goes to the chain - 74 cycles
+; against 62 on 0xffff - and a uniformly random one 77 against 70.  On an 8-bit
+; multiplier mul_16_x4 beats it 46 against 55, in 32 bytes rather than 274.
 
 mul_16_nib:
-        push    lr, r2, r3              ; 10  three for the price of two
+        push    lr, r2, r3              ; 7   three for the price of two
         mov     r3, r1                  ; 1   the multiplier vacates r1 first
         mov     r1, r0                  ; 1   ... and the multiplicand takes it
         mov     r0, #0                  ; 1   acc = 0
@@ -590,7 +600,7 @@ mul_16_nib:
         add     lr, lr, r2              ; 1
         ret                             ; 4
 .done:
-        pop     r3, r2, lr              ; 9
+        pop     r3, r2, lr              ; 6
         ret                             ; 4
 
 ; --- the table: sixteen blocks on a sixteen-byte stride ---------------------
@@ -797,7 +807,8 @@ mul_16_nib:
 ; ----------------------------------------------------------------------------
 ;       first draft   53 bytes   355 cycles      on the byte-serial core
 ;       this          52 bytes   316 cycles      on the byte-serial core
-;       this          52 bytes   208 cycles      on the pipeline
+;       this          52 bytes   202 cycles      on the pipeline, sp even
+;       this          52 bytes   208 cycles      on the pipeline, sp odd
 ;
 ; THE LOOP IS ROTATED, as in mul_16: the two conditional branches at the bottom
 ; ARE the loop control, so there is no `jmpr` back to the top and no separate
@@ -816,7 +827,7 @@ mul_16_16_32:
         mov     r0, r1                  ; 1   pinned
         mov     r1, r5                  ; 1   ... and fall through
 .smallest:
-        push    r2, r3, lr              ; 10
+        push    r2, r3, lr              ; 7
         lsr     r2, r0, #15             ; 1   multiplicand high = a >> 15
         shl     lr, r0, #1              ; 1   multiplicand low  = a << 1
         mov     r3, #0                  ; 1   accumulator high
@@ -840,7 +851,7 @@ mul_16_16_32:
         br      ne, r1, #0, .clear      ; 1
 .done:
         mov     r1, r3                  ; 1
-        pop     lr, r3, r2              ; 9   push order reversed
+        pop     lr, r3, r2              ; 6   push order reversed
         ret                             ; 4
 
 ; THE MULTIPLICAND IS PRE-SHIFTED BY ONE at entry, for the same reason mul_16

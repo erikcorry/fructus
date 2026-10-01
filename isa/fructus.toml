@@ -238,8 +238,10 @@ length_from_first_byte = true
 #     jmp and call to a target in their bytes        3
 #     jmp ra, call ra, ret - a target in a register  4
 #     mul, clz, popcount                             1 + extra_cycles = 2
-#     a load of N bytes: ld8, ld, pop, ldm           N + 3
-#     a store of N bytes: st8, st, push, stm         N + 4
+#     a load of N accesses: ld8, ld, pop, ldm        N + 3
+#     a store of N accesses: st8, st, push, stm      N + 4
+#       - an access is a byte, or a whole word at an EVEN address;
+#         a word at an odd address is two
 #     sei, cli                                       5
 #     brk, rti, and an interrupt                     6
 #
@@ -275,11 +277,23 @@ length_from_first_byte = true
 # Two bytes and any register is the same four cycles.
 #
 # A MEMORY INSTRUCTION STOPS DISPATCH TOO, until its last address is out, so
-# that no fetch shares the bus with it, and it moves a byte a cycle.  A load's
-# first address comes straight from the ALU's adder; a store registers it first,
-# and pays one more.  So `ld r1, [r2, #4]` is five cycles and `push r0-r2`, six
-# bytes, is ten - a memory instruction is the slowest thing a program does
-# often, and keeping a value in a register is worth several ALU instructions.
+# that no fetch shares the bus with it, and it makes an access a cycle.  A
+# load's first address comes straight from the ALU's adder; a store registers
+# it first, and pays one more.  So `ld r1, [r2, #4]` is four cycles if r2 + 4 is
+# even and five if it is odd, and `push r0-r2`, six bytes, is seven with sp
+# even and ten with it odd - a memory instruction is the slowest thing a
+# program does often, and keeping a value in a register is worth several ALU
+# instructions.
+#
+# AN ALIGNED WORD IS ONE ACCESS because memory is a word wide: both bytes are
+# read or written in the same cycle.  A word at an odd address still works,
+# with no fault, a byte at a time.  The FIRST address decides for the whole
+# instruction - a block move's words all share its parity - so a push, pop,
+# stm or ldm with its pointer odd pays a cycle for every byte, as every memory
+# instruction did before, and one with it even a cycle a register.  Nothing
+# splits an unaligned run into a byte, aligned words and a byte: that would
+# cost microcode for a case software can avoid by keeping sp and its buffers
+# even.
 #
 # AND AN INSTRUCTION MAY DECLARE EXTRA CYCLES, with `extra_cycles` on its entry:
 # cycles beyond the one it would otherwise cost.  clz, popcount and mul take

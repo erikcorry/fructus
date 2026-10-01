@@ -8,7 +8,7 @@
 // WHAT IS MICROCODED IS WHAT GETS COMPLICATED.  Every ALU instruction, branch
 // and jump runs through rtl/cpu.sv's three stages with no microcode at
 // all.  A memory instruction's ALU cycle is an ordinary add too - its first
-// address - and the steps after it, one byte a cycle, are what this ROM holds.
+// address - and the steps after it, one access a cycle, are what this ROM holds.
 // It is a block RAM: the control that took eight shift-register schedules and
 // their masks in LUTs takes one of the part's thirty RAMs instead.
 //
@@ -32,7 +32,9 @@
 // routines' fields do not fit beside the memory instructions' in sixteen.
 //
 // THE STEPS of a memory instruction are rtl/cpu.sv's, and its header
-// gives the reasons.  For N bytes, B a register:
+// gives the reasons.  For N accesses, B a register - two for a word a byte
+// at a time, one for a byte or for an aligned word, whose copy of the
+// routine sits at the entry with bit 3 set:
 //
 //     store  address 1 .. N; release at N; done at N, or N + 1 for a block,
 //            whose pointer is written then - last, so a stored register that

@@ -232,6 +232,7 @@ export class Machine {
     this.cyc     = 0;      // cycles, dispatch to dispatch
     this.odd     = 0;      // of them, cycles lost to a three-byte instruction at an odd address
     this.bus     = 0;      // data bytes read or written
+    this.xfer    = 0;      // data accesses: a byte, or an aligned word
     this.penalty = spec.cpu.taken_branch_penalty ?? 0;
 
     // WHICH INSTRUCTIONS PAY IT COMES FROM THE SEMANTICS, not from a list here
@@ -264,15 +265,17 @@ export class Machine {
 
   load(bytes, addr = 0) { this.mem.set(bytes, addr); return this; }
 
-  rd8 (a)    { this.bus += 1; return this.mem[a & MASK]; }
-  wr8 (a, v) { this.bus += 1; this.mem[a & MASK] = v & 0xff; }
+  // AN ALIGNED WORD IS ONE ACCESS, any other a byte at a time: memory is a
+  // word wide, and rtl/cpu.sv takes a word whole when its address is even.
+  rd8 (a)    { this.bus += 1; this.xfer += 1; return this.mem[a & MASK]; }
+  wr8 (a, v) { this.bus += 1; this.xfer += 1; this.mem[a & MASK] = v & 0xff; }
   rd16(a)    {
-    this.bus += 2;
+    this.bus += 2; this.xfer += a & 1 ? 2 : 1;
     const lo = this.mem[a & MASK], hi = this.mem[(a + 1) & MASK];
     return this.little ? lo | (hi << 8) : hi | (lo << 8);
   }
   wr16(a, v) {
-    this.bus += 2;
+    this.bus += 2; this.xfer += a & 1 ? 2 : 1;
     const lo = v & 0xff, hi = (v >>> 8) & 0xff;
     this.mem[a & MASK]       = this.little ? lo : hi;
     this.mem[(a + 1) & MASK] = this.little ? hi : lo;
@@ -377,18 +380,19 @@ export class Machine {
     if (!d) throw new Error(`no instruction at 0x${at.toString(16)} (first byte 0x${this.mem[at].toString(16)})`);
     this.pc = u16(at + d.nbytes);
     const sem = d.insn.semantics ?? '';
-    const bus = this.bus;
+    const xfer = this.xfer;
     this.wrotePc = false;
     this.tmp = {};           // no scratch name outlives its instruction
     if (trace) trace(at, d, this);
     for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);
-    this.cyc += this.cost(d, at, sem, this.bus - bus);
+    this.cyc += this.cost(d, at, sem, this.xfer - xfer);
     this.count++;
     return d;
   }
 
   // The cycles from this instruction's dispatch to the next one's, on the
-  // pipeline in rtl/cpu.sv.  `moved` is the data bytes it read or wrote.
+  // pipeline in rtl/cpu.sv.  `moved` is the data accesses it made: a byte,
+  // or a word at an even address.
   cost(d, at, sem, moved) {
     // AN EXCEPTION IS SIX CYCLES, and it is recognised by naming a shadow -
     // which only `brk' and `rti' do: a microcode routine that moves sp and lr
@@ -397,10 +401,12 @@ export class Machine {
     if (/shadow_lr|shadow_sp/.test(sem)) return 6;
     if (/^ie = [01]$/.test(sem)) return 5;
     // A MEMORY INSTRUCTION STOPS DISPATCH until its last address is out, and
-    // its bytes go a byte a cycle.  A load's first address comes straight out
-    // of the ALU's adder, so N bytes cost N + 3; a store registers its address
-    // first and costs N + 4.  ld8 4, ld and a one-register pop 5; st8 5, st
-    // and a one-register push 6.  How many bytes is what the semantics moved.
+    // makes an access a cycle: a word when it is aligned, a byte when not.  A
+    // load's first address comes straight out of the ALU's adder, so N
+    // accesses cost N + 3; a store registers its address first and costs
+    // N + 4.  ld8 and an aligned ld 4, an odd one 5; st8 and an aligned st 5,
+    // an odd one 6; push of three registers 7 aligned, 10 not.  How many
+    // accesses is what the semantics made.
     if (/M(8|16)\[/.test(sem)) {
       const stores = sem.split(';').some((s) => /^\s*M(8|16)\[/.test(s.trim()));
       return moved + (stores ? 4 : 3);
@@ -444,7 +450,7 @@ export class Machine {
   // Zero the cost counters.  Tests used to open-code this, and open-coded the
   // SUM as well - which is how the taken-branch penalty went unnoticed by every
   // cycle assertion in the suite the moment it was added.  One definition.
-  reset() { this.cyc = this.odd = this.bus = 0; return this; }
+  reset() { this.cyc = this.odd = this.bus = this.xfer = 0; return this; }
   cycles() { return this.cyc; }
 }
 

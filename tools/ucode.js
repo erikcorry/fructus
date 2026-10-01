@@ -49,15 +49,22 @@ const memKey = ({ st, blk, w2, n }) => `${st ? 'st' : 'ld'}${blk ? 'blk' : ''}${
 // than the ordinary routine's; the addresses go out as before.  Only ld, ld8
 // and ldm have a late copy - pop keeps its ordinary routine - and a one-byte
 // load's copy releases dispatch in step 1 instead of its ALU cycle.
-function memSteps({ st, blk, w2, n }, late = 0) {
-  const B = w2 ? 2 : 1, N = n * B;
+//
+// AN ALIGNED COPY MOVES A WORD A STEP.  A word instruction whose first
+// address is even - and a block move's addresses are all the parity of its
+// first - takes each register's two bytes in one access, so its routine is
+// the byte routine's shape with one access a register: an aligned ld steps
+// exactly as ld8 does.  Which bytes an access moves is rtl/cpu.sv's `mal`,
+// a flop, and not in the word.
+function memSteps({ st, blk, w2, n }, late = 0, aligned = 0) {
+  const B = w2 && !aligned ? 2 : 1, N = n * B;   // accesses: a register's, and all
   const step = Array.from({ length: STEPS + 2 }, () => ({}));
   if (st) {
     for (let k = 1; k <= N; k++) step[k].A = 1;
     step[N].R = 1;
     if (blk) { step[N + 1].P = 1; step[N + 1].D = 1; } else step[N].D = 1;
-    // In step k the next byte, byte k, is made ready: register k / B, half
-    // k % B.  Byte 0 was made ready in the ALU cycle.
+    // In step k the next access, access k, is made ready: register k / B,
+    // half k % B.  Access 0 was made ready in the ALU cycle.
     for (let k = 1; k < N; k++) Object.assign(step[k], { WE: 1, KS: Math.floor(k / B), KH: k % B });
   } else {
     for (let k = 1; k <= N - 1; k++) step[k].A = 1;
@@ -105,33 +112,50 @@ const EXCEPTIONS = {
 // Which routine an instruction that is not a memory instruction runs.
 const NAMED = { brk: 'brk', rti: 'rti', sei: 'sei', cli: 'cli' };
 
+// THE VARIANTS SIT AT FIXED BITS OF THE ENTRY, so rtl/cpu.sv chooses one by
+// setting a bit - LATE from flops in decode, ALIGN from the first address's
+// bit 0 in the ALU cycle - and needs no column to say where it is.  A routine
+// with variants therefore needs an entry with those bits clear whose
+// variants' slots are free too - a store, with no late copy, may sit in the
+// late half; allocate() finds them, the routines with the
+// most variants first.  The five-bit entry is full: every one of its 32
+// slots holds a routine.
+export const LATE = 1 << (ENTRY_BITS - 1);
+export const ALIGN = 1 << (ENTRY_BITS - 2);
+
 // The shapes the instruction set has: ld, ld8, st and st8 move one register
-// and are no block; the block moves are two bytes a register.
-export const ROUTINES = [{ name: 'idle', steps: [] }];
+// and are no block; the block moves are two bytes a register.  Each family is
+// a routine and its variants, by the bits that choose them.
+const FAMILIES = [{ variants: { 0: { name: 'idle', key: 'idle', steps: [] } } }];
 for (const st of [0, 1])
   for (const blk of [0, 1])
     for (const w2 of [0, 1])
       for (const n of [1, 2, 3]) {
         if (blk ? !w2 : n !== 1) continue;
         const m = { st, blk, w2, n };
-        ROUTINES.push({
-          name: st ? (blk ? `push/stm ${n}` : w2 ? 'st' : 'st8') : (blk ? `pop/ldm ${n}` : w2 ? 'ld' : 'ld8'),
-          key: memKey(m), bytes: n * (w2 ? 2 : 1), steps: memSteps(m), m,
-        });
+        const name = st ? (blk ? `push/stm ${n}` : w2 ? 'st' : 'st8') : (blk ? `pop/ldm ${n}` : w2 ? 'ld' : 'ld8');
+        const key = memKey(m), bytes = n * (w2 ? 2 : 1);
+        const v = { 0: { name, key, bytes, steps: memSteps(m), m } };
+        if (!st) v[LATE] = { name: `${name} late`, key: `late:${key}`, bytes, steps: memSteps(m, 1) };
+        if (w2) v[ALIGN] = { name: `${name} al`, key: `al:${key}`, bytes, steps: memSteps(m, 0, 1) };
+        if (w2 && !st) v[LATE | ALIGN] = { name: `${name} al late`, key: `late:al:${key}`, bytes, steps: memSteps(m, 1, 1) };
+        FAMILIES.push({ variants: v });
       }
-for (const [name, steps] of Object.entries(EXCEPTIONS)) ROUTINES.push({ name, key: name, steps });
+for (const [name, steps] of Object.entries(EXCEPTIONS)) FAMILIES.push({ variants: { 0: { name, key: name, steps } } });
 
-// A LOAD'S LATE COPY SITS AT ITS ENTRY WITH THE TOP BIT SET, so rtl/cpu.sv
-// chooses it by setting that bit, from flops, and needs no second column to
-// say where it is.  The slots between are left idle.
-export const LATE = 1 << (ENTRY_BITS - 1);
-for (const [e, r] of [...ROUTINES.entries()]) {
-  if (!r.m || r.m.st) continue;
-  if (e >= LATE || ROUTINES[e | LATE]) throw new Error(`no room for ${r.name}'s late copy`);
-  ROUTINES[e | LATE] = { name: `${r.name} late`, key: `late:${r.key}`, bytes: r.bytes, steps: memSteps(r.m, 1) };
+function allocate(families) {
+  const slots = new Array(1 << ENTRY_BITS).fill(null);
+  // idle first, at 0: the sequencer reads entry 0 when it has nothing to do.
+  const order = [families[0], ...families.slice(1).sort((a, b) => Object.keys(b.variants).length - Object.keys(a.variants).length)];
+  for (const f of order) {
+    const offs = Object.keys(f.variants).map(Number), bits = offs.reduce((a, o) => a | o, 0);
+    const e = slots.findIndex((_, e) => !(e & bits) && offs.every((o) => !slots[e | o]));
+    if (e < 0) throw new Error(`no room for ${f.variants[0].name} and its variants: more routines than entries`);
+    for (const o of offs) slots[e | o] = f.variants[o];
+  }
+  return slots.map((r) => r ?? { name: 'idle', key: 'free', steps: [] });
 }
-for (let e = 0; e < ROUTINES.length; e++) ROUTINES[e] ??= { name: 'idle', steps: [] };
-if (ROUTINES.length > 1 << ENTRY_BITS) throw new Error('more routines than entries');
+export const ROUTINES = allocate(FAMILIES);
 if (ROUTINES.some((r) => r.steps.length > STEPS)) throw new Error('a routine is longer than eight steps');
 
 const find = (key) => {
