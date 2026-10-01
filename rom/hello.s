@@ -2,7 +2,7 @@
 ;
 ; The board is described in tools/microtan.js: a 32x16 character display at
 ; 0x0200, written directly, and a keyboard port at 0x0001.  The linker script
-; ld/fructus-rom16k.ld puts this at 0xc000 and the vector table at 0xffd0.
+; ld/fructus-rom16k.ld puts this at 0xc000 and the vector table at 0xffcc.
 
 	.text
 	.globl _start
@@ -27,12 +27,12 @@ msg:	.ascii	"fructus"
 ; ============================================================================
 ; The vectors
 ; ============================================================================
-; Twelve four-byte slots at 0xffd0, which ld/fructus-rom16k.ld places.  The
+; Thirteen four-byte slots at 0xffcc, which ld/fructus-rom16k.ld places.  The
 ; processor JUMPS to a vector rather than reading a pointer out of it, so each
 ; slot holds a real `jmp' - three bytes, with a fourth to spare.
 ;
 ; THEY ARE IN ADDRESS ORDER, LOW TO HIGH, which reads backwards from the table
-; in isa/fructus.toml.  A linker lays a section out ascending, so irq0 is first
+; in isa/fructus.toml.  A linker lays a section out ascending, so io_guard is first
 ; and reset is last; getting that order wrong would put reset where an
 ; interrupt line belongs and the mistake would look like a dead board.
 ;
@@ -41,6 +41,8 @@ msg:	.ascii	"fructus"
 ; same reason: landing in whatever the ROM happened to end with is worse.
 
 	.section .vectors,"ax"
+	jmp	_start		; 0xffcc  io_guard: a guard byte of the I/O page
+	.byte	0
 	jmp	_start		; 0xffd0  irq0
 	.byte	0
 	jmp	_start		; 0xffd4  irq1

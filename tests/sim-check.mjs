@@ -15,7 +15,7 @@
 // =============================================================================
 
 import { assemble, callRoutine, machine, spec } from './harness.mjs';
-import { BUILTIN } from '../tools/sim.js';
+import { BUILTIN, Machine } from '../tools/sim.js';
 import { writeFileSync, rmSync } from 'node:fs';
 
 const M32 = (1n << 32n) - 1n, B31 = 1n << 31n, B32 = 1n << 32n;
@@ -645,6 +645,81 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
   check('rti enables interrupts',          m.ie === true,           `ie=${m.ie}`);
   check('rti costs six cycles',            m.cycles() - half === 6, `${m.cycles() - half} cycles`);
   console.log('ok    brk and rti: every register back where it started, six cycles each');
+}
+
+// --- the I/O page: [cpu.io] -------------------------------------------------
+// A machine made with `io` has it.  Every access that touches a guard byte
+// traps to io_guard with lr on the faulting instruction itself, and leaves the
+// byte alone; the bytes just inside the guards do not trap; the shadows read
+// and write through their words, a byte at a time as well; and a machine
+// without `io' is plain memory there.
+{
+  const io = spec.cpu.io, VEC = spec.cpu.vectors.io_guard;
+  const hex = (v) => `0x${v.toString(16)}`;
+  const run = (body, { mach = new Machine(spec, { io: true }), setup = () => {}, stopAt = VEC } = {}) => {
+    writeFileSync('build/_io.s', `start:\n${body}\n        halt\n`);
+    const { code, syms } = assemble('build/_io.s');
+    mach.fault = syms.get('fault');
+    const SP = mach.named.sp;
+    mach.load(code); mach.pc = 0; mach.R[SP] = 0x1000; mach.shadow_isp = 0x3000;
+    setup(mach);
+    mach.run({ max: 50, stopAt });
+    return mach;
+  };
+  const top = io.page + 0x100 - io.guard_bytes;
+  const traps = [
+    ['ld8 from the first guard byte', io.page, 'ld8  r0, [r1, #0]'],
+    ['st8 to the last bottom guard byte', io.page + io.guard_bytes - 1, 'st8  r0, [r1, #0]'],
+    ['ld from the first top guard word', top, 'ld   r0, [r1, #0]'],
+    ['st to the last top guard word', io.page + 0xfe, 'st   r0, [r1, #0]'],
+    ['an odd ld whose high byte is the guard', top - 1, 'ld   r0, [r1, #0]'],
+    ['an odd st whose low byte is the guard', io.page + io.guard_bytes - 1, 'st   r0, [r1, #0]'],
+  ];
+  for (const [what, addr, insn] of traps) {
+    const m = run(`        mov  r0, #0x5a5a\n        mov  r1, #${addr}\nfault:  ${insn}`);
+    check(`${what} traps`, m.pc === VEC, `pc=${hex(m.pc)}`);
+    check(`${what}: lr is the faulting instruction`, m.R[m.named.lr] === m.fault,
+          `lr=${hex(m.R[m.named.lr])}, want ${hex(m.fault)}`);
+    check(`${what}: the guard is untouched`, m.mem[addr] === 0, `mem[${hex(addr)}]=${hex(m.mem[addr])}`);
+  }
+  // A push off the bottom of the stack: the stack guard.
+  {
+    const m = run('        mov  sp, #0x0500\n        push r0, r3');
+    check('a push below 0x0500 traps', m.pc === VEC, `pc=${hex(m.pc)}`);
+    check('and parks the sp it was pushing to', m.shadow_sp === 0x0500, `shadow_sp=${hex(m.shadow_sp)}`);
+    check('and runs on the interrupt stack', m.R[m.named.sp] === 0x3000, `sp=${hex(m.R[m.named.sp])}`);
+  }
+  // Just inside the guards: ordinary bytes.
+  {
+    const m = run(`        mov  r1, #${io.page + io.guard_bytes + 0x10}\n        mov  r0, #0x1234\n        st   r0, [r1, #0]\n` +
+                  `        mov  r2, #${top - 2}\n        st   r0, [r2, #0]\n        ld   r3, [r2, #0]`);
+    check('the GPU area\'s last word is memory', m.halted && m.R[3] === 0x1234, `halted=${m.halted} r3=${hex(m.R[3])}`);
+  }
+  // The shadows, through their words.
+  {
+    const m = run(`        mov  r1, #${io.shadow_lr}\n        ld   r0, [r1, #0]\n` +
+                  `        mov  r1, #${io.shadow_isp}\n        mov  r2, #0x2468\n        st   r2, [r1, #0]\n` +
+                  `        mov  r1, #${io.shadow_sp + 1}\n        mov  r2, #0xab\n        st8  r2, [r1, #0]\n` +
+                  `        mov  r1, #${io.shadow_sp}\n        ld8  r3, [r1, #0]\n` +
+                  `        brk`,
+                  { setup: (mm) => { mm.shadow_lr = 0xbeef; mm.shadow_sp = 0x1111; },
+                    stopAt: spec.cpu.vectors.brk });
+    check('ld of shadow_lr', m.R[0] === 0xbeef, `r0=${hex(m.R[0])}`);
+    check('ld8 of shadow_sp\'s low byte', m.R[3] === 0x11, `r3=${hex(m.R[3])}`);
+    check('brk enters on the shadow_isp a store set', m.R[m.named.sp] === 0x2468, `sp=${hex(m.R[m.named.sp])}`);
+    check('st8 to shadow_sp\'s high byte, then brk parks sp over it', m.shadow_sp === 0x1000, `shadow_sp=${hex(m.shadow_sp)}`);
+    const n = run(`        mov  r1, #${io.shadow_sp + 1}\n        mov  r2, #0xab\n        st8  r2, [r1, #0]`,
+                  { setup: (mm) => { mm.shadow_sp = 0x1111; } });
+    check('st8 to shadow_sp\'s high byte', n.shadow_sp === 0xab11, `shadow_sp=${hex(n.shadow_sp)}`);
+    check('and none of it reached memory', n.mem[io.shadow_sp + 1] === 0, `mem=${hex(n.mem[io.shadow_sp + 1])}`);
+  }
+  // Without `io': memory, and nothing traps.
+  {
+    const m = run(`        mov  r1, #${io.page}\n        mov  r0, #0x77\n        st8  r0, [r1, #0]`, { mach: machine() });
+    check('a machine without the I/O page does not trap', m.halted && m.mem[io.page] === 0x77, `pc=${hex(m.pc)}`);
+  }
+  rmSync('build/_io.s', { force: true });
+  console.log(`ok    the I/O page: ${traps.length + 1} guard traps, its edges, the shadows by word and byte`);
 }
 
 // --- iseq / isset: the row that is two instructions --------------------------

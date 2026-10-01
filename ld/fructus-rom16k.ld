@@ -3,11 +3,11 @@
  *   0x0000 - 0x0001   kept free: no object at address 0, which is NULL
  *   0x0002 - 0x01ff   zp_lo   .zplo, .zplo.bss      [rb, #-512..-1]
  *   0x0200 - 0x03ff   zp_hi   .zphi, .zphi.bss      [rb, #0..511]
- *   0x0400 - 0x04ff   the I/O page
+ *   0x0400 - 0x04ff   the I/O page: guards, the CPU's, the GPU's; [cpu.io]
  *   0x0500 - top      the stack, growing down towards the I/O page
  *   top    - 0xbfff   .data and .bss
- *   0xc000 - 0xffcf   16K ROM, less the vector table
- *   0xffd0 - 0xffff   the vectors, twelve four-byte slots
+ *   0xc000 - 0xffcb   16K ROM, less the vector table
+ *   0xffcc - 0xffff   the vectors, thirteen four-byte slots
  *
  * THE ZERO PAGE is reached as [rb, #zp(x)] with rb holding 0x200; see
  * ld/fructus-sim.ld.  Its initialised halves live in ROM like .data and are
@@ -38,12 +38,15 @@ MEMORY
 {
   zplo (rw) : ORIGIN = 0x0002, LENGTH = 0x0200 - 2
   zphi (rw) : ORIGIN = 0x0200, LENGTH = 0x0200
-  rom (rx)  : ORIGIN = 0xc000, LENGTH = 16K - 48
-  vec (rx)  : ORIGIN = 0xffd0, LENGTH = 48
+  rom (rx)  : ORIGIN = 0xc000, LENGTH = 16K - 52
+  vec (rx)  : ORIGIN = 0xffcc, LENGTH = 52
 }
 
 __zp_base   = 0x0200;
 __io        = 0x0400;
+__shadow_sp  = 0x0410;
+__shadow_lr  = 0x0412;
+__shadow_isp = 0x0414;
 __stack_top = DEFINED(__stack_top) ? __stack_top : 0x1000;
 
 SECTIONS
@@ -107,6 +110,10 @@ SECTIONS
   /* KEEP, because nothing refers to this section and --gc-sections would
      otherwise drop the whole table on the floor.  */
   .vectors : { KEEP(*(.vectors)) } > vec
+  /* Laid out upwards from 0xffcc, so a table a slot short would put every
+     vector four bytes low - reset where brk belongs - and still link.  */
+  ASSERT(SIZEOF(.vectors) == 0 || SIZEOF(.vectors) == 52,
+         "the vector table is thirteen four-byte slots from 0xffcc")
 
   /DISCARD/ : { *(.comment) *(.note.*) }
 }

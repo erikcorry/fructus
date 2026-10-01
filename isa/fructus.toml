@@ -87,8 +87,9 @@
 #
 # THE THREE SHADOWS ARE MACHINE STATE AND NOT REGISTERS.  No instruction names
 # them as an operand and nothing in the register file reaches them; they exist
-# because `brk` and `rti` move values through them, which is the only way their
-# contents can be observed at all.  They are named here rather than hidden
+# because `brk` and `rti` move values through them.  Each also has a word in
+# the I/O page - [cpu.io] - which is how a handler reads the interrupted code's
+# sp and lr, but that is memory, not an operand.  They are named here rather than hidden
 # inside the two instructions so that the semantics of an exception are written
 # out the same way every other instruction's are.
 #
@@ -358,6 +359,60 @@ irq3         = 0xffdc
 irq2         = 0xffd8
 irq1         = 0xffd4
 irq0         = 0xffd0
+# IMPLEMENTED IN tools/sim.js, NOT YET IN rtl/: a load or store that touches a
+# guard byte of the I/O page, [cpu.io] below.  It is not meant to return from.
+# It enters as brk does - shadows, ie clear - with lr the address OF the
+# faulting instruction, not after it, so a handler can say which one it was.
+# The access itself has not happened, though for a store moving several bytes
+# the ones before the guard may have been.
+io_guard     = 0xffcc
+
+
+# =============================================================================
+# THE I/O PAGE
+# =============================================================================
+# 256 bytes at 0x0400, just above the zero page (see README.md, "The zero
+# page"), with the stack growing down towards it from above:
+#
+#     0x0400 - 0x040f   guard
+#     0x0410 - 0x047f   the CPU's: the shadows, and whatever else the core has
+#     0x0480 - 0x04ef   the GPU's: docs/vga.md, "Registers"
+#     0x04f0 - 0x04ff   guard
+#
+# THE GUARDS TRAP, to [cpu.vectors] io_guard, on a read or a write.  The top one
+# is a stack guard: a push past the stack's bottom lands in it.  The bottom one
+# catches a zero page variable indexed off its end, and the 16 bytes either
+# side catch a pointer into either area that is a little wrong.  It is a
+# debugging aid, not something to recover from: the handler has a stack to
+# report on, since entry moves sp to shadow_isp, and a frame larger than 16
+# bytes can still step over the top guard with an sp-relative store.
+#
+# ONE REGISTER TO A 16-BIT WORD, at its even address, so that an aligned `st`
+# writes exactly one register and a word wide data bus never has to merge two
+# that are unrelated.  A register of 8 bits or fewer takes `st8` to its even
+# address as well.
+#
+# A LARGE ARRAY IS AN ADDRESS AND A DATA REGISTER, a word each, rather than a
+# window onto it: the address increments on every access to the data register
+# and wraps at the array's size.  So the GPU's 2 KB of sprite patterns cost the
+# page four bytes.
+#
+# THE SHADOWS HAVE A WORD EACH, which is the one way to reach them other than
+# brk and rti.  A handler can read the interrupted code's sp and lr for a crash
+# report, and a scheduler can swap them; boot code can set shadow_isp with one
+# store instead of the `rti' it otherwise needs.  They are still not
+# registers - nothing in the register file reaches them.  tools/sim.js maps
+# them; rtl/cpu.sv does not yet, and in tools/fpga-system.sv these addresses
+# are ordinary memory.
+[cpu.io]
+page        = 0x0400
+guard_bytes = 16       # at each end of the page
+cpu         = 0x0410   # 0x0410 - 0x047f
+gpu         = 0x0480   # 0x0480 - 0x04ef
+shadow_sp   = 0x0410
+shadow_lr   = 0x0412
+shadow_isp  = 0x0414
+console     = 0x0420   # tools/fcc-run.mjs's only: a byte stored here is printed
 
 
 # =============================================================================

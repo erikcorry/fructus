@@ -431,7 +431,7 @@ rules:
   SPRAM to an operand flop instead of seven - and the system placed at 24.4
   MHz, below the pixel clock.
 
-**The mode** is the control register at 0x0441. Bit 2 says which buffer the
+**The mode** is the control register at 0x0480. Bit 2 says which buffer the
 display shows, and bits 1:0 what happens to the other one:
 
 | bits 1:0 | the buffer not shown |
@@ -552,8 +552,8 @@ buffers 2. None of it is in a frame buffer, so sprites move without reading
 buffer memory and the write-through copy is unaffected.
 
 The CPU reaches 2 KB of patterns and 128 bytes of attributes, more than the
-256-byte I/O page. An address register and an auto-incrementing data
-register look like the way in.
+256-byte I/O page, through an address register and an auto-incrementing data
+register for each (see [Registers](#registers)).
 
 ### Timing
 
@@ -875,23 +875,30 @@ columns.
 
 ## Registers
 
-Under 64 bytes of registers in an I/O page, plus the sprites' 2 KB of
-patterns and attributes (see [Sprites](#sprites)). `tools/fpga-system.sv`
-puts the page at 0x0400, just above the zero page (0x0000-0x03ff), so
-everything from 0x0500 up is one linear area. There the registers are written
-through into RAM, so they read back as last written, and a CPU write reaches
-them a cycle after the store.
+In the GPU's part of the I/O page, 0x0480-0x04ef; the page's layout, its
+guards and the CPU's part are `[cpu.io]` in `isa/fructus.toml` and "The I/O
+page" in the README. Each register has a 16-bit word to itself, written by an
+aligned `st`. A register of 8 bits or fewer can also take `st8` to its even
+address, and a write to the odd byte alone is dropped. A large array is an
+address register and a data register: every write to the data register
+writes the entry the address names and increments the address, which wraps
+at the array's size. `tools/fpga-system.sv` implements the writes. The page
+is written through into RAM, so a register reads back as last written, and
+a CPU write reaches the registers a cycle after the store.
 
-| register | contents | access |
-|---|---|---|
-| `timing_h` | `struct timing`, 4 × 16 bits, 10 used | write only |
-| `timing_v` | `struct timing`, 4 × 16 bits, 10 used | write only |
-| control | the buffer shown, and CPU, COPY, BLIT or WRITETHRU for the other | write |
-| status | current line (10 bits), vertical blank, write-through in progress | read |
-| font | the font's address, 15 bits; even for a 16-pixel font | write only |
-| palette | 32 × 8 bits | write, through the EBR's second port |
-| sprite attributes | 16 × 4 words | write, through its block RAM's second port |
-| sprite patterns | 16 × 64 words | write, through their block RAMs' second ports |
+| address | register | contents | access |
+|---|---|---|---|
+| 0x0480 | mode | bit 2 the buffer shown; bits 1:0 CPU, COPY, BLIT or WRITETHRU for the other | write |
+| 0x0482 | font | the font's address, 15 bits; even for a 16-pixel font | write |
+| 0x0484 | status | current line (10 bits), vertical blank, write-through in progress | read; not built |
+| 0x0490-0x0496 | `timing_h` | `struct timing`, 4 words, 10 bits each | write only |
+| 0x0498-0x049e | `timing_v` | `struct timing`, 4 words, 10 bits each | write only |
+| 0x04a0 | palette address | 5 bits | write |
+| 0x04a2 | palette data | 8 bits, through the EBR's second port | write |
+| 0x04a4 | pattern address | 10 bits: 16 sprites × 64 words | write |
+| 0x04a6 | pattern data | 16 bits, through the block RAMs' second ports | write |
+| 0x04a8 | attribute address | 6 bits: 16 sprites × 4 words | write |
+| 0x04aa | attribute data | 16 bits, through its block RAM's second port | write |
 
 The timing registers are write only because reading them back would need a
 16-bit 8-to-1 mux onto the data bus, about 50 LUTs, for values the CPU wrote

@@ -517,16 +517,6 @@ frequency of the operand pattern it pins, and that is a question about real
 code rather than about the instruction set. Now that gcc works, the way to spend
 it is to compile a corpus, count, and pin the winner.
 
-### A stack guard in the I/O page
-
-The stack grows down towards the I/O page at 0x0400 (see [The zero
-page](#the-zero-page)). If writing any of the page's top 16 registers,
-0x04f0–0x04ff, raised an interrupt, a push past the bottom of the stack would
-trap. It is a debugging aid, not something to recover from: the handler can
-report the overflow, and it has a stack to do it on, since interrupt entry
-moves `sp` to `shadow_isp`. The guard is 16 bytes, so a frame larger than that
-could step over it with an `sp`-relative store and not trap.
-
 ## The zero page
 
 Not an addressing mode, a convention with a relocation behind it. A register
@@ -538,7 +528,7 @@ base wired to zero.
 ```
 0x0000 - 0x01ff  zp_lo   .zplo, .zplo.bss    [rb, #-512..-1]
 0x0200 - 0x03ff  zp_hi   .zphi, .zphi.bss    [rb, #0..511]
-0x0400 - 0x04ff  the I/O page
+0x0400 - 0x04ff  the I/O page, below
 0x0500 - ...     the stack, growing down towards the I/O page from wherever
                  the system puts its top
 ```
@@ -577,11 +567,50 @@ rematerialize the `mov` where it is used.
 On the simulator, `ld/fructus-sim.ld` keeps 0x0000–0x0002 for a `jmp _start`,
 since the CPU starts at 0, and links the program at `__stack_top`, 0x2000
 unless `-Wl,--defsym=__stack_top=...` says otherwise. The console is at
-0x0400. The `jmp` also keeps every object off address 0, which is NULL;
+0x0420. The `jmp` also keeps every object off address 0, which is NULL;
 `ld/fructus-rom16k.ld` keeps the two bytes free for the same reason.
 `tools/fpga-system.sv` has its registers in the I/O page. The Microtan board in
 `tools/microtan.js` keeps the original's map, with its screen at 0x0200,
 because it is a copy of a real machine.
+
+## The I/O page
+
+256 bytes at 0x0400, between the zero page and the stack. `[cpu.io]` in
+`isa/fructus.toml` is the authority:
+
+```
+0x0400 - 0x040f  guard
+0x0410 - 0x047f  the CPU's   0x0410 shadow_sp, 0x0412 shadow_lr, 0x0414 shadow_isp
+0x0480 - 0x04ef  the GPU's   docs/vga.md, "Registers"
+0x04f0 - 0x04ff  guard
+```
+
+**The guards trap.** A load or store that touches one enters `io_guard`,
+0xffcc, with `lr` on the faulting instruction itself. The top guard is a stack
+guard: the stack grows down towards it, so a push past the bottom traps. The
+bottom one catches a zero page array indexed off its end. Both are debugging
+aids, not something to recover from. The handler has a stack to report on,
+since entry moves `sp` to `shadow_isp`, but a frame larger than 16 bytes can
+step over the top guard with an `sp`-relative store.
+
+**One register to a 16-bit word**, at its even address, so an aligned `st`
+writes exactly one register and a wide data bus never has to merge two
+unrelated ones. A register of 8 bits or fewer takes `st8` there as well. **A
+large array is an address and a data register**, a word each: the address
+increments on every access to the data register and wraps at the array's size.
+So the GPU's 2 KB of sprite patterns cost the page four bytes.
+
+**The shadows have a word each**, so a handler can read the interrupted code's
+`sp` and `lr` for a crash report, a scheduler can swap them, and boot code can
+set `shadow_isp` with a store instead of the `rti` it needs otherwise. They
+are still not registers: no instruction names them.
+
+`tools/sim.js` implements all of this for a machine made with `io`, which is
+`tools/fcc-run.mjs`'s. A program that touches a guard there exits 124, naming
+the instruction. `tests/stack-guard.c` recurses into the top guard.
+`tools/fpga-system.sv` has the GPU's registers, but `rtl/cpu.sv` neither maps
+the shadows nor traps on the guards yet, so those addresses are still ordinary
+memory on the FPGA.
 
 ## Status
 

@@ -373,6 +373,24 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
         fi
     done
     rm -f build/_mal build/_mal.bin
+
+    # --- the I/O page: the console, and the stack guard ---------------------
+    # tests/stack-guard.c prints a line and then recurses for ever, so passing
+    # is the line on stdout and fcc-run's exit 124: the top guard trapped.
+    for o in -O2 -O0; do
+        if tools/fcc $o tests/stack-guard.c -o build/_sg 2>build/_err; then
+            st=0; out=$(node tools/fcc-run.mjs build/_sg.bin 2>build/_err) || st=$?
+        else
+            out=; st=x
+        fi
+        if [ "$st" = 124 ] && [ "$out" = descending ]; then
+            printf 'ok    a recursion with no bottom traps in the stack guard at %s\n' "$o"
+        else
+            printf 'FAIL  stack guard at %s (exit %s, printed "%s")\n' "$o" "$st" "$out"
+            head -10 build/_err; fail=1
+        fi
+    done
+    rm -f build/_sg build/_sg.bin
 else
     printf 'skip  the compiler is not built, the sliding convention not checked\n'
 fi

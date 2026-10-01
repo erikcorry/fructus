@@ -197,8 +197,16 @@ export const BUILTIN = {
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };
 
+// A load or store that touched a guard byte of the I/O page.  step() catches
+// it and enters [cpu.vectors] io_guard.
+class IoGuard extends Error {}
+
 export class Machine {
-  constructor(spec) {
+  // `io`: the machine has the I/O page, [cpu.io] - its guards trap and its
+  // shadow words are the shadows.  tools/fcc-run.mjs's machine has it; a
+  // board with a map of its own, like tools/microtan.js, and the tests that
+  // use memory anywhere do not.
+  constructor(spec, { io = false } = {}) {
     this.spec  = spec;
     this.dec   = buildDecoder(spec);
     this.mem   = new Uint8Array(1 << spec.cpu.addr_bits);
@@ -207,9 +215,10 @@ export class Machine {
     this.halted = false;
 
     // THE EXCEPTION STATE, which is not in the register file and is not
-    // reachable from one.  `brk` and `rti` move values through these and
-    // nothing else touches them, which is why they live here beside `halted`
-    // rather than in `named` below - `named` is built from the spec's register
+    // reachable from one.  `brk` and `rti` move values through these, and
+    // with `io` so do loads and stores of their words in the I/O page.  They
+    // live here beside `halted` rather than in `named` below - `named` is
+    // built from the spec's register
     // list, and a shadow is deliberately not a register.  See isa/fructus.toml.
     //
     // ie STARTS CLEAR because the machine boots with interrupts disabled: the
@@ -220,6 +229,7 @@ export class Machine {
     this.shadow_isp = 0;
     this.shadow_lr  = 0;
     this.vector     = spec.cpu.vectors.brk;
+    this.io         = io ? spec.cpu.io : null;
     this.little = spec.cpu.endian === 'little';
     this.count  = 0;
     this.tmp    = {};      // scratch names, cleared at every instruction
@@ -268,18 +278,46 @@ export class Machine {
 
   // AN ALIGNED WORD IS ONE ACCESS, any other a byte at a time: memory is a
   // word wide, and rtl/cpu.sv takes a word whole when its address is even.
-  rd8 (a)    { this.bus += 1; this.xfer += 1; return this.mem[a & MASK]; }
-  wr8 (a, v) { this.bus += 1; this.xfer += 1; this.mem[a & MASK] = v & 0xff; }
+  rd8 (a)    { this.bus += 1; this.xfer += 1; return this.peek(a); }
+  wr8 (a, v) { this.bus += 1; this.xfer += 1; this.poke(a, v); }
   rd16(a)    {
     this.bus += 2; this.xfer += a & 1 ? 2 : 1; this.split += a & 1;
-    const lo = this.mem[a & MASK], hi = this.mem[(a + 1) & MASK];
+    const lo = this.peek(a), hi = this.peek(a + 1);
     return this.little ? lo | (hi << 8) : hi | (lo << 8);
   }
   wr16(a, v) {
     this.bus += 2; this.xfer += a & 1 ? 2 : 1; this.split += a & 1;
     const lo = v & 0xff, hi = (v >>> 8) & 0xff;
-    this.mem[a & MASK]       = this.little ? lo : hi;
-    this.mem[(a + 1) & MASK] = this.little ? hi : lo;
+    this.poke(a,     this.little ? lo : hi);
+    this.poke(a + 1, this.little ? hi : lo);
+  }
+
+  // One data byte, through the I/O page if the machine has one.  A word is two
+  // of these, so a word half in a guard traps and a word at a shadow's odd
+  // address takes its high byte and the next word's low one, as memory would.
+  peek(a) {
+    a &= MASK;
+    if (this.io && (a & ~0xff) === this.io.page) return this.ioByte(a);
+    return this.mem[a];
+  }
+  poke(a, v) {
+    a &= MASK;
+    if (this.io && (a & ~0xff) === this.io.page) return this.ioByte(a, v);
+    this.mem[a] = v & 0xff;
+  }
+  ioByte(a, v) {
+    const io = this.io, off = a - io.page;
+    if (off < io.guard_bytes || off >= 0x100 - io.guard_bytes) throw new IoGuard();
+    const name = (a & ~1) === io.shadow_sp ? 'shadow_sp'
+               : (a & ~1) === io.shadow_lr ? 'shadow_lr'
+               : (a & ~1) === io.shadow_isp ? 'shadow_isp' : null;
+    if (name === null) {
+      if (v === undefined) return this.mem[a];
+      this.mem[a] = v & 0xff; return;
+    }
+    const shift = ((a & 1) === 1) === this.little ? 8 : 0;
+    if (v === undefined) return (this[name] >>> shift) & 0xff;
+    this[name] = (this[name] & ~(0xff << shift) | ((v & 0xff) << shift)) & 0xffff;
   }
 
   // --- evaluating one instruction's semantics --------------------------------
@@ -385,10 +423,31 @@ export class Machine {
     this.wrotePc = false;
     this.tmp = {};           // no scratch name outlives its instruction
     if (trace) trace(at, d, this);
-    for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);
+    try {
+      for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);
+    } catch (e) {
+      if (!(e instanceof IoGuard)) throw e;
+      this.guardTrap(at);
+      this.cyc += 6;
+      this.count++;
+      return d;
+    }
     this.cyc += this.cost(d, at, sem, this.xfer - xfer);
     this.count++;
     return d;
+  }
+
+  // [cpu.vectors] io_guard: brk's entry, with lr the faulting instruction's
+  // own address.  Charged as an exception, six cycles, whatever the access
+  // that trapped had cost before it did.
+  guardTrap(at) {
+    const sp = this.named.sp, lr = this.named.lr;
+    this.shadow_lr = this.R[lr];
+    this.R[lr] = at;
+    this.shadow_sp = this.R[sp];
+    this.R[sp] = this.shadow_isp;
+    this.ie = false;
+    this.pc = this.spec.cpu.vectors.io_guard;
   }
 
   // The cycles from this instruction's dispatch to the next one's, on the

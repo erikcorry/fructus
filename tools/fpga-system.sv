@@ -11,7 +11,7 @@
 // bit 15.  fba and fbb are frame buffers A and B, used alike: the display
 // shows one, and the processor may reach the other.
 //
-// THE MODE is the register at 0x0441.  Bit 2 says which buffer is shown - 0
+// THE MODE is the register at 0x0480.  Bit 2 says which buffer is shown - 0
 // B, 1 A - and bits 1:0 what happens to the OTHER one:
 //
 //     0  CPU        nothing: the processor's data is its own memory
@@ -45,7 +45,11 @@
 //
 //     0x0000 - 0x03ff   ram_lo, the zero page: [rb, #imm10] with rb = 0x200
 //                       reaches all of it (isa/fructus.toml, [[reloc]])
-//     0x0400 - 0x04ff   the registers, written through into ram_lo as well
+//     0x0400 - 0x04ff   the I/O page, isa/fructus.toml's [cpu.io]: the GPU's
+//                       registers at 0x0480 - 0x04ef, docs/vga.md "Registers",
+//                       written through into ram_lo as well; the rest is
+//                       ram_lo for now, since rtl/cpu.sv neither maps the
+//                       shadows at 0x0410 nor traps on the guards yet
 //     0x0500 - 0x7fff   ram_lo
 //     0x8000 - 0xffff   ram_hi; in blit mode, data is the buffer not shown
 //
@@ -67,7 +71,7 @@
 // read path; there is none yet.
 //
 // EVERY WRITE TO THE REGISTERS AND THE FRAME BUFFERS LANDS A CYCLE LATE, out of
-// flops (`addr_w`, `wdata_w`, `we_w`), so nothing combinational joins the
+// flops (`addr_w`, `wword_w`, `we_w`), so nothing combinational joins the
 // processor's address to anything but its own two SPRAMs.  That was worth 3.9
 // MHz in the whole system; see docs/vga.md, "The whole system on a UP5K".
 //
@@ -161,13 +165,12 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     // --- the registers, a cycle after the processor's write ----------------------
     // `to_a_w`: the processor's buffer, the one not to be shown, is A - with
     // the write, and a cycle later still for blit mode's late reads.
-    // THE REGISTERS ARE WRITTEN A BYTE AT A TIME, from the lane addr's bit 0
-    // names, which is right for st8 and for any store at an odd address.  An
-    // aligned word store writes both lanes of memory in one cycle, but only
-    // its even byte reaches a register here: the register block is not
-    // finished, and what a word store to it should mean is not decided.
+    // ONE REGISTER TO A WORD, at its even address, and a register is written
+    // when that address's lane is - by an aligned `st', the whole word, or by
+    // `st8', whose byte the processor puts in both lanes, so a register of 8
+    // bits or fewer may take either.  A write to the odd byte alone is
+    // dropped.  See [cpu.io] in isa/fructus.toml for why.
     logic [15:0] addr_w; logic [15:0] wword_w; logic [3:0] mask_w; logic we_w, fb_w, to_a_w, to_a_2;
-    wire  [7:0]  wdata_w = addr_w[0] ? wword_w[15:8] : wword_w[7:0];
     always_ff @(posedge clk) begin
         addr_w <= addr; wword_w <= wdata; we_w <= we; mask_w <= mask;
         fb_w <= blit | wthru; to_a_w <= !want_a; to_a_2 <= to_a_w;
@@ -175,40 +178,42 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     // [0] front porch, [1] sync, [2] back porch, [3] pixels or lines.
     logic [3:0][9:0] h_len = {10'd640, 10'd48, 10'd96, 10'd16};
     logic [3:0][9:0] v_len = {10'd480, 10'd33, 10'd2,  10'd10};
-    logic [7:0] lo;                           // the low byte of a 16-bit write
-    logic [9:0] pat_i; logic [5:0] attr_i;    // auto-incrementing indices
+    // The arrays' addresses, each incremented by a write to its data register
+    // and wrapping at its array's size.
+    logic [4:0] pal_i; logic [9:0] pat_i; logic [5:0] attr_i;
     // The font's address: 0x6000, the 4 KB below the line tables, until
     // software says otherwise - room for 256 glyphs of 16 rows.  Its bit 15 is
     // ignored, like every pointer's.
     logic [14:0] font = 15'h6000;
-    wire rw = we_w && addr_w[15:8] == 8'h04;
-    // 0x00-0x0f: timing, a byte at a time - a block per length, since iverilog
-    // refuses a variable index into a packed array on the left.
+    // 0x0480 - 0x04ff, the GPU's half of the page and its top guard.
+    wire rw = we_w && mask_w[0] && addr_w[15:7] == 9'h009;
+    // 0x90 - 0x9e: timing - a block per length, since iverilog refuses a
+    // variable index into a packed array on the left.
     for (genvar i = 0; i < 4; i++) begin : g_len
-        wire sel = rw && addr_w[7:4] == 4'h0 && addr_w[2:1] == 2'(i);
+        wire sel = rw && addr_w[7:4] == 4'h9 && addr_w[2:1] == 2'(i);
         always @(posedge clk) if (sel) begin
-            if (!addr_w[3]) begin if (addr_w[0]) h_len[i][9:8] <= wdata_w[1:0]; else h_len[i][7:0] <= wdata_w; end
-            else            begin if (addr_w[0]) v_len[i][9:8] <= wdata_w[1:0]; else v_len[i][7:0] <= wdata_w; end
+            if (!addr_w[3]) h_len[i] <= wword_w[9:0];
+            else            v_len[i] <= wword_w[9:0];
         end
     end
+    wire pal_we  = rw && addr_w[7:0] == 8'ha2;
+    wire pat_we  = rw && addr_w[7:0] == 8'ha6;
+    wire attr_we = rw && addr_w[7:0] == 8'haa;
     always_ff @(posedge clk) if (rw) begin
-        if (addr_w[7:0] == 8'h40) lo <= wdata_w;
-        if (addr_w[7:0] == 8'h41) begin
-            want_a <= wdata_w[2];
-            {wthru, blit, copy} <= wdata_w[1:0] == 2'd1 ? {2'b00, wdata_w[2]}
-                                 : wdata_w[1:0] == 2'd2 ? 3'b010
-                                 : wdata_w[1:0] == 2'd3 ? 3'b100 : 3'b000;
+        if (addr_w[7:0] == 8'h80) begin
+            want_a <= wword_w[2];
+            {wthru, blit, copy} <= wword_w[1:0] == 2'd1 ? {2'b00, wword_w[2]}
+                                 : wword_w[1:0] == 2'd2 ? 3'b010
+                                 : wword_w[1:0] == 2'd3 ? 3'b100 : 3'b000;
         end
-        if (addr_w[7:0] == 8'h42) pat_i  <= {wdata_w[1:0], lo};
-        if (addr_w[7:0] == 8'h43) attr_i <= lo[5:0];
-        if (addr_w[7:0] == 8'h44) pat_i  <= pat_i + 10'd1;
-        if (addr_w[7:0] == 8'h45) attr_i <= attr_i + 6'd1;
-        if (addr_w[7:0] == 8'h46) font[7:0] <= wdata_w;
-        if (addr_w[7:0] == 8'h47) font[14:8] <= wdata_w[6:0];
+        if (addr_w[7:0] == 8'h82) font <= wword_w[14:0];
+        if (addr_w[7:0] == 8'ha0) pal_i  <= wword_w[4:0];
+        if (addr_w[7:0] == 8'ha4) pat_i  <= wword_w[9:0];
+        if (addr_w[7:0] == 8'ha8) attr_i <= wword_w[5:0];
+        if (pal_we)  pal_i  <= pal_i  + 5'd1;
+        if (pat_we)  pat_i  <= pat_i  + 10'd1;
+        if (attr_we) attr_i <= attr_i + 6'd1;
     end
-    wire pal_we  = rw && addr_w[7:5] == 3'b001; // 0x20-0x3f: palette
-    wire pat_we  = rw && addr_w[7:0] == 8'h44;  // high byte; low byte from 0x40
-    wire attr_we = rw && addr_w[7:0] == 8'h45;
 
     // --- the display and its two buffers ----------------------------------------
     // `on_a`: the display reads A.  `copy_on`: the buffer it does not read is
@@ -252,9 +257,9 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
 
     wire [9:0] line; wire vblank;
     video vid (.clk, .h_len, .v_len, .font,
-               .pal_we, .pal_addr(addr_w[4:0]), .pal_data(wdata_w),
-               .spr_pat_we(pat_we), .spr_pat_addr(pat_i), .spr_pat_data({wdata_w, lo}),
-               .spr_attr_we(attr_we), .spr_attr_addr(attr_i), .spr_attr_data({wdata_w, lo}),
+               .pal_we, .pal_addr(pal_i), .pal_data(wword_w[7:0]),
+               .spr_pat_we(pat_we), .spr_pat_addr(pat_i), .spr_pat_data(wword_w),
+               .spr_attr_we(attr_we), .spr_attr_addr(attr_i), .spr_attr_data(wword_w),
                .mem_rd(vrd), .mem_addr(vaddr), .mem_rdata(vdata),
                .hsync_n, .vsync_n, .red, .green, .blue, .line, .vblank);
 endmodule

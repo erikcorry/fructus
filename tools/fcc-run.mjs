@@ -11,18 +11,18 @@
 //
 // THE EXIT STATUS IS r0 AT THE HALT, which is what crt/crt0.s arranges: main's
 // return value falls into exit, exit is a halt, and abort halts with 134.  A
-// program that never halts exits 125 with the pc it was at.
+// program that never halts exits 125 with the pc it was at, and one that
+// touches a guard of the I/O page 124, naming the instruction that did.
 //
-// A byte stored to 0x0400 (`__console' in the linker script) is printed.
-// That is the whole of the I/O model; nothing in tools/sim.js knows about it,
-// it is this runner intercepting the store.
+// THE MACHINE HAS THE I/O PAGE, [cpu.io] in isa/fructus.toml: its guards
+// trap to [cpu.vectors] io_guard, and the shadows have a word each.  A byte
+// stored to its console, 0x0420 (`__console' in the linker script), is
+// printed: that is this runner intercepting the store, not tools/sim.js.
 // =============================================================================
 
 import { readFileSync } from 'node:fs';
 import { loadSpec } from './isa.js';
 import { Machine } from './sim.js';
-
-const CONSOLE = 0x0400;
 
 const args = process.argv.slice(2);
 let file = null, max = 5e7, stats = false;
@@ -36,7 +36,9 @@ if (!file) {
   process.exit(2);
 }
 
-const m = new Machine(loadSpec());
+const spec = loadSpec();
+const CONSOLE = spec.cpu.io.console;
+const m = new Machine(spec, { io: true });
 m.load(readFileSync(file));
 m.pc = 0;
 m.R[m.named.sp] = 0;      // crt0 sets it from __stack_top
@@ -47,7 +49,14 @@ m.wr8 = (a, v) => {
   else wr8(a, v);
 };
 
-const why = m.run({ max });
+// A guard trap stops the run where it enters, rather than in whatever the
+// image has at the vector, which is usually nothing: zeroes, so brk forever.
+const why = m.run({ max, stopAt: spec.cpu.vectors.io_guard });
+if (why === 'stopped') {
+  console.error(`fcc-run: I/O page guard touched by the instruction at 0x${m.R[m.named.lr].toString(16)}, `
+              + `sp was 0x${m.shadow_sp.toString(16)}`);
+  process.exit(124);
+}
 if (stats)
   console.error(`${m.count} instructions, ${m.cycles()} cycles, r0 = ${m.R[0]}`);
 if (why !== 'halted') {
