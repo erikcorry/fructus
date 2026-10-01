@@ -23,7 +23,9 @@
 //
 // Needs iverilog; skips without it.  CPU_KEEP=1 leaves the programs in
 // build/cpu-prog-N.hex and their registers in build/cpu-reg-N.hex, for
-// looking at one that fails.
+// looking at one that fails.  FRUCTUS_RTL=dir reads the RTL from dir instead
+// of rtl/, which is how tests/dontcare-check.mjs runs it with its don't-cares
+// filled.
 // =============================================================================
 
 import { loadSpec } from '../tools/isa.js';
@@ -468,8 +470,8 @@ ${BLIT_WIRING}
     end
 endmodule
 `);
-const RTL = ['rtl/cpu.sv', 'rtl/classify.sv', 'rtl/alu.sv', 'rtl/ucode.sv',
-             'rtl/lhs.sv', 'rtl/dest.sv', 'rtl/immgen.sv', 'rtl/cond.sv', 'rtl/compare.sv'];
+const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare']
+  .map((m) => `${process.env.FRUCTUS_RTL ?? 'rtl'}/${m}.sv`);
 execFileSync('iverilog', ['-g2012', '-o', 'build/cpu-tb.vvp', ...RTL, 'build/cpu-tb.sv'], { stdio: 'inherit' });
 const out = execFileSync('vvp', ['build/cpu-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
 
@@ -542,6 +544,13 @@ function check(out, blit, what) {
   });
 }
 check(out, false, '');
+// A machine that is wrong already is not tried in blit mode or under
+// interrupts: a program that never halts runs the interrupt bench's 50000
+// cycles, and when they all do that is minutes saying nothing new.
+if (bad) {
+  console.log(`FAIL  rtl/cpu.sv: ${bad} disagreements with tools/sim.js`);
+  process.exit(1);
+}
 
 // AND BUILT WITH FRUCTUS_BLIT: with the mode off it must be the same machine,
 // line for line; with it on, the memory hands every word back a second time,

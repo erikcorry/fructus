@@ -42,6 +42,9 @@ if (!have('iverilog')) {
   process.exit(0);
 }
 
+// FRUCTUS_RTL=dir reads the RTL from dir instead of rtl/: tests/dontcare-check.mjs.
+const RTL = process.env.FRUCTUS_RTL ?? 'rtl';
+
 const spec = loadSpec();
 const t = spec.optype;
 const u16 = (v) => (v >>> 0) & 0xffff;
@@ -195,7 +198,7 @@ writeFileSync('build/immgen-tb.sv', `module tb;
 endmodule
 `);
 
-execFileSync('iverilog', ['-g2012', '-o', 'build/immgen-tb.vvp', 'rtl/immgen.sv', 'build/immgen-tb.sv'],
+execFileSync('iverilog', ['-g2012', '-o', 'build/immgen-tb.vvp', `${RTL}/immgen.sv`, 'build/immgen-tb.sv'],
              { stdio: 'inherit' });
 const out = execFileSync('vvp', ['build/immgen-tb.vvp'], { encoding: 'utf8' });
 process.stdout.write(out.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
@@ -302,7 +305,7 @@ let failed = /FAIL/.test(out);
     end
 endmodule
 `);
-  execFileSync('iverilog', ['-g2012', '-o', 'build/lhs-tb.vvp', 'rtl/lhs.sv', 'build/lhs-tb.sv'],
+  execFileSync('iverilog', ['-g2012', '-o', 'build/lhs-tb.vvp', `${RTL}/lhs.sv`, 'build/lhs-tb.sv'],
                { stdio: 'inherit' });
   const o = execFileSync('vvp', ['build/lhs-tb.vvp'], { encoding: 'utf8' });
   process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
@@ -392,7 +395,7 @@ endmodule
     end
 endmodule
 `);
-  execFileSync('iverilog', ['-g2012', '-o', 'build/dest-tb.vvp', 'rtl/dest.sv', 'build/dest-tb.sv'],
+  execFileSync('iverilog', ['-g2012', '-o', 'build/dest-tb.vvp', `${RTL}/dest.sv`, 'build/dest-tb.sv'],
                { stdio: 'inherit' });
   const o = execFileSync('vvp', ['build/dest-tb.vvp'], { encoding: 'utf8' });
   process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
@@ -496,7 +499,7 @@ endmodule
 endmodule
 `;
   writeFileSync('build/alu-tb.sv', aluTb.replaceAll('\${WHICH}', ''));
-  run('alu', ['rtl/alu.sv'], 'alu-tb');
+  run('alu', [`${RTL}/alu.sv`], 'alu-tb');
 
   // AND AGAIN WITH THE SB_MAC16 THAT SYNTHESIS GETS.  Everything above runs the
   // behavioural product rtl/alu.sv gives iverilog; this runs the same vectors
@@ -508,7 +511,7 @@ endmodule
   if (cells && existsSync(cells)) {
     writeFileSync('build/alu-tb.txt', aluRows);
     writeFileSync('build/alu-tb.sv', aluTb.replaceAll('\${WHICH}', ", with yosys's SB_MAC16 model"));
-    run('alu', ['-DCPU_CELLS', cells, 'rtl/alu.sv'], 'alu-tb');
+    run('alu', ['-DCPU_CELLS', cells, `${RTL}/alu.sv`], 'alu-tb');
   } else console.log("skip  rtl/alu.sv's SB_MAC16: yosys's ice40 cell models not found");
 
   // --- the compare unit on its own: cond neg mask lhs rhs want ------------------
@@ -544,7 +547,7 @@ endmodule
     end
 endmodule
 `);
-  run('compare', ['rtl/compare.sv'], 'compare-tb');
+  run('compare', [`${RTL}/compare.sv`], 'compare-tb');
 
   // --- end to end: branch bytes -> cond.sv -> compare.sv ----------------------
   // The microcode's source for each: 0 the two-register branch (rhs = R[a],
@@ -607,7 +610,7 @@ endmodule
     end
 endmodule
 `);
-  run('cond', ['rtl/compare.sv', 'rtl/cond.sv'], 'cond-tb');
+  run('cond', [`${RTL}/compare.sv`, `${RTL}/cond.sv`], 'cond-tb');
 }
 
 process.exit(failed ? 1 : 0);

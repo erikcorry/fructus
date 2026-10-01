@@ -30,6 +30,12 @@
 // isa/fructus.toml's reserved illegal_insn vector that saved `pc` as brk's
 // does would save the garbage: it must save the ALU stage's e_pc, the
 // opcode's own address, or the empties' length must be pinned again.
+//
+// EVERY x HERE IS A COLUMN ITS ROW DOES NOT READ, and synthesis fills each one
+// as suits it.  So rtl/cpu.sv must hold whatever lands there: the dispatch
+// latches that let `two` and `ext` hold an instruction were both bugs of an x
+// that was read after all.  tests/dontcare-check.mjs fills them with zeros,
+// ones and random bits and runs the processor each way.
 // =============================================================================
 
 module classify (

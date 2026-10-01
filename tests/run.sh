@@ -131,6 +131,9 @@ done
 if node tests/rtl-check.mjs; then :; else fail=1; fi
 if node tests/cpu-check.mjs; then :; else fail=1; fi
 if node tests/blit-check.mjs; then :; else fail=1; fi
+# The same three with rtl/'s don't-cares filled - zeros, ones, random bits - as
+# synthesis may fill them: an x that something reads after all passes as x.
+if node tests/dontcare-check.mjs; then :; else fail=1; fi
 if node tests/background-check.mjs; then :; else fail=1; fi
 if node tests/foreground-check.mjs; then :; else fail=1; fi
 if node tests/video-check.mjs; then :; else fail=1; fi

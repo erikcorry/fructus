@@ -332,10 +332,11 @@ ${words.map(([mem, w], k) => {
 endmodule
 `);
 
-const RTL = ['rtl/cpu.sv', 'rtl/classify.sv', 'rtl/alu.sv', 'rtl/ucode.sv',
-             'rtl/lhs.sv', 'rtl/dest.sv', 'rtl/immgen.sv', 'rtl/cond.sv', 'rtl/compare.sv'];
-const VIDEO = ['rtl/video/video.sv', 'rtl/video/timing.sv', 'rtl/video/background.sv',
-               'rtl/video/foreground.sv', 'rtl/video/sprites.sv'];
+// FRUCTUS_RTL=dir reads the RTL from dir instead of rtl/: tests/dontcare-check.mjs.
+const DIR = process.env.FRUCTUS_RTL ?? 'rtl';
+const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare']
+  .map((m) => `${DIR}/${m}.sv`);
+const VIDEO = ['video', 'timing', 'background', 'foreground', 'sprites'].map((m) => `${DIR}/video/${m}.sv`);
 execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', '-DNO_ICE40_DEFAULT_ASSIGNMENTS', '-o', 'build/blit-tb.vvp',
   ...RTL, ...VIDEO, CELLS, 'tools/fpga-system.sv', 'build/blit-tb.sv'], { stdio: ['ignore', 'ignore', 'inherit'] });
 const out = execFileSync('vvp', ['-n', 'build/blit-tb.vvp'], { encoding: 'utf8' });

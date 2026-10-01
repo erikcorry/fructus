@@ -119,7 +119,9 @@ module alu (
         4'd11:      y = $signed(lhs) >>> amt;
         4'd12:      y = two ? half2 : unf;
         4'd14:      y = prod;
-        default:    y = 16'hxxxx;
+        // Capital X: no row that writes its result has these codes - the
+        // fast group's are folded into 4.  tests/dontcare-check.mjs.
+        default:    y = 16'hXXXX;
     endcase
 
 endmodule
