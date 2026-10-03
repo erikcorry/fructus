@@ -28,12 +28,20 @@ X=$B/cross-bin
 # include paths and the runtime library together, because on this target none
 # of the three is found by default.
 #
-# THE TWO -I FLAGS ARE BOTH REQUIRED.  GCC was configured to look for its C++
-# headers under $HOME/fructus-tools, which build-gcc.sh never installs to, so
-# xg++ finds NOTHING on its own - `xg++ -E -v' reports only gcc/include and
+# THE TWO LIBRARY PATHS ARE BOTH REQUIRED.  GCC was configured to look for its
+# C++ headers under $HOME/fructus-tools, which build-gcc.sh never installs to,
+# so xg++ finds NOTHING on its own - `xg++ -E -v' reports only gcc/include and
 # gcc/include-fixed.  The first path is the library's headers; the second holds
 # bits/c++config.h, which is generated per target, and <type_traits> does not
 # compile without it.
+#
+# AND THEY ARE -isystem, BEHIND crt/include, NOT -I.  Every -I directory is
+# searched before every -isystem one, wherever it stands on the command line,
+# and libstdc++ has a <stdlib.h> of its own.  It was built freestanding, so
+# that one declares abort, atexit and exit and nothing else: ahead of ours it
+# took malloc, atoi and qsort away from every C++ program.  Among -isystem
+# directories the order is the command line's, and $CXXC names crt/include
+# first.
 #
 # THE EMBEDDED SUBSET, as on an ESP32: no exceptions, no RTTI, no thread-safe
 # statics.
@@ -55,7 +63,7 @@ case $(basename "$0") in *g++) cxx=1 ;; esac
 for a in "$@"; do case $a in *.cc|*.cpp|*.cxx|*.C|*.c++) cxx=1 ;; esac; done
 
 L3=$B/gcc/fructus-elf/libstdc++-v3
-CXXF="-I$L3/include -I$L3/include/fructus-elf \
+CXXF="-isystem $L3/include -isystem $L3/include/fructus-elf \
       -fno-exceptions -fno-rtti -fno-threadsafe-statics"
 
 # THE LIBRARY IS ALWAYS BUILT BY THE SAME TWO COMPILERS, whatever the program
