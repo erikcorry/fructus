@@ -14,6 +14,12 @@
 // [cpu.vectors] brk: where brk and the interrupt line go.
 `define FRUCTUS_VECTOR_BRK 16'hfff8
 
+// [cpu.vectors] io_guard: where a load or store that touches a guard goes.
+`define FRUCTUS_VECTOR_IO_GUARD 16'hffcc
+
+// [cpu.io]: the page, whose first and last 16 bytes are its guards.
+`define FRUCTUS_IO_PAGE 8'h04
+
 // [cpu.io]: the shadows' words in the I/O page, which loads and stores reach.
 `define FRUCTUS_IO_SHADOW_SP  16'h0410
 `define FRUCTUS_IO_SHADOW_LR  16'h0412

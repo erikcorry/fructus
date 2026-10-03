@@ -649,17 +649,18 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
 
 // --- the I/O page: [cpu.io] -------------------------------------------------
 // A machine made with `io` has it.  Every access that touches a guard byte
-// traps to io_guard with lr on the faulting instruction itself, and leaves the
-// byte alone; the bytes just inside the guards do not trap; the shadows read
+// traps to io_guard - after the instruction, which runs out, its store landing
+// - with lr the next instruction's address, as an interrupt saves it; the
+// bytes just inside the guards do not trap; the shadows read
 // and write through their words, a byte at a time as well; and a machine
 // without `io' is plain memory there.
 {
   const io = spec.cpu.io, VEC = spec.cpu.vectors.io_guard;
   const hex = (v) => `0x${v.toString(16)}`;
   const run = (body, { mach = new Machine(spec, { io: true }), setup = () => {}, stopAt = VEC } = {}) => {
-    writeFileSync('build/_io.s', `start:\n${body}\n        halt\n`);
+    writeFileSync('build/_io.s', `start:\n${body}\nafter:  halt\n`);
     const { code, syms } = assemble('build/_io.s');
-    mach.fault = syms.get('fault');
+    mach.after = syms.get('after');
     const SP = mach.named.sp;
     mach.load(code); mach.pc = 0; mach.R[SP] = 0x1000; mach.shadow_isp = 0x3000;
     setup(mach);
@@ -676,17 +677,18 @@ const hex32 = (v) => v.toString(16).padStart(8, '0');
     ['an odd st whose low byte is the guard', io.page + io.guard_bytes - 1, 'st   r0, [r1, #0]'],
   ];
   for (const [what, addr, insn] of traps) {
-    const m = run(`        mov  r0, #0x5a5a\n        mov  r1, #${addr}\nfault:  ${insn}`);
+    const m = run(`        mov  r0, #0x5a5a\n        mov  r1, #${addr}\n        ${insn}`);
     check(`${what} traps`, m.pc === VEC, `pc=${hex(m.pc)}`);
-    check(`${what}: lr is the faulting instruction`, m.R[m.named.lr] === m.fault,
-          `lr=${hex(m.R[m.named.lr])}, want ${hex(m.fault)}`);
-    check(`${what}: the guard is untouched`, m.mem[addr] === 0, `mem[${hex(addr)}]=${hex(m.mem[addr])}`);
+    check(`${what}: lr is the instruction after`, m.R[m.named.lr] === m.after,
+          `lr=${hex(m.R[m.named.lr])}, want ${hex(m.after)}`);
+    if (/^st/.test(insn))
+      check(`${what}: the store landed`, m.mem[addr] === 0x5a, `mem[${hex(addr)}]=${hex(m.mem[addr])}`);
   }
   // A push off the bottom of the stack: the stack guard.
   {
     const m = run('        mov  sp, #0x0500\n        push r0, r3');
     check('a push below 0x0500 traps', m.pc === VEC, `pc=${hex(m.pc)}`);
-    check('and parks the sp it was pushing to', m.shadow_sp === 0x0500, `shadow_sp=${hex(m.shadow_sp)}`);
+    check('and parks the sp it pushed to', m.shadow_sp === 0x04fc, `shadow_sp=${hex(m.shadow_sp)}`);
     check('and runs on the interrupt stack', m.R[m.named.sp] === 0x3000, `sp=${hex(m.R[m.named.sp])}`);
   }
   // Just inside the guards: ordinary bytes.

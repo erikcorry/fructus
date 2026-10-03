@@ -197,10 +197,6 @@ export const BUILTIN = {
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };
 
-// A load or store that touched a guard byte of the I/O page.  step() catches
-// it and enters [cpu.vectors] io_guard.
-class IoGuard extends Error {}
-
 export class Machine {
   // `io`: the machine has the I/O page, [cpu.io] - its guards trap and its
   // shadow words are the shadows.  tools/fcc-run.mjs's machine has it; a
@@ -230,6 +226,9 @@ export class Machine {
     this.shadow_lr  = 0;
     this.vector     = spec.cpu.vectors.brk;
     this.io         = io ? spec.cpu.io : null;
+    // A load or store touched a guard byte of the I/O page: `guardHit' while
+    // it runs, `guardPending' until the next step enters io_guard.
+    this.guardHit = this.guardPending = false;
     this.little = spec.cpu.endian === 'little';
     this.count  = 0;
     this.tmp    = {};      // scratch names, cleared at every instruction
@@ -293,7 +292,7 @@ export class Machine {
   }
 
   // One data byte, through the I/O page if the machine has one.  A word is two
-  // of these, so a word half in a guard traps and a word at a shadow's odd
+  // of these, so a word half in a guard trips it and a word at a shadow's odd
   // address takes its high byte and the next word's low one, as memory would.
   peek(a) {
     a &= MASK;
@@ -307,7 +306,9 @@ export class Machine {
   }
   ioByte(a, v) {
     const io = this.io, off = a - io.page;
-    if (off < io.guard_bytes || off >= 0x100 - io.guard_bytes) throw new IoGuard();
+    // A GUARD IS MEMORY THAT TRAPS AFTERWARDS: the access is made, the
+    // instruction runs out, and the next step is the trap - rtl/cpu.sv's way.
+    if (off < io.guard_bytes || off >= 0x100 - io.guard_bytes) this.guardHit = true;
     const name = (a & ~1) === io.shadow_sp ? 'shadow_sp'
                : (a & ~1) === io.shadow_lr ? 'shadow_lr'
                : (a & ~1) === io.shadow_isp ? 'shadow_isp' : null;
@@ -417,6 +418,7 @@ export class Machine {
   // them means the address of the next instruction - which is what makes
   // `lr = pc` and `pc = pc + off` read the way the spec's summaries describe.
   step(trace = null) {
+    if (this.guardPending) return this.guardTrap(trace);
     const at = this.pc;
     const d  = decode(this.dec, this.mem, at);
     if (!d) throw new Error(`no instruction at 0x${at.toString(16)} (first byte 0x${this.mem[at].toString(16)})`);
@@ -426,32 +428,32 @@ export class Machine {
     this.wrotePc = false;
     this.tmp = {};           // no scratch name outlives its instruction
     if (trace) trace(at, d, this);
-    try {
-      for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);
-    } catch (e) {
-      if (!(e instanceof IoGuard)) throw e;
-      this.guardTrap(at);
-      this.cyc += 6;
-      this.count++;
-      return d;
-    }
+    for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);
+    if (this.guardHit) { this.guardHit = false; this.guardPending = true; }
     this.cyc += this.cost(d, at, sem, this.xfer - xfer);
     this.count++;
     return d;
   }
 
-  // [cpu.vectors] io_guard: brk's entry, with lr the faulting instruction's
-  // own address.  Charged as an exception, six cycles, whatever the access
-  // that trapped had cost before it did.
-  guardTrap(at) {
+  // [cpu.vectors] io_guard, a step of its own after the instruction that
+  // touched a guard: a brk dispatched in that instruction's successor's
+  // place, as an interrupt is, so lr is the successor's address.  Six cycles.
+  guardTrap(trace) {
+    const at = this.pc, d = decode(this.dec, [0, 0, 0], 0);     // brk, opcode 0
+    if (trace) trace(at, d, this);
     const sp = this.named.sp, lr = this.named.lr;
+    this.guardPending = false;
     this.shadow_lr = this.R[lr];
     this.R[lr] = at;
     this.shadow_sp = this.R[sp];
     this.R[sp] = this.shadow_isp;
     this.ie = false;
     this.pc = this.spec.cpu.vectors.io_guard;
+    this.cyc += 6;
+    this.count++;
+    return d;
   }
+
 
   // The cycles from this instruction's dispatch to the next one's, on the
   // pipeline in rtl/cpu.sv.  `moved` is the data accesses it made: a byte,

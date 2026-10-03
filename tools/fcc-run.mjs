@@ -12,7 +12,7 @@
 // THE EXIT STATUS IS r0 AT THE HALT, which is what crt/crt0.s arranges: main's
 // return value falls into exit, exit is a halt, and abort halts with 134.  A
 // program that never halts exits 125 with the pc it was at, and one that
-// touches a guard of the I/O page 124, naming the instruction that did.
+// touches a guard of the I/O page 124, naming the instruction after it.
 //
 // THE MACHINE HAS THE I/O PAGE, [cpu.io] in isa/fructus.toml: its guards
 // trap to [cpu.vectors] io_guard, and the shadows have a word each.  A byte
@@ -53,7 +53,7 @@ m.wr8 = (a, v) => {
 // image has at the vector, which is usually nothing: zeroes, so brk forever.
 const why = m.run({ max, stopAt: spec.cpu.vectors.io_guard });
 if (why === 'stopped') {
-  console.error(`fcc-run: I/O page guard touched by the instruction at 0x${m.R[m.named.lr].toString(16)}, `
+  console.error(`fcc-run: I/O page guard touched just before 0x${m.R[m.named.lr].toString(16)}, `
               + `sp was 0x${m.shadow_sp.toString(16)}`);
   process.exit(124);
 }

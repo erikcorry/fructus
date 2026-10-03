@@ -585,8 +585,10 @@ because it is a copy of a real machine.
 0x04f0 - 0x04ff  guard
 ```
 
-**The guards trap.** A load or store that touches one enters `io_guard`,
-0xffcc, with `lr` on the faulting instruction itself. The top guard is a stack
+**The guards trap.** A load or store that touches one runs out unchanged,
+writing the memory behind a guard as it would any other, and then the CPU
+enters `io_guard`, 0xffcc, in place of the next instruction, as an interrupt
+does, so `lr` is that next instruction's address. The top guard is a stack
 guard: the stack grows down towards it, so a push past the bottom traps. The
 bottom one catches a zero page array indexed off its end. Both are debugging
 aids, not something to recover from. The handler has a stack to report on,
@@ -609,10 +611,10 @@ are still not registers: no instruction names them.
 
 `tools/sim.js` implements all of this for a machine made with `io`, which is
 `tools/fcc-run.mjs`'s. A program that touches a guard there exits 124, naming
-the instruction. `tests/stack-guard.c` recurses into the top guard.
-`rtl/cpu.sv` maps the shadows too, and `tools/fpga-system.sv` has the GPU's
-registers. The CPU core doesn't trap on the guards yet, so on the FPGA they
-are still ordinary memory.
+the instruction after the one that did. `tests/stack-guard.c` recurses into
+the top guard. `rtl/cpu.sv` maps the shadows too and traps on the guards, for
+44 logic cells and no slowest path through any of it, and
+`tools/fpga-system.sv` has the GPU's registers.
 
 ## Status
 

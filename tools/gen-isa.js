@@ -50,6 +50,12 @@ const io = spec.cpu.io;
 const shadowWords = ['shadow_sp', 'shadow_lr', 'shadow_isp'].map((n) => io?.[n]);
 if (shadowWords.some((a) => typeof a !== 'number' || a & 1) || new Set(shadowWords).size !== 3)
   fail(`[cpu.io]'s shadow_sp, shadow_lr and shadow_isp must be three distinct even addresses`);
+// And its guards: rtl/cpu.sv compares bits 15:8 with the page and 7:4 with
+// 0 and 0xf, so the page must start on 256 bytes and each guard be 16.
+if (io.page & 0xff || io.guard_bytes !== 16)
+  fail(`[cpu.io]: the page at 0x${io.page.toString(16)} must be 256-byte aligned and its guards 16 bytes, not ${io.guard_bytes}`);
+const ioGuard = spec.cpu.vectors.io_guard;
+if (typeof ioGuard !== 'number') fail('[cpu.vectors] has no io_guard');
 if ((sp ^ lr) !== 1 || (sp & 1) !== 0)
   fail(`sp is r${sp} and lr r${lr}: rtl/cpu.sv's kreg names them as {${sp >> 1}, which}, so they must be an even register and the one after it`);
 
@@ -92,6 +98,12 @@ process.stdout.write(`// =======================================================
 
 // [cpu.vectors] brk: where brk and the interrupt line go.
 \`define FRUCTUS_VECTOR_BRK 16'h${hex(vector, 4)}
+
+// [cpu.vectors] io_guard: where a load or store that touches a guard goes.
+\`define FRUCTUS_VECTOR_IO_GUARD 16'h${hex(ioGuard, 4)}
+
+// [cpu.io]: the page, whose first and last 16 bytes are its guards.
+\`define FRUCTUS_IO_PAGE 8'h${hex(io.page >> 8, 2)}
 
 // [cpu.io]: the shadows' words in the I/O page, which loads and stores reach.
 \`define FRUCTUS_IO_SHADOW_SP  16'h${hex(io.shadow_sp, 4)}

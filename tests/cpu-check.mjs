@@ -123,6 +123,8 @@ const brs = [...branches.values()];
 const oneByte = (mnemonic) => parseInt(spec.insn.find((i) => i.mnemonic === mnemonic)
                                            .form[0].encoding.replace(/[\s_]/g, ''), 2);
 const RTI = oneByte('rti'), VECTOR = spec.cpu.vectors.brk;
+// io_guard's vector holds a halt, so a guard trap ends the program there.
+const GVECTOR = spec.cpu.vectors.io_guard;
 const excs = ['brk', 'sei', 'cli'].map((mn) => ({ op: oneByte(mn), nbytes: 1, b1s: [0] }));
 const EXC = /^(brk|rti|sei|cli)$/;
 const EXC_CYCLES = { brk: 6, rti: 6, sei: 5, cli: 5 };
@@ -198,6 +200,33 @@ const shuffle = (xs) => xs.map((x) => [rnd(), x]).sort((a, b) => a[0] - b[0]).ma
 // is run twice: as written, and a byte later behind a nop, so that every
 // branch in it lands at the other alignment too.
 const SOURCES = [
+  // THE GUARDS, [cpu.io]: each program runs into one and halts at io_guard's
+  // vector, having entered it at the instruction after.  A stack overflow,
+  // the case they are for: the second push reaches 0x04fc.
+  `       mov  r1, #0x414
+          mov  r0, #0x3000
+          st   r0, [r1, #0]
+          mov  sp, #0x504
+          push r0, r1
+          push r0, r1
+          add  r0, r0, #1
+          halt`,
+  // An odd word whose first byte is the bottom guard's last.
+  `       mov  r1, #0x40f
+          ld   r0, [r1, #0]
+          add  r0, r0, #1
+          halt`,
+  // A block load into the top guard, its pointer moved as usual.
+  `       mov  r2, #0x4fa
+          ldm  r0, r3
+          add  r0, r0, #1
+          halt`,
+  // A byte stored to the page's first byte.
+  `       mov  r1, #0x400
+          mov  r0, #0x77
+          st8  r0, [r1, #0]
+          add  r0, r0, #1
+          halt`,
   // THE SHADOWS' WORDS, [cpu.io]: stored and loaded by word, by byte, at odd
   // addresses a byte at a time, by ldm and stm, and moved by brk and rti in
   // between.  cli first, since an interrupt rewrites them, and again after
@@ -391,11 +420,13 @@ for (let p = 0; p < PROGRAMS; p++) {
     bytes = assembled[p - N_RANDOM];
   }
   const reg = Array.from({ length: 8 }, draws);
-  // The assembled programs run with the I/O page, which one of them is about;
-  // the random ones load from anywhere, guards included.
-  const io = p >= N_RANDOM;
+  // WITH THE I/O PAGE, as rtl/cpu.sv always has it: its shadows, and its
+  // guards, which a random load or store can touch as well as a program
+  // written to.
+  const io = true;
   const m = new Machine(spec, { io }).load(bytes, 0);
   m.mem[VECTOR] = RTI;
+  m.mem[GVECTOR] = HALT;
   reg.forEach((v, k) => { m.R[k] = v; });
   // WHETHER A BRANCH IS TAKEN IS NOT WHERE THE pc LANDS: a branch to the
   // very next instruction lands there either way, and the processor still
@@ -414,7 +445,9 @@ for (let p = 0; p < PROGRAMS; p++) {
   let fault = null;                    // blit mode's first stack fault: where, and memory then
   for (let guard = 0; !m.halted && guard < 1000; guard++) {
     const pc = m.pc;
-    const d = decode(dec, [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
+    // A guard trap is a brk dispatched where the next instruction would be.
+    const d = decode(dec, m.guardPending ? [0, 0, 0]
+                                         : [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
     const taken = branches.has(`${d.insn.mnemonic}/${d.form.name}@${m.mem[pc]}`) && takes(pc, d.nbytes);
     // A jump costs three cycles, or four through a register - jmp ra, call
     // ra, ret - which goes through taken_q; `call lr` goes to the next pc,
@@ -438,7 +471,7 @@ for (let p = 0; p < PROGRAMS; p++) {
     const acc = mem ? m.xfer - xfer0 : 0;
     if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, acc, memst, late, sfault, exc, cyc, R: Array.from(m.R) });
   }
-  programs.push({ bytes, reg, trace, hash: fold(m.mem), fault, io });
+  programs.push({ bytes, reg, trace, hash: fold(m.mem), fault, io, gtrap: m.pc === ((GVECTOR + 1) & 0xffff) });
   writeFileSync(`build/cpu-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
   writeFileSync(`build/cpu-reg-${p}.hex`, reg.map(hex4).join('\n') + '\n');
 }
@@ -491,6 +524,7 @@ ${BLIT_WIRING}
             // The shadows are not reset; tools/sim.js starts them at zero.
             u.shadow_sp = 0; u.shadow_lr = 0; u.shadow_isp = 0;
             mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
+            mem[${GVECTOR}] = 8'h${HALT.toString(16).padStart(2, '0')};
             rst = 0; cyc = 0;
             while (!halted && !trapped && cyc < 5000) step;
             // AND ON A LITTLE: whatever stopped the machine must have stopped
@@ -623,6 +657,7 @@ for (const f of ['build/cpu-tb.vvp', 'build/cpu-tb.sv']) rmSync(f, { force: true
 const finals = programs.map(({ bytes, reg, io }) => {
   const m = new Machine(spec, { io }).load(bytes, 0);
   m.mem[VECTOR] = RTI;
+  m.mem[GVECTOR] = HALT;
   m.ie = 1;
   reg.forEach((v, k) => { m.R[k] = v; });
   let cli = false;
@@ -681,6 +716,7 @@ ${BLIT_WIRING}
             $sformat(name, "build/cpu-prog-%0d.hex", p); $readmemh(name, mem);
             $sformat(name, "build/cpu-reg-%0d.hex", p);  $readmemh(name, regs);
             mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
+            mem[${GVECTOR}] = 8'h${HALT.toString(16).padStart(2, '0')};
             irq = 0;
             rst = 1;
             repeat (3) begin #1 clk = 1; #1 clk = 0; end
@@ -737,6 +773,11 @@ for (const blit of [false, true]) {
 for (const f of ['build/cpu-irq-tb.vvp', 'build/cpu-irq-tb.sv']) rmSync(f, { force: true });
 if (!process.env.CPU_KEEP) for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/cpu-prog-${p}.hex`, `build/cpu-reg-${p}.hex`]) rmSync(f, { force: true });
 
+// The four guard programs, each run twice, must have ended at io_guard's halt.
+const GUARD_PROGRAMS = 8;
+for (let k = 0; k < GUARD_PROGRAMS; k++)
+  if (!programs[N_RANDOM + k].gtrap) complain(`program ${N_RANDOM + k} ran into a guard and did not trap`);
+const gtraps = programs.filter((q) => q.gtrap).length;
 if (bad === 0) {
   const taken = programs.reduce((n, { trace }) => n + trace.filter((t) => t.taken).length, 0);
   const jumped = programs.reduce((n, { trace }) => n + trace.filter((t) => t.jump).length, 0);
@@ -748,7 +789,7 @@ if (bad === 0) {
             + `${all.length + brs.length + jumps.length + loads.length + stores.length} forms, `
             + `${taken} branches taken, ${jumped} jumps, ${moved} memory instructions, ${whole} a word at a time; `
             + `registers, memory, dispatch cadence and tools/sim.js's cycle counts agree, `
-            + `${cycles} cycles to halt`);
+            + `${cycles} cycles to halt; ${gtraps} guard traps, ${gtraps - GUARD_PROGRAMS} of them random`);
   console.log(`ok    rtl/cpu.sv, interrupted: ${PROGRAMS} programs under ${irqTakes} interrupts, `
             + `the last at each halt, end as tools/sim.js does without them`);
   const lateLoads = programs.reduce((n, { trace, fault }) => n + trace.slice(0, fault?.at).filter((t) => t.late).length, 0);

@@ -451,8 +451,11 @@ module cpu (
     // the classifier's row, decode, the routine - is brk's.  The only
     // difference is that the pc does not move on, so the routine saves the
     // preempted instruction's address and rti restarts it.
+    // A GUARD TRAP IS ONE TOO, and not maskable: `gq', below, says a load or
+    // store touched a guard of the I/O page, and the next dispatch is its brk.
     wire       ie_q;                           // below, with the shadows
-    wire       take = go & ie_q & irq;
+    logic      gq;
+    wire       take = go & ((ie_q & irq) | gq);
     wire [7:0] opraw = pc[0] ? (use_nxt ? nxt : hi) : lo;
     wire [7:0] op = opraw & {8{~take}};
 
@@ -927,6 +930,19 @@ module cpu (
     wire         sh_isp = mar[15:1] == SH_ISP[15:1];
     wire  [15:0] shword = sh_sp ? shadow_sp : sh_lr ? shadow_lr : shadow_isp;
     wire         shrd   = sh_sp | sh_lr | sh_isp;
+    // THE GUARDS, the I/O page's first and last 16 bytes: a load or store
+    // that touches one enters [cpu.vectors] io_guard at the next dispatch,
+    // as an interrupt would, so lr is the address after it.  The instruction
+    // itself runs out unchanged - the memory behind a guard is written, and a
+    // load takes what is there - since the trap is a diagnostic, a stack run
+    // into the page, and not something to return from.  Decoded from mar,
+    // like the shadows: a store's access is at mar, and `mldq' says mar is
+    // an address a load put out the cycle before.  `gq' is set two cycles
+    // after a load's address and one after a store's, and the next dispatch
+    // is two after the last address either way, so it is never late.
+    wire         gmar = mar[15:8] == `FRUCTUS_IO_PAGE && (mar[7:4] == 4'h0 || mar[7:4] == 4'hf);
+    logic        mldq, gent;
+    wire         ghit = gmar & (mldq | (weq & aphase));
 `ifdef FRUCTUS_BLIT
     // A late routine's capture takes its byte from mem_late, whose lane is the
     // one mlane held a cycle before.  Only the word's L bit chooses it, so an
@@ -1029,7 +1045,15 @@ module cpu (
                       : (uLQ == 3'd2) ? shadow_sp
                       : (uLQ == 3'd3) ? shadow_lr : shadow_isp;
     assign urj    = uRJ != 2'd0;
-    assign rjaddr = (urj & uRJ[0]) ? VECTOR : aq;         // aq: rti's, or a register jump's
+    localparam [15:0] GVECTOR = `FRUCTUS_VECTOR_IO_GUARD;
+    assign rjaddr = (urj & uRJ[0]) ? (gent ? GVECTOR : VECTOR) : aq;   // aq: rti's, or a register jump's
+    // The guard trap: gq from the faulting access until its brk is taken;
+    // gent through that brk's routine, which jumps to GVECTOR.
+    always_ff @(posedge clk) begin
+        mldq <= ~rst & ((mstart & ldnow) | (aphase & ~mst));
+        gq   <= ~rst & ~take & (gq | ghit);
+        gent <= ~rst & (take ? gq : gent & ~(urj & uRJ[0]));
+    end
     assign wake   = halted & ie & irq;
     always_ff @(posedge clk) begin
         if (uSH == 2'd1) shadow_sp  <= aq;

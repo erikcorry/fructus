@@ -359,12 +359,15 @@ irq3         = 0xffdc
 irq2         = 0xffd8
 irq1         = 0xffd4
 irq0         = 0xffd0
-# IMPLEMENTED IN tools/sim.js, NOT YET IN rtl/: a load or store that touches a
-# guard byte of the I/O page, [cpu.io] below.  It is not meant to return from.
-# It enters as brk does - shadows, ie clear - with lr the address OF the
-# faulting instruction, not after it, so a handler can say which one it was.
-# The access itself has not happened, though for a store moving several bytes
-# the ones before the guard may have been.
+# IMPLEMENTED: a load or store that touches a guard byte of the I/O page,
+# [cpu.io] below.  It is a diagnostic - a stack run into the page - and not
+# meant to return from.  The instruction runs out unchanged, its accesses all
+# made, the guard's included: memory behind a guard is written, and a load
+# takes what is there.  Then the trap is taken where the next instruction
+# would have been, as an interrupt is - shadows, ie clear, not maskable - so
+# lr is that next instruction's address.  Saving the faulting one's instead
+# would cost rtl/cpu.sv a 16-bit register and a mux, for a report that can
+# say "just before" anyway.
 io_guard     = 0xffcc
 
 
@@ -379,7 +382,8 @@ io_guard     = 0xffcc
 #     0x0480 - 0x04ef   the GPU's: docs/vga.md, "Registers"
 #     0x04f0 - 0x04ff   guard
 #
-# THE GUARDS TRAP, to [cpu.vectors] io_guard, on a read or a write.  The top one
+# THE GUARDS TRAP, to [cpu.vectors] io_guard, on a read or a write, after the
+# instruction that made it, which runs out as usual.  The top one
 # is a stack guard: a push past the stack's bottom lands in it.  The bottom one
 # catches a zero page variable indexed off its end, and the 16 bytes either
 # side catch a pointer into either area that is a little wrong.  It is a
