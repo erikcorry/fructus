@@ -5,6 +5,10 @@
 #include <stddef.h>
 #include <stdarg.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define EOF (-1)
 
 typedef struct __file FILE;
@@ -24,5 +28,9 @@ int fputs (const char *, FILE *);
 size_t fwrite (const void *, size_t, size_t, FILE *);
 int fputc (int, FILE *);
 int fflush (FILE *);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

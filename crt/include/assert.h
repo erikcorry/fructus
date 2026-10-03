@@ -3,6 +3,9 @@
 #ifdef NDEBUG
 #define assert(e) ((void) 0)
 #else
-extern void abort (void) __attribute__ ((noreturn));
+#ifdef __cplusplus
+extern "C"
+#endif
+void abort (void) __attribute__ ((noreturn));
 #define assert(e) ((e) ? (void) 0 : abort ())
 #endif

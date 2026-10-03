@@ -4,6 +4,10 @@
 
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
 
@@ -29,5 +33,9 @@ void free (void *);
 size_t malloc_free_bytes (void);
 
 void qsort (void *, size_t, size_t, int (*) (const void *, const void *));
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
