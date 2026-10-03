@@ -277,6 +277,36 @@
 ; sliding convention is really aimed at.
 ;
 ; ----------------------------------------------------------------------------
+; DATA LAYOUT
+; ----------------------------------------------------------------------------
+;
+; char is one byte, aligned to one.  short, int, a pointer, long, float and
+; anything holding one of them are aligned to TWO - never four, because no
+; access is wider than a word.  Memory is a word wide: an aligned word is one
+; access, and an odd one is two, a byte at a time and a cycle more.  The ISA
+; still allows the odd one with no fault, so alignment is a matter of speed
+; and not of correctness - but it is the layout's job to get it.
+;
+; STRUCTS ARE LAID OUT CONVENTIONALLY.  Fields are in declaration order, each
+; padded up to its own alignment, and the size is rounded up to the struct's
+; alignment, which is the largest of its fields':
+;
+;       struct { char a; int b; char c; }      a@0 b@2 c@4      size 6
+;       struct { int b; char a; char c; }      b@0 a@2 c@3      size 4
+;       struct { char a, b, c; }               a@0 b@1 c@2      size 3
+;
+; Nothing reorders fields - C requires declaration order - so the second
+; line is how a programmer saves the two bytes.  A struct of chars alone is
+; byte aligned and unpadded.  C++ may place a derived class's fields in the
+; tail padding of a base that is not POD, as the Itanium C++ ABI says.
+;
+; IT WAS PACKED, with no alignment anywhere, while the processor read an odd
+; word as fast as an even one.  The FPGA core made aligned words faster, and
+; a packed layout put every word after an odd number of bytes at an odd
+; address: in a struct, in an array of structs, and on a stack knocked odd by
+; a byte argument.
+;
+; ----------------------------------------------------------------------------
 ; ARGUMENTS
 ; ----------------------------------------------------------------------------
 ;
@@ -301,8 +331,8 @@
 ;   struct goes on the stack rather than straddling.  The alternative costs
 ;   the CALLEE: a struct half in registers and half on the stack has to be put
 ;   back together in the prologue, field by field, because a byte-sized field
-;   takes a whole register and only one byte of stack - so the registers and
-;   the bytes do not even line up.  Wasting up to three registers on the rare
+;   takes a whole register but only its own byte in the struct's memory - so
+;   the registers and the bytes do not even line up.  Wasting up to three registers on the rare
 ;   struct that lands on the boundary is the cheaper end of that trade.
 ;
 ;   NO BACKFILLING.  Once an argument has gone to the stack, every later
@@ -313,9 +343,8 @@
 ; 8-BIT ARGUMENTS
 ; ----------------------------------------------------------------------------
 ;
-; A byte-sized argument takes a WHOLE REGISTER but only ONE BYTE OF STACK.  The
-; two halves of that rule are asymmetric on purpose, and each is the cheap
-; choice for where the value is:
+; A byte-sized argument takes a WHOLE REGISTER, or a WHOLE WORD OF STACK, and
+; in both the rule is the same:
 ;
 ;   IN A REGISTER the value is in the low 8 bits and THE HIGH 8 BITS ARE
 ;   UNSPECIFIED.  The caller is not required to clear them, sign extend them, or
@@ -329,12 +358,19 @@
 ;   costs two bytes in the functions that care and nothing anywhere else; the
 ;   other way round, every caller pays whether the callee looks or not.
 ;
-;   ON THE STACK the value is one byte and IS NOT PADDED.  `push8` pushes one
-;   byte and moves sp by one, so an argument after a byte argument sits at an
-;   ODD offset, and so does everything after it.  That is fine: the ISA allows
-;   unaligned 16-bit access with no fault and no penalty, so a misaligned stack
-;   slot costs literally nothing to read.  Packing is the free option and
-;   padding would waste a byte per char in the one place where bytes are scarce.
+;   ON THE STACK the value is in the LOW BYTE of a word slot - the lower
+;   address, since memory is little endian - and the high byte is unspecified
+;   in the same way.  So the push is the ordinary word push of the register
+;   that holds it, one instruction:
+;
+;       push    r5              ; a byte argument on the stack  2 bytes
+;
+;   and sp stays even, so every slot after it is aligned.  It was one unpadded
+;   byte, saving a byte of stack per char at the price of an odd offset for
+;   everything after it, and, once push8 was gone, an `add` and an `st8` to
+;   push it.  A whole STRUCT on the stack is its own layout, padded at the end
+;   to a whole number of words: struct { char a, b, c, d, e; } takes six
+;   bytes, the five chars packed in the first five.
 ;
 ; RETURNING a byte works the same way: the value is in the low 8 bits of r0 and
 ; the high bits are unspecified, so a caller that needs 16 clean bits extends it
@@ -403,10 +439,10 @@ fat_bump:
 ; offset.  A function with a variable sized frame therefore cannot exist, which
 ; is the price of the register.
 ;
-; NO ALIGNMENT REQUIREMENT ANYWHERE.  sp may be odd, and after a single `push8`
-; it is.  The ISA allows unaligned 16-bit accesses with no fault and no penalty
-; visible to software, so nothing has to be padded and nothing has to be
-; realigned before a call.
+; sp IS ALWAYS EVEN.  Every push is a whole number of words, a byte argument
+; included, and every frame is rounded up to a word, so every 16-bit slot is
+; aligned and nothing has to be realigned before a call.  A function may
+; assume sp is even on entry and must leave it even at every call.
 ;
 ; The caller pushes stack arguments in REVERSE order, last argument first, so
 ; that the first stack argument ends up nearest sp.  This is not a style choice;
@@ -714,15 +750,12 @@ slot_examples:
         ld      r0, [sp, #8]            ; slot 4                         2
         ld      r0, [sp, #10]           ; slot 5 - imm10 form            3
         st      r0, [sp, #4]            ; stores have the same shape     2
-        ld      r0, [sp, #3]            ; an ODD offset costs the same   2
-        ld8     r0, [sp, #1]            ; a byte argument                2
+        ld8     r0, [sp, #2]            ; a byte argument, low byte      2
 
 ; SO ORDER THE FRAME BY TRAFFIC.  The five hottest 16-bit locals belong in the
 ; first five slots; everything after that pays a byte per access.  The imm3
 ; table was chosen for tagged-pointer field access rather than for stack frames,
-; and it happens to serve both - and because it holds odd values too, a frame
-; knocked out of alignment by a byte argument is no more expensive than one that
-; is not.
+; and it happens to serve both.
 
 
 ; ============================================================================
@@ -762,11 +795,11 @@ vararg_example:
 ; A VARIADIC FUNCTION COSTS THE SAME AS ANY OTHER.  Three bytes of prologue and
 ; epilogue, and the two-byte add that materialises va_list.
 ;
-; NO UNNAMED ARGUMENT IS EVER 8 BITS, so va_arg never has to deal with the
-; unpadded byte slot.  C's default argument promotions widen char to int before
-; an unnamed argument is passed, and int is 16 bits here.  A byte on the stack
-; is therefore always a NAMED argument that overflowed the registers, whose size
-; the callee knows from its prototype.
+; NO UNNAMED ARGUMENT IS EVER 8 BITS.  C's default argument promotions widen
+; char to int before an unnamed argument is passed, and int is 16 bits here.  A
+; byte on the stack is therefore always a NAMED argument that overflowed the
+; registers - and its slot is a word anyway, so va_arg steps a word at a time
+; whatever it reads.
 ;
 ; va_arg FOR A 32-BIT TYPE reads two consecutive words and finds the low half
 ; first, because the caller pushed the high half first and it landed higher.

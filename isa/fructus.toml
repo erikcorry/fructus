@@ -2911,13 +2911,11 @@ semantics = "base = sp; M16[base - 2] = R[a]; M16[base - 4] = R[b]; M16[base - 6
 # are gone; the four opcodes they held are the three-register stm and ldm
 # below, which could not have existed without them.
 #
-# WHAT IT COSTS.  The ABI still passes a byte argument on the stack UNPADDED -
-# see isa/abi.s - so a caller that puts one there writes the two-instruction
-# form instead, `add sp, sp, #-1` and then `st8`.  That is four bytes where
-# `push8` was two.  It is a rare shape: it needs a function with more arguments
-# than the registers carry AND a byte among the ones that spill, and a compiler
-# usually sinks the whole frame's adjustment into one `add` and fills the slots
-# with stores anyway.  Block moves are common and that trade is the point.
+# WHAT IT COSTS: NOTHING NOW.  While the ABI passed a byte argument on the
+# stack unpadded, a caller wrote `add sp, sp, #-1` and then `st8`, four bytes
+# where `push8` was two.  The ABI now gives a byte argument a word slot with
+# the value in its low byte - see isa/abi.s - so the word `push` of the
+# register holding it is the byte push, and sp stays even.
 #
 # `pop8` was rarer still - nothing in libc, nothing in libgcc, and no pattern
 # in the compiler emitted it.

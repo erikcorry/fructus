@@ -13,10 +13,15 @@
 ;                                    the stack - it is one value for the no-
 ;                                    splitting rule, so r3 goes unused
 ;   takefive  {char a, b, c, d, e}   five fields is five registers, so all of
-;                                    it goes on the stack, one byte a field
+;                                    it goes on the stack, one byte a field,
+;                                    in a six-byte slot so sp stays even
 ;   make_three  () -> {int a, b, c}  returned in r0, r1 and r2
 ;   make_four   () -> {char a, b, c, d}
 ;                                    returned in r0-r3, a register a field
+;   byte_on_stack (int, int, int, int, char, int)
+;                                    r0-r3, then the char in a word slot with
+;                                    garbage in its high byte, and the int
+;                                    after it at sp + 2
 ;
 ; THE LAST TWO PUT SENTINELS IN r2 AND r3 before the call.  A callee that
 ; takes no arguments but returns into r2 or r3 must not preserve them, and
@@ -128,10 +133,9 @@ main:
 
         ; takefive ({1, 2, 3, 4, 5}) = 15, all of it on the stack
         mov     r4, #10
-        ; Five unpadded bytes.  With no `push8` in the machine the caller makes
-        ; the room once and fills the slots with stores, which is what the
-        ; compiler does too - and the layout it has to produce is unchanged.
-        add     sp, sp, #-5             ; room for five bytes of argument
+        ; Five bytes, packed as the struct is, in a slot rounded up to six so
+        ; that sp stays even.  The sixth byte is padding.
+        add     sp, sp, #-6             ; room for five bytes of argument
         mov     r5, #5
         st8     r5, [sp, #4]            ; e, at the highest address
         mov     r5, #4
@@ -143,7 +147,7 @@ main:
         mov     r5, #1
         st8     r5, [sp, #0]            ; a, at sp
         call    takefive
-        add     sp, sp, #5
+        add     sp, sp, #6
         mov     r5, #15
         br      eq, r0, r5, .ok10
         jmp     fail
@@ -197,6 +201,24 @@ main:
         br      eq, r3, r5, .ok17
         jmp     fail
 .ok17:
+
+        ; byte_on_stack (1, 2, 3, 4, 5, 6) = 6510.  The char is pushed as a
+        ; word, the push the compiler uses, with 0x5a in the high byte.
+        mov     r4, #18
+        mov     r5, #6                  ; f, at sp + 2
+        push    r5
+        mov     r5, #0x5a05             ; e = 5, and garbage above it
+        push    r5
+        mov     r0, #1
+        mov     r1, #2
+        mov     r2, #3
+        mov     r3, #4
+        call    byte_on_stack
+        add     sp, sp, #4
+        mov     r5, #6510
+        br      eq, r0, r5, .ok18
+        jmp     fail
+.ok18:
 
         mov     r0, #0
         pop     lr

@@ -6,6 +6,25 @@
    assigned independently, so a field of any size up to 16 bits takes a whole
    register - and the limit is four REGISTERS, not eight bytes.  */
 
+/* The layout, isa/abi.s "data layout": chars aligned to one, everything
+   wider to two, fields in declaration order and padded to their alignment,
+   and the size rounded to the struct's.  */
+struct gap { char a; int b; char c; };
+struct tight { int b; char a; char c; };
+struct bytes3 { char a, b, c; };
+struct with_long { char a; long b; };
+_Static_assert (sizeof (struct gap) == 6, "char, int, char is six bytes");
+_Static_assert (__builtin_offsetof (struct gap, b) == 2, "int after a char at 2");
+_Static_assert (__builtin_offsetof (struct gap, c) == 4, "then a char at 4");
+_Static_assert (sizeof (struct tight) == 4, "int, char, char packs into four");
+_Static_assert (sizeof (struct bytes3) == 3 && _Alignof (struct bytes3) == 1,
+		"chars alone are byte aligned and unpadded");
+_Static_assert (_Alignof (long) == 2 && __builtin_offsetof (struct with_long, b) == 2,
+		"a long is aligned to two, never four");
+_Static_assert (_Alignof (int) == 2 && _Alignof (void *) == 2
+		&& _Alignof (float) == 2 && _Alignof (long long) == 2,
+		"every wider type is aligned to two");
+
 struct two_chars { char a, b; };
 struct pair { int a, b; };
 struct mixed { int a; long b; };
@@ -92,4 +111,13 @@ make_four (void)
   struct four_chars t;
   t = s;
   return t;
+}
+
+/* Four ints fill r0-r3, so the char goes on the stack in a word slot, value
+   in the low byte, and the int after it is at an even offset.  The caller
+   leaves garbage in the slot's high byte, which must not be looked at.  */
+int
+byte_on_stack (int a, int b, int c, int d, char e, int f)
+{
+  return a + b + c + d + e * 100 + f * 1000;
 }
