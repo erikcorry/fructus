@@ -278,9 +278,10 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
 
     # --- tagged pointers ------------------------------------------------------
     # tests/tag1.s writes `.short tag1(sym)' against tests/tag1.c's objects, in
-    # an aligned table and at odd addresses in a byte stream; R_FRUCTUS_16_TAG1
-    # must place each address plus one.  Then the two things that must fail: a
-    # tag on an odd address is a link error, and on an odd constant gas's.
+    # an aligned table and at odd addresses in a byte stream, and loads two with
+    # `mov rd, #tag1(sym)'; R_FRUCTUS_16_TAG1 must place each address plus one.
+    # Then the things that must fail: a tag on an odd address is a link error,
+    # on an odd constant gas's, and a tagged jump or call target is refused.
     for o in -O2 -O0; do
         if tools/fcc $o tests/tag1.c tests/tag1.s -o build/_tag 2>build/_err \
            && node tools/fcc-run.mjs build/_tag.bin; then
@@ -300,12 +301,14 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
         printf 'FAIL  a tagged pointer to an odd address failed, but not for that\n'
         head -5 build/_err; fail=1
     fi
-    printf '\t.short tag1(0x1001)\n' > build/_tagodd.s
-    if build/cross-bin/fructus-elf-as -o build/_tagodd.o build/_tagodd.s 2>/dev/null; then
-        printf 'FAIL  gas tagged an odd constant\n'; fail=1
-    else
-        printf 'ok    gas refuses a tag on an odd constant\n'
-    fi
+    for bad in '.short tag1(0x1001)' 'mov r0, #tag1(0x1001)' 'jmp tag1(x)' 'call tag1(x)'; do
+        printf '\t%s\nx:\tret\n' "$bad" > build/_tagodd.s
+        if build/cross-bin/fructus-elf-as -o build/_tagodd.o build/_tagodd.s 2>/dev/null; then
+            printf 'FAIL  gas took `%s'"'"'\n' "$bad"; fail=1
+        else
+            printf 'ok    gas refuses `%s'"'"'\n' "$bad"
+        fi
+    done
     rm -f build/_tag build/_tag.bin build/_tagodd.s build/_tagodd.o
 
     # --- gas pads code with nop, not brk ------------------------------------

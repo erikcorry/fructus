@@ -2,8 +2,8 @@
    a 2-aligned object plus one, in a datum that may sit at any address.  The
    objects are here, laid out by the compiler; the tagged pointers to them are
    in the assembly, written `.short tag1(sym)', some in an aligned table and
-   some in a byte stream where they land odd.  main returns 0, or the number
-   of the first check that failed.  */
+   some in a byte stream where they land odd, and `mov rd, #tag1(sym)' in
+   code.  main returns 0, or the number of the first check that failed.  */
 
 struct obj { int a, b; };
 
@@ -12,6 +12,8 @@ struct obj o2[3];
 
 extern const unsigned short table[];
 extern const unsigned char stream[];
+extern unsigned tagged_o1 (void);
+extern unsigned tagged_o2_1 (void);
 
 /* A bytecode stream is read a byte at a time: its words are not aligned.  */
 static unsigned
@@ -35,5 +37,9 @@ main (void)
     return 5;
   if (rd16 (stream + 3) != (unsigned) &o2[1] + 1)
     return 6;
+  if (tagged_o1 () != (unsigned) &o1 + 1)
+    return 7;
+  if (tagged_o2_1 () != (unsigned) &o2[1] + 1)
+    return 8;
   return 0;
 }

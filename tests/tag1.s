@@ -15,3 +15,14 @@ stream:
         .byte   0x42
         .short  tag1(o1)
         .short  tag1(o2 + 4)
+
+; And as immediates, which is how generated code loads one: a symbol takes
+; the three-byte mov, whose 16-bit field the same relocation fills.
+        .text
+        .globl  tagged_o1, tagged_o2_1
+tagged_o1:
+        mov     r0, #tag1(o1)
+        ret
+tagged_o2_1:
+        mov     r0, #tag1(o2 + 4)
+        ret

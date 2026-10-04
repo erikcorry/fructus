@@ -518,13 +518,17 @@ used_by = "#zp(sym) in any imm10 field: ld, st, ld8, st8, and the ALU forms"
 
 # A TAGGED POINTER is the fifth: the address of a heap object, which is
 # 2-aligned, plus `tag' in the free low bit - the TAG = 1 of tests/data.s.  It
-# is DATA, never an instruction field: a static object's fields, an array, or
-# a bytecode stream, which a compiler emits as a gas file for the linker to
-# place.  So the datum may be at any address, odd or even, and is written
-# byte by byte.
+# goes in DATA - a static object's fields, an array, or a bytecode stream,
+# which a compiler emits as a gas file for the linker to place - where the
+# datum may be at any address, odd or even, and is written byte by byte.  And
+# in CODE, as a 16-bit immediate, which is how generated code loads one:
 #
 #     .short  tag1(sym)                ; R_FRUCTUS_16_TAG1 against sym
+#     mov     r0, #tag1(sym)           ; the same, in mov's imm16 field
 #
+# Every relocatable instruction field is whole bytes stored low byte first,
+# which gen-asm.js asserts, so the one relocation serves both.  Only an
+# immediate takes it: a tagged jmp or call target would be an odd address.
 # The linker places S + A + tag and refuses an odd S + A, which no object
 # has: a tag on it would name the wrong thing.
 [[reloc]]
@@ -533,7 +537,7 @@ bits   = 16
 pcrel  = false
 signed = false
 tag    = 1
-used_by = "tag1(sym) in .short, .2byte and .hword - static objects and bytecode"
+used_by = "tag1(sym) in .short, .2byte and .hword, and #tag1(sym) in mov rd, #imm16"
 
 
 # =============================================================================
