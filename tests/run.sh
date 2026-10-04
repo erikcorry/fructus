@@ -311,6 +311,19 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     done
     rm -f build/_tag build/_tag.bin build/_tagodd.s build/_tagodd.o
 
+    # --- a program moves the boundary between the heap and itself -----------
+    # tests/heap-end.s defines __heap_end, which ld/fructus-sim.ld's default
+    # gives way to: the program goes at 0x6000 and malloc must get exactly the
+    # 75 pages below it, which tests/malloc.c checks against __heap_pages.
+    if tools/fcc -O2 tests/malloc.c tests/heap-end.s -o build/_heap 2>build/_err \
+       && node tools/fcc-run.mjs build/_heap.bin \
+       && build/cross-bin/fructus-elf-readelf -s build/_heap | grep -q ' 00006000 .* _start$'; then
+        printf 'ok    a program'"'"'s own __heap_end moves it to 0x6000, with 75 pages of heap\n'
+    else
+        printf 'FAIL  a program'"'"'s own __heap_end did not move it\n'; head -5 build/_err; fail=1
+    fi
+    rm -f build/_heap build/_heap.bin
+
     # --- gas pads code with nop, not brk ------------------------------------
     # gas's default fill for a .p2align in code is 0x00, which is brk, so a
     # loop that -falign-loops padded and the program fell into trapped.

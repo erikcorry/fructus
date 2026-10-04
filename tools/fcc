@@ -85,11 +85,20 @@ else
     CC="$CCC"
 fi
 
+# A LINKER SCRIPT OF THE CALLER'S replaces ld/fructus-sim.ld rather than
+# joining it: two -T's would be two SECTIONS commands placing everything
+# twice.  -T, -Wl,-T or --script picks another layout; a program that only
+# wants a different split between heap and code moves __heap_end instead -
+# see ld/fructus-sim.ld.
 out=a.out
 prev=
+script="-T $root/ld/fructus-sim.ld"
 for a in "$@"; do
     [ "$prev" = -o ] && out=$a
-    case $a in -c|-S|-E) exec $CC "$@" ;; esac
+    case $a in
+        -c|-S|-E) exec $CC "$@" ;;
+        -T*|-Wl,-T*|-Wl,--script*|--script*) script= ;;
+    esac
     prev=$a
 done
 
@@ -164,7 +173,7 @@ fi
 exec 9>&-
 
 # The image is RAM, code and data alike, so the one segment is RWX on purpose.
-$CC -nostdlib -T $root/ld/fructus-sim.ld -Wl,--no-warn-rwx-segments,--gc-sections \
+$CC -nostdlib $script -Wl,--no-warn-rwx-segments,--gc-sections \
     $B/crt/crt0.o "$@" \
     -Wl,--start-group $lib $CXXLIB -L$B/gcc/fructus-elf/libgcc -lgcc -Wl,--end-group
 $X/fructus-elf-objcopy -O binary $out $out.bin
