@@ -124,6 +124,20 @@ for (const [name, t] of Object.entries(types)) {
       }
       continue;
     }
+    if (r.tag !== undefined) {
+      // The tagged pointer's: a 16-bit absolute datum, with its tag written
+      // into bfd by hand.
+      if (r.bits !== 16 || r.signed || r.pcrel)
+        err(`reloc ${r.name}: a tagged relocation must be the unsigned absolute 16`);
+      const h = join(root, 'vendor/binutils-gdb/include/elf/fructus.h');
+      if (existsSync(h)) {
+        const m = /#define\s+FRUCTUS_TAG1\s+(0x[0-9a-f]+|\d+)/i.exec(readFileSync(h, 'utf8'));
+        if (!m || Number(m[1]) !== r.tag)
+          err(`reloc ${r.name}: tag ${r.tag}, but include/elf/fructus.h's `
+            + `FRUCTUS_TAG1 is ${m ? m[1] : 'missing'}`);
+      }
+      continue;
+    }
     if (![8, 16].includes(r.bits))
       err(`reloc ${r.name}: ${r.bits} bits, but every Fructus field is 8 or 16`);
     if (r.pcrel && !r.signed)

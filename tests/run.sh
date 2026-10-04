@@ -276,6 +276,38 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     fi
     rm -f build/_zp build/_zp.bin build/_zpbig.s build/_zpbare.s build/_zpbare.o
 
+    # --- tagged pointers ------------------------------------------------------
+    # tests/tag1.s writes `.short tag1(sym)' against tests/tag1.c's objects, in
+    # an aligned table and at odd addresses in a byte stream; R_FRUCTUS_16_TAG1
+    # must place each address plus one.  Then the two things that must fail: a
+    # tag on an odd address is a link error, and on an odd constant gas's.
+    for o in -O2 -O0; do
+        if tools/fcc $o tests/tag1.c tests/tag1.s -o build/_tag 2>build/_err \
+           && node tools/fcc-run.mjs build/_tag.bin; then
+            printf 'ok    tagged pointers at %s\n' "$o"
+        else
+            printf 'FAIL  tagged pointers at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    printf '\t.section .rodata\n\t.globl table, stream\ntable:\nstream:\n\t.short tag1(o1 + 1)\n' \
+        > build/_tagodd.s
+    if tools/fcc tests/tag1.c build/_tagodd.s -o build/_tag 2>build/_err; then
+        printf 'FAIL  a tagged pointer to an odd address linked\n'; fail=1
+    elif grep -q 'tagged pointer to an odd address' build/_err; then
+        printf 'ok    a tagged pointer to an odd address is a link error\n'
+    else
+        printf 'FAIL  a tagged pointer to an odd address failed, but not for that\n'
+        head -5 build/_err; fail=1
+    fi
+    printf '\t.short tag1(0x1001)\n' > build/_tagodd.s
+    if build/cross-bin/fructus-elf-as -o build/_tagodd.o build/_tagodd.s 2>/dev/null; then
+        printf 'FAIL  gas tagged an odd constant\n'; fail=1
+    else
+        printf 'ok    gas refuses a tag on an odd constant\n'
+    fi
+    rm -f build/_tag build/_tag.bin build/_tagodd.s build/_tagodd.o
+
     # --- gas pads code with nop, not brk ------------------------------------
     # gas's default fill for a .p2align in code is 0x00, which is brk, so a
     # loop that -falign-loops padded and the program fell into trapped.
