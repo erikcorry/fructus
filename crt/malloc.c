@@ -28,11 +28,14 @@
    page, so they are real 16-bit pointers - which is why a free block needs
    six bytes and no allocation is smaller than four.
 
-   The heap lives in .bss and is correct when zeroed: an empty freelist is a
-   null pointer, and page status 0 is PAGE_FREE.  There is no initialisation
-   to call and no first-call test on the hot path.  The one thing that must be
-   arranged is that the page array is 256-byte aligned, which is what makes a
-   pointer's low byte tell page allocations apart from small ones.
+   The heap's bookkeeping lives in .bss and is correct when zeroed: an empty
+   freelist is a null pointer, and page status 0 is PAGE_FREE.  There is no
+   initialisation to call and no first-call test on the hot path.  The memory
+   it hands out is the linker script's, and the one thing that must be
+   arranged is that it starts at a 256-byte boundary, which is what makes a
+   pointer's low byte tell page allocations apart from small ones - a small
+   allocation's payload is at least four bytes into its page.  The script
+   asserts it.
 
    Every entry point loads the address of the heap and passes it down.  That
    is a deliberate choice of shape: reaching a global directly costs a 3-byte
@@ -50,10 +53,18 @@ void abort (void) __attribute__ ((noreturn));
 #define PAGE_SHIFT 8
 #define PAGE_SIZE (1 << PAGE_SHIFT)
 
-/* Eight kilobytes.  It costs nothing in the image - .bss is not loaded - but
-   it is address space, so it is the one number to turn when a program wants
-   more heap or a smaller machine wants less.  */
-#define HEAP_PAGES 32
+/* THE HEAP IS THE LINKER SCRIPT'S, not an array here: ld/fructus-sim.ld puts
+   it between the top of the stack and 0x8000, at a page boundary, and says
+   how many pages that is in __heap_pages - an absolute symbol, so its address
+   is the number.  A bigger stack is a smaller heap and nothing here changes.
+   HEAP_PAGES_MAX sizes the page table, and the script asserts the heap is no
+   bigger: it is the largest heap there can be, from the bottom of the stack
+   at 0x0500 to 0x8000.  */
+extern unsigned char __heap_start[];
+extern unsigned char __heap_pages[];
+#define heap_memory __heap_start
+#define HEAP_PAGES ((unsigned) __heap_pages)
+#define HEAP_PAGES_MAX ((0x8000 - 0x0500) >> PAGE_SHIFT)
 
 /* All individual memory areas in a page start with this.  SIZE is the
    distance to the next one and LEFT_SIZE the distance back to the previous
@@ -117,16 +128,12 @@ typedef struct heap
   /* One entry per page, and one more: a scan for the end of a run stops at
      anything that is not PAGE_CONTINUED, and the zero left there by .bss is
      not PAGE_CONTINUED.  */
-  unsigned char pages[HEAP_PAGES + 1];
+  unsigned char pages[HEAP_PAGES_MAX + 1];
 } heap_t;
 
-static heap_t the_heap;
-
-/* The alignment is load-bearing, not decoration: free () tells a page
-   allocation from a small one by its low byte, which works because a small
-   allocation's payload is at least four bytes into its page.  */
-static unsigned char heap_memory[HEAP_PAGES * PAGE_SIZE]
-  __attribute__ ((aligned (PAGE_SIZE)));
+/* IN THE ZERO PAGE, zp_lo, since it is static and small: 210 bytes, most of
+   them the page table.  zp_hi is left to the program - see ld/fructus-sim.ld.  */
+static heap_t the_heap __attribute__ ((zp));
 
 /* ---- headers ------------------------------------------------------------ */
 

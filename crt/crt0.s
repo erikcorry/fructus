@@ -9,9 +9,9 @@
 ;
 ; THE CPU STARTS AT 0, which is the zero page now, so all that goes there is
 ; a jump to _start: three bytes of zp_lo, which also keep every object off
-; address 0.  The program itself is linked at __stack_top, with the stack
-; below it growing down towards the I/O page at 0x0400 and its top guard,
-; 0x04f0-0x04ff, which tools/fcc-run.mjs traps.
+; address 0.  The stack grows down from __stack_top towards the I/O page at
+; 0x0400 and its top guard, 0x04f0-0x04ff, which tools/fcc-run.mjs traps; the
+; heap is above it and the program at 0x8000.
 ;
 ; THE EXIT STATUS IS r0 AT THE `halt'.  exit() is therefore nothing but a
 ; halt: its argument is already in r0.  abort() halts with 134, which is what

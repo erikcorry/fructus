@@ -4,8 +4,9 @@
  *   0x0003 - 0x01ff   zp_lo   .zplo, .zplo.bss      [rb, #-512..-1]
  *   0x0200 - 0x03ff   zp_hi   .zphi, .zphi.bss      [rb, #0..511]
  *   0x0400 - 0x04ff   the I/O page, [cpu.io]; 0x0420 is the console
- *   0x0500 - top      the stack, growing down towards the I/O page
- *   top    - 0xffff   code, then data, loaded as one flat image
+ *   0x0500 - 0x14ff   the stack, 4K, growing down towards the I/O page
+ *   0x1500 - 0x7fff   the heap, crt/malloc.c's: 107 pages of 256 bytes
+ *   0x8000 - 0xffff   code, then data, loaded as one flat image
  *
  * THE ZERO PAGE is reached as [rb, #zp(x)] with rb holding 0x200, the
  * R_FRUCTUS_ZP10 relocation; see isa/fructus.toml.  A program chooses its
@@ -23,10 +24,17 @@
  * The .bss halves go into the image with the data, as zeros: the simulator
  * loads it from 0 whatever, so keeping them out of it would save nothing.
  *
- * THE TOP OF THE STACK is the loader's to choose: the program is linked at
- * __stack_top, so `-Wl,--defsym=__stack_top=0x4000' buys a bigger stack with
- * address space the program no longer has.  .bss is not in the image; the
- * simulator's memory starts zeroed.
+ * THE HEAP IS WHAT IS LEFT BELOW 0x8000, from the top of the stack up:
+ * __heap_start, __heap_end and __heap_pages, its size in 256-byte pages,
+ * which crt/malloc.c reads as the address of a symbol.  Its start must be a
+ * page boundary, because malloc tells a page allocation from a small one by
+ * its low byte.  `-Wl,--defsym=__stack_top=0x2000' buys a bigger stack out
+ * of the heap; nothing else moves.  malloc's own bookkeeping is a static in
+ * zp_lo.  The heap is not in the image and needs
+ * no clearing - malloc writes every header it reads.
+ *
+ * The program has the top 32K.  .bss is not in the image; the simulator's
+ * memory starts zeroed.
  */
 
 OUTPUT_FORMAT("elf32-fructus")
@@ -39,7 +47,10 @@ __shadow_sp  = 0x0410;
 __shadow_lr  = 0x0412;
 __shadow_isp = 0x0414;
 __console    = 0x0420;
-__stack_top  = DEFINED(__stack_top) ? __stack_top : 0x2000;
+__stack_top  = DEFINED(__stack_top) ? __stack_top : 0x1500;
+__heap_start = __stack_top;
+__heap_end   = 0x8000;
+__heap_pages = (__heap_end - __heap_start) / 256;
 
 SECTIONS
 {
@@ -52,8 +63,11 @@ SECTIONS
   ASSERT(. <= 0x0400, "zp_hi overflows into the I/O page (0x0400)")
 
   ASSERT(__stack_top >= 0x0500, "__stack_top is below the I/O page")
+  ASSERT(__heap_start % 256 == 0, "__stack_top, where the heap starts, is not a 256-byte page boundary")
+  ASSERT(__heap_start < __heap_end, "__stack_top leaves no heap below 0x8000")
+  ASSERT(__heap_pages <= 123, "the heap has more pages than crt/malloc.c's table")
 
-  .text __stack_top : {
+  .text 0x8000 : {
     *(.text.startup) *(.text) *(.text.*)
   }
 
@@ -65,6 +79,7 @@ SECTIONS
     *(.bss) *(.bss.*) *(COMMON)
     __bss_end = .;
   }
+  ASSERT(. <= 0x10000, "the program does not fit in its 32K at 0x8000")
 
   /DISCARD/ : { *(.comment) *(.note.*) }
 }

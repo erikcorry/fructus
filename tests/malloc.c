@@ -16,12 +16,15 @@
 #include <string.h>
 
 #define SLOTS 16
-#define MAX_PAGES 64
+#define MAX_PAGES 128
 
 static char *slot[SLOTS];
 static unsigned len[SLOTS];
 static unsigned char mark[SLOTS];
 static char *page[MAX_PAGES];
+
+/* ld/fructus-sim.ld's: the heap's size in pages, as the address of a symbol.  */
+extern char __heap_pages[];
 
 /* A 16-bit xorshift, so that the sequence is the same on every run and a
    failure can be looked at again.  */
@@ -259,6 +262,8 @@ main (void)
     }
   if (n == 0)
     return 35;
+  if (n != (unsigned) __heap_pages)
+    return 38;			/* the heap is the linker script's, all of it */
   for (unsigned i = 0; i < n; i++)
     for (unsigned j = 0; j < 200; j++)
       if ((unsigned char) page[i][j] != i + 1)

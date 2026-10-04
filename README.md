@@ -565,9 +565,10 @@ of the function, so the register allocator decides whether to keep it or to
 rematerialize the `mov` where it is used.
 
 On the simulator, `ld/fructus-sim.ld` keeps 0x0000–0x0002 for a `jmp _start`,
-since the CPU starts at 0, and links the program at `__stack_top`, 0x2000
-unless `-Wl,--defsym=__stack_top=...` says otherwise. The console is at
-0x0420. The `jmp` also keeps every object off address 0, which is NULL;
+since the CPU starts at 0. Above the zero page and the I/O page is a 4K
+stack, 0x0500–0x14ff, then malloc's heap up to 0x7fff, then the program from
+0x8000. `-Wl,--defsym=__stack_top=...` moves the boundary between the stack
+and the heap; it must be a multiple of 256. The console is at 0x0420. The `jmp` also keeps every object off address 0, which is NULL;
 `ld/fructus-rom16k.ld` keeps the two bytes free for the same reason.
 `tools/fpga-system.sv` has its registers in the I/O page. The Microtan board in
 `tools/microtan.js` keeps the original's map, with its screen at 0x0200,
