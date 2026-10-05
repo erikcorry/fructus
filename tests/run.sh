@@ -413,6 +413,20 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     done
     rm -f build/_d32 build/_d32.bin
 
+    # --- 64-bit division, the same way ---------------------------------------
+    # tests/div64.c reaches each path of libgcc's hand-written __udivmoddi4,
+    # and with -mmul checks it with __muldi3_mul's products instead.
+    for o in -O2 -O0 "-O2 -mmul"; do
+        if tools/fcc $o tests/div64.c -o build/_d64 2>build/_err \
+           && node tools/fcc-run.mjs build/_d64.bin; then
+            printf 'ok    64-bit division at %s\n' "$o"
+        else
+            printf 'FAIL  64-bit division at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    rm -f build/_d64 build/_d64.bin
+
     # --- the heap, against the two things it must never do ------------------
     # crt/malloc.c is cmpctmalloc cut down to two-byte headers and 256-byte
     # pages.  tests/malloc.c needs no reference allocator: every live block is

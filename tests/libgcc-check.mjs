@@ -395,6 +395,98 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   console.log(`ok    the four division helpers: ${signed.length} signed pairs, 2000 unsigned`);
 }
 
+// --- the 64-bit divisions ----------------------------------------------------
+// Six entry points on one core.  n in r0-r3, d on the stack at [sp], and for
+// the divmod pair a remainder pointer at [sp, #8], which may be null.  BigInt
+// is the reference, and its division truncates towards zero as C's does.
+//
+// What is checked beyond the answers: r4 and sp kept, nothing written past
+// the arguments, and nothing written through a null remainder pointer.  The
+// cases reach every divisor width, since the width decides how many of n's
+// words go into the remainder whole; dividends narrower than their divisors;
+// quotients that come out within one of exact; and divisors of 2^63 or more,
+// the only ones whose remainder can double past 64 bits.
+{
+  const SP = 0xf000, RP = 0xe000, M64 = (1n << 64n) - 1n;
+  const word = (v, i) => Number((v >> BigInt(16 * i)) & 0xffffn);
+  const div = (name, n, d, rp) => {
+    m.mem.fill(0);
+    m.load(code);
+    m.R.fill(0);
+    for (let i = 0; i < 4; i++) {
+      m.mem[SP + 2 * i] = word(d, i) & 0xff;
+      m.mem[SP + 2 * i + 1] = word(d, i) >> 8;
+      m.R[i] = word(n, i);
+    }
+    m.mem[SP + 8] = rp & 0xff; m.mem[SP + 9] = rp >> 8;
+    m.mem[SP + 10] = 0xa5;
+    m.R[4] = R4; m.R[m.named.sp] = SP; m.R[m.named.lr] = RET;
+    m.pc = syms.get(name); m.halted = false; m.count = 0;
+    m.reset();
+    let why;
+    try { why = m.run({ max: 100000, stopAt: RET }); }
+    catch (e) { why = `ran off the rails: ${e.message}`; }
+    let got = 0n, rem = 0n;
+    for (let i = 3; i >= 0; i--) {
+      got = got << 16n | BigInt(m.R[i]);
+      rem = rem << 16n | BigInt(m.mem[RP + 2 * i] | m.mem[RP + 2 * i + 1] << 8);
+    }
+    return { why, got, rem, cycles: m.cycles(),
+             kept: m.R[4] === R4 && m.R[m.named.sp] === SP && m.mem[SP + 10] === 0xa5 };
+  };
+  let y = 0x9e3779b97f4a7c15n;
+  const r64 = () => (y = (y * 6364136223846793005n + 1442695040888963407n) & M64);
+  const s64 = (v) => BigInt.asIntN(64, v), u64 = (v) => BigInt.asUintN(64, v);
+
+  const cases = [];
+  const edge = [0n, 1n, 2n, 3n, 10n, 0xffffn, 0x10000n, 0x10001n, 0xffffffffn,
+                0x100000000n, 1000000000n, 0xffffffffffffn, 0x1000000000000n,
+                0x7fffffffffffffffn, 0x8000000000000000n, 0x8000000000000001n,
+                0xfffffffffffffffen, 0xffffffffffffffffn];
+  for (const a of edge) for (const b of edge) if (b) cases.push([a, b]);
+  for (let bits = 1; bits <= 64; bits++)
+    for (let i = 0; i < 12; i++) {
+      const b = (r64() >> BigInt(64 - bits)) | (1n << BigInt(bits - 1));
+      cases.push([r64(), b], [r64() >> BigInt(Number(r64() % 64n)), b],
+                 [u64(b * (r64() >> 40n) + r64() % b), b]);
+    }
+
+  for (const [name, q, r] of [
+    ['__udivdi3', (a, b) => a / b],
+    ['__umoddi3', (a, b) => a % b],
+    ['__udivmoddi4', (a, b) => a / b, (a, b) => a % b],
+    ['__divdi3', (a, b) => u64(s64(a) / s64(b))],
+    ['__moddi3', (a, b) => u64(s64(a) % s64(b))],
+    ['__divmoddi4', (a, b) => u64(s64(a) / s64(b)), (a, b) => u64(s64(a) % s64(b))],
+  ]) {
+    let wrong = 0, eg = '', n = 0;
+    for (const [a, b] of cases)
+      for (const rp of r ? [RP, 0] : [0]) {
+        const o = div(name, a, b, rp);
+        n++;
+        const ok = o.why === 'stopped' && o.got === q(a, b) && o.kept
+                   && (rp ? o.rem === r(a, b) : o.rem === 0n);
+        if (!ok && !wrong++)
+          eg = `0x${a.toString(16)}, 0x${b.toString(16)}${r ? (rp ? ' with' : ' without') + ' rp' : ''} -> ` +
+               (o.why !== 'stopped' ? o.why : `0x${o.got.toString(16)}` +
+                (r && rp ? ` rem 0x${o.rem.toString(16)}` : '') + (o.kept ? '' : ', and something it must keep changed'));
+      }
+    check(name, wrong === 0, `${wrong} of ${n} wrong, e.g. ${eg}`);
+  }
+
+  // Cycles by divisor width, under full 64-bit dividends.
+  const cost = (bits) => {
+    let t = 0;
+    for (let i = 0; i < 30; i++)
+      t += div('__udivdi3', r64() | 1n << 63n,
+               (r64() >> BigInt(64 - bits)) | (1n << BigInt(bits - 1)), 0).cycles;
+    return (t / 30).toFixed(0);
+  };
+  console.log(`ok    the six 64-bit divisions: ${cases.length} pairs each against BigInt; ` +
+              `${cost(10)} / ${cost(32)} / ${cost(48)} / ${cost(64)} cycles ` +
+              `for a 10 / 32 / 48 / 64-bit divisor`);
+}
+
 // --- the shifts by a variable count -----------------------------------------
 // Every legal count, against BigInt.  The 32-bit ones take the value in r0:r1
 // and the count in r2; the 64-bit ones fill r0-r3 with the value, so the count

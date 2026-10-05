@@ -30,7 +30,10 @@
 ; r0 and the remainder in r1, which is one 32-bit value to a C caller.  A
 ; compiler that wants `x / 10' and `x % 10' together can then have them for one
 ; call.  The 32-bit division helpers are still C, in the GCC tree's
-; libgcc/config/fructus/lib2div.c.
+; libgcc/config/fructus/lib2div.c.  The 64-bit ones are here, six entry points
+; on one division:
+;
+;       __udivdi3  __umoddi3  __udivmoddi4  __divdi3  __moddi3  __divmoddi4
 ;
 ; And the shifts by a variable count, at the end of the file:
 ;
@@ -838,6 +841,428 @@ __modhi3:
         rsb     r0, r0, #0              ; 1
 .pos:
         pop     r2, lr                  ; 7
+        ret                             ; 4
+
+; ============================================================================
+; 64-bit division
+; ============================================================================
+;       __udivdi3    __umoddi3    __udivmoddi4      unsigned
+;       __divdi3     __moddi3     __divmoddi4       signed
+;
+;       n in r0:r1:r2:r3, low word first; d on the stack at [sp]; and for the
+;       divmod pair a pointer to the remainder at [sp, #8], which may be null.
+;       The answer comes back in r0:r1:r2:r3.
+;
+; ONE DIVISION, SIX ENTRY POINTS.  libgcc2.c's are C, each with its own copy of
+; the whole of __udivmoddi4 inlined, and each a quotient digit at a time in
+; 32-bit words - which on this machine is calls to __udivsi3, __umodsi3 and
+; __mulsi3 and a 256-byte table for clz.  A program that wanted / and % on a
+; long long carried two copies, over 4.5K of it.  Here the six share one core,
+; .core below, and the signed three one sign-fixing wrapper around it.
+;
+; THE CORE'S CONVENTION IS ITS OWN: n in r0:r1:r2:r3 and r5 pointing at d,
+; and it returns the quotient in r0:r1:r2:r3 and WRITES THE REMAINDER OVER d.
+; Over d because d is in the caller's argument slots, which C hands to the
+; callee: __udivdi3 is then `mov r5, sp' and a jump, and __umoddi3 reads its
+; answer back out of its own arguments.  It keeps r4, so a jump into it is
+; a tail call of a function with __udivdi3's convention.
+;
+; ----------------------------------------------------------------------------
+; A BIT AT A TIME - BUT NOT ALL SIXTY-FOUR OF THEM
+; ----------------------------------------------------------------------------
+; Restoring division, the remainder R shifted left a bit at a time with the
+; dividend's next bit coming in underneath and the quotient's going out into
+; the dividend word that bit came from:
+;
+;       R = 2R + next bit of n;  if (R >= d) { R -= d; quotient bit = 1 }
+;
+; WHOLE WORDS NEED NO STEPS WHILE THEY ARE SMALLER THAN d.  If d has m words
+; that count - the highest one non-zero - then any m-1 words are below it, so
+; the first m-1 words of n go into R whole, as quotient words of zero, and
+; only the rest are fed a bit at a time.  Leading zero words of n count the
+; same way.  So dividing by a 48-bit value is 32 steps, and anything whose
+; dividend has fewer words than its divisor is no steps at all.
+;
+; A DIVISOR UNDER 65536 HAS A LOOP OF ITS OWN, because it is the common one -
+; ten, to print a number - and because then R < d fits one register too, and
+; the whole division lives in seven: n and the quotient in r0-r3, a word at a
+; time in r3 and rotated round after each, R in r4, d in r5, the count in lr.
+; About thirteen cycles a step.  The general loop keeps R in r0-r3, the
+; dividend and quotient words in the frame, and d there too, compared and
+; subtracted a word at a time.
+;
+; THE COUNT IS ALSO THE WORD.  Steps are counted down in lr from 64, sixteen
+; to a word, so lr's low four bits are zero exactly at a word boundary - one
+; brclr - and lr / 8 is the frame offset of the word about to be fed.
+;
+; DIVISION BY ZERO returns junk and does not hang: d = 0 takes the narrow loop,
+; whose count is fixed, and every step subtracts nothing.
+;
+; ----------------------------------------------------------------------------
+; MEASURED, a full 64-bit dividend, mean cycles of __udivdi3
+; ----------------------------------------------------------------------------
+;       divisor bits        1-16    17-32    33-48    49-64
+;       here                1150    2700-3100 1600-2000 700-980
+;       libgcc2.c's         ~4100   ~3000    ~3300    1600-2600
+;
+; 597 bytes for all six, where libgcc2.c's were 2.3K to 3.2K EACH, before the
+; 32-bit division, multiply and clz table they called.  A divisor of 17 to 32
+; bits is the slow case: 48 steps of the general loop, and a loop of its own
+; with R in two registers would be about 80 bytes more.
+
+__udivmoddi4:
+        mov     r5, sp                  ; 1   d, which becomes the remainder
+        push    lr                      ; 6
+        call    .core                   ; 3
+        ld      r5, [sp, #10]           ; 5   rp, past the pushed lr
+        br      eq, r5, #0, .norp       ; 1
+        ld      lr, [sp, #2]            ; 5
+        st      lr, [r5, #0]            ; 6
+        ld      lr, [sp, #4]            ; 5
+        st      lr, [r5, #2]            ; 6
+        ld      lr, [sp, #6]            ; 5
+        st      lr, [r5, #4]            ; 6
+        ld      lr, [sp, #8]            ; 5
+        st      lr, [r5, #6]            ; 6
+.norp:
+        pop     lr                      ; 5
+        ret                             ; 4
+
+; --- the core -----------------------------------------------------------------
+;       in:  r0:r1:r2:r3  n             r5  -> d, four words
+;       out: r0:r1:r2:r3  n / d         [r5] n % d, over d          r4 kept
+.core:
+        push    r4, lr, r5              ; 10  [sp]: p, lr, r4
+        ld      r4, [r5, #2]            ; 5   d1 | d2 | d3: under 65536?
+        ld      lr, [r5, #4]            ; 5
+        or      r4, r4, lr              ; 1
+        ld      lr, [r5, #6]            ; 5
+        or      r4, r4, lr              ; 1
+        br      ne, r4, #0, .wide       ; 1
+
+        ; --- d < 65536: R in r4 (zero already), d in r5 ------------------------
+        ld      r5, [r5, #0]            ; 5   d
+        push    r5                      ; 6   kept, for after each rotation
+        mov     lr, #64                 ; 1
+.nword:
+        br      ne, r4, #0, .nbits      ; 1   a zero word with nothing carried
+        br      ne, r3, #0, .nbits      ; 1   in is a zero quotient word:
+        add     lr, lr, #-16            ; 1   no steps
+        jmpr    .nrot                   ; 3
+.nbits:
+        brset   r4, #0x8000, .nbig      ; 1   2R overflows: it is above d
+        shl     r4, r4, #1              ; 1
+        brclr   r3, #0x8000, .n0        ; 3+1 the dividend's next bit
+        add     r4, r4, #1              ; 1
+.n0:
+        shl     r3, r3, #1              ; 1   ... and room for the quotient's
+        br      lo, r4, r5, .nnext      ; 3+1
+.nsub:
+        rsb     r4, r5, r4              ; 1   R -= d
+        add     r3, r3, #1              ; 1   quotient bit
+.nnext:
+        add     lr, lr, #-1             ; 1
+        brclr   lr, #0x000f, .nrot      ; 1   end of a word
+        jmpr    .nbits                  ; 3
+.nbig:
+        shl     r4, r4, #1              ; 1   2R - 65536 ...
+        brclr   r3, #0x8000, .n1        ; 3+1
+        add     r4, r4, #1              ; 1
+.n1:
+        shl     r3, r3, #1              ; 1
+        jmpr    .nsub                   ; 3   ... less d is exact mod 65536
+.nrot:
+        mov     r5, r3                  ; 1   the next word down into r3,
+        mov     r3, r2                  ; 1   and the quotient word just made
+        mov     r2, r1                  ; 1   round to r0: four rotations
+        mov     r1, r0                  ; 1   put every word back in place
+        mov     r0, r5                  ; 1
+        ld      r5, [sp, #0]            ; 5   d again
+        br      ne, lr, #0, .nword      ; 3+1
+        ld      r5, [sp, #2]            ; 5   p: the remainder is R, and d's
+        st      r4, [r5, #0]            ; 6   other words are zero already
+        add     sp, sp, #4              ; 1
+        pop     lr, r4                  ; 7
+        ret                             ; 4
+
+        ; --- the general case: R in r0-r3, the rest in the frame -------------
+.wide:
+        ld      r4, [r5, #6]            ; 5
+        ld      lr, [r5, #4]            ; 5
+        push    r4, lr                  ; 8   d3 d2
+        ld      r4, [r5, #2]            ; 5
+        ld      lr, [r5, #0]            ; 5
+        push    r4, lr                  ; 8   d1 d0
+        push    r3, r2, r1              ; 10
+        push    r0                      ; 6
+        ;      n0(0) n1(2) n2(4) n3(6) d0(8) d1(10) d2(12) d3(14) p(16)
+
+        ; j = (m - 1) + leading zero words of n: the words that go in whole
+        mov     r5, #3                  ; 1
+        ld      r4, [sp, #14]           ; 5   d3
+        br      ne, r4, #0, .m          ; 3+1
+        mov     r5, #2                  ; 1
+        ld      r4, [sp, #12]           ; 5   d2
+        br      ne, r4, #0, .m          ; 3+1
+        mov     r5, #1                  ; 1   then d1, which is not zero
+.m:
+        br      ne, r3, #0, .z          ; 3+1
+        add     r5, r5, #1              ; 1
+        br      ne, r2, #0, .z          ; 3+1
+        add     r5, r5, #1              ; 1
+        br      ne, r1, #0, .z          ; 3+1
+        add     r5, r5, #1              ; 1
+.z:
+        shl     r5, r5, #4              ; 1
+        rsb     r5, r5, #64             ; 1   T = 64 - 16j: the step count
+        br      ge, r5, #0, .t          ; 3+1 below which words go bit by bit
+        mov     r5, #0                  ; 1   n < d: every word goes in whole
+.t:
+        push    r5                      ; 6
+        ;      T(0) n0(2) n1(4) n2(6) n3(8) d0(10) d1(12) d2(14) d3(16)
+        ;      p(18) lr(20) r4(22)          word i at 2 + 2i, which is lr / 8
+        mov     r0, #0                  ; 1   R
+        mov     r1, r0                  ; 1
+        mov     r2, r0                  ; 1
+        mov     r3, r0                  ; 1
+        mov     lr, #64                 ; 1
+.word:
+        ld      r4, [sp, #0]            ; 5   T
+        br      ls, lr, r4, .wbits      ; 1
+        lsr     r5, lr, #3              ; 1   this word goes into R whole
+        mov     r3, r2                  ; 1
+        mov     r2, r1                  ; 1
+        mov     r1, r0                  ; 1
+        ld      r0, [sp, r5]            ; 5
+        mov     r4, #0                  ; 1   and its quotient word is zero
+        st      r4, [sp, r5]            ; 6
+        add     lr, lr, #-16            ; 1
+        br      ne, lr, #0, .word       ; 3+1
+        jmp     .wend                   ; 3
+.wbits:
+        lsr     r5, lr, #3              ; 1
+        ld      r4, [sp, r5]            ; 5   the word to feed in, in r4
+.bits:
+        ; R:w <<= 1.  Unlike the narrow loop's, 2R cannot overflow: R is
+        ; what is left of the dividend's bits above w's next, which are at
+        ; most n >> 1 and below 2^63, so R's top bit is always clear.
+        shl     r3, r3, #1              ; 1
+        lsr     r5, r2, #15             ; 1
+        or      r3, r3, r5              ; 1
+        shl     r2, r2, #1              ; 1
+        lsr     r5, r1, #15             ; 1
+        or      r2, r2, r5              ; 1
+        shl     r1, r1, #1              ; 1
+        lsr     r5, r0, #15             ; 1
+        or      r1, r1, r5              ; 1
+        shl     r0, r0, #1              ; 1
+        lsr     r5, r4, #15             ; 1
+        or      r0, r0, r5              ; 1
+        shl     r4, r4, #1              ; 1
+        ld      r5, [sp, #16]           ; 5   R >= d, from the top word down
+        br      hi, r3, r5, .sub        ; 3+1
+        br      lo, r3, r5, .next       ; 3+1
+        ld      r5, [sp, #14]           ; 5
+        br      hi, r2, r5, .sub        ; 3+1
+        br      lo, r2, r5, .next       ; 3+1
+        ld      r5, [sp, #12]           ; 5
+        br      hi, r1, r5, .sub        ; 3+1
+        br      lo, r1, r5, .next       ; 3+1
+        ld      r5, [sp, #10]           ; 5
+        br      lo, r0, r5, .next       ; 3+1
+.sub:
+        ; R -= d.  A borrow decrements the words above it, and a word that
+        ; was zero passes it on - it becomes 0xffff, which is then never below
+        ; its own word of d, so no word ever borrows twice.
+        ld      r5, [sp, #10]           ; 5
+        br      hs, r0, r5, .s0         ; 3+1
+        br      ne, r1, #0, .t1         ; 3+1
+        br      ne, r2, #0, .t2         ; 3+1
+        sub     r3, r3, #1              ; 1
+.t2:
+        sub     r2, r2, #1              ; 1
+.t1:
+        sub     r1, r1, #1              ; 1
+.s0:
+        rsb     r0, r5, r0              ; 1
+        ld      r5, [sp, #12]           ; 5
+        br      hs, r1, r5, .s1         ; 3+1
+        br      ne, r2, #0, .u2         ; 3+1
+        sub     r3, r3, #1              ; 1
+.u2:
+        sub     r2, r2, #1              ; 1
+.s1:
+        rsb     r1, r5, r1              ; 1
+        ld      r5, [sp, #14]           ; 5
+        br      hs, r2, r5, .s2         ; 3+1
+        sub     r3, r3, #1              ; 1
+.s2:
+        rsb     r2, r5, r2              ; 1
+        ld      r5, [sp, #16]           ; 5
+        rsb     r3, r5, r3              ; 1
+        add     r4, r4, #1              ; 1   quotient bit
+.next:
+        add     lr, lr, #-1             ; 1
+        brclr   lr, #0x000f, .wdone     ; 1
+        jmpr    .bits                   ; 3
+.wdone:
+        lsr     r5, lr, #3              ; 1   the word just finished is
+        add     r5, r5, #2              ; 1   one above lr / 8 now
+        st      r4, [sp, r5]            ; 6   its quotient word
+        br      eq, lr, #0, .wend       ; 3+1 the loop is longer than a
+        jmp     .word                   ; 3   branch reaches
+.wend:
+        ld      r5, [sp, #18]           ; 5   p: R is the remainder
+        st      r0, [r5, #0]            ; 6
+        st      r1, [r5, #2]            ; 6
+        st      r2, [r5, #4]            ; 6
+        st      r3, [r5, #6]            ; 6
+        ld      r0, [sp, #2]            ; 5   and the quotient
+        ld      r1, [sp, #4]            ; 5
+        ld      r2, [sp, #6]            ; 5
+        ld      r3, [sp, #8]            ; 5
+        add     sp, sp, #20             ; 1
+        pop     lr, r4                  ; 7
+        ret                             ; 4
+
+; ============================================================================
+; __udivdi3 and __umoddi3 - into the core, and out again
+; ============================================================================
+; __udivdi3 is a tail call: the core keeps r4 and returns the quotient where
+; the caller wants it.  __umoddi3 finds the remainder in its own arguments.
+
+__udivdi3:
+        mov     r5, sp                  ; 1
+        jmp     __udivmoddi4.core       ; 3
+
+__umoddi3:
+        mov     r5, sp                  ; 1
+        push    lr                      ; 6
+        call    __udivmoddi4.core       ; 3
+        pop     lr                      ; 5
+        ld      r0, [sp, #0]            ; 5
+        ld      r1, [sp, #2]            ; 5
+        ld      r2, [sp, #4]            ; 5
+        ld      r3, [sp, #6]            ; 5
+        ret                             ; 4
+
+; ============================================================================
+; __divmoddi4, __divdi3 and __moddi3 - the magnitudes divide
+; ============================================================================
+; C truncates a quotient towards zero and gives the remainder the dividend's
+; sign, so the core divides |n| by |d| and .signed puts the signs back: the
+; quotient negative when exactly one operand was, the remainder when n was.
+; .signed has the core's convention, and both results are fixed every time -
+; a few dozen cycles that __divdi3 and __moddi3 each spend on the other's,
+; for one copy of all of it.
+;
+; The signs ride in r4, which the core keeps: bit 15 is n's and bit 14 the
+; quotient's.  -2^63 has no positive counterpart, but its magnitude is 2^63
+; unsigned, which is what the core wants.
+
+__divmoddi4:
+        mov     r5, sp                  ; 1
+        push    lr                      ; 6
+        call    .signed                 ; 3
+        ld      r5, [sp, #10]           ; 5   rp
+        br      eq, r5, #0, .norp       ; 1
+        ld      lr, [sp, #2]            ; 5
+        st      lr, [r5, #0]            ; 6
+        ld      lr, [sp, #4]            ; 5
+        st      lr, [r5, #2]            ; 6
+        ld      lr, [sp, #6]            ; 5
+        st      lr, [r5, #4]            ; 6
+        ld      lr, [sp, #8]            ; 5
+        st      lr, [r5, #6]            ; 6
+.norp:
+        pop     lr                      ; 5
+        ret                             ; 4
+
+.signed:
+        push    r4, lr, r5              ; 10  [sp]: p, lr, r4
+        ld      lr, [r5, #6]            ; 5   d3
+        xor     lr, lr, r3              ; 1   the quotient's sign ...
+        lsr     lr, lr, #1              ; 1   ... to bit 14
+        mov     r4, r3                  ; 1
+        and     r4, r4, #0x8000         ; 1   n's in bit 15
+        or      r4, r4, lr              ; 1
+        brclr   r3, #0x8000, .npos      ; 3+1
+        call    .neg                    ; 3   |n|
+.npos:
+        push    r3, r2, r1              ; 10  |n|, while d is fetched
+        push    r0                      ; 6
+        ld      r0, [r5, #0]            ; 5
+        ld      r1, [r5, #2]            ; 5
+        ld      r2, [r5, #4]            ; 5
+        ld      r3, [r5, #6]            ; 5
+        brclr   r3, #0x8000, .dpos      ; 3+1
+        call    .neg                    ; 3   |d|
+.dpos:
+        push    r3, r2, r1              ; 10  |d| below |n|, where the core
+        push    r0                      ; 6   can have it
+        ld      r0, [sp, #8]            ; 5
+        ld      r1, [sp, #10]           ; 5
+        ld      r2, [sp, #12]           ; 5
+        ld      r3, [sp, #14]           ; 5
+        mov     r5, sp                  ; 1
+        call    __udivmoddi4.core       ; 3
+        brclr   r4, #0x4000, .qpos      ; 3+1
+        call    .neg                    ; 3
+.qpos:
+        st      r0, [sp, #8]            ; 6   the quotient over |n|, and the
+        st      r1, [sp, #10]           ; 6   remainder out of |d|'s slots
+        st      r2, [sp, #12]           ; 6
+        st      r3, [sp, #14]           ; 6
+        ld      r0, [sp, #0]            ; 5
+        ld      r1, [sp, #2]            ; 5
+        ld      r2, [sp, #4]            ; 5
+        ld      r3, [sp, #6]            ; 5
+        brclr   r4, #0x8000, .rpos      ; 3+1
+        call    .neg                    ; 3
+.rpos:
+        ld      r5, [sp, #16]           ; 5   p
+        st      r0, [r5, #0]            ; 6
+        st      r1, [r5, #2]            ; 6
+        st      r2, [r5, #4]            ; 6
+        st      r3, [r5, #6]            ; 6
+        ld      r0, [sp, #8]            ; 5
+        ld      r1, [sp, #10]           ; 5
+        ld      r2, [sp, #12]           ; 5
+        ld      r3, [sp, #14]           ; 5
+        add     sp, sp, #18             ; 1
+        pop     lr, r4                  ; 7
+        ret                             ; 4
+
+; r0:r1:r2:r3 = -(r0:r1:r2:r3): every bit inverted, and one added, carried
+; up only as far as a word that did not wrap to zero.
+.neg:
+        xor     r0, r0, #-1             ; 1
+        xor     r1, r1, #-1             ; 1
+        xor     r2, r2, #-1             ; 1
+        xor     r3, r3, #-1             ; 1
+        add     r0, r0, #1              ; 1
+        br      ne, r0, #0, .negd       ; 3+1
+        add     r1, r1, #1              ; 1
+        br      ne, r1, #0, .negd       ; 3+1
+        add     r2, r2, #1              ; 1
+        br      ne, r2, #0, .negd       ; 3+1
+        add     r3, r3, #1              ; 1
+.negd:
+        ret                             ; 4
+
+__divdi3:
+        mov     r5, sp                  ; 1
+        jmp     __divmoddi4.signed      ; 3
+
+__moddi3:
+        mov     r5, sp                  ; 1
+        push    lr                      ; 6
+        call    __divmoddi4.signed      ; 3
+        pop     lr                      ; 5
+        ld      r0, [sp, #0]            ; 5
+        ld      r1, [sp, #2]            ; 5
+        ld      r2, [sp, #4]            ; 5
+        ld      r3, [sp, #6]            ; 5
         ret                             ; 4
 
 ; ============================================================================
