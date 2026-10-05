@@ -101,6 +101,46 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   console.log(`ok    __umulhisi3 and __mulhisi3: ${pairs.length} products each, halves in the right registers`);
 }
 
+// --- the `_mul' routines, which use the multiplier ---------------------------
+// What gcc -mmul calls.  The sim has mul, so they run here like the rest.
+// Four byte products and no branch, so besides the products, the timing is
+// checked to be the same for every operand - a branch slipped in would show.
+// The 16-bit pair keep r2 and r3 as well as r4: two arguments and a 32-bit
+// result leave both callee saved, and inline gcc relies on it.
+{
+  const R2 = 0x2222, R3 = 0x3333;
+  const wide = [];
+  for (const [a, b] of pairs) wide.push([a, b, r16(), r16()]);
+  for (const a of edge) for (const b of edge) wide.push([a, b, b, a], [a, a, b, b]);
+  for (const [name, args, want, keeps] of [
+    ['__umulhisi3_mul', 2, ([a, b]) => BigInt(a) * BigInt(b), true],
+    ['__mulhisi3_mul', 2, ([a, b]) => BigInt(s16(a) * s16(b)) & 0xffffffffn, true],
+    ['__mulsi3_mul', 4, ([a, b, c, d]) =>
+       ((BigInt(a) | BigInt(b) << 16n) * (BigInt(c) | BigInt(d) << 16n)) & 0xffffffffn, false],
+  ]) {
+    let wrong = 0, eg = '';
+    const cycles = new Set();
+    for (const v of args === 2 ? pairs : wide) {
+      const regs = { 0: v[0], 1: v[1] };
+      if (args === 2) Object.assign(regs, { 2: R2, 3: R3 });
+      else Object.assign(regs, { 2: v[2], 3: v[3] });
+      const q = run(name, regs);
+      const got = BigInt(q.R[1]) << 16n | BigInt(q.R[0]);     // LOW:HIGH
+      const kept = q.sp === SP0 && q.R[4] === R4 && (!keeps || (q.R[2] === R2 && q.R[3] === R3));
+      cycles.add(q.cycles);
+      if (q.why !== 'stopped' || got !== want(v) || !kept) {
+        if (!wrong++) eg = `${v.slice(0, args).map((x) => '0x' + x.toString(16)).join(' ')} -> ` +
+                           (q.why !== 'stopped' ? q.why : `0x${got.toString(16)}, want ` +
+                            `0x${want(v).toString(16)}` + (kept ? '' : ', and a kept register changed'));
+      }
+    }
+    check(name, wrong === 0, `${wrong} wrong, e.g. ${eg}`);
+    check(`${name} never branches`, cycles.size === 1,
+          `${[...cycles].join(', ')} cycles: it should take the same for every operand`);
+    console.log(`ok    ${name}: ${(args === 2 ? pairs : wide).length} products, ${[...cycles][0]} cycles every time`);
+  }
+}
+
 // --- the shortcut ------------------------------------------------------------
 // Both operands under 256 means the product is under 65536, so the whole thing
 // is one narrow multiply.  It is worth roughly four times the general case.
@@ -177,7 +217,7 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
 // the partial sums to 0xffff, where the second test is the only thing between
 // a right answer and a wrong one.
 {
-  const wide = (A, B) => {
+  const wide = (A, B, name = '__umulsidi3') => {
     m.mem.fill(0);
     m.load(code);
     m.R.fill(0);
@@ -186,7 +226,7 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
     m.R[4] = R4;
     m.R[0] = Number(A & 0xffffn); m.R[1] = Number((A >> 16n) & 0xffffn);
     m.R[2] = Number(B & 0xffffn); m.R[3] = Number((B >> 16n) & 0xffffn);
-    m.pc = syms.get('__umulsidi3'); m.halted = false; m.count = 0;
+    m.pc = syms.get(name); m.halted = false; m.count = 0;
     m.reset();
     let why;
     try { why = m.run({ max: 20000, stopAt: RET }); }
@@ -227,20 +267,34 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   }
   check('__umulsidi3', wrong === 0, `${wrong} of ${cases.length} wrong, e.g. ${eg}`);
 
-  const cost = (gen) => {
+  // __umulsidi3_mul is the same carries over __umulhisi3_mul, so the same
+  // sweep - which is the only thing that reaches its second carry test.
+  let wrongM = 0, egM = '';
+  for (const [A, B] of cases) {
+    const q = wide(A, B, '__umulsidi3_mul');
+    if (q.why !== 'stopped' || q.product !== A * B || q.sp !== SP0 || q.r4 !== R4) {
+      if (!wrongM++) egM = `0x${A.toString(16)} * 0x${B.toString(16)} = ` +
+                           `0x${(A * B).toString(16)}, got ` +
+                           (q.why !== 'stopped' ? q.why : `0x${q.product.toString(16)}`);
+    }
+  }
+  check('__umulsidi3_mul', wrongM === 0, `${wrongM} of ${cases.length} wrong, e.g. ${egM}`);
+
+  const cost = (gen, name) => {
     let y = 0x517cc1b7;
     const g = () => { y ^= y << 13; y >>>= 0; y ^= y >>> 17; y ^= y << 5; y >>>= 0; return y; };
     const b = (n) => BigInt((g() >>> (32 - n)) & 0xffff);
     let t = 0;
-    for (let i = 0; i < 200; i++) { const [A, B] = gen(b); t += wide(A, B).cycles; }
+    for (let i = 0; i < 200; i++) { const [A, B] = gen(b); t += wide(A, B, name).cycles; }
     return t / 200;
   };
   const full = cost((b) => [(b(16) << 16n) | b(16), (b(16) << 16n) | b(16)]);
   const half = cost((b) => [b(16), b(16)]);
   check('__umulsidi3 shortcut', half < full / 3,
         `16-bit values cost ${half.toFixed(0)} against ${full.toFixed(0)} for 32-bit ones`);
-  console.log(`ok    __umulsidi3: ${cases.length} products against BigInt; ` +
-              `${full.toFixed(0)} cycles full width, ${half.toFixed(0)} narrow`);
+  const fullM = cost((b) => [(b(16) << 16n) | b(16), (b(16) << 16n) | b(16)], '__umulsidi3_mul');
+  console.log(`ok    __umulsidi3 and __umulsidi3_mul: ${cases.length} products each against BigInt; ` +
+              `${full.toFixed(0)} and ${fullM.toFixed(0)} cycles full width, ${half.toFixed(0)} narrow`);
 }
 
 // --- __udivmodhi4 and the four division helpers ------------------------------

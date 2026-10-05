@@ -219,22 +219,30 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     # --- -mmul, and only -mmul, uses the multiplier -------------------------
     # A part without a DSP has no mul, so the compiler must not emit one
     # unless asked; asked, the products must be right.  tests/mul.c checks
-    # `*' against a shift-and-add loop that never multiplies.
+    # products of every width and divisions by constants against shift and
+    # add, and each mode tests something different - mul, its byte products
+    # inline, the `_mul' helpers, reciprocals, or libgcc's shift-and-add.
     if tools/fcc -O2 -S tests/mul.c -o - 2>/dev/null | grep -q '^[[:space:]]mul[[:space:]]'; then
         printf 'FAIL  the compiler emits mul without -mmul\n'; fail=1
     else
         printf 'ok    no mul without -mmul\n'
     fi
-    for o in -O2 -Os; do
-        if tools/fcc $o -mmul -S tests/mul.c -o - 2>/dev/null | grep -q '^[[:space:]]mul[[:space:]]' \
-           && tools/fcc $o -mmul tests/mul.c -o build/_mul 2>build/_err \
+    for o in -O2 -Os "-O2 -mmul" "-Os -mmul"; do
+        if tools/fcc $o tests/mul.c -o build/_mul 2>build/_err \
            && node tools/fcc-run.mjs build/_mul.bin; then
-            printf 'ok    -mmul products are right at %s\n' "$o"
+            printf 'ok    products and constant divisions are right at %s\n' "$o"
         else
-            printf 'FAIL  -mmul products at %s (check %s)\n' "$o" "$?"
+            printf 'FAIL  products or constant divisions at %s (%s wrong)\n' "$o" "$?"
             head -10 build/_err; fail=1
         fi
     done
+    # Linked without -mmul, nothing of libgcc's may reach mul either.
+    tools/fcc -O2 tests/mul.c -o build/_mul 2>/dev/null
+    if fructus-elf-objdump -d build/_mul 2>/dev/null | grep -q '[[:space:]]mul[[:space:]]'; then
+        printf 'FAIL  a program built without -mmul links code that uses mul\n'; fail=1
+    else
+        printf 'ok    nothing linked without -mmul uses mul\n'
+    fi
     rm -f build/_mul build/_mul.bin
 
     # --- the zero page --------------------------------------------------------
