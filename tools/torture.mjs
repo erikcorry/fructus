@@ -3,7 +3,7 @@
 // torture.mjs - GCC's C execute torture tests, on the simulator
 // =============================================================================
 //
-//   node tools/torture.mjs [-O2] [-j N] [name-filter ...]
+//   node tools/torture.mjs [-O2] [-mmul] [-j N] [name-filter ...]
 //
 // Compiles every vendor/gcc/gcc/testsuite/gcc.c-torture/execute/*.c with
 // tools/fcc, runs it with tools/fcc-run.mjs, and sorts the outcomes:
@@ -20,25 +20,38 @@
 //              int - so it was not run
 //
 // Results go to build/torture/results<opt>.txt, one line per test, so two
-// runs can be diffed.  This is not the DejaGnu harness, but it reads the two
-// directives that matter most: dg-require-effective-target, for n/a, and
+// runs can be diffed.  A -m option is passed on to the compiler and becomes
+// part of <opt>: -O2 -mmul writes results-O2-mmul.txt.
+//
+// THE SLOWEST GO FIRST.  A few tests run for a long time on the simulator -
+// arith-rand-ll does 64-bit arithmetic in software, nearly 200 million
+// instructions - and started in alphabetical order they began late and ran
+// on alone after everything else had finished, one core busy and the rest
+// idle.  Each test's wall time goes to build/torture/times.json, shared by
+// every <opt>, and the next run starts them longest first.  A test with no
+// time recorded goes before all of them, since it might be the slowest.
+//
+// This is not the DejaGnu harness, but it reads the two directives that
+// matter most: dg-require-effective-target, for n/a, and
 // dg-options, whose portable flags (-std, -f, -O, -W, -D) are passed on.
 // =============================================================================
 
 import { execFile } from 'node:child_process';
-import { readdirSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { join, basename } from 'node:path';
 import { root } from './isa.js';
 
 const args = process.argv.slice(2);
-let opt = '-O2', jobs = cpus().length;
-const filters = [];
+let level = '-O2', jobs = cpus().length;
+const filters = [], target = [];
 for (let i = 0; i < args.length; i++) {
-  if (/^-O/.test(args[i])) opt = args[i];
+  if (/^-O/.test(args[i])) level = args[i];
+  else if (/^-m/.test(args[i])) target.push(args[i]);
   else if (args[i] === '-j') jobs = Number(args[++i]);
   else filters.push(args[i]);
 }
+const opt = level + target.join('');
 
 const dir = join(root, 'vendor/gcc/gcc/testsuite/gcc.c-torture/execute');
 const out = join(root, 'build/torture');
@@ -46,6 +59,11 @@ mkdirSync(out, { recursive: true });
 
 let tests = readdirSync(dir).filter((f) => f.endsWith('.c')).sort();
 if (filters.length) tests = tests.filter((f) => filters.some((p) => f.includes(p)));
+
+const timesFile = join(out, 'times.json');
+const times = existsSync(timesFile) ? JSON.parse(readFileSync(timesFile, 'utf8')) : {};
+const known = (f) => times[basename(f, '.c')] ?? Infinity;
+tests.sort((a, b) => known(b) - known(a) || 0);   // two unknowns are NaN: a tie
 
 const run = (cmd, argv, timeout) => new Promise((resolve) => {
   execFile(cmd, argv, { timeout, maxBuffer: 1 << 24 }, (err, stdout, stderr) =>
@@ -86,7 +104,7 @@ async function one(file) {
     // -fpermissive: the tests are old C, with implicit int and implicit
     // declarations, which GCC 14 and later reject by default.  The real
     // torture harness passes it too.
-    [opt, '-w', '-fpermissive', '-DSTACK_SIZE=4096', ...flags,
+    [level, ...target, '-w', '-fpermissive', '-DSTACK_SIZE=4096', ...flags,
      join(dir, file), '-o', exe], 120000);
   if (c.code !== 0) {
     const text = c.stdout + c.stderr;
@@ -115,12 +133,15 @@ let next = 0;
 async function worker() {
   while (next < tests.length) {
     const t = tests[next++];
+    const start = Date.now();
     results.push(await one(t));
+    times[basename(t, '.c')] = Date.now() - start;
   }
 }
 await Promise.all(Array.from({ length: jobs }, worker));
 
 results.sort((a, b) => (a[1] < b[1] ? -1 : 1));
+writeFileSync(timesFile, JSON.stringify(times, null, 0) + '\n');
 writeFileSync(join(out, `results${opt}.txt`),
   results.map((r) => `${r[0].padEnd(8)} ${r[1]}  ${r[2]}`).join('\n') + '\n');
 
