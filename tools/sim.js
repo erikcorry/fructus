@@ -265,12 +265,20 @@ export class Machine {
     for (const [alias, target] of Object.entries(reg.aliases ?? {})) this.named[alias] = nameIndex(reg, target);
 
     this.sem = new Map();          // insn object -> parsed statement list
+    this.kind = new Map();         // insn object -> its cost class, see cost()
     for (const insn of spec.insn) {
       if (insn.semantics === undefined) throw new Error(`${insn.mnemonic}: no semantics`);
       const body = parse(insn.semantics);
       this.sem.set(insn, body);
       this.relative.set(insn, body.some(isRelativeBranch));
+      this.kind.set(insn, this.classify(insn));
     }
+
+    // DECODED INSTRUCTIONS, BY ADDRESS, each with the bytes it was decoded
+    // from.  A hit must find the same bytes in memory still, so code that is
+    // overwritten - by a store, by load(), or by a test poking `mem' directly -
+    // is decoded afresh, and nothing has to remember to invalidate it.
+    this.icache = new Array(this.mem.length);
   }
 
   load(bytes, addr = 0) { this.mem.set(bytes, addr); return this; }
@@ -419,18 +427,25 @@ export class Machine {
   // `lr = pc` and `pc = pc + off` read the way the spec's summaries describe.
   step(trace = null) {
     if (this.guardPending) return this.guardTrap(trace);
-    const at = this.pc;
-    const d  = decode(this.dec, this.mem, at);
-    if (!d) throw new Error(`no instruction at 0x${at.toString(16)} (first byte 0x${this.mem[at].toString(16)})`);
+    const at = this.pc, mem = this.mem;
+    const bytes = mem[at] | (mem[u16(at + 1)] << 8) | (mem[u16(at + 2)] << 16);
+    let e = this.icache[at];
+    if (e === undefined || ((bytes ^ e.bytes) & e.mask) !== 0) {
+      const d = decode(this.dec, mem, at);
+      if (!d) throw new Error(`no instruction at 0x${at.toString(16)} (first byte 0x${mem[at].toString(16)})`);
+      e = { d, bytes, mask: (1 << (8 * d.nbytes)) - 1,
+            body: this.sem.get(d.insn), kind: this.kind.get(d.insn) };
+      this.icache[at] = e;
+    }
+    const d = e.d;
     this.pc = u16(at + d.nbytes);
-    const sem = d.insn.semantics ?? '';
     const xfer = this.xfer;
     this.wrotePc = false;
     this.tmp = {};           // no scratch name outlives its instruction
     if (trace) trace(at, d, this);
-    for (const s of this.sem.get(d.insn)) this.exec(s, d.ops);
+    for (const s of e.body) this.exec(s, d.ops);
     if (this.guardHit) { this.guardHit = false; this.guardPending = true; }
-    this.cyc += this.cost(d, at, sem, this.xfer - xfer);
+    this.cyc += this.cost(d, at, e.kind, this.xfer - xfer);
     this.count++;
     return d;
   }
@@ -455,16 +470,32 @@ export class Machine {
   }
 
 
+  // WHAT cost() NEEDS TO KNOW ABOUT AN INSTRUCTION, read from its semantics
+  // once, when the machine is built, rather than by matching its text at
+  // every step - which was an eighth of the simulator's time.  What each
+  // pattern means is explained in cost(), where it is used.
+  classify(insn) {
+    const sem = insn.semantics ?? '';
+    return {
+      fixed:  /shadow_lr|shadow_sp/.test(sem) ? 6 : /^ie = [01]$/.test(sem) ? 5 : 0,
+      memory: /M(8|16)\[/.test(sem),
+      stores: sem.split(';').some((s) => /^\s*M(8|16)\[/.test(s.trim())),
+      extra:  insn.extra_cycles ?? 0,
+      branch: /^if /.test(sem) && this.relative.get(insn),
+      viaReg: /\bpc = (lr|R\[[a-z]\])$/.test(sem),
+      callA:  /^lr = pc; pc = R\[a\]$/.test(sem),
+    };
+  }
+
   // The cycles from this instruction's dispatch to the next one's, on the
   // pipeline in rtl/cpu.sv.  `moved` is the data accesses it made: a byte,
-  // or a word at an even address.
-  cost(d, at, sem, moved) {
+  // or a word at an even address.  `k` is what classify() made of it.
+  cost(d, at, k, moved) {
     // AN EXCEPTION IS SIX CYCLES, and it is recognised by naming a shadow -
     // which only `brk' and `rti' do: a microcode routine that moves sp and lr
     // through the shadows, and a redirect of the fetch through taken_q.  sei
     // and cli are routines too, without the redirect, and cost five.
-    if (/shadow_lr|shadow_sp/.test(sem)) return 6;
-    if (/^ie = [01]$/.test(sem)) return 5;
+    if (k.fixed) return k.fixed;
     // A MEMORY INSTRUCTION STOPS DISPATCH until its last address is out, and
     // makes an access a cycle: a word when it is aligned, a byte when not.  A
     // load's first address comes straight out of the ALU's adder, so N
@@ -472,26 +503,22 @@ export class Machine {
     // N + 4.  ld8 and an aligned ld 4, an odd one 5; st8 and an aligned st 5,
     // an odd one 6; push of three registers 7 aligned, 10 not.  How many
     // accesses is what the semantics made.
-    if (/M(8|16)\[/.test(sem)) {
-      const stores = sem.split(';').some((s) => /^\s*M(8|16)\[/.test(s.trim()));
-      return moved + (stores ? 4 : 3);
-    }
+    if (k.memory) return moved + (k.stores ? 4 : 3);
     // mul, clz and popcount run a two-step routine: `extra_cycles` beyond one.
-    if (d.insn.extra_cycles) return 1 + d.insn.extra_cycles;
+    if (k.extra) return 1 + k.extra;
     // A CONDITIONAL BRANCH FLOWS DOWN THE PIPE LIKE AN ALU INSTRUCTION, with
     // dispatch carrying on behind it.  TAKEN, it squashes the three behind it
     // and fetches the target: `taken_branch_penalty` more.  Taken means the
     // assignment to pc RAN, not that pc ended up somewhere else - a branch to
     // the very next instruction still pays, which tests/branch-cost.s pins.
-    if (/^if /.test(sem) && this.relative.get(d.insn)) {
+    if (k.branch) {
       if (this.wrotePc) return 1 + this.penalty;
     } else if (this.wrotePc) {
       // A JUMP OR CALL stops dispatch behind it and fetches the target in its
       // ALU cycle: three cycles.  Through a register - jmp ra, call ra, ret -
       // the target goes through taken_q, a cycle later: four.  `call lr` goes
       // to the NEW lr, the next pc, which is no register read: three.
-      const viaReg = /\bpc = (lr|R\[[a-z]\])$/.test(sem)
-                  && !(/^lr = pc; pc = R\[a\]$/.test(sem) && d.ops.a === this.named.lr);
+      const viaReg = k.viaReg && !(k.callA && d.ops.a === this.named.lr);
       return viaReg ? 4 : 3;
     }
     // ANYTHING ELSE IS ONE CYCLE, unless its bytes cannot be there in time.

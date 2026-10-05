@@ -43,7 +43,15 @@ function compile(types, insn, form) {
   }
   if (pos !== 0) throw new Error(`${insn.mnemonic}: encoding is not ${width} bits`);
 
-  return { insn, form, nbytes, mask: mask >>> 0, lit: lit >>> 0, slices, encType };
+  // The same facts as arrays, for decode(), which the simulator calls once an
+  // instruction and which spent most of its time re-deriving them.
+  const fields = [...slices].map(([name, parts]) => ({
+    name, type: encType.get(name),
+    parts: parts.map((p) => ({ shift: p.shift, lo: p.lo, mask: (1 << (p.hi - p.lo + 1)) - 1 })),
+  }));
+  const fix = Object.entries(form.fix ?? {}), tie = Object.entries(form.tie ?? {});
+
+  return { insn, form, nbytes, mask: mask >>> 0, lit: lit >>> 0, slices, encType, fields, fix, tie };
 }
 
 export function buildDecoder(spec) {
@@ -93,21 +101,18 @@ export function decode(dec, mem, addr) {
     const ops = {};
     let bad = false;
 
-    for (const [opName, parts] of c.slices) {
+    for (const f of c.fields) {
       let raw = 0;
-      for (const p of parts) {
-        const n = p.hi - p.lo + 1;
-        raw |= ((word >>> p.shift) & ((1 << n) - 1)) << p.lo;
-      }
-      const v = decodeField(dec.types, c.encType.get(opName), raw);
+      for (const p of f.parts) raw |= ((word >>> p.shift) & p.mask) << p.lo;
+      const v = decodeField(dec.types, f.type, raw);
       if (v === undefined) { bad = true; break; }
-      ops[opName] = v;
+      ops[f.name] = v;
     }
     if (bad) continue;
 
     // Operands the bit map does not carry.
-    for (const [k, v] of Object.entries(c.form.fix ?? {})) ops[k] = v;
-    for (const [k, v] of Object.entries(c.form.tie ?? {})) ops[k] = ops[v];
+    for (const [k, v] of c.fix) ops[k] = v;
+    for (const [k, v] of c.tie) ops[k] = ops[v];
 
     return { insn: c.insn, form: c.form, nbytes, ops, addr };
   }
