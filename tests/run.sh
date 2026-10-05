@@ -427,6 +427,21 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     done
     rm -f build/_d64 build/_d64.bin
 
+    # --- clrsb and the overflow builtins ------------------------------------
+    # tests/overflow.c: clrsbhi2's branch, complement and clz on every 16-bit
+    # value, and addv/subv/negv - br vs, or a comparison against a constant -
+    # against the same sums done in 32 bits.
+    for o in -O2 -Os -O0; do
+        if tools/fcc $o tests/overflow.c -o build/_ov 2>build/_err \
+           && node tools/fcc-run.mjs build/_ov.bin; then
+            printf 'ok    clrsb and int overflow at %s\n' "$o"
+        else
+            printf 'FAIL  clrsb and int overflow at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    rm -f build/_ov build/_ov.bin
+
     # --- the heap, against the two things it must never do ------------------
     # crt/malloc.c is cmpctmalloc cut down to two-byte headers and 256-byte
     # pages.  tests/malloc.c needs no reference allocator: every live block is
