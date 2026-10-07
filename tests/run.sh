@@ -382,6 +382,21 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     done
     rm -f build/_sc build/_sc.bin
 
+    # --- a call through a pointer is not a call through lr ------------------
+    # `call ra' writes lr before it jumps, so `call lr' goes to the next
+    # instruction.  tests/call-lr.c has the shape that put the target in lr,
+    # at -Os, from SOM++.
+    for o in -O2 -Os -O0; do
+        if tools/fcc $o tests/call-lr.c -o build/_cl 2>build/_err \
+           && node tools/fcc-run.mjs build/_cl.bin; then
+            printf 'ok    calls through a pointer reach their target at %s\n' "$o"
+        else
+            printf 'FAIL  a call through a pointer misses its target at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    rm -f build/_cl build/_cl.bin
+
     # --- a masked shift count may lose its mask -----------------------------
     # fructus.h says SHIFT_COUNT_TRUNCATED, so GCC may drop the `& 15', `& 31'
     # or `& 63' on a count and rely on the shift reading only those bits.
