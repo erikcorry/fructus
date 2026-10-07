@@ -6,7 +6,7 @@
 //
 // 31 routines and idle, eight steps each, in 256 words of 32 bits: two
 // block RAMs side by side.
-//     entry  0  idle        
+//     entry  0  idle/boot    8 steps
 //     entry  1  ld           2 bytes
 //     entry  2  pop/ldm 1    2 bytes
 //     entry  3  pop/ldm 2    4 bytes
@@ -70,8 +70,8 @@ module ucode (
         rom[8'h01] = 32'h00000000;
         rom[8'h02] = 32'h00000000;
         rom[8'h03] = 32'h00000000;
-        rom[8'h04] = 32'h00000000;
-        rom[8'h05] = 32'h00000000;
+        rom[8'h04] = 32'h00000080;
+        rom[8'h05] = 32'h00000001;
         rom[8'h06] = 32'h00000000;
         rom[8'h07] = 32'h00000000;
         rom[8'h08] = 32'h00000007;

@@ -18,7 +18,8 @@
 // routine, and routines can be shared - push and stm step alike, and so do
 // pop and ldm, since only their pointer's offset differs, and that is the
 // ALU's business.  tools/ucode.js holds the routines and assigns the
-// entries; both generators read it.  Entry 0 is idle, all zeros.
+// entries; both generators read it.  Entry 0 is idle - its word 0, all
+// zeros - and its other seven words are the boot loop, tools/ucode.js's BOOT.
 //
 // THE ROM'S OUTPUT IS REGISTERED, as a block RAM's is, so the word for step k
 // is addressed in step k - 1 and every control still comes out of a flop.

@@ -3,7 +3,7 @@
 // speed.mjs - how fast rtl/ runs on an iCE40 UP5K
 // =============================================================================
 //
-//   node tools/speed.mjs [seeds] [--floorplan | --system]
+//   node tools/speed.mjs [seeds] [--floorplan | --system] [--jobs N]
 //                                   (or: just speed, just speed-system)
 //
 // Synthesises rtl/ with tools/fpga-top.sv - the processor behind one real
@@ -15,6 +15,9 @@
 // FRUCTUS_BLIT, its 64 KB, the display and its frame buffers, floorplanned by
 // tools/fpga-system.py.  Its floor is the pixel clock, 25.175 MHz, which is
 // also the processor's clock in that system.
+//
+// --jobs N places N seeds at a time, rather than one a core: a placement of
+// the system takes the better part of a gigabyte.
 //
 // WHY SIXTEEN SEEDS AND A MEDIAN.  nextpnr's placer is randomised, and a single
 // placement of this design wanders by two or three MHz - enough to reverse the
@@ -37,10 +40,11 @@ const run = promisify(execFile);
 const args = process.argv.slice(2);
 const SYSTEM = args.includes('--system');
 const PLAN = SYSTEM ? 'tools/fpga-system.py' : args.includes('--floorplan') ? 'tools/fpga-top.py' : null;
-const SEEDS = Number(args.find((a) => !a.startsWith('--')) ?? 16);
+const JOBS = args.includes('--jobs') ? Number(args[args.indexOf('--jobs') + 1]) : Infinity;
+const SEEDS = Number(args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--jobs') ?? 16);
 const OUT = SYSTEM ? 'build/speed-system' : 'build/speed';
 const MODULES = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare',
-  ...(SYSTEM ? ['video/video', 'video/timing', 'video/background', 'video/foreground', 'video/sprites'] : [])];
+  ...(SYSTEM ? ['spiboot', 'video/video', 'video/timing', 'video/background', 'video/foreground', 'video/sprites'] : [])];
 
 const have = async (cmd) => {
   try { await run('sh', ['-c', `command -v ${cmd}`]); return true; } catch { return false; }
@@ -90,7 +94,7 @@ const place = async (seed) => {
   };
 };
 
-const limit = Math.max(1, Math.min(cpus().length, SEEDS));
+const limit = Math.max(1, Math.min(cpus().length, SEEDS, JOBS));
 const seeds = [...Array(SEEDS).keys()].map((i) => i + 1);
 const results = [];
 for (let i = 0; i < seeds.length; i += limit)

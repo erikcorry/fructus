@@ -15,8 +15,9 @@
 //
 // This copies rtl/ to build/dontcare/rtl, rewrites every x digit of every
 // literal assigned there to 0, to 1, or to random bits, and runs
-// tests/rtl-check.mjs, tests/cpu-check.mjs and tests/blit-check.mjs on the
-// copy, through their FRUCTUS_RTL.  They must pass every way.
+// tests/rtl-check.mjs, tests/cpu-check.mjs, tests/blit-check.mjs and
+// tests/boot-check.mjs on the copy, through their FRUCTUS_RTL.  They must pass
+// every way.
 //
 // THE CASE OF THE x SAYS WHY IT IS ONE.  Verilog does not distinguish them;
 // this does, so the two can be filled apart with --only:
@@ -91,7 +92,7 @@ function fill(dir, mode) {
 }
 
 const WHAT = { zero: 'zeros', one: 'ones' };
-const TESTS = ['rtl-check', 'cpu-check', 'blit-check'];
+const TESTS = ['rtl-check', 'cpu-check', 'blit-check', 'boot-check'];
 const DIR = 'build/dontcare/rtl';
 const TIMEOUT = 300;    // seconds a test may take; cpu-check, the longest, needs 45
 let failed = false;

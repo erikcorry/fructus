@@ -109,6 +109,17 @@ const EXCEPTIONS = {
   // mul, clz and popcount ran routines here once, taking their results into
   // ldq; the ALU stage holds them a second cycle now - rtl/cpu.sv.
 };
+// THE BOOT LOOP IS ENTRY 0, the idle routine's.  Idle reads only its word 0,
+// which stays all zeros; no opcode starts entry 0, so its words 1 .. 7 are
+// read only when rtl/cpu.sv's `boot` starts the sequencer there from reset.
+// No step says D, so the step count wraps and the eight steps go round for as
+// long as `boot` is held, one byte stored a lap: WE in word 4, its access in
+// word 5, at mar, which starts at 0 and steps up a byte.  The byte is not the
+// processor's - the system puts the flash's byte on the memory's data pins
+// while it boots - so the store reads no register.  A lap is eight cycles
+// because a byte is eight bits of single SPI at the processor's clock;
+// tools/fpga-system.sv's streamer keeps the two in step.
+const BOOT = [{}, {}, {}, {}, { WE: 1 }, { A: 1 }, {}, {}];
 // Which routine an instruction that is not a memory instruction runs.
 const NAMED = { brk: 'brk', rti: 'rti', sei: 'sei', cli: 'cli' };
 
@@ -126,7 +137,7 @@ export const ALIGN = 1 << (ENTRY_BITS - 2);
 // The shapes the instruction set has: ld, ld8, st and st8 move one register
 // and are no block; the block moves are two bytes a register.  Each family is
 // a routine and its variants, by the bits that choose them.
-const FAMILIES = [{ variants: { 0: { name: 'idle', key: 'idle', steps: [] } } }];
+const FAMILIES = [{ variants: { 0: { name: 'idle/boot', key: 'idle', steps: BOOT } } }];
 for (const st of [0, 1])
   for (const blk of [0, 1])
     for (const w2 of [0, 1])

@@ -486,7 +486,7 @@ writeFileSync('build/cpu-tb.sv', `module tb;
     wire [1:0] we;
     wire halted, trapped, ret;
 ${BLIT_WIRING}
-    cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
+    cpu u (.clk(clk), .rst(rst), .boot(1'b0), .mem_addr(addr), .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(we), .irq(1'b0),
 \`ifdef FRUCTUS_BLIT
                 .blit(\`BLIT_ON), .mem_late(late), .mem_data(rdata),
@@ -681,7 +681,7 @@ writeFileSync('build/cpu-irq-tb.sv', `module tb;
     wire [1:0] we;
     wire halted, trapped;
 ${BLIT_WIRING}
-    cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
+    cpu u (.clk(clk), .rst(rst), .boot(1'b0), .mem_addr(addr), .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(we), .irq(irq),
 \`ifdef FRUCTUS_BLIT
                 .blit(\`BLIT_ON), .mem_late(late), .mem_data(rdata),

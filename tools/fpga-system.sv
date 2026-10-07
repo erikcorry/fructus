@@ -106,11 +106,30 @@
 // before software has written it.
 // =============================================================================
 
-module top (input logic clk, input logic din, input logic irq, output wire dout,
-            output logic hsync_n, vsync_n, output logic [2:0] red, green, blue);
+module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests do
+           (input logic clk, input logic din, input logic irq, output wire dout,
+            output logic hsync_n, vsync_n, output logic [2:0] red, green, blue,
+            output wire flash_sck, flash_cs_n, flash_mosi, input logic flash_miso);
 
-    logic rst_q, rst;
-    always_ff @(posedge clk) begin rst_q <= din; rst <= rst_q; end
+    // THE PROCESSOR'S MEMORY IS FILLED FROM THE FLASH AT POWER-UP, and again
+    // whenever din is held: rtl/spiboot.sv.  While `boot` is set the
+    // processor's stores - its boot loop, rtl/cpu.sv - write the flash's byte
+    // and not their own, and the register block and the frame buffers take no
+    // write, so an image's bytes in the I/O page set no mode.
+    logic rst_q = 1'b0, start = 1'b0, rst, boot;
+    always_ff @(posedge clk) begin rst_q <= din; start <= rst_q; end
+    wire [7:0] boot_byte; wire spi_on;
+    if (BOOT) begin : g_boot
+        spiboot sb (.clk, .start, .rst, .boot, .on(spi_on), .mosi(flash_mosi),
+                    .miso(flash_miso), .byte_q(boot_byte));
+    end else begin : g_noboot
+        always_ff @(posedge clk) rst <= start;
+        assign boot = 1'b0, spi_on = 1'b0, boot_byte = 8'h00, flash_mosi = 1'b0;
+    end
+    // The flash's clock, high in the low half of each cycle the read is on.
+    SB_IO #(.PIN_TYPE(6'b0100_01)) sck_pad (.PACKAGE_PIN(flash_sck), .OUTPUT_CLK(clk),
+                                             .D_OUT_0(1'b0), .D_OUT_1(spi_on));
+    assign flash_cs_n = ~spi_on;
     logic irq_q, irq_s;
     always_ff @(posedge clk) begin irq_q <= irq; irq_s <= irq_q; end
 
@@ -126,11 +145,12 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
 
     // --- the processor's own 64 KB ----------------------------------------------
     wire [15:0] lo_word, hi_word;
-    SB_SPRAM256KA ram_lo (.ADDRESS(addr[14:1]), .DATAIN(wdata),
+    wire [15:0] mdata = boot ? {boot_byte, boot_byte} : wdata;
+    SB_SPRAM256KA ram_lo (.ADDRESS(addr[14:1]), .DATAIN(mdata),
                           .MASKWREN(we && !hi ? mask : 4'h0), .WREN(we && !hi),
                           .CHIPSELECT(1'b1), .CLOCK(clk), .STANDBY(1'b0),
                           .SLEEP(1'b0), .POWEROFF(1'b1), .DATAOUT(lo_word));
-    SB_SPRAM256KA ram_hi (.ADDRESS(addr[14:1]), .DATAIN(wdata),
+    SB_SPRAM256KA ram_hi (.ADDRESS(addr[14:1]), .DATAIN(mdata),
                           .MASKWREN(we && hi && !blit ? mask : 4'h0), .WREN(we && hi && !blit),
                           .CHIPSELECT(1'b1), .CLOCK(clk), .STANDBY(1'b0),
                           .SLEEP(1'b0), .POWEROFF(1'b1), .DATAOUT(hi_word));
@@ -165,7 +185,7 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     // sixteen seeds, floorplanned.  The price is the optimisations across its
     // ports, which here are wiring.
     (* keep_hierarchy *)
-    cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(rdata),
+    cpu u (.clk(clk), .rst(rst), .boot(boot), .mem_addr(addr), .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(lanes), .blit(blit), .mem_late(late), .mem_data(dword),
                 .irq(irq_s), .halted(halted), .trapped(trapped), .result(result),
                 .retire(), .retire_pc());
@@ -183,7 +203,7 @@ module top (input logic clk, input logic din, input logic irq, output wire dout,
     // dropped.  See [cpu.io] in isa/fructus.toml for why.
     logic [15:0] addr_w; logic [15:0] wword_w; logic [3:0] mask_w; logic we_w, fb_w, to_a_w, to_a_2;
     always_ff @(posedge clk) begin
-        addr_w <= addr; wword_w <= wdata; we_w <= we; mask_w <= mask;
+        addr_w <= addr; wword_w <= wdata; we_w <= we & ~boot; mask_w <= mask;
         fb_w <= blit | wthru; to_a_w <= !want_a; to_a_2 <= to_a_w;
     end
     // [0] front porch, [1] sync, [2] back porch, [3] pixels or lines.

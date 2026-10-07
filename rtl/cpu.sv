@@ -392,6 +392,9 @@
 module cpu (
     input  logic        clk,
     input  logic        rst,
+    input  logic        boot,        // <- the system: from reset, store a byte every
+                                     //    eight cycles at 0, 1, 2 ... - see THE BOOT
+                                     //    LOOP; held through rst, dropped under it
     output logic [15:0] mem_addr,    // -> memory: the word is [15:1]; [0] is clear for
                                      //    every fetch, and for a store says nothing
                                      //    mem_we does not
@@ -523,7 +526,7 @@ module cpu (
     always_ff @(posedge clk) begin
         nxt <= hi;
         if (rst) begin
-            {pcb, pcl, pcc} <= 17'd0; go <= 1'b0; stop <= 1'b0; use_nxt <= 1'b0;
+            {pcb, pcl, pcc} <= 17'd0; go <= 1'b0; stop <= boot; use_nxt <= 1'b0;
         end else if (taken_q) begin
             // The target's word is being read now; it dispatches next cycle.
             {pcb, pcl, pcc} <= {tgt_q, 1'b0}; go <= 1'b1; stop <= 1'b0; use_nxt <= 1'b0;
@@ -843,6 +846,25 @@ module cpu (
     // into the ROM's address, and none of the adder's chain.  From then on
     // `mal` says every access moves a word: a capture takes the whole word,
     // a store writes both lanes, and mar steps by two.
+    //
+    // THE BOOT LOOP FILLS MEMORY FROM RESET, since the UP5K's SPRAM cannot be
+    // initialised by the bitstream and the block RAMs can.  Reset with `boot`
+    // leaves the sequencer running entry 0 - mact set, the step, the entry
+    // and mar zero, a byte store's mst and mal - and dispatch stopped.  Entry
+    // 0's word 0 is idle's, all zeros; its words 1 .. 7, which nothing else
+    // reads, store one byte a lap, and with no D the step count wraps, so
+    // the eight steps go round until the system resets again without `boot`.
+    // The byte stored is not wq's: the system puts the flash's on the
+    // memory's data pins, so nothing new stands between the register file
+    // and the store port.  Counting from the first cycle out of reset as 0,
+    // a lap's word k is in cycle 8n + k for n >= 0 and k >= 1 - cycle 0 has
+    // word 1 too, read throughout reset - so byte n is written at the edge
+    // ending cycle 8n + 5.  tools/fpga-system.sv's streamer keeps to that.
+    // It costs the reset arms on six of the sequencer's flops, and nothing
+    // on an address or data path: 7 LUT4s, and medians of sixteen of 30.85
+    // MHz against 30.28 before it, spread 30.0 .. 32.5 against 29.4 .. 31.4;
+    // the whole system, with rtl/spiboot.sv, 35 LUT4s and 27.19 against
+    // 26.74, spread 26.5 .. 28.0 against 25.4 .. 27.5 - noise, both.
 `ifdef FRUCTUS_BLIT
     // A STACK ABOVE 0x8000 IS A FAULT IN BLIT MODE.  There a push's bytes are
     // stores, and go to the frame buffer, while pop keeps its ordinary routine
@@ -998,10 +1020,15 @@ module cpu (
     // - from the SPRAM, through a register number and the read - ended.
 
     always_ff @(posedge clk) begin
-        if (rst)         mact <= 1'b0;
+        if (rst)         mact <= boot;
         else if (mstart) mact <= 1'b1;
         else if (mdone)  mact <= 1'b0;
-        if (mstart) begin
+        if (rst) begin
+            // The boot loop's state; the rest is the system's or unused.
+            mu <= 3'd0; ment <= 5'd0; mar <= 16'd0;
+            {mst, mal} <= 2'b10;
+            weq <= 1'b0;
+        end else if (mstart) begin
             mu  <= 3'd0;
             ment <= uent;
             mar <= ea;

@@ -346,7 +346,8 @@ writeFileSync('build/blit-tb.sv', `module tb;
     // The interrupt line: raised once the program says it is waiting, and
     // held until the handler has counted two entries - brk's and its own.
     wire irq = dut.ram_lo.mem[${(RESULT + 44) >> 1}] == 16'd1 && dut.ram_lo.mem[${(RESULT + 40) >> 1}] < 16'd2;
-    top dut (.clk, .din, .irq, .dout, .hsync_n, .vsync_n, .red, .green, .blue);
+    top #(.BOOT(0)) dut (.clk, .din, .irq, .dout, .hsync_n, .vsync_n, .red, .green, .blue,
+                         .flash_sck(), .flash_cs_n(), .flash_mosi(), .flash_miso(1'b0));
     integer cyc, k;
     initial begin
         $readmemh("build/blit-lo.hex",  dut.ram_lo.mem);
@@ -381,7 +382,7 @@ const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond',
   .map((m) => `${DIR}/${m}.sv`);
 const VIDEO = ['video', 'timing', 'background', 'foreground', 'sprites'].map((m) => `${DIR}/video/${m}.sv`);
 execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', '-DNO_ICE40_DEFAULT_ASSIGNMENTS', '-o', 'build/blit-tb.vvp',
-  ...RTL, ...VIDEO, CELLS, 'tools/fpga-system.sv', 'build/blit-tb.sv'], { stdio: ['ignore', 'ignore', 'inherit'] });
+  ...RTL, ...VIDEO, `${DIR}/spiboot.sv`, CELLS, 'tools/fpga-system.sv', 'build/blit-tb.sv'], { stdio: ['ignore', 'ignore', 'inherit'] });
 const out = execFileSync('vvp', ['-n', 'build/blit-tb.vvp'], { encoding: 'utf8' });
 
 // --- a stack above 0x8000 in blit mode: a fault --------------------------------------

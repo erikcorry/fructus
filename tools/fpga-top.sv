@@ -14,7 +14,8 @@
 // optimised away.
 // =============================================================================
 
-module top (input logic clk, input logic din, input logic irq, output wire dout);
+module top (input logic clk, input logic din, input logic irq, input logic boot,
+            output wire dout);
 
     logic rst_q, rst;
     always_ff @(posedge clk) begin rst_q <= din; rst <= rst_q; end
@@ -25,6 +26,9 @@ module top (input logic clk, input logic din, input logic irq, output wire dout)
     // the number would describe a processor that cannot be interrupted.
     logic irq_q, irq_s;
     always_ff @(posedge clk) begin irq_q <= irq; irq_s <= irq_q; end
+    // And so does BOOT, for the same reason: the boot loop's reset arms.
+    logic boot_q, boot_s;
+    always_ff @(posedge clk) begin boot_q <= boot; boot_s <= boot_q; end
 
     wire [15:0] addr;
     wire [15:0] word;
@@ -38,7 +42,7 @@ module top (input logic clk, input logic din, input logic irq, output wire dout)
 
     wire halted, trapped;
     wire [15:0] result;
-    cpu u (.clk(clk), .rst(rst), .mem_addr(addr), .mem_rdata(word),
+    cpu u (.clk(clk), .rst(rst), .boot(boot_s), .mem_addr(addr), .mem_rdata(word),
                 .mem_wdata(wdata), .mem_we(we), .irq(irq_s),
                 .halted(halted), .trapped(trapped), .result(result), .retire(), .retire_pc());
 
