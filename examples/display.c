@@ -100,8 +100,8 @@ int main (void)
   uint16_t ball[63];
   make_ball (ball);
 
-  display_pattern (0, ball);
-  display_palette (1, ball_colours, 3);
+  display_set_pattern (0, ball);
+  display_set_palette (1, ball_colours, 3);
 
   /* B is shown at power-up, so A is the processor's.  */
   DISPLAY_MODE = DISPLAY_WRITETHRU;
@@ -112,7 +112,7 @@ int main (void)
   int x = 0, y = 100, dx = 6, dy = 4;
   for (int frame = 0; frame < 60; frame++) {
     display_vblank ();
-    display_sprite (0, x, y, 0, 0, 1, 2, 3);
+    display_set_sprite (0, x, y, 0, 0, 1, 2, 3);
     x += dx; y += dy;
     if (x < 0 || x > 640 - 24) dx = -dx;
     if (y < 0 || y > 480 - 21) dy = -dy;

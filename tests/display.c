@@ -25,9 +25,9 @@ static const uint16_t square[63] = {
 
 int main (void)
 {
-  display_palette (1, colours, 1);
-  display_pattern (2, square);
-  display_sprite (0, 100, 100, 2, 0, 1, 0, 0);
+  display_set_palette (1, colours, 1);
+  display_set_pattern (2, square);
+  display_set_sprite (0, 100, 100, 2, 0, 1, 0, 0);
 
   /* 1. WRITETHRU, B shown: stores go to A, loads are the processor's.  */
   DISPLAY_MODE = DISPLAY_WRITETHRU;
@@ -72,5 +72,11 @@ int main (void)
   if (DISPLAY_LINE (s) >= 480) return 5;
   while (!((s = DISPLAY_STATUS) & DISPLAY_VBLANK)) ;
   if (DISPLAY_LINE (s) != 0) return 6;
+
+  /* 6. display_line: a line 0-479 while drawing, -1 in the blank.  */
+  int n;
+  while ((n = display_line ()) < 0) ;
+  if (n > 479) return 7;
+  while ((n = display_line ()) >= 0) if (n > 479) return 8;
   return 0;
 }
