@@ -108,6 +108,10 @@ function call(entry, dest, src, n) {
     after: m.mem.slice(BUF, BUF + SPAN),
     ret: m.R[0], sp: m.R[m.named.sp], r3: m.R[3], r4: m.R[4],
     cycles: m.cycles(),
+    // The first word either routine pushed: memcpy's `push r0, lr` leaves
+    // dest there, memmove's descending `push lr, r3, r4` leaves the return
+    // address.  The stack below SP0 is FILL before every call.
+    pushed: m.mem[SP0 - 2] | m.mem[SP0 - 1] << 8,
   };
 }
 
@@ -165,25 +169,26 @@ function verify(name, r, dest, src, n) {
 }
 
 // CORRECTNESS DOES NOT PIN THE DISPATCH DOWN.  A memmove that always descends
-// passes every byte comparison above and is two to three times slower on the
-// copies that did not need it; so does one whose second test is strict rather
-// than inclusive, which sends exactly-abutting regions the long way round.
-// Neither shows up as a wrong byte, so the path is measured instead.
+// passes every byte comparison above and is a little slower on the copies
+// that did not need it; so does one whose second test is strict rather than
+// inclusive, which sends exactly-abutting regions the long way round.  Neither
+// shows up as a wrong byte, so the path is read off the stack instead.
 //
-// The two loops are far enough apart to tell by cost alone - the bulk loop runs
-// at 2.63 cycles/byte, or 3.13 when dest and src differ in parity, and the
-// descending byte loop at 15 - so anything under 8
-// went ascending.  Only lengths of 32 and up are judged, where the byte-loop
-// head and the prologue no longer dominate.
-const ASCENDING = 8;
+// NOT BY COST.  This used to time the call, when the descending loop moved a
+// byte at a time at 15 cycles a byte; it is 2.94 now, against memcpy's 2.63,
+// and an odd placement puts the two on top of each other.  What does tell them
+// apart is the first word each one pushes - see `pushed` in call() - and that
+// holds at every length, so every length is judged.
 function dispatch(name, r, dest, src, n) {
-  if (n < 32 || r.why !== 'stopped') return;
-  const ascended = r.cycles / n < ASCENDING;
+  if (r.why !== 'stopped') return;
+  const ascended = r.pushed === dest;
+  const descended = r.pushed === RET;
   // Ascending is legal exactly when the write never overtakes the read.
   const legal = dest <= src || src + n <= dest;
-  check(name, ascended === legal,
-        legal ? `descended ${(r.cycles / n).toFixed(2)} c/B where ascending was legal`
-              : `ascended at ${(r.cycles / n).toFixed(2)} c/B over a real overlap`);
+  check(name, ascended !== descended && ascended === legal,
+        !ascended && !descended ? `pushed 0x${r.pushed.toString(16)}, which neither path does`
+        : legal ? `descended where ascending was legal`
+                : `ascended over a real overlap`);
 }
 
 // --- memmove: every overlap in a window -------------------------------------
@@ -251,6 +256,22 @@ function dispatch(name, r, dest, src, n) {
   check('memcpy tail cost', Math.abs(tail - 46 / 15) < 0.0001, `${tail.toFixed(2)} cycles/byte`);
   console.log(`ok    bulk loop ${per.toFixed(4)} cycles/byte, ` +
               `tail ${tail.toFixed(2)} for up to 15 bytes`);
+}
+
+// --- and so does memmove's, going down ---------------------------------------
+// dest two above src, so every call overlaps and descends.  The alignment byte
+// matters here as it does for memset: an odd source end must cost the loop
+// nothing, which only the cost can show.
+{
+  const entry = syms.get('memmove');
+  const cost = (n, odd = 0) => call(entry, BUF + HIGH + 2 + odd, BUF + HIGH + odd, n).cycles;
+  const loop = (odd) => (cost(MAXN, odd) - cost(64, odd)) / (MAXN - 64);
+  const per = loop(0);
+  check('memmove bulk cost', Math.abs(per - 47 / 16) < 0.0001,
+        `${per.toFixed(4)} cycles/byte, the file says 47 for 16`);
+  check('memmove aligns an odd source end', Math.abs(loop(1) - per) < 0.0001,
+        `the loop costs ${loop(1).toFixed(4)} cycles/byte from an odd end, ${per.toFixed(4)} from an even one`);
+  console.log(`ok    descending loop ${per.toFixed(4)} cycles/byte, even or odd`);
 }
 
 // --- memset and bzero -------------------------------------------------------
@@ -383,7 +404,7 @@ function dispatch(name, r, dest, src, n) {
 // --- sizes, so the compactness claim is checkable ---------------------------
 {
   const mm = syms.get('memmove'), mc = syms.get('memcpy');
-  console.log(`ok    sizes: memmove ${mc - mm} bytes, memcpy ${code.length - mc} bytes, ` +
+  console.log(`ok    sizes: memcpy ${mm - mc} bytes, memmove ${code.length - mm} bytes, ` +
               `${code.length} together`);
 }
 
