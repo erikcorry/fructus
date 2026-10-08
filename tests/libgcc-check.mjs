@@ -102,19 +102,16 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
 }
 
 // --- the `_mul' routines, which use the multiplier ---------------------------
-// What gcc -mmul calls.  The sim has mul, so they run here like the rest.
-// Four byte products and no branch, so besides the products, the timing is
-// checked to be the same for every operand - a branch slipped in would show.
-// The 16-bit pair keep r2 and r3 as well as r4: two arguments and a 32-bit
-// result leave both callee saved, and inline gcc relies on it.
+// What gcc -mmul calls.  The sim has mul and mulhu, so they run here like
+// the rest.  __mulsi3_mul has no branch, so besides the products, the timing
+// is checked to be the same for every operand - a branch slipped in would
+// show.
 {
   const R2 = 0x2222, R3 = 0x3333;
   const wide = [];
   for (const [a, b] of pairs) wide.push([a, b, r16(), r16()]);
   for (const a of edge) for (const b of edge) wide.push([a, b, b, a], [a, a, b, b]);
   for (const [name, args, want, keeps] of [
-    ['__umulhisi3_mul', 2, ([a, b]) => BigInt(a) * BigInt(b), true],
-    ['__mulhisi3_mul', 2, ([a, b]) => BigInt(s16(a) * s16(b)) & 0xffffffffn, true],
     ['__mulsi3_mul', 4, ([a, b, c, d]) =>
        ((BigInt(a) | BigInt(b) << 16n) * (BigInt(c) | BigInt(d) << 16n)) & 0xffffffffn, false],
   ]) {
@@ -267,8 +264,8 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   }
   check('__umulsidi3', wrong === 0, `${wrong} of ${cases.length} wrong, e.g. ${eg}`);
 
-  // __umulsidi3_mul is the same carries over __umulhisi3_mul, so the same
-  // sweep - which is the only thing that reaches its second carry test.
+  // __umulsidi3_mul tests its carries as __umulsidi3 does, so the same
+  // sweep - which is the only thing that reaches the ones that wrap w2.
   let wrongM = 0, egM = '';
   for (const [A, B] of cases) {
     const q = wide(A, B, '__umulsidi3_mul');
@@ -293,8 +290,9 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   check('__umulsidi3 shortcut', half < full / 3,
         `16-bit values cost ${half.toFixed(0)} against ${full.toFixed(0)} for 32-bit ones`);
   const fullM = cost((b) => [(b(16) << 16n) | b(16), (b(16) << 16n) | b(16)], '__umulsidi3_mul');
+  const halfM = cost((b) => [b(16), b(16)], '__umulsidi3_mul');
   console.log(`ok    __umulsidi3 and __umulsidi3_mul: ${cases.length} products each against BigInt; ` +
-              `${full.toFixed(0)} and ${fullM.toFixed(0)} cycles full width, ${half.toFixed(0)} narrow`);
+              `${full.toFixed(0)} and ${fullM.toFixed(0)} cycles full width, ${half.toFixed(0)} and ${halfM.toFixed(0)} narrow`);
 }
 
 // --- __udivmodhi4 and the four division helpers ------------------------------

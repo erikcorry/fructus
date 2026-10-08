@@ -439,8 +439,8 @@ endmodule
   // rtl/alu.sv's `alu` for every one-cycle operation, its `slow` for clz and
   // popcount and its `mul` for the product, each of which answers for the
   // operands of the edge before.  Op 13 is the sequencer's word, which the
-  // bench drives with rhs; 16 and 17 name `slow` and `mul` here, not codes
-  // the processor has.
+  // bench drives with rhs; 16 names `slow` here, and 17, 18 and 19 `mul`'s
+  // three halves - mul, mulhu, mulhs - not codes the processor has.
   const rows = [];
   const row = (op, l, r, w) => `${op} ${hex4(l)} ${hex4(r)} ${hex4(w)}`;
   for (const [l, r] of pairs) {
@@ -455,6 +455,8 @@ endmodule
     rows.push(row(OP.movhi, l, r, ((r & 0xff) << 8) | (l & 0xff)));
     rows.push(row(13, l, r, r));
     rows.push(row(17, l, r, Math.imul(l, r)));
+    rows.push(row(18, l, r, BUILTIN.mulhu(l, r)));
+    rows.push(row(19, l, r, BUILTIN.mulhs(l, r)));
     for (const nm of ['shl', 'lsr', 'asr']) rows.push(row(OP[nm], l, r, BUILTIN[nm](l, r & 15)));
     // the operation rides bits 2:1 of the right-hand operand, which is the
     // imm3 value its encoding names - exactly what the processor puts there;
@@ -476,7 +478,8 @@ endmodule
     wire [2:0] ls = op == 2 ? 3'd6 : op == 3 ? 3'd7 : op == 10 ? 3'd4 : op == 13 ? 3'd5 : op[2:0] - 3'd4;
     alu  u (.clk(clk), .lhs(l), .rhs(r), .op(op == 16 ? 4'd12 : grp ? 4'd4 : op[3:0]), .two(op == 16),
             .lsel(ls), .mdata(r), .y(y), .sum());
-    mul  m (.clk(clk), .a(l), .b(r), .p(py));
+    // mul's z as rtl/classify.sv's lsel has it: a 0 for the half kept.
+    mul  m (.clk(clk), .a(l), .b(r), .z(op == 18 ? 3'b101 : op == 19 ? 3'b011 : 3'b110), .p(py));
     initial begin
         f = $fopen("build/alu-tb.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
@@ -485,7 +488,7 @@ endmodule
             if (rr == 4) begin
                 // one clock, so slow and mul have their answers too
                 #1 clk = 1; #1 clk = 0; #1 clk = 1; #1 clk = 0; #1; n = n + 1;
-                got = op == 17 ? py : y;
+                got = op >= 17 ? py : y;
                 if (got !== want_) begin
                     bad = bad + 1;
                     if (bad < 6) $display("  MISMATCH op=%0d lhs=%h rhs=%h: want %h got %h", op, l, r, want_, got);

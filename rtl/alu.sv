@@ -4,9 +4,10 @@
 //
 // WRITTEN BY HAND, as rtl/cpu.sv is.  The operation codes are
 // tools/control.js's, so tools/predecode-rows.js's rows mean the same thing
-// here.  mul's SB_MAC16, `mul` below, delivers a cycle late: its product is
-// op 14, and rtl/cpu.sv holds a mul in the ALU stage a second cycle, as it
-// does clz and popcount, so the second writes the right product.
+// here.  The SB_MAC16s, `mul` below, deliver a cycle late: their product is
+// op 14 - mul's low half, or mulhu's or mulhs's high half - and rtl/cpu.sv
+// holds the instruction in the ALU stage a second cycle, as it does clz and
+// popcount, so the second writes the right product.
 //
 // clz AND popcount ARE THE UNARY CODE, with `two` set, and take two cycles
 // here: the first half's result goes into a flop of the ALU's own, q, and the
@@ -40,7 +41,7 @@ module alu (
     input  logic [3:0]  op,
     input  logic [2:0]  lsel,    // with op 4: which of the fast group - flops of their own
     input  logic        two,     // with the unary code: clz or popcount, from q
-    input  logic [15:0] prod,    // the SB_MAC16's product, op 14: mul, held until it is right
+    input  logic [15:0] prod,    // the SB_MAC16s' product, op 14: mul, mulhu, mulhs, held until it is right
     input  logic [15:0] mdata,   // the memory sequencer's word: what a load or a
                                  // block move's pointer writes: the fast group's member 5
     output logic [15:0] y,
@@ -127,27 +128,41 @@ module alu (
 endmodule
 
 // =============================================================================
-// mul - the low half of a 16 x 16 product, a cycle late
+// mul - a 16 x 16 product, either half, a cycle late
 // =============================================================================
 //
-// THE SB_MAC16 MULTIPLIES aq BY bq EVERY CYCLE into its own output register,
+// THE SB_MAC16s MULTIPLY aq BY bq EVERY CYCLE into their own output registers,
 // so the product of a mul's first ALU cycle's operands is there in its
 // second, through the result mux's op 14; the first writes a wrong one.
-// Its inputs are the operand flops themselves, with nothing between: a bare
+// Their inputs are the operand flops themselves, with nothing between: a bare
 // wire from a flop is all that pulls toward the DSP's column, which is how it
 // avoids what yosys's -dsp did to the byte-serial core's alu.sv - copy the flops in front of it
-// into the DSP and drag their logic after them.  So it is instantiated, with
-// the parameters the byte-serial core's alu.sv had, and nothing passes -dsp.
+// into the DSP and drag their logic after them.  So they are instantiated,
+// and nothing passes -dsp.
+//
+// mul, mulhu AND mulhs ARE ONE OPERATION HERE, and no mux chooses between
+// their results.  Each output register is the DSP's accumulator, loading
+// product + C (or D), with C and D tied to zero - and its OLOAD pin, which
+// loads C or D instead, makes it zero.  `z' is rtl/classify.sv's lsel, a
+// flop set with the operands: one bit for each of the three halves, the low,
+// the unsigned high and the signed high, and a 1 zeroes it.  Two are always
+// set, so the product is the three OR'd - one LUT level, where choosing
+// would be two.  The signed high half is a second SB_MAC16's, configured
+// signed: the sign is a parameter, not a pin.
 module mul (
     input  logic        clk,
     input  logic [15:0] a,
     input  logic [15:0] b,
-    output logic [15:0] p        // a * b of the last edge's operands
+    input  logic [2:0]  z,       // zero {signed high, unsigned high, low}: lsel
+    output logic [15:0] p        // the half z kept, of the last edge's operands
 );
 
-    // The DSP itself for synthesis, and for tests/cpu-check.mjs's pass
-    // against yosys's model of it, which checks these parameters; a plain
-    // registered multiply otherwise.
+    logic [15:0] lo, hu, hs;
+    assign p = lo | hu | hs;
+
+    // The DSPs themselves for synthesis, and for tests/cpu-check.mjs's pass
+    // against yosys's model of them, which checks these parameters; plain
+    // registered multiplies otherwise.
 `ifdef SYNTHESIS
  `define CPU_MAC
 `endif
@@ -155,26 +170,55 @@ module mul (
  `define CPU_MAC
 `endif
 `ifdef CPU_MAC
-    wire [31:0] o;
+    // Each 16-bit half through its adder, plus C or D - zero - and into the
+    // output register: OUTPUT_SELECT 01.  The adders take no carry from each
+    // other, and no pipeline register sits before them, so the product is the
+    // operands' of the edge that loads it.
+    wire [31:0] ou, os;
     SB_MAC16 #(
         .A_REG(1'b0), .B_REG(1'b0), .C_REG(1'b0), .D_REG(1'b0),
         .TOP_8x8_MULT_REG(1'b0), .BOT_8x8_MULT_REG(1'b0),
-        .PIPELINE_16x16_MULT_REG1(1'b0), .PIPELINE_16x16_MULT_REG2(1'b1),
-        .TOPOUTPUT_SELECT(2'b11), .BOTOUTPUT_SELECT(2'b11),
-        .TOPADDSUB_LOWERINPUT(2'b10), .TOPADDSUB_UPPERINPUT(1'b1), .TOPADDSUB_CARRYSELECT(2'b11),
+        .PIPELINE_16x16_MULT_REG1(1'b0), .PIPELINE_16x16_MULT_REG2(1'b0),
+        .TOPOUTPUT_SELECT(2'b01), .BOTOUTPUT_SELECT(2'b01),
+        .TOPADDSUB_LOWERINPUT(2'b10), .TOPADDSUB_UPPERINPUT(1'b1), .TOPADDSUB_CARRYSELECT(2'b00),
         .BOTADDSUB_LOWERINPUT(2'b10), .BOTADDSUB_UPPERINPUT(1'b1), .BOTADDSUB_CARRYSELECT(2'b00),
         .MODE_8x8(1'b0), .A_SIGNED(1'b0), .B_SIGNED(1'b0)
-    ) mac (
+    ) macu (
         .CLK(clk), .CE(1'b1), .A(a), .B(b), .C(16'd0), .D(16'd0),
         .AHOLD(1'b0), .BHOLD(1'b0), .CHOLD(1'b0), .DHOLD(1'b0),
         .IRSTTOP(1'b0), .IRSTBOT(1'b0), .ORSTTOP(1'b0), .ORSTBOT(1'b0),
-        .OLOADTOP(1'b0), .OLOADBOT(1'b0), .ADDSUBTOP(1'b0), .ADDSUBBOT(1'b0),
+        .OLOADTOP(z[1]), .OLOADBOT(z[0]), .ADDSUBTOP(1'b0), .ADDSUBBOT(1'b0),
         .OHOLDTOP(1'b0), .OHOLDBOT(1'b0), .CI(1'b0), .ACCUMCI(1'b0), .SIGNEXTIN(1'b0),
-        .O(o), .CO(), .ACCUMCO(), .SIGNEXTOUT()
+        .O(ou), .CO(), .ACCUMCO(), .SIGNEXTOUT()
     );
-    assign p = o[15:0];
+    // The same, signed, for its high half alone; its low half would be macu's.
+    SB_MAC16 #(
+        .A_REG(1'b0), .B_REG(1'b0), .C_REG(1'b0), .D_REG(1'b0),
+        .TOP_8x8_MULT_REG(1'b0), .BOT_8x8_MULT_REG(1'b0),
+        .PIPELINE_16x16_MULT_REG1(1'b0), .PIPELINE_16x16_MULT_REG2(1'b0),
+        .TOPOUTPUT_SELECT(2'b01), .BOTOUTPUT_SELECT(2'b01),
+        .TOPADDSUB_LOWERINPUT(2'b10), .TOPADDSUB_UPPERINPUT(1'b1), .TOPADDSUB_CARRYSELECT(2'b00),
+        .BOTADDSUB_LOWERINPUT(2'b10), .BOTADDSUB_UPPERINPUT(1'b1), .BOTADDSUB_CARRYSELECT(2'b00),
+        .MODE_8x8(1'b0), .A_SIGNED(1'b1), .B_SIGNED(1'b1)
+    ) macs (
+        .CLK(clk), .CE(1'b1), .A(a), .B(b), .C(16'd0), .D(16'd0),
+        .AHOLD(1'b0), .BHOLD(1'b0), .CHOLD(1'b0), .DHOLD(1'b0),
+        .IRSTTOP(1'b0), .IRSTBOT(1'b0), .ORSTTOP(1'b0), .ORSTBOT(1'b0),
+        .OLOADTOP(z[2]), .OLOADBOT(1'b1), .ADDSUBTOP(1'b0), .ADDSUBBOT(1'b0),
+        .OHOLDTOP(1'b0), .OHOLDBOT(1'b0), .CI(1'b0), .ACCUMCI(1'b0), .SIGNEXTIN(1'b0),
+        .O(os), .CO(), .ACCUMCO(), .SIGNEXTOUT()
+    );
+    assign lo = ou[15:0];
+    assign hu = ou[31:16];
+    assign hs = os[31:16];
 `else
-    always_ff @(posedge clk) p <= a * b;
+    wire [31:0] pu = a * b;
+    wire [31:0] ps = $signed(a) * $signed(b);
+    always_ff @(posedge clk) begin
+        lo <= z[0] ? 16'd0 : pu[15:0];
+        hu <= z[1] ? 16'd0 : pu[31:16];
+        hs <= z[2] ? 16'd0 : ps[31:16];
+    end
 `endif
 
 endmodule

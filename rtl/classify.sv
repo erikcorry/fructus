@@ -8,14 +8,14 @@
 // rtl/cpu.sv decides from kind, length and `two` whether the next dispatch
 // can follow at once, and latches the rest for the decode stage.
 //
-// 149 opcodes: 91 ALU, 45 microcoded - 40 of them memory instructions and
+// 153 opcodes: 95 ALU, 45 microcoded - 40 of them memory instructions and
 // 4 exception instructions or mul - 7 conditional branches, 6 jumps.
 // AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
 // MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
 // pc was worked out behind it, so the length is never used.  Pinned at one, as
 // it was, it measured 32.96 MHz against 33.59, and the length's lookup was on
 // the critical path in some seeds; free, it is on none.  The empty cells -
-// 107 of them - let synthesis carry the pattern of the rows and columns
+// 103 of them - let synthesis carry the pattern of the rows and columns
 // across them.
 // Rearranging the opcodes that ARE used, with the empties still pinned, made
 // it worse: 31.08.
@@ -107,12 +107,12 @@ module classify (
         8'h2d: t = 44'b00_10_1_0100_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_011;    // mov
         8'h2e: t = 44'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_100;    // movhi
         8'h2f: t = 44'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_100;    // movhi
-        8'h30: t = 44'b00_10_1_1110_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_xxx;    // mul
-        8'h31: t = 44'b00_11_1_1110_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_xxx;    // mul
+        8'h30: t = 44'b00_10_1_1110_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_110;    // mul
+        8'h31: t = 44'b00_11_1_1110_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_110;    // mul
         8'h32: t = 44'b00_10_1_1100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // clmul bitrev sxt8
         8'h33: t = 44'b00_10_1_1100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_xxx;    // clz popcount
-        8'h36: t = 44'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_xxx;    // mul
-        8'h37: t = 44'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_xxx;    // mul
+        8'h36: t = 44'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_110;    // mul
+        8'h37: t = 44'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_110;    // mul
         8'h38: t = 44'b00_10_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
         8'h39: t = 44'b00_11_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
         8'h3a: t = 44'b00_10_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // add
@@ -220,6 +220,10 @@ module classify (
         8'had: t = 44'b10_11_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x_0_xxxxx_00_x_xxx;    // brset
         8'hae: t = 44'b01_01_0_xxxx_xxxx_xxxx_xxxx_xx_xx_0_0_0_00_0_0_1_11101_00_0_xxx;    // sei
         8'haf: t = 44'b01_01_0_xxxx_xxxx_xxxx_xxxx_xx_xx_0_0_0_00_0_0_1_11111_00_0_xxx;    // cli
+        8'hb6: t = 44'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_101;    // mulhu
+        8'hb7: t = 44'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_101;    // mulhu
+        8'hbe: t = 44'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_011;    // mulhs
+        8'hbf: t = 44'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_01_x_011;    // mulhs
         default: t = 44'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_x_x;
         endcase
     end

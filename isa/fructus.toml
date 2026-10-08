@@ -1197,7 +1197,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   THE GROUPED REGION IS NOW FULL: fifteen rows of eight, 0000_1xxx through
 #   0111_1xxx, with no gaps between them.  A sixteenth grouped operation has
-#   nowhere contiguous to go, which is the price of the tidiness - there are 80
+#   nowhere contiguous to go, which is the price of the tidiness - there are 76
 #   free opcodes at 1011_xxxx and above, but none of them adjoin this block.
 #   ------------------------------------------------------------------------
 #
@@ -1284,7 +1284,11 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1010_1101                brset   ra, #immask5, target
 #   1010_1110                sei                        1 byte, ie = 1
 #   1010_1111                cli                        1 byte, ie = 0
-#   1011_0000 .. 1111_1111   -- free, 80 slots
+#   1011_0000 .. 1011_0101   -- free
+#   1011_011b                mulhu rd, ra, rb          2 bytes
+#   1011_1000 .. 1011_1101   -- free
+#   1011_111b                mulhs rd, ra, rb          2 bytes
+#   1100_0000 .. 1111_1111   -- free, 64 slots
 #
 #   AND THE COLUMNS SAY WHAT BYTE 1 LOOKS LIKE, exactly as they do everywhere
 #   else in the map:
@@ -2482,8 +2486,8 @@ semantics = "R[d] = clmul(R[a])"
 # nextpnr-ice40 0.7 DOES NOT TIME THROUGH SB_MAC16, so `just speed` cannot see
 # this path at all; icetime can.
 #
-# GCC DOES NOT USE IT YET.  The port has no mulhi3 pattern, so a multiply in C
-# is still a call to libgcc's __mulhi3.
+# GCC USES IT WITH -mmul, which is off by default: a part without the DSP has
+# no mul, and a multiply in C is then a call to libgcc's __mulhi3.
 
 [[insn]]
 mnemonic = "mul"
@@ -2524,6 +2528,64 @@ extra_cycles = 1
   name     = "reg_reg_imm10"
   encoding = "0011_0001  iiaa_addd  jjjj_jjjj"
   fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
+
+
+# --- mulhu, mulhs --------------------------------------------------------------
+# The HIGH sixteen bits of the same product, unsigned and signed.  Three
+# registers only, in the three-register columns of two empty rows:
+#
+#     0xb6  mulhu rd, ra, rb       2 bytes, with 0xb7
+#     0xbe  mulhs rd, ra, rb       2 bytes, with 0xbf
+#
+# NO IMMEDIATE FORMS.  A constant multiplier wanting the high half is a
+# division by a constant, which runs once per division; the constant's mov is
+# two or three bytes, and the opcodes are worth more than that.
+#
+# HERE THE SIGN MATTERS, so there are two.  0x8000 * 0x8000 is 0x4000_0000
+# unsigned and the same signed, but 0xffff * 0xffff is 0xfffe_0001 against
+# 0x0000_0001.  With mul they make every wider product: a 16 x 16 -> 32 is
+# mul and mulhu, and a 32 x 32 -> 32 is three muls and a mulhu.
+#
+# THEY ARE mul, TO EVERYTHING BUT THE DSPs.  All three are the ALU's op 14,
+# held a second cycle, and the classifier's `lsel` column - which op 14 had no
+# use for - says which half.  Its three bits go straight to the OLOAD pins of
+# two SB_MAC16s, one unsigned and one signed, and each half that is not
+# wanted loads zero into its output register in place of the product; the
+# ALU's op 14 is the three halves OR'd.  See rtl/alu.sv.
+
+[[insn]]
+mnemonic = "mulhu"
+summary  = "rd = high 16 bits of ra * rb, unsigned"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = mulhu(R[a], R[b])"
+extra_cycles = 1
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "1011_011b  ccaa_addd"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+[[insn]]
+mnemonic = "mulhs"
+summary  = "rd = high 16 bits of ra * rb, signed"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = mulhs(R[a], R[b])"
+extra_cycles = 1
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "1011_111b  ccaa_addd"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 
 # --- br ---------------------------------------------------------------------

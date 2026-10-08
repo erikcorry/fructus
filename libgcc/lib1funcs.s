@@ -15,9 +15,10 @@
 ;       __umulhisi3     16 x 16 -> 32     unsigned widening
 ;       __mulhisi3      16 x 16 -> 32     signed widening
 ;
-; which it does, with __umulsidi3 for 32 x 32 -> 64 as well.  With -mmul it
-; calls the `_mul' routines after __umulsidi3 instead, which are built from
-; the multiplier - see WITH THE MULTIPLIER below.
+; which it does, with __umulsidi3 for 32 x 32 -> 64 as well.  With -mmul a
+; 16 x 16 -> 32 is two instructions inline, and the wider products call the
+; `_mul' routines instead, which are built from the multiplier - see WITH
+; THE MULTIPLIER below.
 ;
 ; There is no divide instruction either, so the same again for division:
 ;
@@ -409,126 +410,23 @@ __umulsidi3:
 ; ============================================================================
 ; WITH THE MULTIPLIER - what gcc -mmul calls instead
 ; ============================================================================
-; mul is the LOW half of a 16 x 16 product and nothing more, so a part with a
-; multiplier still needs helpers for anything wider - just much faster ones.
-; They have names of their own rather than replacing the routines above: this
-; library is built once, without -mmul, and has to run on a part without one.
-; A program built with -mmul calls these; --gc-sections drops the rest.
+; mul is the low half of a 16 x 16 product and mulhu the high, so a part with
+; a multiplier makes a 16 x 16 -> 32 in two instructions, and gcc puts those
+; inline.  Anything wider still has helpers - just much faster ones.  They
+; have names of their own rather than replacing the routines above: this
+; library is built once, without -mmul, and has to run on a part without
+; one.  A program built with -mmul calls these; --gc-sections drops the rest.
 ;
-;       __umulhisi3_mul     16 x 16 -> 32 unsigned   45 bytes  39 cycles
-;       __mulhisi3_mul      16 x 16 -> 32 signed     45 bytes  39 cycles
-;       __mulsi3_mul        32 x 32 -> 32            53 bytes  43 cycles
-;       __umulsidi3_mul     32 x 32 -> 64 unsigned  102 bytes  50..266
+;       __mulsi3_mul        32 x 32 -> 32            13 bytes  14 cycles
+;       __umulsidi3_mul     32 x 32 -> 64 unsigned   83 bytes  15, or 54 on average
 ;
 ; and __muldi3_mul, in C on top of them, in the GCC tree's
 ; libgcc/config/fructus/lib2mul.c.  The cycles are from entry to the return.
-; The first three take the same for every operand, because they never
-; branch; __umulsidi3_mul is 50 when both high words are zero.
-;
-; ----------------------------------------------------------------------------
-; FOUR BYTE PRODUCTS, AND NO CARRY TESTED
-; ----------------------------------------------------------------------------
-; Split into bytes, every partial product fits in sixteen bits:
-;
-;       a*b = p11<<16 + (p01 + p10)<<8 + p00      p00 = a0*b0   p01 = a0*b1
-;                                                 p10 = a1*b0   p11 = a1*b1
-;
-; The cross products straddle the halves, which is where a carry would be.
-; Instead the low bytes are summed apart from the high bytes - three bytes
-; come to at most 0x2fc, so the sum cannot overflow and its top bits ARE the
-; carry:
-;
-;       s  = (p00 >> 8) + (p01 & 255) + (p10 & 255)
-;       lo = s:p00, a byte each                         - one movhi
-;       hi = p11 + (p01 >> 8) + (p10 >> 8) + (s >> 8)
-;
-; On a machine without flags a carry is a compare and a branch, and a taken
-; branch is four cycles; there are none here.
-;
-; s IS FORMED WITHOUT THE TWO MASKS, which would want a sixth register: the
-; whole of p01 and p10 are added, wrapping, and h << 8 taken back out, where
-; h = (p01 >> 8) + (p10 >> 8) is wanted for the high half anyway.  That is
-; exact modulo 2^16, and s's true value is far below it.
-;
-; SIGNED IS THE SAME CODE with four shifts arithmetic: the high bytes of the
-; operands, and of the two cross products.  a1*b0 is in -32640..32385 and
-; a1*b1 in -16256..16384, so every partial product is still exact in sixteen
-; bits and nothing needs correcting afterwards, as __mulhisi3 above does.
-; p00 and s are never negative, so their shifts stay logical.
-;
-; gcc emits the same sequence inline at -O2 - fructus.cc's
-; fructus_expand_byte_products - and for dividing by a constant, the high
-; half alone, with the divisor's reciprocal in mul's immediates.  These are
-; what -Os calls.
+; __mulsi3_mul never branches; __umulsidi3_mul is 15 when both high words
+; are zero, and 54 is its mean over random full-width operands.
 
 ; ============================================================================
-; __umulhisi3_mul - 16 x 16 -> 32, unsigned, with mul               45 bytes
-; ============================================================================
-;       r0  a, then the product LOW        r1  b, then the product HIGH
-;
-; Five values are live when the products are formed, and two arguments with a
-; 32-bit result make r2 and r3 callee saved under isa/abi.s - so eleven of the
-; 39 cycles are saving them.  Inline, gcc's allocator does better.
-
-__umulhisi3_mul:
-        push    r2, r3                  ; 6
-        lsr     r5, r0, #8              ; 1   a1
-        and     r0, r0, #0x00ff         ; 1   a0
-        lsr     r2, r1, #8              ; 1   b1
-        and     r1, r1, #0x00ff         ; 1   b0
-        mul     r3, r5, r1              ; 2   p10 = a1*b0
-        mul     r5, r5, r2              ; 2   p11 = a1*b1
-        mul     r2, r0, r2              ; 2   p01 = a0*b1
-        mul     r0, r0, r1              ; 2   p00 = a0*b0
-        lsr     r1, r0, #8              ; 1   p00 >> 8
-        add     r1, r1, r2              ; 1   + p01, wrapping
-        add     r1, r1, r3              ; 1   + p10
-        lsr     r2, r2, #8              ; 1
-        lsr     r3, r3, #8              ; 1
-        add     r2, r2, r3              ; 1   h = (p01 >> 8) + (p10 >> 8)
-        add     r5, r5, r2              ; 1   p11 + h
-        shl     r2, r2, #8              ; 1
-        rsb     r1, r2, r1              ; 1   s, the low bytes' sum
-        movhi   r0, r0, r1              ; 1   lo = s:p00
-        lsr     r1, r1, #8              ; 1   s's carry, 0..2
-        add     r1, r5, r1              ; 1   hi
-        pop     r3, r2                  ; 5
-        ret                             ; 4
-
-
-; ============================================================================
-; __mulhisi3_mul - 16 x 16 -> 32, signed, with mul                  45 bytes
-; ============================================================================
-; __umulhisi3_mul with the four high-byte shifts arithmetic.
-
-__mulhisi3_mul:
-        push    r2, r3                  ; 6
-        asr     r5, r0, #8              ; 1   a1, signed
-        and     r0, r0, #0x00ff         ; 1   a0
-        asr     r2, r1, #8              ; 1   b1, signed
-        and     r1, r1, #0x00ff         ; 1   b0
-        mul     r3, r5, r1              ; 2   p10 = a1*b0
-        mul     r5, r5, r2              ; 2   p11 = a1*b1
-        mul     r2, r0, r2              ; 2   p01 = a0*b1
-        mul     r0, r0, r1              ; 2   p00 = a0*b0
-        lsr     r1, r0, #8              ; 1   p00 >> 8: p00 is never negative
-        add     r1, r1, r2              ; 1
-        add     r1, r1, r3              ; 1
-        asr     r2, r2, #8              ; 1
-        asr     r3, r3, #8              ; 1
-        add     r2, r2, r3              ; 1   h
-        add     r5, r5, r2              ; 1
-        shl     r2, r2, #8              ; 1
-        rsb     r1, r2, r1              ; 1   s, never negative either
-        movhi   r0, r0, r1              ; 1   lo
-        lsr     r1, r1, #8              ; 1
-        add     r1, r5, r1              ; 1   hi
-        pop     r3, r2                  ; 5
-        ret                             ; 4
-
-
-; ============================================================================
-; __mulsi3_mul - 32 x 32 -> 32, signed or unsigned, with mul         53 bytes
+; __mulsi3_mul - 32 x 32 -> 32, signed or unsigned, with mul         13 bytes
 ; ============================================================================
 ;       a in r0:r1 as low:high          b in r2:r3 as low:high
 ;       result in r0:r1 as low:high
@@ -536,115 +434,97 @@ __mulhisi3_mul:
 ;       (ah:al) * (bh:bl)  =  al*bl  +  ((al*bh + ah*bl) << 16)
 ;
 ; The cross terms are wanted only to sixteen bits, which is two plain muls;
-; al*bl is the byte products above.  Four argument registers make r2 and r3
-; ours, but the cross terms' sum is a sixth live value beside the byte
-; products' five, so r4 is saved for it.  NOT A CALL to __umulhisi3_mul,
-; which would cost its own r2 and r3 as well as the call.
+; al*bl is wanted whole, which is mul and mulhu.  gcc -O2 puts the same
+; inline.
 
 __mulsi3_mul:
-        push    r4                      ; 6
-        mul     r1, r1, r2              ; 2   ah*bl
         mul     r3, r3, r0              ; 2   bh*al
-        add     r4, r3, r1              ; 1   the cross terms
-        lsr     r5, r0, #8              ; 1   a1, of al
-        and     r0, r0, #0x00ff         ; 1   a0
-        lsr     r3, r2, #8              ; 1   b1, of bl
-        and     r2, r2, #0x00ff         ; 1   b0
-        mul     r1, r5, r2              ; 2   p10
-        mul     r5, r5, r3              ; 2   p11
-        mul     r3, r0, r3              ; 2   p01
-        mul     r0, r0, r2              ; 2   p00
-        add     r5, r5, r4              ; 1   p11 + the cross terms
-        lsr     r2, r0, #8              ; 1
-        add     r2, r2, r3              ; 1
-        add     r2, r2, r1              ; 1
-        lsr     r3, r3, #8              ; 1
-        lsr     r1, r1, #8              ; 1
-        add     r3, r3, r1              ; 1   h
-        add     r5, r5, r3              ; 1
-        shl     r3, r3, #8              ; 1
-        rsb     r2, r3, r2              ; 1   s
-        movhi   r0, r0, r2              ; 1   lo
-        lsr     r2, r2, #8              ; 1
-        add     r1, r5, r2              ; 1   hi
-        pop     r4                      ; 5
+        mul     r1, r1, r2              ; 2   ah*bl
+        add     r1, r1, r3              ; 1   the cross terms
+        mulhu   r3, r0, r2              ; 2   al*bl, high
+        add     r1, r1, r3              ; 1   hi
+        mul     r0, r0, r2              ; 2   lo
         ret                             ; 4
 
 
 ; ============================================================================
-; __umulsidi3_mul - 32 x 32 -> 64, unsigned, with mul                102 bytes
+; __umulsidi3_mul - 32 x 32 -> 64, unsigned, with mul                83 bytes
 ; ============================================================================
-; __umulsidi3 above, calling __umulhisi3_mul.  Everything that routine says
-; about its carries holds unchanged: what it relies on of its helper is the
-; product, low:high in r0:r1, and r2, r3 and r4 preserved - which
-; __umulhisi3_mul gives too.  A COPY rather than one body with the helper in
-; a register, because `call' through a register loaded from the frame is
-; five cycles more a product, four times over.
+;       a in r0:r1 as low:high          b in r2:r3 as low:high
+;       result w0..w3 in r0..r3, lowest first
+;
+; Four 16 x 16 -> 32 products, P0 = al*bl, P1 = al*bh, P2 = ah*bl and
+; P3 = ah*bh, each a mul and a mulhu, summed by columns:
+;
+;       w0 = P0.lo
+;       w1 = P0.hi + P1.lo + P2.lo                carry into w2
+;       w2 = P1.hi + P2.hi + P3.lo + carries      carry into w3
+;       w3 = P3.hi + carries                      which cannot overflow
+;
+; A CARRY IS A COMPARE AND A BRANCH: the sum is below an addend exactly when
+; it wrapped.  The branch goes to the carry, out of line, so that no carry
+; is a branch not taken - one or two cycles against four.  Between random
+; 32-bit operands a carry is about as likely as not, and this is still 54
+; cycles on average against 56 the other way round; between operands whose
+; high words are small, a carry is rare and the difference larger.
+;
+; Each of a and b is read by two products and dies after its second, and the
+; products are ordered so that seven registers suffice - r4 and lr, saved,
+; beside the five this owns.
 
 __umulsidi3_mul:
         or      r5, r1, r3              ; 1   ah | bh
-        br      eq, r5, #0, .narrow     ; 1   both zero: it is a 16 x 16
-        push    r4, lr, r1              ; 10  r4, lr, ah      ah lowest
-        push    r0, r3, r2              ; 10  al, bh, bl      bl lowest
-        add     sp, sp, #-2             ; 1   and a slot for w0
-        ;      w0(0)  bl(2)  bh(4)  al(6)  ah(8)  lr(10)  r4(12)
-
-        ; --- P1 = al * bh ---------------------------------------------------
-        ld      r0, [sp, #6]            ; 5
-        ld      r1, [sp, #4]            ; 5
-        call    __umulhisi3_mul         ; 3
-        mov     r2, r1                  ; 1   X.hi
-        mov     r3, r0                  ; 1   X.lo
-
-        ; --- P2 = ah * bl, and X = P1 + P2 ----------------------------------
-        ld      r0, [sp, #8]            ; 5
-        ld      r1, [sp, #2]            ; 5
-        call    __umulhisi3_mul         ; 3
-        mov     r4, #0                  ; 1   cx
-        add     r3, r3, r0              ; 1   X.lo
-        br      hs, r3, r0, .nc1        ; 2
-        add     r1, r1, #1              ; 1   into P2.hi; it cannot wrap
-.nc1:
-        add     r2, r2, r1              ; 1   X.hi
-        br      hs, r2, r1, .nc2        ; 1
-        add     r4, r4, #1              ; 1
-.nc2:
-
-        ; --- P0 = al * bl ---------------------------------------------------
-        ld      r0, [sp, #6]            ; 5
-        ld      r1, [sp, #2]            ; 5
-        call    __umulhisi3_mul         ; 3
-        st      r0, [sp, #0]            ; 6   w0 is finished
-        add     r3, r3, r1              ; 1   w1 = X.lo + P0.hi
-        br      hs, r3, r1, .nc3        ; 1
-        add     r2, r2, #1              ; 1   k1 into X.hi ...
-        br      ne, r2, #0, .nc3        ; 2   ... which CAN wrap
-        add     r4, r4, #1              ; 1
-.nc3:
-
-        ; --- P3 = ah * bh ---------------------------------------------------
-        ld      r0, [sp, #8]            ; 5
-        ld      r1, [sp, #4]            ; 5
-        call    __umulhisi3_mul         ; 3
-        add     r2, r2, r0              ; 1   w2 = X.hi + k1 + P3.lo
-        br      hs, r2, r0, .nc4        ; 2
-        add     r4, r4, #1              ; 1
-.nc4:
-        add     r4, r4, r1              ; 1   w3 = P3.hi + cx + k2
-
-        ; --- place the four words and unwind --------------------------------
-        mov     r1, r3                  ; 1   w1; w2 is in r2 already
-        mov     r3, r4                  ; 1   w3, before the pop restores r4
-        ld      r0, [sp, #0]            ; 5   w0
-        add     sp, sp, #10             ; 1
-        pop     lr, r4                  ; 7
+        br      eq, r5, #0, .narrow     ; 2   both zero: it is a 16 x 16
+        push    r4, lr                  ; 6
+        mulhu   r4, r0, r3              ; 2   w2 = P1.hi
+        mul     r5, r0, r3              ; 2   w1 = P1.lo
+        mul     lr, r1, r3              ; 2   P3.lo
+        mulhu   r3, r1, r3              ; 2   w3 = P3.hi; bh is dead
+        add     r4, r4, lr              ; 1   w2 += P3.lo
+        br      lo, r4, lr, .k1         ; 1   a carry: out of line
+.r1:
+        mulhu   lr, r1, r2              ; 2   P2.hi
+        mul     r1, r1, r2              ; 2   P2.lo; ah is dead
+        add     r4, r4, lr              ; 1   w2 += P2.hi
+        br      lo, r4, lr, .k2         ; 2
+.r2:
+        add     r5, r5, r1              ; 1   w1 += P2.lo
+        br      lo, r5, r1, .k3         ; 1
+.r3:
+        mulhu   r1, r0, r2              ; 2   P0.hi
+        mul     r0, r0, r2              ; 2   w0 = P0.lo
+        add     r1, r5, r1              ; 1   w1 += P0.hi
+        br      lo, r1, r5, .k4         ; 2
+.r4:
+        mov     r2, r4                  ; 1   w2
+        pop     lr, r4                  ; 5
         ret                             ; 4
 
+; The carries.  One into w2 can wrap w2 in turn, and then it carries on into
+; w3, which itself cannot overflow: the product fits in 64 bits.
+.k1:
+        add     r3, r3, #1
+        jmpr    .r1
+.k2:
+        add     r3, r3, #1
+        jmpr    .r2
+.k3:
+        add     r4, r4, #1
+        br      ne, r4, #0, .r3
+        add     r3, r3, #1
+        jmpr    .r3
+.k4:
+        add     r4, r4, #1
+        br      ne, r4, #0, .r4
+        add     r3, r3, #1
+        jmpr    .r4
+
 .narrow:
-        mov     r1, r2                  ; 1   bl; al is already in r0
+        mulhu   r1, r0, r2              ; 2   al*bl, high
+        mul     r0, r0, r2              ; 2   and low
         mov     r2, #0                  ; 1   w2
         mov     r3, r2                  ; 1   w3
-        jmp     __umulhisi3_mul         ; 3
+        ret                             ; 4
 
 ; ============================================================================
 ; __udivmodhi4 - 16 / 16 -> quotient and remainder, unsigned

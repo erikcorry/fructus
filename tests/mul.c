@@ -3,9 +3,10 @@
    tests/run.sh compiles this four ways - -O2 and -Os, with -mmul and
    without - and every one must exit 0, the number of wrong answers.  What
    is under test is different each way: with -mmul a 16-bit `*' is the mul
-   instruction, a wider product mul's byte products inline or the `_mul'
-   routines in libgcc, and a division by a constant at -O2 a multiply by its
-   reciprocal; without, libgcc's shift-and-add and division routines.
+   instruction, a wider product mul and mulhu or mulhs inline or the `_mul'
+   routines in libgcc, and a division by a constant at -O2 a mulhu or mulhs
+   by its reciprocal; without, libgcc's shift-and-add and division
+   routines.
 
    The references never multiply or divide, so they share nothing with what
    they check.  The 16-bit constants cover the three forms gas can pick for

@@ -152,12 +152,17 @@ export const ALU_OPS = [
   { code: 12, name: 'unary', does: "the fast unary operations on lhs" },
   { code: 13, name: 'slow',  does: "the slow unary operations, clz and popcount, registered" },
   { code: 14, name: 'mul',   does: 'lhs * rhs, low half, from an SB_MAC16 registered a cycle earlier' },
+  // The high halves are op 14 too, to the ALU: gen-classify.js folds them
+  // into it, with an `lsel` that tells the SB_MAC16s which half to keep -
+  // so these two codes, like the fast group's, never reach rtl/alu.sv.
+  { code: 15, name: 'mulhu', does: 'lhs * rhs, high half, unsigned' },
+  { code: 16, name: 'mulhs', does: 'lhs * rhs, high half, signed' },
 ];
 
 // The operations whose result is registered, so that an instruction using one
 // must declare `extra_cycles` and nothing else may: the byte-serial core's ucode.sv gives exactly
 // those the SLOW step.
-export const ALU_REGISTERED = new Set(['slow', 'mul']);
+export const ALU_REGISTERED = new Set(['slow', 'mul', 'mulhu', 'mulhs']);
 
 // --- which operation each instruction needs, from its semantics ---------------
 export const ALU_RULES = [
@@ -179,6 +184,7 @@ export const ALU_RULES = [
   // extra cycle, finish in the ALU's second cycle on them - rtl/alu.sv.
   [/^R\[d\] = (sxt8|clz|bitrev|popcount|clmul)\(R\[a\]\)$/, 'unary'],
   [/^R\[d\] = R\[a\] \* (R\[b\]|imm)$/,                    'mul'],
+  [/^R\[d\] = (mulhu|mulhs)\(R\[a\], R\[b\]\)$/,             (m) => m[1]],
   [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
   [/^R\[d\] = \(\((R\[b\]|imm) & 0xff\) << 8\) \| \(R\[a\] & 0xff\)$/, 'movhi'],
   [/^R\[d\] = \(R\[a\] & mask\) != 0$/,                    'isset'],

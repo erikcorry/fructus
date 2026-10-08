@@ -214,6 +214,13 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
+//     mulhu AND mulhs, a second SB_MAC16, OLOAD      2139    30.75  29.6 .. 32.1
+//       1892 LUT4 against 1870, and in the same text before it 30.38,
+//       29.4 .. 31.4; every seed's critical path still decode's.  icetime:
+//       the DSPs' pins settle by 7.3 ns, then 6.5 inside to the output
+//       registers, and the LUTs after them see their worst input, 10.5 ns,
+//       from a fabric flop.  The system 27.01 against 27.40, 2990 LUT4
+//       against 2991
 //     ALIGNED WORDS IN ONE ACCESS, as here           1998    31.16  30.4 .. 31.9
 //       1706 LUT4 against 1673, and in the same run the design before it
 //       measured 30.84, 29.1 .. 32.4 - no seed's critical path at the new
@@ -1063,11 +1070,12 @@ module cpu (
     logic        ie;
     assign ie_q  = ie;
     // THE PRODUCT OF aq AND bq, worked on every cycle and a cycle late: the ALU
-    // takes it as op 14 in a mul's second, held cycle.  (clz and popcount chosen
+    // takes it as op 14 in a mul's second, held cycle.  e_lsel, which op 14
+    // has no other use for, says which half - see rtl/alu.sv's mul.  (clz and popcount chosen
     // whole into ldq in the ALU cycle once measured 26.40 MHz: yosys pushed ldq
     // back into the popcount tree, and the flops it made there took a reset
     // from dispatch.)
-    mul  mulu (.clk(clk), .a(aq), .b(bq), .p(prod));
+    mul  mulu (.clk(clk), .a(aq), .b(bq), .z(e_lsel), .p(prod));
     wire [15:0] lqsrc = (uLQ == 3'd1) ? pc
                       : (uLQ == 3'd2) ? shadow_sp
                       : (uLQ == 3'd3) ? shadow_lr : shadow_isp;

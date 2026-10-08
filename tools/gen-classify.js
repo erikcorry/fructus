@@ -43,9 +43,9 @@ const spec = loadSpec();
 
 // A unary operation with extra cycles takes two cycles in the ALU stage.
 // An instruction the ALU stage holds for its extra cycles: a unary operation,
-// or mul, which reads the SB_MAC16 beside the ALU.
+// or mul, mulhu or mulhs, which read the SB_MAC16s beside the ALU.
 const isTwo = (i) => i.extra_cycles > 0
-  && /^R\[d\] = (\w+\(R\[a\]\)|R\[a\] \* (R\[b\]|imm))$/.test(i.semantics ?? '');
+  && /^R\[d\] = (\w+\(R\[a\]\)|R\[a\] \* (R\[b\]|imm)|mulh[su]\(R\[a\], R\[b\]\))$/.test(i.semantics ?? '');
 const isAlu = (i) => {
   const sem = i.semantics ?? '';
   return (!(i.extra_cycles > 0) || isTwo(i))
@@ -118,8 +118,13 @@ const ALU_ADD = 0;
 // iseq and isset - control.js's 4, 5, 6, 7, 10, 13, 2 and 3 - reach rtl/alu.sv
 // as one code, 4, and a select column of their own, `lsel`.  See rtl/alu.sv.
 const LSEL = { 4: 0, 5: 1, 6: 2, 7: 3, 10: 4, 13: 5, 2: 6, 3: 7 };
-const aluOf = (a) => (a !== X && a in LSEL ? 4 : a);
-const lselOf = (a) => (a !== X && a in LSEL ? LSEL[a] : X);
+// THE PRODUCTS: mul, mulhu and mulhs - 14, 15 and 16 - reach it as 14, and
+// `lsel` says which halves to throw away.  Its bits are the OLOAD pins of the
+// SB_MAC16s, {signed high, unsigned high, low}: a 1 loads that half's output
+// register with zero, so the one 0 is the half kept.
+const MSEL = { 14: 0b110, 15: 0b101, 16: 0b011 };
+const aluOf = (a) => (a !== X && a in LSEL ? 4 : a !== X && a in MSEL ? 14 : a);
+const lselOf = (a) => (a !== X && a in LSEL ? LSEL[a] : a !== X && a in MSEL ? MSEL[a] : X);
 const memOf = (r) => {
   const sem = r.insns[0].semantics ?? '';
   let m;
