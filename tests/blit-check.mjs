@@ -31,7 +31,7 @@
 //     handler inherits blit mode, so its load above 0x8000 reads A, and it
 //     counts its entries: exactly two, and each returns where it should;
 //   - WRITETHRU: loads above 0x8000 are ram_hi's, and st and st8 there land
-//     in both ram_hi and A;
+//     in A and not in ram_hi, so a load straight after finds ram_hi's word;
 //   - blit mode off, and the loads above 0x8000 are ram_hi's again;
 //   - COPY of A into B, held for about three frames of a short frame the
 //     program sets up: every word of B must afterwards be its old self or A's,
@@ -40,8 +40,8 @@
 //   - then the other way about, A shown and B the processor's: a blit-mode
 //     store before the next vertical sync is dropped, since B is still being
 //     copied into; after it, a load from B finds the copy of A's word, and a
-//     store to B reads back; and a writethru store lands in ram_hi and B, not
-//     A.
+//     store to B reads back; and a writethru store lands in B, not in A or
+//     ram_hi.
 //
 // Every buffer and ram_hi start filled with a different pattern, so a load
 // from the wrong one, or a store that lands in two places, shows.
@@ -168,11 +168,11 @@ irqw:   ld   r0, [r4, #40]         ; until the handler has run twice
         ld   r3, [r2, #2]          ; ram_hi's word 257, not A's
         st   r3, [r4, #20]
         mov  r0, #0x4242
-        st   r0, [r2, #0]          ; word 256, in ram_hi and in A
-        ld   r3, [r2, #0]          ; and back, from ram_hi
+        st   r0, [r2, #0]          ; word 256, in A only
+        ld   r3, [r2, #0]          ; and back, from ram_hi: its old word
         st   r3, [r4, #22]
         mov  r0, #0x99
-        st8  r0, [r2, #3]          ; the high byte of word 257, in both
+        st8  r0, [r2, #3]          ; the high byte of word 257, in A only
         mov  r0, #0
         st8  r0, [r1]              ; processor mode
         mov  r2, #0x8000
@@ -206,8 +206,8 @@ wait2:  add  r3, r3, #-1
         st8  r0, [r1]              ; A shown, writethru to B
         mov  r2, #0x8600
         mov  r0, #0x6262
-        st   r0, [r2]              ; word 768, in ram_hi and in B
-        ld   r3, [r2]              ; and back, from ram_hi
+        st   r0, [r2]              ; word 768, in B only
+        ld   r3, [r2]              ; and back, from ram_hi: its old word
         st   r3, [r4, #36]
         mov  r0, #0
         st8  r0, [r1]              ; processor mode: B shown again, at the next sync
@@ -297,14 +297,14 @@ const results = [
   ['pop in blit mode, second',                                 0x2468],
   ['the copy loop\'s sum',                                     sum],
   ['writethru: a load above 0x8000 is ram_hi\'s',             hiC(257)],
-  ['writethru: st, then ld of it at once',                     0x4242],
+  ['writethru: st, then ld of it: ram_hi\'s old word',         hiC(256)],
   ['blit off: ram_hi\'s word 0, stored in processor mode',     0x1111],
   ['a frame just below 0x8000, in blit mode, first',          0x5926],
   ['a frame just below 0x8000, in blit mode, second',         0x3141],
   ['blit off: ram_hi\'s word 1, untouched',                    hiC(1)],
   ['blit to B: a table word is the copy of A\'s',              fbA(0x3800)],
   ['blit to B: st, then ld of it at once',                     0x6161],
-  ['writethru to B: st, then ld of it, from ram_hi',           0x6262],
+  ['writethru to B: st, then ld of it: ram_hi\'s old word',    hiC(768)],
   ['the handler, in blit mode, loaded A\'s word 8',             fbA(8)],
   ['the handler ran twice: brk, then the interrupt line',      2],
   ['brk returned to the instruction after it',                 0x5e5e],
@@ -327,13 +327,13 @@ const words = [
   ['fba', 80, fbA(80), 'the copy loop stopped where it should'],
   ['fba', 256, 0x4242, 'the writethru st reached A'],
   ['fba', 257, (fbA(257) & 0xff) | 0x9900, 'and so did the st8, to its byte'],
-  ['hi', 256, 0x4242, 'the writethru st reached ram_hi'],
-  ['hi', 257, (hiC(257) & 0xff) | 0x9900, 'and so did the st8'],
+  ['hi', 256, hiC(256), 'the writethru st did not reach ram_hi'],
+  ['hi', 257, hiC(257), 'nor did the st8'],
   ['fbb', 0x280, 0x6161, 'the blit-mode st landed in B'],
   ['fba', 0x280, fbA(0x280), 'and not in A'],
   ['hi', 0x280, hiC(0x280), 'nor in ram_hi'],
   ['fbb', 768, 0x6262, 'the writethru st reached B'],
-  ['hi', 768, 0x6262, 'and ram_hi'],
+  ['hi', 768, hiC(768), 'and not ram_hi'],
   ['fba', 768, fbA(768), 'and not A'],
   ['hi', 0, 0x1111, 'the processor-mode store landed in ram_hi'],
   ['hi', 10, hiC(10), 'blit-mode stores did not reach ram_hi'],

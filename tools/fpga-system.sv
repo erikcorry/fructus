@@ -18,7 +18,7 @@
 //     1  COPY       every word the display reads is written into it too; only
 //                   while A is shown - with B shown this is CPU
 //     2  BLIT       the processor's data above 0x8000 is it
-//     3  WRITETHRU  as CPU, but every write above 0x8000 is made to it as well
+//     3  WRITETHRU  as CPU, but every write above 0x8000 is made to it instead
 //
 // COPY publishes A to B: held for a frame, it leaves in B every word the
 // display fetches, which is all a shown buffer is ever read for (docs/vga.md,
@@ -28,8 +28,9 @@
 // ONLY RUNS ONE WAY because the other way buys nothing - either buffer can be
 // the one kept latest - and cost 45 logic cells, for a 16-bit mux in front of
 // A's data and a third arm on its address.
-// WRITETHRU suits text, where a screen is small: the processor keeps its own
-// copy above 0x8000, reads it at full speed, and the buffer follows it.
+// WRITETHRU suits drawing that never reads back: the processor's loads above
+// 0x8000 - its code, its constants - are its own, at full speed, and its
+// stores there go to the buffer alone, so ram_hi above 0x8000 is read-only.
 //
 // THE SHOWN BUFFER AND THE COPY CHANGE ONLY IN VERTICAL SYNC, when the display
 // reads nothing, so a copy is always of whole frames, vsync to vsync, and a
@@ -41,7 +42,8 @@
 //
 // THE MEMORY MAP.  The processor sees its own 64 KB, always, for instruction
 // fetch.  Its data accesses do too, except in BLIT mode, when the top 32 KB of
-// data - loads and stores, not fetches - is the buffer not shown:
+// data - loads and stores, not fetches - is the buffer not shown, and in
+// WRITETHRU, when the stores are:
 //
 //     0x0000 - 0x03ff   ram_lo, the zero page: [rb, #imm10] with rb = 0x200
 //                       reaches all of it (isa/fructus.toml, [[reloc]])
@@ -52,7 +54,8 @@
 //                       beneath them; the guards are ram_lo, which the
 //                       processor traps on touching
 //     0x0500 - 0x7fff   ram_lo
-//     0x8000 - 0xffff   ram_hi; in blit mode, data is the buffer not shown
+//     0x8000 - 0xffff   ram_hi; in blit mode, data is the buffer not shown,
+//                       and in writethru, stores are
 //
 // So everything from 0x0500 up is one linear area for a program that never
 // uses blit mode.
@@ -140,8 +143,9 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
 
     // The mode, decoded as it is written, so that each use is one flop.
     // `want_a`: A is to be shown.  The others are what happens to the buffer
-    // not shown.
-    logic want_a = 1'b0, copy = 1'b0, blit = 1'b0, wthru = 1'b0;
+    // not shown.  `fb_st`: stores above 0x8000 go to it, and not to ram_hi -
+    // BLIT and WRITETHRU, one flop so that ram_hi's write enable is one LUT.
+    logic want_a = 1'b0, copy = 1'b0, blit = 1'b0, fb_st = 1'b0;
 
     // --- the processor's own 64 KB ----------------------------------------------
     wire [15:0] lo_word, hi_word;
@@ -151,7 +155,7 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
                           .CHIPSELECT(1'b1), .CLOCK(clk), .STANDBY(1'b0),
                           .SLEEP(1'b0), .POWEROFF(1'b1), .DATAOUT(lo_word));
     SB_SPRAM256KA ram_hi (.ADDRESS(addr[14:1]), .DATAIN(mdata),
-                          .MASKWREN(we && hi && !blit ? mask : 4'h0), .WREN(we && hi && !blit),
+                          .MASKWREN(we && hi && !fb_st ? mask : 4'h0), .WREN(we && hi && !fb_st),
                           .CHIPSELECT(1'b1), .CLOCK(clk), .STANDBY(1'b0),
                           .SLEEP(1'b0), .POWEROFF(1'b1), .DATAOUT(hi_word));
 
@@ -204,7 +208,7 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     logic [15:0] addr_w; logic [15:0] wword_w; logic [3:0] mask_w; logic we_w, fb_w, to_a_w, to_a_2;
     always_ff @(posedge clk) begin
         addr_w <= addr; wword_w <= wdata; we_w <= we & ~boot; mask_w <= mask;
-        fb_w <= blit | wthru; to_a_w <= !want_a; to_a_2 <= to_a_w;
+        fb_w <= fb_st; to_a_w <= !want_a; to_a_2 <= to_a_w;
     end
     // [0] front porch, [1] sync, [2] back porch, [3] pixels or lines.
     logic [3:0][9:0] h_len = {10'd640, 10'd48, 10'd96, 10'd16};
@@ -233,9 +237,9 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     always_ff @(posedge clk) if (rw) begin
         if (addr_w[7:0] == 8'h80) begin
             want_a <= wword_w[2];
-            {wthru, blit, copy} <= wword_w[1:0] == 2'd1 ? {2'b00, wword_w[2]}
-                                 : wword_w[1:0] == 2'd2 ? 3'b010
-                                 : wword_w[1:0] == 2'd3 ? 3'b100 : 3'b000;
+            fb_st <= wword_w[1];
+            {blit, copy} <= wword_w[1:0] == 2'd1 ? {1'b0, wword_w[2]}
+                          : wword_w[1:0] == 2'd2 ? 2'b10 : 2'b00;
         end
         if (addr_w[7:0] == 8'h82) font <= wword_w[14:0];
         if (addr_w[7:0] == 8'ha0) pal_i  <= wword_w[4:0];

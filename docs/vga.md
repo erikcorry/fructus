@@ -83,10 +83,9 @@ buffer, so the CPU may write them as its own addresses of the buffer,
 The text generator's two are the lower pair, so without it everything below
 0x7800 is free.
 
-In WRITETHRU mode the CPU's own copy of the tables shares 0xffd0–0xffff with
-the [exception vectors](#the-whole-system-on-a-up5k): `graphics_mode` for
-lines 488–511. A 480-line mode never writes those entries; a mode with more
-lines, like 640×512, would overwrite the vectors.
+In BLIT and WRITETHRU modes the tables' stores go to the buffer alone, so
+`graphics_mode` for lines 488–511, at 0xffd0–0xffff, never touches the
+[exception vectors](#the-whole-system-on-a-up5k) in the CPU's own RAM there.
 
 At the start of scan line n the GPU reads the four entries for line n, 8
 bytes in all. Every line therefore has its own mode, font row and data
@@ -439,7 +438,7 @@ display shows, and bits 1:0 what happens to the other one:
 | 0 CPU | untouched: the CPU's data above 0x8000 is its own RAM |
 | 1 COPY | written with every word the display reads, only while A is shown |
 | 2 BLIT | the CPU's data above 0x8000 |
-| 3 WRITETHRU | written with every CPU write above 0x8000, which also goes to the CPU's own RAM |
+| 3 WRITETHRU | written with every CPU write above 0x8000, which no longer goes to the CPU's own RAM |
 
 So A and B are used alike: a program may bring each up from its state two
 frames ago in software and never copy, or keep A as its latest image and
@@ -463,9 +462,12 @@ direction would cost 45 logic cells.
   `pop` that reaches 0x8000 or above stops the CPU with `trapped`, because
   `pop` reads the CPU's own memory there while `push` would write the buffer.
   Without `` `define FRUCTUS_BLIT `` the CPU is built exactly as before.
-- **WRITETHRU** suits text, where the screen is small. The CPU keeps its own
-  copy of the screen above 0x8000 and reads it at full speed, and the buffer
-  not shown follows every write.
+- **WRITETHRU** suits drawing that never reads back. Stores above 0x8000 go
+  to the buffer not shown and nowhere else; loads there still read the CPU's
+  own RAM at full speed. So that half of the CPU's memory is read-only: code
+  and constants may live there, but data and the stack belong below 0x8000.
+  Unlike BLIT, a `push` or `pop` above 0x8000 does not trap, and pops what
+  was there before.
 
 **No RAM pays for read-during-write.** A read and a write of one word in
 the same cycle give the block RAM undefined data. Written plainly, the RTL
