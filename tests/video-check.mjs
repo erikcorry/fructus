@@ -23,6 +23,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { DEPTH, lineTable, pixel, pins as pinsOf } from '../tools/display.js';
 
 const have = (cmd) => {
   try { execFileSync('sh', ['-c', `command -v ${cmd}`], { stdio: 'ignore' }); return true; }
@@ -47,7 +48,6 @@ const LINES = 24;
 
 // --- the frame buffer ---------------------------------------------------------
 const mem = Array.from({ length: WORDS }, () => rand(0x10000));
-const DEPTH = [[1, 0x1c], [1, 0x1e], [2, 0x18], [2, 0x08], [3, 0x10], [4, 0x00], [8, 0], [8, 0]];
 const table = [];
 // The font register, the font's address, at random but even.
 const FONT = rand(16384) * 2;
@@ -105,35 +105,10 @@ const spriteSet = (W) => {
   return sprites;
 };
 
-const byte = (a) => (mem[(a & 0x7fff) >> 1] >> ((a & 1) * 8)) & 0xff;
-
 // --- the reference ----------------------------------------------------------
-const bgPixel = (t, x) => {
-  const [bpp, base] = DEPTH[(t.mode >> 8) & 7];
-  const p = Math.floor(x / (((t.mode >> 11) & 7) + 1));
-  let v;
-  if (bpp === 3) {
-    const w = mem[((t.bg >> 1) + Math.floor(p / 5)) % WORDS];
-    v = (w >> ((p % 5) * 3)) & 7;
-  } else {
-    const bit = t.bg * 8 + p * bpp;
-    v = (mem[(bit >> 4) % WORDS] >> (bit & 15)) & ((1 << bpp) - 1);
-  }
-  return bpp === 8 ? v : base | v;
-};
-
-const fgPixel = (t, x) => {
-  const wide = (t.mode >> 14) & 1, off = t.mode >> 15;
-  const cell = wide ? x >> 4 : x >> 3;
-  const bit = wide ? x & 15 : x & 7;
-  const base = FONT + ((t.mode & 0xff) << (wide ? 7 : 6)), code = byte(t.ch + cell);
-  const row = wide ? byte(base + 2 * code) | byte(base + 2 * code + 1) << 8 : byte(base + code) << 8;
-  return { on: !off && (row >> (15 - bit)) & 1, color: byte(t.co + cell) };
-};
-
-const G = [0, 0b000, 0b001, 0b010, 0b100, 0b101, 0b110, 0b111];   // by t
-const R = [0b000, 0b001, 0b010, 0b011, 0b110, 0b111];
-const B = [0b000, 0b001, 0b100, 0b101, 0b111];
+// tools/display.js, which the simulator draws its frames with too: this test
+// is what holds that file to the RTL.
+const st = { word: (i) => mem[i], font: FONT, palette, patterns };
 
 // Attribute writes during the compared frame, each on visible line `line` at
 // cycle `k` after that line's horizontal wrap.  Sprite s's word w is read at
@@ -168,33 +143,7 @@ const eventWords = (set) => {
   });
 };
 
-// The sprites' pixel at (x, n): the lowest-numbered sprite with a colour that
-// is not 0 there, or 0.  Positions wrap round the 1024-pixel line buffer.
-const spritePixel = (set0, n, x) => {
-  const set = attrsFor(set0, n);
-  for (const a of set) {
-    const dy = n + 42 - a.y;
-    if (dy < 0 || dy >= (a.dh ? 42 : 21)) continue;
-    const row = a.dh ? dy >> 1 : dy;
-    const dx = (x + 48 - a.x) & 1023;
-    if (dx >= 24) continue;
-    const v = (patterns[a.p * 64 + row * 3 + (dx >> 3)] >> ((dx & 7) * 2)) & 3;
-    if (v && a.c[v - 1]) return a.c[v - 1];
-  }
-  return 0;
-};
-
-const pins = (set, n, x) => {
-  const t = table[n];
-  const fg = fgPixel(t, x);
-  const cp = spritePixel(set, n, x);
-  const sel = cp ? cp : fg.on ? fg.color : bgPixel(t, x);
-  const px = sel >> 5 ? sel : palette[sel & 31];
-  const top = px >> 5, c = px & 15;
-  if (top === 0 || c === 15) return 0;
-  const r = Math.floor(c / 5) + 3 * ((px >> 4) & 1);
-  return R[r] << 6 | G[top] << 3 | B[c % 5];
-};
+const pins = (set, n, x) => pinsOf(pixel(st, lineTable(st, n), attrsFor(set, n), n, x));
 
 // One frame from vsync falling, as [hsync_n, vsync_n, pins] per cycle.
 const frame = (h, v, set) => {

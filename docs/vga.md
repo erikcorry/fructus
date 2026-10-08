@@ -919,6 +919,35 @@ itself. The timing costs 80 flops of the UP5K's 5,280.
 The status register's current line lets the CPU time a mid-frame palette
 change by polling, without an interrupt.
 
+## In the simulator
+
+`tools/fcc-run.mjs` runs a program with the display attached
+(`tools/gpu.js`): both frame buffers, the registers above, and the mode's
+routing of data above 0x8000. `crt/include/fructus/display.h` names it all
+for C, and `examples/display.c` uses it.
+
+```
+tools/fcc -O2 examples/display.c -o build/display
+node tools/fcc-run.mjs build/display.bin --x11 --scale 2       # a window at $DISPLAY
+node tools/fcc-run.mjs build/display.bin --frames build/frames # PNG files
+```
+
+It is not cycle accurate. The display draws a whole frame at once, with the
+processor stopped, at the vertical sync after the shown buffer changes, when
+COPY starts (copying into B exactly the words of A that frame read), and at
+a sync after the palette, a sprite or the font register changed; a change
+made mid-frame shows whole in the next. The timing a program can see is the
+hardware's: the processor runs on the pixel clock, so the status register
+counts lines from the simulator's cycle count, a change of mode takes effect
+at the next vertical sync, and until then stores to the buffer still shown or
+being copied into are dropped. Not modelled: blit mode's trap on `push` and
+`pop` above 0x8000. Pixels come from `tools/display.js`, which
+`tests/video-check.mjs` holds to the RTL; `tests/display-check.mjs` checks the
+model around it.
+
+A compiled program's globals are above 0x8000, with its code, so it draws
+with locals in BLIT or WRITETHRU and sets the mode back before using them.
+
 ## Connector (DE-15)
 
 | pin | signal |
