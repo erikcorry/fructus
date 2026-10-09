@@ -327,14 +327,18 @@ since a part without a multiplier has none of them; without it a product is a
 call to libgcc's `__mulhi3`. With it a 16×16→32 product is `mul` and `mulhu`
 or `mulhs` inline, a 32×32→32 is four products inline at `-O2`, and a
 division by a constant is a `mulhu` or `mulhs` by its reciprocal.
-`recip rd, ra, rb`, at 0xc6/0xc7, is Möller and Granlund's reciprocal of a
-normalised divisor, `floor((2³²−1)/(ra | 0x8000)) − 2¹⁶`, which turns a 32/16
-division into a `mulhu`, an add and a correction or two. `rb` is not read yet;
-it is there for the 3/2 reciprocal. It is five cycles, in `rtl/recip.sv`
-beside the multiplier: a straight line per slot from one block RAM of 128
-pairs, which lands 0 to 3 below, then a second product to find out how far,
-and two more `SB_MAC16`s of its own. To the ALU it is `mul` with every half
-zeroed and its answer OR'd in.
+`recip` is Möller and Granlund's reciprocal of a normalised divisor,
+`floor((2⁴⁸−1)/D) − 2¹⁶` for `D = (ra | 0x8000):rb`. `recip rd, ra, rb`, at
+0xc6/0xc7, is the 3/2 reciprocal of a 32-bit divisor, in eight cycles;
+`recip rd, ra, #0`, at 0xc3, is the 2/1 reciprocal of a 16-bit one, in five,
+and needs no register holding zero — only `#0` is defined there. Either way a
+quotient word estimated as `u2 + mulhu(v, u2)` plus a carry is never too big,
+and a division corrects it with one loop. It is `rtl/recip.sv` beside the
+multiplier: a straight line per slot from one block RAM of 128 pairs, which
+lands 0 to 3 below, then a second product to find out how far, and for the
+low word a third product on the first DSP again and a second correction, 0 to
+4 down. It has two `SB_MAC16`s of its own. To the ALU it is `mul` with every
+half zeroed and its answer OR'd in.
 `rtl/alu.sv` instantiates the DSPs rather
 than letting yosys's `-dsp` infer them, because the inference copies the operand
 flops into the DSP's input registers and drags the logic in front of them to
@@ -484,7 +488,7 @@ odd address; a taken branch four; a jump or call three, or four through a
 register; a load of N accesses N + 3 and a store N + 4, where an access is a
 byte or a whole word at an even address, so `ld` is four aligned and five not,
 and a three-register `push` seven with sp even and ten with it odd; mul, mulhu,
-mulhs, clz and popcount two, and recip five. A taken branch is what
+mulhs, clz and popcount two, and recip five, or eight with a low word. A taken branch is what
 makes a longer unrolled loop worth anything once the instruction mix is fixed,
 and a memory instruction is the slowest thing a program does often. The
 simulator does not keep a list of which instructions are which: the semantics

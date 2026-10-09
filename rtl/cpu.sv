@@ -214,7 +214,17 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     recip, rtl/recip.sv, keep_hierarchy, as here   2340    30.29  29.1 .. 31.0
+//     recip's LOW WORD, 0xc6 eight cycles, as here   2811    30.60  29.6 .. 31.4
+//       2308 LUT4 against 2044, the same RAM and DSPs - mac1 makes the third
+//       product too; 0xc3, recip rd, ra, #0, still five cycles.  Critical
+//       paths decode's, seven cells, or the first correction's in five
+//       seeds, 29.7 .. 31.4.  On the way: the compares in the last cycle with
+//       the select, 23.95; given a cycle of their own, 26.95, the choice
+//       between the two answers then a LUT level on the first correction;
+//       each answer into mul's output registers through macu's D and C, so
+//       no choice, 28.78 - two long wires to the pin, 24.8 ns of 37.2
+//       routing; the answer into a flop of recip's own, ORed in, 30.60
+//     recip, rtl/recip.sv, keep_hierarchy            2340    30.29  29.1 .. 31.0
 //       2044 LUT4, 3 block RAMs and 4 SB_MAC16s, against 1880, 2 and 2;
 //       mulhu's commit, rerun the same day, 30.38, 29.5 .. 31.5.  Every
 //       seed's critical path decode's, seven cells.  Flattened, the unit
@@ -1098,13 +1108,14 @@ module cpu (
     // whole into ldq in the ALU cycle once measured 26.40 MHz: yosys pushed ldq
     // back into the popcount tree, and the flops it made there took a reset
     // from dispatch.)
-    // recip's answer comes in through the low half's D, which an lsel of 111
-    // loads in place of the product - rtl/alu.sv's mul and rtl/recip.sv.
-    wire [15:0] rans;
-    mul  mulu (.clk(clk), .a(aq), .b(bq), .z(e_lsel), .l(rans), .p(prod));
+    // recip's answer is ORed in, zero but in its last held cycle, and an lsel
+    // of 111 has zeroed all three of mul's halves - rtl/recip.sv.
+    wire [15:0] mprod, rprod;
+    mul  mulu (.clk(clk), .a(aq), .b(bq), .z(e_lsel), .p(mprod));
+    assign prod = mprod | rprod;
     // A module of its own, or abc maps decode a cell deeper: rtl/recip.sv.
     (* keep_hierarchy *)
-    recip rcp (.clk(clk), .a(aq), .go(e_op == 4'd14 && e_lsel == 3'b111), .cnt(e_cnt), .l(rans));
+    recip rcp (.clk(clk), .a(aq), .b(bq), .go(e_op == 4'd14 && e_lsel == 3'b111), .cnt(e_cnt), .p(rprod));
     wire [15:0] lqsrc = (uLQ == 3'd1) ? pc
                       : (uLQ == 3'd2) ? shadow_sp
                       : (uLQ == 3'd3) ? shadow_lr : shadow_isp;

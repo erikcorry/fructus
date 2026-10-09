@@ -8,14 +8,14 @@
 // rtl/cpu.sv decides from kind, length and `two` whether the next dispatch
 // can follow at once, and latches the rest for the decode stage.
 //
-// 155 opcodes: 97 ALU, 45 microcoded - 40 of them memory instructions and
+// 156 opcodes: 98 ALU, 45 microcoded - 40 of them memory instructions and
 // 4 exception instructions or mul - 7 conditional branches, 6 jumps.
 // AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
 // MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
 // pc was worked out behind it, so the length is never used.  Pinned at one, as
 // it was, it measured 32.96 MHz against 33.59, and the length's lookup was on
 // the critical path in some seeds; free, it is on none.  The empty cells -
-// 101 of them - let synthesis carry the pattern of the rows and columns
+// 100 of them - let synthesis carry the pattern of the rows and columns
 // across them.
 // Rearranging the opcodes that ARE used, with the empties still pinned, made
 // it worse: 31.08.
@@ -224,8 +224,9 @@ module classify (
         8'hb7: t = 45'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_101;    // mulhu
         8'hbe: t = 45'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_011;    // mulhs
         8'hbf: t = 45'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_011;    // mulhs
-        8'hc6: t = 45'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_100_x_111;    // recip
-        8'hc7: t = 45'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_100_x_111;    // recip
+        8'hc3: t = 45'b00_10_1_1110_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_100_x_111;    // recip
+        8'hc6: t = 45'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_111_x_111;    // recip
+        8'hc7: t = 45'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_111_x_111;    // recip
         default: t = 45'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_x_x;
         endcase
     end

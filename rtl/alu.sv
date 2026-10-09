@@ -149,17 +149,11 @@ endmodule
 // set, so the product is the three OR'd - one LUT level, where choosing
 // would be two.  The signed high half is a second SB_MAC16's, configured
 // signed: the sign is a parameter, not a pin.
-//
-// recip's ANSWER COMES IN AT THE LOW HALF'S D, which its OLOAD loads in place
-// of the product: rtl/recip.sv's `l', zero but in the cycle before recip's
-// last, when lsel 111 has every half zeroed.  So the product is still three
-// halves OR'd, and recip needs no output register of its own.
 module mul (
     input  logic        clk,
     input  logic [15:0] a,
     input  logic [15:0] b,
     input  logic [2:0]  z,       // zero {signed high, unsigned high, low}: lsel
-    input  logic [15:0] l,       // loaded in place of the low half - recip's answer, or 0
     output logic [15:0] p        // the half z kept, of the last edge's operands
 );
 
@@ -190,7 +184,7 @@ module mul (
         .BOTADDSUB_LOWERINPUT(2'b10), .BOTADDSUB_UPPERINPUT(1'b1), .BOTADDSUB_CARRYSELECT(2'b00),
         .MODE_8x8(1'b0), .A_SIGNED(1'b0), .B_SIGNED(1'b0)
     ) macu (
-        .CLK(clk), .CE(1'b1), .A(a), .B(b), .C(16'd0), .D(l),
+        .CLK(clk), .CE(1'b1), .A(a), .B(b), .C(16'd0), .D(16'd0),
         .AHOLD(1'b0), .BHOLD(1'b0), .CHOLD(1'b0), .DHOLD(1'b0),
         .IRSTTOP(1'b0), .IRSTBOT(1'b0), .ORSTTOP(1'b0), .ORSTBOT(1'b0),
         .OLOADTOP(z[1]), .OLOADBOT(z[0]), .ADDSUBTOP(1'b0), .ADDSUBBOT(1'b0),
@@ -221,7 +215,7 @@ module mul (
     wire [31:0] pu = a * b;
     wire [31:0] ps = $signed(a) * $signed(b);
     always_ff @(posedge clk) begin
-        lo <= z[0] ? l : pu[15:0] + l;   // l is 0 whenever z[0] is
+        lo <= z[0] ? 16'd0 : pu[15:0];
         hu <= z[1] ? 16'd0 : pu[31:16];
         hs <= z[2] ? 16'd0 : ps[31:16];
     end

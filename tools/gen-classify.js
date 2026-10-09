@@ -46,7 +46,7 @@ const spec = loadSpec();
 // or mul, mulhu or mulhs, which read the SB_MAC16s beside the ALU, or recip,
 // which reads rtl/recip.sv beside them.
 const isTwo = (i) => i.extra_cycles > 0
-  && /^R\[d\] = (\w+\(R\[a\]\)|R\[a\] \* (R\[b\]|imm)|(mulh[su]|recip)\(R\[a\], R\[b\]\))$/.test(i.semantics ?? '');
+  && /^R\[d\] = (\w+\(R\[a\]\)|R\[a\] \* (R\[b\]|imm)|mulh[su]\(R\[a\], R\[b\]\)|recip\(R\[a\], (R\[b\]|imm)\))$/.test(i.semantics ?? '');
 const isAlu = (i) => {
   const sem = i.semantics ?? '';
   return (!(i.extra_cycles > 0) || isTwo(i))
@@ -123,7 +123,7 @@ const LSEL = { 4: 0, 5: 1, 6: 2, 7: 3, 10: 4, 13: 5, 2: 6, 3: 7 };
 // `lsel` says which halves to throw away.  Its bits are the OLOAD pins of the
 // SB_MAC16s, {signed high, unsigned high, low}: a 1 loads that half's output
 // register with zero, so the one 0 is the half kept.  recip, 17, zeroes all
-// three, and rtl/recip.sv, which reads the same lsel, ORs in its own answer.
+// three, and rtl/cpu.sv ORs in rtl/recip.sv's answer.
 const MSEL = { 14: 0b110, 15: 0b101, 16: 0b011, 17: 0b111 };
 const aluOf = (a) => (a !== X && a in LSEL ? 4 : a !== X && a in MSEL ? 14 : a);
 const lselOf = (a) => (a !== X && a in LSEL ? LSEL[a] : a !== X && a in MSEL ? MSEL[a] : X);

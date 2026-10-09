@@ -479,7 +479,7 @@ endmodule
     alu  u (.clk(clk), .lhs(l), .rhs(r), .op(op == 16 ? 4'd12 : grp ? 4'd4 : op[3:0]), .two(op == 16),
             .lsel(ls), .mdata(r), .y(y), .sum());
     // mul's z as rtl/classify.sv's lsel has it: a 0 for the half kept.
-    mul  m (.clk(clk), .a(l), .b(r), .z(op == 18 ? 3'b101 : op == 19 ? 3'b011 : 3'b110), .l(16'd0), .p(py));
+    mul  m (.clk(clk), .a(l), .b(r), .z(op == 18 ? 3'b101 : op == 19 ? 3'b011 : 3'b110), .p(py));
     initial begin
         f = $fopen("build/alu-tb.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
@@ -517,48 +517,87 @@ endmodule
     run('alu', ['-DCPU_CELLS', cells, `${RTL}/alu.sv`], 'alu-tb');
   } else console.log("skip  rtl/alu.sv's SB_MAC16: yosys's ice40 cell models not found");
 
-  // --- recip with mul: every operand, against tools/sim.js ----------------------
-  // Each one through the five cycles rtl/cpu.sv gives it - aq in the first,
-  // e_cnt counting 4 down to 0, lsel 111 - and the product read in the last,
-  // where mul's low output register has loaded recip's answer; and recip's
-  // answer must be zero in every other cycle, since mul adds it to a product.
-  // All 65536, so the top bit is seen to be ignored, behavioural and then
-  // through yosys's SB_MAC16 model.
-  writeFileSync('build/recip-tb.hex',
-    Array.from({ length: 0x10000 }, (_, x) => hex4(BUILTIN.recip(x, 0))).join('\n') + '\n');
-  const recipTb = `module tb;
-    logic clk = 0, go = 0; logic [2:0] cnt = 0; logic [15:0] a = 0; wire [15:0] l, p;
-    logic [15:0] want [0:65535];
-    integer x, k, bad = 0, stray = 0;
-    recip u (.clk(clk), .a(a), .go(go), .cnt(cnt), .l(l));
-    mul   m (.clk(clk), .a(a), .b(16'h1234), .z(3'b111), .l(l), .p(p));
+  // --- recip's low word, as the unit does it, over every divisor -------------
+  // From the 2/1 answer v2 and its remainder r2 - the first correction's, which
+  // the block below checks through the RTL - the second correction compares
+  // G[k] = beta * (r2 - d0) + beta - 1 + k * D with v2 * d0 for k = 0 .. 3, and
+  // takes v2 less the number below.  All 2^31 divisors, against the 3/2
+  // reciprocal itself; about nine seconds.
+  {
+    const B = 0x10000, N48 = 2 ** 48 - 1;
+    let bad = 0;
+    for (let d1 = 0x8000; d1 < B; d1++) {
+      const v2 = Math.floor((B * B - 1) / d1) - B, r2 = (B * B - 1) - (B + v2) * d1;
+      for (let d0 = 0; d0 < B; d0++) {
+        const D = d1 * B + d0, p3 = v2 * d0, g0 = (r2 - d0) * B + 0xffff;
+        const n = (g0 < p3) + (g0 + D < p3) + (g0 + 2 * D < p3) + (g0 + 3 * D < p3);
+        if (v2 - n !== Math.floor(N48 / D) - B && bad++ < 5)
+          console.log(`  MISMATCH d=${hex4(d1)}:${hex4(d0)}: ${v2 - n}`);
+      }
+    }
+    if (bad) { console.log(`FAIL  rtl/recip.sv's low-word correction: ${bad} of 2^31 divisors wrong`); failed = true; }
+    else console.log("ok    rtl/recip.sv's low-word correction: all 2^31 divisors, as the unit computes it");
+  }
+
+  // --- recip: both lengths, against tools/sim.js -------------------------------
+  // Each one through the cycles rtl/cpu.sv gives it - aq and bq in the first,
+  // e_cnt counting 4 or 7 down to 0, lsel 111 - and its answer read in the
+  // last; and the answer must be zero in every other cycle, since it is ORed
+  // into the product.  0xc3's for all 65536 operands, with bq whatever it is, so the
+  // top bit and bq are seen to be ignored; 0xc6's for every high word with
+  // the lowest and highest low words, 0 and 0xffff - where the corrections
+  // are smallest and largest - and one at random, and 10000 pairs at random,
+  // the arithmetic having been checked over all of them above; all in a shuffled
+  // order, so the long flop is seen to clear between them.  Behavioural, and
+  // then through yosys's SB_MAC16 model.
+  {
+    let seed = 12345;
+    const rnd = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) >>> 8;
+    const vec = [];
+    for (let x = 0; x < 0x10000; x++) vec.push([4, x, rnd() & 0xffff]);
+    for (let x = 0; x < 0x8000; x++)
+      for (const y of [0, 0xffff, rnd() & 0xffff]) vec.push([7, x | (rnd() & 0x8000), y]);
+    for (let i = 0; i < 10000; i++) vec.push([7, rnd() & 0xffff, rnd() & 0xffff]);
+    for (let i = vec.length - 1; i > 0; i--) { const j = rnd() % (i + 1); [vec[i], vec[j]] = [vec[j], vec[i]]; }
+    writeFileSync('build/recip-tb.hex', vec.map(([k, a, b]) =>
+      `${k} ${hex4(a)} ${hex4(b)} ${hex4(BUILTIN.recip(a, k === 4 ? 0 : b))}`).join('\n') + '\n');
+    var recipTb = `module tb;
+    logic clk = 0, go = 0; logic [2:0] cnt = 0; logic [15:0] a = 0, b = 0, xa, xb, want_; wire [15:0] p;
+    integer f, rr, len, k, n = 0, bad = 0, stray = 0;
+    recip u (.clk(clk), .a(a), .b(b), .go(go), .cnt(cnt), .p(p));
     initial begin
-        $readmemh("build/recip-tb.hex", want);
+        f = $fopen("build/recip-tb.hex", "r");
         #1 clk = 1; #1 clk = 0;          // p's first value, zero
         #1 clk = 1; #1 clk = 0;
-        for (x = 0; x < 65536; x = x + 1) begin
-            for (k = 4; k >= 0; k = k - 1) begin
-                // aq holds d in the first cycle only; after it, decode's garbage
-                a = k == 4 ? x[15:0] : $random; go = 1; cnt = k[2:0];
-                #1; if (k != 1 && l !== 16'd0) stray = stray + 1;
-                if (k == 0 && p !== want[x]) begin
-                    bad = bad + 1;
-                    if (bad < 6) $display("  MISMATCH d=%h: want %h got %h", x[15:0], want[x], p);
+        while (!$feof(f)) begin
+            rr = $fscanf(f, "%d %h %h %h\\n", len, xa, xb, want_);
+            if (rr == 4) begin
+                n = n + 1;
+                for (k = len; k >= 0; k = k - 1) begin
+                    // aq and bq hold the operands in the first cycle only
+                    a = k == len ? xa : $random; b = k == len ? xb : $random;
+                    go = 1; cnt = k[2:0];
+                    #1; if (k != 0 && p !== 16'd0) stray = stray + 1;
+                    if (k == 0 && p !== want_) begin
+                        bad = bad + 1;
+                        if (bad < 6) $display("  MISMATCH len=%0d d=%h:%h: want %h got %h", len, xa, xb, want_, p);
+                    end
+                    #1 clk = 1; #1 clk = 0;
                 end
-                #1 clk = 1; #1 clk = 0;
             end
         end
-        if (bad == 0 && stray == 0) $display("ok    rtl/recip.sv\${WHICH}: all 65536 operands against tools/sim.js, and zero between");
-        else $display("FAIL  rtl/recip.sv\${WHICH}: %0d wrong, %0d cycles not zero", bad, stray);
+        if (bad == 0 && stray == 0) $display("ok    rtl/recip.sv\${WHICH}: %0d operands of both lengths against tools/sim.js, and zero between", n);
+        else $display("FAIL  rtl/recip.sv\${WHICH}: %0d of %0d wrong, %0d cycles not zero", bad, n, stray);
         $finish;
     end
 endmodule
 `;
+  }
   writeFileSync('build/recip-tb.sv', recipTb.replaceAll('\${WHICH}', ''));
-  run('recip', [`${RTL}/recip.sv`, `${RTL}/alu.sv`], 'recip-tb');
+  run('recip', [`${RTL}/recip.sv`], 'recip-tb');
   if (cells && existsSync(cells)) {
     writeFileSync('build/recip-tb.sv', recipTb.replaceAll('\${WHICH}', ", with yosys's SB_MAC16 model"));
-    run('recip', ['-DCPU_CELLS', cells, `${RTL}/recip.sv`, `${RTL}/alu.sv`], 'recip-tb');
+    run('recip', ['-DCPU_CELLS', cells, `${RTL}/recip.sv`], 'recip-tb');
   } else console.log("skip  rtl/recip.sv's SB_MAC16: yosys's ice40 cell models not found");
   rmSync('build/recip-tb.hex', { force: true });
 
