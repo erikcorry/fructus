@@ -33,7 +33,7 @@
 //             brclr call brset
 //   ra field  insn[13:11]
 //             st st8 ld ld8 movhi mul clmul bitrev sxt8 clz popcount add rsb
-//             xor or and shl asr lsr iseq br mulhu mulhs
+//             xor or and shl asr lsr iseq br mulhu mulhs recip
 //
 // THE COLUMN NEARLY DECIDES IT - +0, +4 and +5 are rd, the rest ra - and the
 // exceptions, computed rather than remembered, are:

@@ -214,6 +214,16 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
+//     recip, rtl/recip.sv, keep_hierarchy, as here   2340    30.29  29.1 .. 31.0
+//       2044 LUT4, 3 block RAMs and 4 SB_MAC16s, against 1880, 2 and 2;
+//       mulhu's commit, rerun the same day, 30.38, 29.5 .. 31.5.  Every
+//       seed's critical path decode's, seven cells.  Flattened, the unit
+//       made those paths eight cells deep without touching them, 28.08, and
+//       nine with its answer through mul's D, 26.64; recip's release inside
+//       dispatch's if-chain put aq -> pcc paths, nine cells, in five seeds;
+//       the correction's increment behind its compares was the critical
+//       path in five, from mac2's output, 30.32 then.  icetime: mac2's A
+//       pins settle by 19.0 ns, macu's D by 30.7, decode's worst path 36.2
 //     mulhu AND mulhs, a second SB_MAC16, OLOAD      2139    30.75  29.6 .. 32.1
 //       1892 LUT4 against 1870, and in the same text before it 30.38,
 //       29.4 .. 31.4; every seed's critical path still decode's.  icetime:
@@ -471,7 +481,7 @@ module cpu (
 
     wire [1:0] kind, len, c_cond, c_pcsrc, c_mn;
     wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush, c_useq, c_urs;
-    wire [1:0] c_ext;                  // extra cycles in the ALU stage
+    wire [2:0] c_ext;                  // extra cycles in the ALU stage
 `ifdef FRUCTUS_BLIT
     wire       c_ulate;
     logic      d_ulate;
@@ -508,6 +518,13 @@ module cpu (
     wire span3   = pc[0] & (len == 2'd3);  // three bytes starting odd: three words
     // clz AND popcount TAKE TWO CYCLES IN THE ALU STAGE, and leave a cycle with
     // no dispatch after them, as span3 does: see the ALU stage.
+    // MORE THAN ONE EXTRA CYCLE - recip's four - STOPS DISPATCH, as a jump
+    // does, and `xrel` releases it when the ALU stage has three held cycles
+    // to come: the bubble after the release reads pc's word, and the next
+    // instruction dispatches into decode for the last, where it takes the
+    // result through the bypass.  So any count from three up needs nothing
+    // more than the compare; two would want a release before the hold began.
+    wire c_long = |c_ext[2:1];
 
     // The candidates for the next pc come off the pc flop in parallel, so the
     // classifier's length only picks one.
@@ -524,6 +541,7 @@ module cpu (
     wire        urj;                       // the microcode redirects the fetch
     wire [15:0] rjaddr;
     wire        wake;                      // an interrupt ends a halt
+    wire        xrel;                      // a long hold releases dispatch: the ALU stage
     assign mem_addr = taken_q ? {tgt_q[15:1], 1'b0}
                     : jnow    ? {jaddr[15:1], 1'b0}
                     : ldnow   ? asum
@@ -552,13 +570,17 @@ module cpu (
         end else if (go) begin
             pcb     <= pch;
             {pcc, pcl} <= pcs;
-            go      <= flows & ~span3 & (c_ext == 2'd0);
-            stop    <= ~flows;
+            go      <= flows & ~span3 & (c_ext == 3'd0);
+            stop    <= ~flows | c_long;
             use_nxt <= ~pc[0] & (len == 2'd1);
         end else if (!stop) begin
             go      <= 1'b1;               // the bubble: pc's word arrives now
             use_nxt <= 1'b0;
         end
+        // recip's release, outside the chain above: it only ever finds dispatch
+        // stopped, so it touches nothing but stop, and inside the chain it put
+        // a term behind mrestart - the adder on aq - in front of every pc flop.
+        if (xrel & ~rst) stop <= 1'b0;     // the bubble, as after a routine
     end
 
     // =========================================================================
@@ -569,7 +591,7 @@ module cpu (
     logic [1:0]  d_mn;
     logic [4:0]  d_uent;
     logic        d_useq, d_urs;
-    logic [1:0]  d_ext;
+    logic [2:0]  d_ext;
     logic [7:0]  d_op, d_b1;
     logic [3:0]  d_alu, d_lhs, d_rhs, d_dest;
     logic [1:0]  d_cond, d_pcsrc, d_len;
@@ -724,19 +746,20 @@ module cpu (
     // a flop of its own - rtl/alu.sv - and writes rd twice: a wrong value in
     // the first cycle, which nothing reads, and the right one in the second,
     // which the instruction then in decode takes through the bypass as usual.
-    logic [1:0]  e_cnt;               // held cycles still to come
+    logic [2:0]  e_cnt;               // held cycles still to come
     logic        e_two;               // held: clz or popcount's unary arm reads q
-    wire         e_hold = e_cnt != 2'd0;
+    wire         e_hold = e_cnt != 3'd0;
     wire         e_keep = e_hold & ~taken_q;   // held on; a squash ends it
+    assign       xrel   = e_cnt == 3'd3;       // dispatch's release, for recip: above
     logic        e_valid;             // for the harness
     logic [15:0] e_pc;                // for the harness
     always_ff @(posedge clk) begin
         // A squash lands in the held instruction's first ALU cycle, if it is
         // the one behind a taken branch - and must end the hold there, or its
         // later cycles would write and retire it after all.
-        e_valid <= e_hold ? (e_cnt == 2'd1) & ~taken_q : (keep & (d_ext == 2'd0));   // the last cycle retires
-        e_cnt   <= (rst | taken_q) ? 2'd0 : e_hold ? e_cnt - 2'd1 : keep ? d_ext : 2'd0;
-        e_two   <= ~rst & (e_hold ? e_two : keep & (d_ext != 2'd0));
+        e_valid <= e_hold ? (e_cnt == 3'd1) & ~taken_q : (keep & (d_ext == 3'd0));   // the last cycle retires
+        e_cnt   <= (rst | taken_q) ? 3'd0 : e_hold ? e_cnt - 3'd1 : keep ? d_ext : 3'd0;
+        e_two   <= ~rst & (e_hold ? e_two : keep & (d_ext != 3'd0));
         aq      <= fwd_a ? y : R[an_rd];
         bq      <= fwd_b ? y : rb;
         if (!e_keep) e_we <= (keep & d_wen) ? 8'd1 << wn : 8'd0;
@@ -1075,7 +1098,13 @@ module cpu (
     // whole into ldq in the ALU cycle once measured 26.40 MHz: yosys pushed ldq
     // back into the popcount tree, and the flops it made there took a reset
     // from dispatch.)
-    mul  mulu (.clk(clk), .a(aq), .b(bq), .z(e_lsel), .p(prod));
+    // recip's answer comes in through the low half's D, which an lsel of 111
+    // loads in place of the product - rtl/alu.sv's mul and rtl/recip.sv.
+    wire [15:0] rans;
+    mul  mulu (.clk(clk), .a(aq), .b(bq), .z(e_lsel), .l(rans), .p(prod));
+    // A module of its own, or abc maps decode a cell deeper: rtl/recip.sv.
+    (* keep_hierarchy *)
+    recip rcp (.clk(clk), .a(aq), .go(e_op == 4'd14 && e_lsel == 3'b111), .cnt(e_cnt), .l(rans));
     wire [15:0] lqsrc = (uLQ == 3'd1) ? pc
                       : (uLQ == 3'd2) ? shadow_sp
                       : (uLQ == 3'd3) ? shadow_lr : shadow_isp;

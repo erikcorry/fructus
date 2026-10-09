@@ -43,9 +43,10 @@ const spec = loadSpec();
 
 // A unary operation with extra cycles takes two cycles in the ALU stage.
 // An instruction the ALU stage holds for its extra cycles: a unary operation,
-// or mul, mulhu or mulhs, which read the SB_MAC16s beside the ALU.
+// or mul, mulhu or mulhs, which read the SB_MAC16s beside the ALU, or recip,
+// which reads rtl/recip.sv beside them.
 const isTwo = (i) => i.extra_cycles > 0
-  && /^R\[d\] = (\w+\(R\[a\]\)|R\[a\] \* (R\[b\]|imm)|mulh[su]\(R\[a\], R\[b\]\))$/.test(i.semantics ?? '');
+  && /^R\[d\] = (\w+\(R\[a\]\)|R\[a\] \* (R\[b\]|imm)|(mulh[su]|recip)\(R\[a\], R\[b\]\))$/.test(i.semantics ?? '');
 const isAlu = (i) => {
   const sem = i.semantics ?? '';
   return (!(i.extra_cycles > 0) || isTwo(i))
@@ -121,8 +122,9 @@ const LSEL = { 4: 0, 5: 1, 6: 2, 7: 3, 10: 4, 13: 5, 2: 6, 3: 7 };
 // THE PRODUCTS: mul, mulhu and mulhs - 14, 15 and 16 - reach it as 14, and
 // `lsel` says which halves to throw away.  Its bits are the OLOAD pins of the
 // SB_MAC16s, {signed high, unsigned high, low}: a 1 loads that half's output
-// register with zero, so the one 0 is the half kept.
-const MSEL = { 14: 0b110, 15: 0b101, 16: 0b011 };
+// register with zero, so the one 0 is the half kept.  recip, 17, zeroes all
+// three, and rtl/recip.sv, which reads the same lsel, ORs in its own answer.
+const MSEL = { 14: 0b110, 15: 0b101, 16: 0b011, 17: 0b111 };
 const aluOf = (a) => (a !== X && a in LSEL ? 4 : a !== X && a in MSEL ? 14 : a);
 const lselOf = (a) => (a !== X && a in LSEL ? LSEL[a] : a !== X && a in MSEL ? MSEL[a] : X);
 const memOf = (r) => {
@@ -141,7 +143,7 @@ const memOf = (r) => {
   return null;
 };
 const bits = (v, w) => (v === X ? 'x'.repeat(w) : v.toString(2).padStart(w, '0'));
-const W = 39 + ENTRY_BITS;
+const W = 40 + ENTRY_BITS;
 const late1 = [], late0 = [];          // the rows with a routine, by ulate
 const counts = [0, 0, 0, 0];
 let memRows = 0, excRows = 0;
@@ -165,10 +167,12 @@ const cases = rows.map((r) => {
   if (two !== r.insns.some(isTwo)) throw new Error(`opcode ${r.op}: two cycles for some forms only`);
   const ext = two ? r.insns[0].extra_cycles : 0;
   if (r.insns.some((i) => (two ? i.extra_cycles : 0) !== ext)) throw new Error(`opcode ${r.op}: extra cycles differ`);
-  // rtl/cpu.sv's dispatch leaves one bubble.  Two held cycles - mul with its
-  // SB_MAC16 registered at both ends - measured no faster and put a second
-  // bubble's flop on dispatch's path; it would need that back.
-  if (ext > 1) throw new Error(`opcode ${r.op}: ${ext} extra cycles, and rtl/cpu.sv holds one`);
+  // rtl/cpu.sv's dispatch leaves one bubble for one extra cycle, and stops
+  // for more, to be released when three held cycles are left - so two would
+  // need a release that cannot come.  (Two held cycles for mul, with its
+  // SB_MAC16 registered at both ends, measured no faster and put a second
+  // bubble's flop on dispatch's path.)
+  if (ext === 2 || ext > 7) throw new Error(`opcode ${r.op}: ${ext} extra cycles, and rtl/cpu.sv holds 1 or 3 to 7`);
   // Released in the ALU cycle: whatever finishes in its first step, so that
   // the next instruction reaches decode as its write lands - a load of one
   // register, in one access.  ld8's is always one; ld's, pop's and ldm's of
@@ -192,7 +196,7 @@ const cases = rows.map((r) => {
              bits(f(r.v.pc, jump || cbr), 2),
              bits(mem ? 1 : 0, 1), mf(mem?.st, 1), mf(mem?.w2, 1), mf(mem?.n, 2), mf(mem?.blk, 1), mf(mem?.push, 1),
              bits(useq ? 1 : 0, 1), bits(mem ? entryOf(mem) : exc ?? X, ENTRY_BITS),
-             bits(piped ? ext : X, 2), bits(useq ? (urs ? 1 : 0) : X, 1),
+             bits(piped ? ext : X, 3), bits(useq ? (urs ? 1 : 0) : X, 1),
              bits(mem ? X : f(lselOf(r.v.alu), writes), 3)];
   if (useq) (mem?.late ? late1 : late0).push(r.op);
   return `        8'h${r.op.toString(16).padStart(2, '0')}: t = ${W}'b${t.join('_')};    // ${r.who}`;
@@ -258,7 +262,7 @@ module classify (
     output logic       mpush,     //   downward, so its registers lie reversed
     output logic       useq,      // it runs a routine: a memory or exception instruction
     output logic [${ENTRY_BITS - 1}:0] uent,      // where its routine starts in rtl/ucode.sv
-    output logic [1:0] ext,       // extra cycles in the ALU stage: clz, popcount, mul
+    output logic [2:0] ext,       // extra cycles in the ALU stage: clz, popcount, mul, recip
 \`ifdef FRUCTUS_BLIT
     output logic       ulate,     // blit mode makes it late: ld, ld8 and ldm
 \`endif

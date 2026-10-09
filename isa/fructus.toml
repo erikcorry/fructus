@@ -239,6 +239,7 @@ length_from_first_byte = true
 #     jmp and call to a target in their bytes        3
 #     jmp ra, call ra, ret - a target in a register  4
 #     mul, clz, popcount                             1 + extra_cycles = 2
+#     recip                                          1 + extra_cycles = 5
 #     a load of N accesses: ld8, ld, pop, ldm        N + 3
 #     a store of N accesses: st8, st, push, stm      N + 4
 #       - an access is a byte, or a whole word at an EVEN address;
@@ -302,7 +303,8 @@ length_from_first_byte = true
 # register - clz and popcount's registered halfway so that they do not set the
 # clock every other instruction runs at, mul's because the DSP delivers its
 # product a cycle late.  The first cycle writes a wrong result, the second the
-# right one - see rtl/cpu.sv.
+# right one - see rtl/cpu.sv.  recip takes four: a table, two products and a
+# correction, each registered - see rtl/recip.sv.
 #
 # The simulator does not need a list of which instructions are which - the
 # semantics already say.  `if (...) pc = pc + off` is a conditional branch;
@@ -1197,7 +1199,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   THE GROUPED REGION IS NOW FULL: fifteen rows of eight, 0000_1xxx through
 #   0111_1xxx, with no gaps between them.  A sixteenth grouped operation has
-#   nowhere contiguous to go, which is the price of the tidiness - there are 76
+#   nowhere contiguous to go, which is the price of the tidiness - there are 74
 #   free opcodes at 1011_xxxx and above, but none of them adjoin this block.
 #   ------------------------------------------------------------------------
 #
@@ -1288,7 +1290,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1011_011b                mulhu rd, ra, rb          2 bytes
 #   1011_1000 .. 1011_1101   -- free
 #   1011_111b                mulhs rd, ra, rb          2 bytes
-#   1100_0000 .. 1111_1111   -- free, 64 slots
+#   1100_0000 .. 1100_0101   -- free
+#   1100_011b                recip rd, ra, rb          2 bytes
+#   1100_1000 .. 1111_1111   -- free, 56 slots
 #
 #   AND THE COLUMNS SAY WHAT BYTE 1 LOOKS LIKE, exactly as they do everywhere
 #   else in the map:
@@ -2585,6 +2589,47 @@ extra_cycles = 1
   [[insn.form]]
   name     = "three_reg"
   encoding = "1011_111b  ccaa_addd"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
+
+# --- recip -------------------------------------------------------------------
+# The reciprocal of a normalised divisor, Moller and Granlund's v, in sixteen
+# bits: with d = ra | 0x8000,
+#
+#     0xc6  recip rd, ra, rb       2 bytes, with 0xc7
+#
+#     rd = floor((2^32 - 1) / d) - 2^16
+#
+# so that a 32 / 16 division by d is a mulhu by rd, an add and at most two
+# corrections, as in "Improved division by invariant integers" (2011).  ra's
+# top bit is taken as 1, whatever it is: a divisor is shifted until it is.
+#
+# rb IS NOT READ YET.  It is there for the 3/2 reciprocal, which corrects v
+# by the divisor's low word; for now recip is unary and rb only fills the
+# encoding, which is mul's three-register one.
+#
+# A TABLE, A PRODUCT, A SECOND PRODUCT AND A CORRECTION, in rtl/recip.sv with
+# a block RAM and two SB_MAC16s of its own: v is first read as A - S*lo >> 12
+# from 128 pairs indexed by d[14:8], which is within three below, and then
+# corrected by comparing beta^2 - 1 - (beta + v) * d with d, 2d and 3d.  To
+# everything but those it is mul: op 14, with an lsel of 111 that zeroes every
+# half the SB_MAC16s beside the ALU make, and its own answer OR'd in.
+
+[[insn]]
+mnemonic = "recip"
+summary  = "rd = floor((2^32 - 1) / (ra | 0x8000)) - 2^16"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = recip(R[a], R[b])"
+extra_cycles = 4
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "1100_011b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 

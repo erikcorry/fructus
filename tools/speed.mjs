@@ -43,7 +43,7 @@ const PLAN = SYSTEM ? 'tools/fpga-system.py' : args.includes('--floorplan') ? 't
 const JOBS = args.includes('--jobs') ? Number(args[args.indexOf('--jobs') + 1]) : Infinity;
 const SEEDS = Number(args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--jobs') ?? 16);
 const OUT = SYSTEM ? 'build/speed-system' : 'build/speed';
-const MODULES = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare',
+const MODULES = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare', 'recip',
   ...(SYSTEM ? ['spiboot', 'video/video', 'video/timing', 'video/background', 'video/foreground', 'video/sprites'] : [])];
 
 const have = async (cmd) => {

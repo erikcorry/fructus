@@ -157,12 +157,15 @@ export const ALU_OPS = [
   // so these two codes, like the fast group's, never reach rtl/alu.sv.
   { code: 15, name: 'mulhu', does: 'lhs * rhs, high half, unsigned' },
   { code: 16, name: 'mulhs', does: 'lhs * rhs, high half, signed' },
+  // And so is the reciprocal, whose answer rtl/recip.sv ORs into the product
+  // with all three halves zeroed.
+  { code: 17, name: 'recip', does: 'floor((2^32 - 1) / (lhs | 0x8000)) - 2^16, from rtl/recip.sv' },
 ];
 
 // The operations whose result is registered, so that an instruction using one
 // must declare `extra_cycles` and nothing else may: the byte-serial core's ucode.sv gives exactly
 // those the SLOW step.
-export const ALU_REGISTERED = new Set(['slow', 'mul', 'mulhu', 'mulhs']);
+export const ALU_REGISTERED = new Set(['slow', 'mul', 'mulhu', 'mulhs', 'recip']);
 
 // --- which operation each instruction needs, from its semantics ---------------
 export const ALU_RULES = [
@@ -184,7 +187,7 @@ export const ALU_RULES = [
   // extra cycle, finish in the ALU's second cycle on them - rtl/alu.sv.
   [/^R\[d\] = (sxt8|clz|bitrev|popcount|clmul)\(R\[a\]\)$/, 'unary'],
   [/^R\[d\] = R\[a\] \* (R\[b\]|imm)$/,                    'mul'],
-  [/^R\[d\] = (mulhu|mulhs)\(R\[a\], R\[b\]\)$/,             (m) => m[1]],
+  [/^R\[d\] = (mulhu|mulhs|recip)\(R\[a\], R\[b\]\)$/,       (m) => m[1]],
   [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
   [/^R\[d\] = \(\((R\[b\]|imm) & 0xff\) << 8\) \| \(R\[a\] & 0xff\)$/, 'movhi'],
   [/^R\[d\] = \(R\[a\] & mask\) != 0$/,                    'isset'],

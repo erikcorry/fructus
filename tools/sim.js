@@ -197,6 +197,9 @@ export const BUILTIN = {
   // any 32-bit product, where Math.imul would keep only the low half.
   mulhu:    (x, y) => Math.floor(((x & MASK) * (y & MASK)) / 0x10000),
   mulhs:    (x, y) => Math.floor((s16(x) * s16(y)) / 0x10000),
+  // Moller and Granlund's v for the divisor x with its top bit set: exact
+  // in a double too.  y, the 3/2 reciprocal's low word, is not read yet.
+  recip:    (x, y) => Math.floor(0xffffffff / ((x & MASK) | HALF)) - 0x10000,
   clmul:    (x) => { let r = 0; for (let i = 0; i < 8; i++) if ((x >>> i) & 1) r ^= ((x >>> 8) & 0xff) << i; return r; },
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };

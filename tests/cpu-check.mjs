@@ -540,7 +540,7 @@ ${BLIT_WIRING}
     end
 endmodule
 `);
-const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare']
+const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare', 'recip']
   .map((m) => `${process.env.FRUCTUS_RTL ?? 'rtl'}/${m}.sv`);
 execFileSync('iverilog', ['-g2012', '-o', 'build/cpu-tb.vvp', ...RTL, 'build/cpu-tb.sv'], { stdio: 'inherit' });
 const out = execFileSync('vvp', ['build/cpu-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
