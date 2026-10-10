@@ -51,7 +51,7 @@ export function lhsOf(insn, form) {
     const dest = left.trim().match(/^R\[([a-z])\]$/);
     const memw = /M(8|16)\[/.test(left);
     // A POINTER THE INSTRUCTION WALKS is the register it steps from the value
-    // it was entered with: `sp = base - 4` for push, `r1 = base + 4` for stm.
+    // it was entered with: `sp = base - 4` for push, `r5 = base + 4` for stm.
     // That register is port A's, whichever it is - and it is the LAST thing
     // such an instruction writes, which is what defines `pop sp`.
     const step = stmt.match(/\b([a-z][a-z0-9]*)\s*=\s*base\s*[-+]\s*\d/);

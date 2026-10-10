@@ -59,7 +59,7 @@ const rhsCode = (d) => {
   // the byte-serial core read its address unit before the flop, exactly as a
   // call read the pc adder; rtl/cpu.sv makes it from the pointer in its ALU
   // cycle.  It names the pointer on both sides of a step - `sp = sp - 2` for
-  // push, `r1 = r1 + 2` for stm - and the digit is what keeps `pc = pc + off`
+  // push, `r5 = r5 + 2` for stm - and the digit is what keeps `pc = pc + off`
   // out, since a branch's displacement is not a constant here.
   if (/\b[a-z][a-z0-9]* = base [-+] \d/.test(sem)) return RHS_ADR;
   if (Object.values(form.fields ?? {}).some((v) => /^[a-z]:reg\[0\]$/.test(v))) return modeCode('port B, from the bytes');
@@ -101,7 +101,7 @@ const lhsCode = (d, op) => {
 const destCode = (d, op) => {
   const writes = destWritesOf(d.insn);
   // AN INSTRUCTION THAT WALKS A POINTER NAMES IT, and that is the write this
-  // table carries - sp for push and pop, r1 for stm, r2 for ldm.  The register
+  // table carries - sp for push and pop, r5 for stm, r1 for ldm.  The register
   // writes in between are the ones a microcode step overrides, and pop has up
   // to three of them; the pointer write is the one every such instruction ends
   // with, so it is the one worth predecoding.

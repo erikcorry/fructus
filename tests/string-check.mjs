@@ -129,9 +129,9 @@ const per = (name, oa, ob) => {
 };
 const COSTS = {
   // name        even    s2 odd
-  strcmp:  [6.5000, 7.0000],
+  strcmp:  [6.2500, 6.7500],
   strncmp: [7.0000, 7.5000],
-  strlen:  [2.6250, 2.6250],
+  strlen:  [2.5000, 2.5000],
 };
 for (const [name, [even, odd]] of Object.entries(COSTS)) {
   const e = per(name, 0, 0), o = per(name, 0, 1);

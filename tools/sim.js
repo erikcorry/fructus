@@ -266,8 +266,8 @@ export class Machine {
     // sp and lr are register ALIASES in the spec, not hardcoded numbers here.
     const reg = spec.optype.reg;
     // Both the aliases and the registers' OWN names, because an instruction
-    // that walks a pointer names it outright - `stm` steps r1 and `ldm` steps
-    // r2, the way push and pop step sp - and semantics have to be able to say
+    // that walks a pointer names it outright - `stm` steps r5 and `ldm` steps
+    // r1, the way push and pop step sp - and semantics have to be able to say
     // so.  Operand names are single letters, so nothing here can collide.
     this.named = {};
     reg.names.forEach((n, i) => { this.named[n] = i; });

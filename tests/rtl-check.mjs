@@ -235,7 +235,7 @@ let failed = /FAIL/.test(out);
       const e = decode(dec, [op, b1, 0], 0);
       // An instruction that WALKS A POINTER reads it on port A, and the
       // microcode names it rather than the encoding carrying it - push and pop
-      // step sp, stm and ldm step r1 and r2.  The digit is what keeps branches
+      // step sp, stm and ldm step r5 and r1.  The digit is what keeps branches
       // out: `pc = pc + off` has the same shape and its register IS a field.
       if (!e || e.nbytes === 1
              || /\b[a-z][a-z0-9]* = base [-+] \d/.test(e.insn.semantics ?? '')) continue;

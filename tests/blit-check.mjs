@@ -124,11 +124,11 @@ const src = `
         st8  r0, [r2, #7]          ; the high byte of word 11
         ld   r3, [r2, #6]
         st   r3, [r4, #6]
-        mov  r2, #0x8020
-        ldm  r0, r3                ; words 16 and 17; r2 steps to 0x8024
+        mov  r1, #0x8020
+        ldm  r0, r3                ; words 16 and 17; r1 steps to 0x8024
         st   r0, [r4, #8]
         st   r3, [r4, #10]
-        st   r2, [r4, #12]
+        st   r1, [r4, #12]
         mov  r0, #0x1357
         mov  r3, #0x2468
         push r0, r3                ; the stack is ram_lo's, in blit mode too

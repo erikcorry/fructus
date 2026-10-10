@@ -48,7 +48,7 @@ But we don't want to pay the typical code density penalty of RISC on a 64k machi
 - Up to three arbitrary registers can be pushed or popped in a single two-byte instruction for compact
   function prologs and epilogs. Store-multiple and load-multiple can write or read up to three registers
   (repeats allowed) for memcpy, memset, strlen. Their pointer is fixed, as `sp` is for push and pop —
-  `stm` stores through `r1` and `ldm` loads through `r2`, each counting up — which leaves all of
+  `stm` stores through `r5` and `ldm` loads through `r1`, each counting up — which leaves all of
   byte 1 for the register list.
 
 It is conceived to run on the
@@ -341,7 +341,7 @@ low word a third product on the first DSP again and a second correction, 0 to
 half zeroed and its answer OR'd in. With `-mmul` every division libgcc does
 is built on it: the `_mul` routines in `libgcc/lib1funcs.s` divide a word at a
 time, so a 16-bit division is about 36 cycles, a 32-bit one about 80 against
-534 to 1074 for the C, and a 64-bit one 270 to 630 against 700 to 3100.
+534 to 1074 for the C, and a 64-bit one 260 to 605 against 690 to 3120.
 `rtl/alu.sv` instantiates the DSPs rather
 than letting yosys's `-dsp` infer them, because the inference copies the operand
 flops into the DSP's input registers and drags the logic in front of them to

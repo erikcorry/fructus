@@ -3025,7 +3025,7 @@ semantics = "R[d] = (R[a] & mask) != 0"
 #     pop  sp    has no effect on sp: it is left holding the stepped pointer,
 #                and the word that was loaded into it is discarded
 #
-# and the same for `stm r1` and `ldm r2`.  Neither case is useful, but both are
+# and the same for `stm r5` and `ldm r1`.  Neither case is useful, but both are
 # well defined, and no assembler has to know about them.
 #
 # IT IS ALSO WHAT THE HARDWARE DOES FOR ITS OWN REASONS.  The register file has
@@ -3125,15 +3125,27 @@ semantics = "base = sp; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 
 # --- stm / ldm: the block moves ---------------------------------------------
 # push and pop walk the stack; these walk a buffer, and they are the same
-# hardware doing it.  `stm` stores through r1 and `ldm` loads through r2, each
+# hardware doing it.  `stm` stores through r5 and `ldm` loads through r1, each
 # stepping its pointer past what it moved - so a copy loop is `ldm` then `stm`
 # with no pointer arithmetic between them at all, and the two pointers advance
 # themselves.
 #
 # THE POINTER IS NAMED, NOT ENCODED, exactly as sp is for push and pop.  That
 # is what leaves all of byte 1 for the registers being moved, which is what
-# makes a three-register form fit in two bytes.  r1 for the store and r2 for
-# the load, so that a copy can hold both at once, and neither is sp.
+# makes a three-register form fit in two bytes.  Two registers, so that a copy
+# can hold both at once, and neither is sp.
+#
+# r1 FOR THE LOAD because it is argument 1, which is the source in memcpy,
+# memmove, strcmp and the rest: the routine reads through the register its
+# caller already put the pointer in.  r5 FOR THE STORE because it is the one
+# register that is caller saved under every signature - see isa/abi.s - so a
+# routine may walk it without saving it, and it never holds an argument that
+# would have to be moved out of the way first.  memcpy copies dest into r5 and
+# leaves r0 alone as its return value; memset puts its fill word in r1, where
+# c arrived.  They were r1 for the store and r2 for the load until the RTL
+# measured the change as free: the pointer is a register number in the
+# predecode table, so a different one is a different constant, and nothing
+# else in rtl/ moved.
 #
 # THEY COUNT UP, where push counts down.  A block move runs forwards, and the
 # post-update leaves each pointer one past the last byte it moved - ready for
@@ -3151,10 +3163,10 @@ semantics = "base = sp; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 # push/pop pair reverses it.
 [[insn]]
 mnemonic = "stm"
-summary  = "store ra through r1, stepping r1 past it"
+summary  = "store ra through r5, stepping r5 past it"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
-semantics = "base = r1; M16[base] = R[a]; r1 = base + 2"
+semantics = "base = r5; M16[base] = R[a]; r5 = base + 2"
 
   [[insn.form]]
   name     = "single"
@@ -3162,10 +3174,10 @@ semantics = "base = r1; M16[base] = R[a]; r1 = base + 2"
 
 [[insn]]
 mnemonic = "stm"
-summary  = "store ra then rb through r1"
+summary  = "store ra then rb through r5"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
 syntax   = "{a}, {b}"
-semantics = "base = r1; M16[base] = R[a]; M16[base + 2] = R[b]; r1 = base + 4"
+semantics = "base = r5; M16[base] = R[a]; M16[base + 2] = R[b]; r5 = base + 4"
 
   [[insn.form]]
   name     = "double"
@@ -3173,11 +3185,11 @@ semantics = "base = r1; M16[base] = R[a]; M16[base + 2] = R[b]; r1 = base + 4"
 
 [[insn]]
 mnemonic = "stm"
-summary  = "store ra, then rb, then rc through r1"
+summary  = "store ra, then rb, then rc through r5"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" },
             { name = "c", type = "reg" }]
 syntax   = "{a}, {b}, {c}"
-semantics = "base = r1; M16[base] = R[a]; M16[base + 2] = R[b]; M16[base + 4] = R[c]; r1 = base + 6"
+semantics = "base = r5; M16[base] = R[a]; M16[base + 2] = R[b]; M16[base + 4] = R[c]; r5 = base + 6"
 
   [[insn.form]]
   name     = "triple"
@@ -3186,10 +3198,10 @@ semantics = "base = r1; M16[base] = R[a]; M16[base + 2] = R[b]; M16[base + 4] = 
 
 [[insn]]
 mnemonic = "ldm"
-summary  = "load ra through r2, stepping r2 past it"
+summary  = "load ra through r1, stepping r1 past it"
 operands = [{ name = "a", type = "reg" }]
 syntax   = "{a}"
-semantics = "base = r2; R[a] = M16[base]; r2 = base + 2"
+semantics = "base = r1; R[a] = M16[base]; r1 = base + 2"
 
   [[insn.form]]
   name     = "single"
@@ -3197,10 +3209,10 @@ semantics = "base = r2; R[a] = M16[base]; r2 = base + 2"
 
 [[insn]]
 mnemonic = "ldm"
-summary  = "load ra then rb through r2"
+summary  = "load ra then rb through r1"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" }]
 syntax   = "{a}, {b}"
-semantics = "base = r2; R[a] = M16[base]; R[b] = M16[base + 2]; r2 = base + 4"
+semantics = "base = r1; R[a] = M16[base]; R[b] = M16[base + 2]; r1 = base + 4"
 
   [[insn.form]]
   name     = "double"
@@ -3208,11 +3220,11 @@ semantics = "base = r2; R[a] = M16[base]; R[b] = M16[base + 2]; r2 = base + 4"
 
 [[insn]]
 mnemonic = "ldm"
-summary  = "load ra, then rb, then rc through r2"
+summary  = "load ra, then rb, then rc through r1"
 operands = [{ name = "a", type = "reg" }, { name = "b", type = "reg" },
             { name = "c", type = "reg" }]
 syntax   = "{a}, {b}, {c}"
-semantics = "base = r2; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base + 4]; r2 = base + 6"
+semantics = "base = r1; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base + 4]; r1 = base + 6"
 
   [[insn.form]]
   name     = "triple"

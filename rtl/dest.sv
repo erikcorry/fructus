@@ -46,8 +46,8 @@
 //     r0        ld/implicit, ld8/implicit, add/inc_r0, add/dec_r0,
 //               add/inc2_r0, or/mov_r0_r1, mov/r0_zero, xor/r0_not,
 //               add/r0_r0_r1
-//     r1        add/r1_r1_r0, or/mov_r1_r0, stm
-//     r2        ldm
+//     r1        add/r1_r1_r0, or/mov_r1_r0, ldm
+//     r5        stm
 //     sp (r6)   brk, rti, push, pop
 //     lr (r7)   brk, rti, call
 //

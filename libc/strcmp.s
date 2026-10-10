@@ -10,10 +10,10 @@
 ; MEASURED, by tests/string-check.mjs, against the C that crt/libc.c had
 ; ----------------------------------------------------------------------------
 ;                       here        s2 odd      C       faster by
-;       strlen          2.6250                 12.00      4.57x  optimistic path
-;       strlen          4.7500                 12.00      2.53x  every block a
+;       strlen          2.5000                 12.00      4.80x  optimistic path
+;       strlen          4.5000                 12.00      2.67x  every block a
 ;                                                                false alarm
-;       strcmp          6.5000     7.0000      19.00      2.92x
+;       strcmp          6.2500     6.7500      19.00      3.04x
 ;       strncmp         7.0000     7.5000      23.00      3.29x
 ;
 ; Cycles per byte of string, differenced across two lengths so the call and the
@@ -25,7 +25,7 @@
 ; EVERY OTHER THREE-BYTE BRANCH STARTS AT AN ODD ADDRESS and costs two cycles
 ; falling through, not one - see the cost model under [cpu] in the spec.  The
 ; loops are runs of them, and only an instruction of odd length moves the
-; parity, which would cost the cycle it saved; so strcmp's loop is 26 cycles
+; parity, which would cost the cycle it saved; so strcmp's loop is 25 cycles
 ; for four bytes where its instructions' own costs sum to 23.  strncmp's is 28:
 ; its count, and a test of it in place of strcmp's last branch.  The figures
 ; are for the file assembled at an even address; at an odd one strncmp's loop
@@ -35,8 +35,8 @@
 ; ============================================================================
 ; strcmp and strncmp
 ; ============================================================================
-; FOUR BYTES A TRIP: ldm reads two words of s1 through r2, and two `ld`s the
-; same two words of s2 through r1.  A pair of words that matches and holds no
+; FOUR BYTES A TRIP: ldm reads two words of s1 through r1, and two `ld`s the
+; same two words of s2 through r0.  A pair of words that matches and holds no
 ; zero byte costs a brclr or a br per byte, falling through; anything else
 ; leaves the loop and is settled byte by byte, at the word where it happened.
 ;
@@ -48,7 +48,8 @@
 ; bytes past its terminator, into the next aligned word.
 ;
 ; r1 is s2 - s1 while the bytes are peeled, so that one cursor serves both
-; through `ld8 lr, [r0, r1]`, and s2 itself in the loop.
+; through `ld8 lr, [r0, r1]`.  Then two instructions turn the pair round - r0
+; becomes s2 and r1 becomes s1 - and r2 is never needed.
 ;
 ; THE ANSWER IS THE DIFFERENCE OF THE FIRST BYTES THAT DIFFER, as unsigned
 ; chars - or 0 if a terminator comes first.  At a word that differs, its low
@@ -57,8 +58,7 @@
 ; either byte ends the strings equal.
 
 strcmp:
-        push    lr, r2, r3              ; r2 is callee saved: two arguments
-        push    r4
+        push    lr, r3, r4
         rsb     r1, r0, r1              ; r1 = s2 - s1, while peeling
         brclr   r0, #3, .aligned
 .peel:
@@ -69,19 +69,19 @@ strcmp:
         add     r0, r0, #1
         brset   r0, #3, .peel
 .aligned:
-        mov     r2, r0                  ; ldm's cursor: s1
-        add     r1, r0, r1              ; r1 = s2
+        add     r0, r0, r1              ; r0 = s2
+        rsb     r1, r1, r0              ; r1 = s1, ldm's cursor
 .top:
-        ldm     r3, r4                  ; s1, four bytes, r2 += 4       5
-        ld      r5, [r1]                ; s2                            4
-        ld      lr, [r1, #2]            ;                               4
-        add     r1, r1, #4              ;                               1
-        br      ne, r3, r5, .w0         ; at an odd address             2
-        brclr   r3, #0x00ff, .zero      ;                               1
-        brclr   r3, #0xff00, .zero      ; odd                           2
-        br      ne, r4, lr, .w1         ;                               1
-        brclr   r4, #0x00ff, .zero      ; odd                           2
-        brset   r4, #0xff00, .top       ;                               4
+        ldm     r3, r4                  ; s1, four bytes, r1 += 4       5
+        ld      r5, [r0]                ; s2                            4
+        ld      lr, [r0, #2]            ;                               4
+        add     r0, r0, #4              ;                               1
+        br      ne, r3, r5, .w0         ;                               1
+        brclr   r3, #0x00ff, .zero      ; at an odd address             2
+        brclr   r3, #0xff00, .zero      ;                               1
+        br      ne, r4, lr, .w1         ; odd                           2
+        brclr   r4, #0x00ff, .zero      ;                               1
+        brset   r4, #0xff00, .top       ; odd, taken                    4
 .zero:
         mov     r0, #0
         jmpr    .out
@@ -99,15 +99,14 @@ strcmp:
 .bytes:
         rsb     r0, lr, r5              ; *s1 - *s2
 .out:
-        pop     r4
-        pop     r3, r2, lr
+        pop     r4, r3, lr
         ret
 
-; strncmp IS strcmp WITH A COUNT, in r0 through the loop - r2 is ldm's, and
-; the count is what is left of n, never an end address, since n = 0xffff
-; ("no limit") would wrap one.  The loop runs while four bytes or more are
-; left, and the last zero to three go through the byte loop at .tail.  r2 is
-; an argument here, so it is caller saved and not pushed.
+; strncmp IS strcmp WITH A COUNT, in r2 where n arrived.  The count is what is
+; left of n, never an end address, since n = 0xffff ("no limit") would wrap
+; one.  The loop runs while four bytes or more are left, and the last zero to
+; three go through the byte loop at .tail.  r2 is an argument here, so it is
+; caller saved and not pushed.
 
 strncmp:
         push    lr, r3, r4
@@ -123,33 +122,31 @@ strncmp:
         add     r2, r2, #-1
         brset   r0, #3, .peel
 .aligned:
-        add     r1, r0, r1              ; r1 = s2
-        mov     r5, r2                  ; swap: the count to r0, s1 to r2
-        mov     r2, r0
-        mov     r0, r5
-        brclr   r0, #0xfffc, .tail      ; fewer than four left
+        add     r0, r0, r1              ; r0 = s2
+        rsb     r1, r1, r0              ; r1 = s1, ldm's cursor
+        brclr   r2, #0xfffc, .tail      ; fewer than four left
 .top:
-        ldm     r3, r4                  ; s1, four bytes, r2 += 4       5
-        ld      r5, [r1]                ; s2                            4
-        ld      lr, [r1, #2]            ;                               4
-        add     r1, r1, #4              ;                               1
-        add     r0, r0, #-4             ;                               1
+        ldm     r3, r4                  ; s1, four bytes, r1 += 4       5
+        ld      r5, [r0]                ; s2                            4
+        ld      lr, [r0, #2]            ;                               4
+        add     r0, r0, #4              ;                               1
+        add     r2, r2, #-4             ;                               1
         br      ne, r3, r5, .w0         ;                               1
         brclr   r3, #0x00ff, .zero      ; at an odd address             2
         brclr   r3, #0xff00, .zero      ;                               1
         br      ne, r4, lr, .w1         ; odd                           2
         brclr   r4, #0x00ff, .zero      ;                               1
         brclr   r4, #0xff00, .zero      ; odd                           2
-        brset   r0, #0xfffc, .top       ;                               4
+        brset   r2, #0xfffc, .top       ;                               4
 .tail:
-        br      eq, r0, #0, .zero
-        ld8     r5, [r2]
-        ld8     lr, [r1]
+        br      eq, r2, #0, .zero
+        ld8     r5, [r1]
+        ld8     lr, [r0]
         br      ne, r5, lr, .bytes
         br      eq, r5, #0, .zero
-        add     r2, r2, #1
         add     r1, r1, #1
-        add     r0, r0, #-1
+        add     r0, r0, #1
+        add     r2, r2, #-1
         jmpr    .tail
 .zero:
         mov     r0, #0
@@ -182,27 +179,28 @@ strncmp:
 ; failure of this assumption is probably a space character just before or after
 ; a capital letter, but the slower fallback is still pretty fast.
 ;
-; 2.625 cycles/byte when the optimism holds: the loop is unrolled once, eight
+; 2.5 cycles/byte when the optimism holds: the loop is unrolled once, eight
 ; bytes a trip, so one taken branch serves two blocks.  A false alarm costs a
 ; second trip round the byte tests, and there are TWO ways in, at two prices:
-; the low bytes AND to zero (4.75), or the high bytes do (4.50).  The second is
+; the low bytes AND to zero (4.50), or the high bytes do (4.00).  The second is
 ; cheaper because reaching it means both low bytes are already known non-zero,
 ; so only the high ones are worth testing - which is why it has its own two
 ; tests rather than sharing .slow_block's four.
 ;
-; THE UNROLL MADE THAT SECOND PATH DEARER: 3.75 before it, 4.50 now.  Both
+; THE UNROLL MADE THAT SECOND PATH DEARER: 3.75 before it, 4.50 after - and
+; 4.00 now, since ldm moved to r1 and every branch below changed parity.  Both
 ; paths return to .top, the first half, and there a high-byte alarm is a taken
 ; `brclr` to .slow_block_low_bytes_ok, four cycles, where the second half's
-; falls through for one.  Every block that alarms on its high bytes pays three
-; more, and every eight clean bytes save three; on text, where it takes a
+; falls through for one.  Every block that alarmed on its high bytes paid three
+; more, and every eight clean bytes saved three; on text, where it takes a
 ; space beside a capital letter, the unroll is far ahead.
 ;
 ; Either way it is a SLOWDOWN AND NOT AN ERROR: both paths return to .top when
 ; they find no zero byte, which is what the two `brset ..., .top` are for.
 ; Measured over all 625 four-byte patterns drawn from { 01, 0f, 10, f0, ff },
-; at two lengths each: worst 4.75 cycles/byte, none wrong.
+; at two lengths each: worst 4.50 cycles/byte, none wrong.
 ;
-; ldm walks r2 and only r2, so r2 is the cursor and the pair lands in r1 and
+; ldm walks r1 and only r1, so r1 is the cursor and the pair lands in r2 and
 ; r3.  r0 is free to be the block-AND scratch: r5 holds the start, and the
 ; length is recovered from the cursor at the end.
 strlen:
@@ -215,36 +213,36 @@ strlen:
   brset r0, #3, .unaligned
 .aligned:
   push r2, r3
-  mov r2, r0                         ; ldm's cursor
+  mov r1, r0                         ; ldm's cursor
 .top:
-  ldm r1, r3        ; Load 32 bits, r2 += 4   ; 5
-  and r0, r1, r3                              ; 1
-  brclr   r0, #0xff, .slow_block              ; 2, at an odd address
-  brclr r0, #0xff00, .slow_block_low_bytes_ok ; 1, at an even address
-  ldm r1, r3        ; Load 32 bits, r2 += 4   ; 5
-  and r0, r1, r3                              ; 1
-  brclr   r0, #0xff, .slow_block              ; 2, at an odd address
+  ldm r2, r3        ; Load 32 bits, r1 += 4   ; 5
+  and r0, r2, r3                              ; 1
+  brclr   r0, #0xff, .slow_block              ; 1, at an even address
+  brclr r0, #0xff00, .slow_block_low_bytes_ok ; 2, at an odd address
+  ldm r2, r3        ; Load 32 bits, r1 += 4   ; 5
+  and r0, r2, r3                              ; 1
+  brclr   r0, #0xff, .slow_block              ; 1, at an even address
   brset r0, #0xff00, .top                     ; 4
 .slow_block_low_bytes_ok:
 ; Slow case, but the low bytes are known not zero.
-  brclr   r1, #0xff00, .minus3                ; 2
+  brclr   r2, #0xff00, .minus3                ; 1
   brset r3, #0xff00, .top    ; no zero byte here after all: keep scanning
   jmpr .minus1
 .slow_block:
-  brclr   r1, #0xff, .minus4                  ; 2
-  brclr   r1, #0xff00, .minus3                ; 1
-  brclr   r3, #0xff, .minus2                  ; 2
+  brclr   r2, #0xff, .minus4                  ; 1
+  brclr   r2, #0xff00, .minus3                ; 2
+  brclr   r3, #0xff, .minus2                  ; 1
   brset r3, #0xff00, .top    ; no zero byte here after all: keep scanning
   jmpr .minus1               ; r3's high byte is the zero
 .minus4:
-  add r2, r2, #-1
+  add r1, r1, #-1
 .minus3:
-  add r2, r2, #-1
+  add r1, r1, #-1
 .minus2:
-  add r2, r2, #-1
+  add r1, r1, #-1
 .minus1:
-  add r2, r2, #-1
-  mov r0, r2
+  add r1, r1, #-1
+  mov r0, r1
   pop r3, r2
 .done:
   rsb r0, r5, r0     ; length = cursor - start

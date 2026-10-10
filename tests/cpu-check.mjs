@@ -83,7 +83,7 @@ const all = [...forms.values()];
 // it stores, and bytes + 3 if it loads, since a load's first address is the
 // ALU's result, put out in its ALU cycle.
 const memBytes = (sem) => {
-  const blk = /^base = (sp|r1|r2); /.test(sem);
+  const blk = /^base = (sp|r[0-7]); /.test(sem);
   if (blk) return 2 * (sem.match(/M16\[/g) ?? []).length;
   const m = /M(8|16)\[R\[a\] \+ (off|R\[b\])\]/.exec(sem);
   return m ? (m[1] === '8' ? 1 : 2) : 0;
@@ -217,7 +217,7 @@ const SOURCES = [
           add  r0, r0, #1
           halt`,
   // A block load into the top guard, its pointer moved as usual.
-  `       mov  r2, #0x4fa
+  `       mov  r1, #0x4fa
           ldm  r0, r3
           add  r0, r0, #1
           halt`,
@@ -234,31 +234,31 @@ const SOURCES = [
   // brk parked and leaves shadow_isp, so it changes nothing.  The simulator
   // runs it with the I/O page.
   `       cli
-          mov  r1, #0x410
+          mov  r5, #0x410
           mov  r0, #0x1234
-          st   r0, [r1, #0]
+          st   r0, [r5, #0]
           mov  r0, #0x5678
-          st   r0, [r1, #2]
+          st   r0, [r5, #2]
           mov  r0, #0x3000
-          st   r0, [r1, #4]
-          mov  r2, #0xab
-          st8  r2, [r1, #1]
-          ld   r3, [r1, #0]
-          ld8  r4, [r1, #3]
-          ld   r5, [r1, #3]
+          st   r0, [r5, #4]
+          mov  r1, #0xab
+          st8  r1, [r5, #1]
+          ld   r3, [r5, #0]
+          ld8  r4, [r5, #3]
+          ld   r2, [r5, #3]
           add  r3, r3, r4
-          add  r3, r3, r5
+          add  r3, r3, r2
           brk
           cli
-          mov  r2, #0x410
-          ldm  r0, r4, r5
+          mov  r1, #0x410
+          ldm  r0, r4, r2
           add  r3, r3, r0
           add  r3, r3, r4
-          add  r3, r3, r5
-          mov  r1, #0x411
+          add  r3, r3, r2
+          mov  r5, #0x411
           stm  r3, r4
-          ld   r0, [r1, #-5]
-          ld   r5, [r1, #-1]
+          ld   r0, [r5, #-5]
+          ld   r2, [r5, #-1]
           halt`,
   `       mov  r0, #5
           mov  r1, #0
@@ -308,55 +308,55 @@ const SOURCES = [
   // a pop and an ldm, where the later word wins - which libgcc's 64-bit
   // division uses to step over a dead word of its frame.
   `       mov  sp, #0x4000
-          mov  r1, #0x3000
+          mov  r5, #0x3000
           mov  r0, #0x1234
-          st   r0, [r1, #0]
-          st8  r0, [r1, #3]
-          ld   r2, [r1, #0]
-          ld8  r3, [r1, #3]
-          ld   r4, [r1, #1]
-          mov  r5, #2
-          ld   r4, [r1, r5]
-          st   r4, [r1, #5]
-          push r0, r2, r3
+          st   r0, [r5, #0]
+          st8  r0, [r5, #3]
+          ld   r1, [r5, #0]
+          ld8  r3, [r5, #3]
+          ld   r4, [r5, #1]
+          mov  r2, #2
+          ld   r4, [r5, r2]
+          st   r4, [r5, #5]
+          push r0, r1, r3
           push r4
-          pop  r5
-          pop  r0, r2, r3
-          mov  r2, #0x3000
+          pop  r2
+          pop  r0, r1, r3
+          mov  r1, #0x3000
           ldm  r3, r4
+          mov  r5, #0x3101
+          stm  r0, r2, r5
+          add  r1, r1, #-4
+          ldm  r2
           mov  r1, #0x3101
-          stm  r0, r5, r1
-          add  r2, r2, #-4
-          ldm  r5
-          mov  r2, #0x3101
-          ldm  r3, r2, r4
+          ldm  r3, r1, r4
           push sp
           pop  sp
           push r6, r0
           pop  r0, r6
-          push r0, r2, r3
-          pop  r4, r4, r5
-          mov  r2, #0x3000
+          push r0, r1, r3
+          pop  r4, r4, r2
+          mov  r1, #0x3000
           ldm  r3, r3
           halt`,
   // A copy loop, word by word, as memcpy would do it.
-  `       mov  r2, #0x3000
-          mov  r1, #0x3000
+  `       mov  r1, #0x3000
+          mov  r5, #0x3000
           mov  r0, #0x0102
           mov  r3, #4
   fill:   stm  r0
           add  r0, r0, #0x0202
           add  r3, r3, #-1
           br   ne, r3, #0, fill
-          mov  r1, #0x3401
+          mov  r5, #0x3401
           mov  r3, #2
-  copy:   ldm  r4, r5
-          stm  r4, r5
+  copy:   ldm  r4, r2
+          stm  r4, r2
           add  r3, r3, #-1
           br   ne, r3, #0, copy
-          mov  r1, #0x3401
-          ld   r4, [r1, #0]
-          ld   r5, [r1, #6]
+          mov  r5, #0x3401
+          ld   r4, [r5, #0]
+          ld   r2, [r5, #6]
           halt`,
 ];
 // The second copy has its nop IN THE SOURCE, not put in front of the bytes:

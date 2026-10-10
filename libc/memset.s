@@ -8,7 +8,7 @@
 ; Both return with r0 untouched, so memset's return value costs nothing.
 ;
 ; THE TRICK IS THAT `stm` WRITES THREE REGISTERS IN ONE INSTRUCTION and steps
-; its pointer, r1, itself.  memset never reads, so there is no second pointer
+; its pointer, r5, itself.  memset never reads, so there is no second pointer
 ; to maintain and no load to pay for.  sp is never touched, so an interrupt
 ; in the middle of a fill is harmless.
 ;
@@ -17,7 +17,7 @@
 ; ----------------------------------------------------------------------------
 ;       fill loop       1.5625 cycles/byte  16 bytes an iteration, even or odd
 ;       tail            1.5000 cycles/byte  up to 15 bytes, straight-line
-;       sizes           bzero 12 bytes, memset 55, 67 together
+;       sizes           bzero 12 bytes, memset 56, 68 together
 ;
 ; An odd buffer runs the loop at the even rate because one byte stored first
 ; makes the pointer even; without it every stm would go a byte at a time, at
@@ -55,41 +55,41 @@ bzero:
 ; memset
 ; ============================================================================
 ; ONE BYTE TO MAKE THE POINTER EVEN, then a 16-byte loop of stm, then what is
-; left - 0 to 15 bytes - by its bits: 8, 4, 2 and 1.  stm stores through r1 and
-; steps it, so r1 becomes the cursor and r0, the return value, is never
-; touched.  The fill word goes in r5, the one register free once r1 is the
-; pointer: r5 is the assembler's scratch, and tests/run.sh's --noat assembly
-; of libc proves nothing here expands through it.
+; left - 0 to 15 bytes - by its bits: 8, 4, 2 and 1.  stm stores through r5 and
+; steps it, so r5 becomes the cursor and r0, the return value, is never
+; touched.  The fill word goes in r1, where c arrived.  r5 is the assembler's
+; scratch, and tests/run.sh's --noat assembly of libc proves nothing here
+; expands through it.
 
 memset:
-        movhi   r5, r1, r1              ; r5 = c:c - (unsigned char)c, twice
-        mov     r1, r0                  ; stm's pointer; r0 stays the result
-        brclr   r1, #1, .aligned        ; already even
+        movhi   r1, r1, r1              ; r1 = c:c - (unsigned char)c, twice
+        mov     r5, r0                  ; stm's pointer; r0 stays the result
+        brclr   r5, #1, .aligned        ; already even
         br      eq, r2, #0, .done       ; nothing to fill
-        st8     r5, [r1]                ; one byte makes the pointer even
-        add     r1, r1, #1
+        st8     r1, [r5]                ; one byte makes the pointer even
+        add     r5, r5, #1
         add     r2, r2, #-1
 .aligned:
         brclr   r2, #0xfff0, .tail      ; fewer than 16
 .loop:
-        stm     r5, r5, r5              ; +0  .. +5
-        stm     r5, r5, r5              ; +6  .. +11
-        stm     r5, r5                  ; +12 .. +15
+        stm     r1, r1, r1              ; +0  .. +5
+        stm     r1, r1, r1              ; +6  .. +11
+        stm     r1, r1                  ; +12 .. +15
         add     r2, r2, #-16
         brset   r2, #0xfff0, .loop      ; 16 or more left
 .tail:
         brclr   r2, #8, .lt8
-        stm     r5, r5
-        stm     r5, r5
+        stm     r1, r1
+        stm     r1, r1
 .lt8:
         brclr   r2, #4, .lt4
-        stm     r5, r5
+        stm     r1, r1
 .lt4:
         brclr   r2, #3, .done           ; a multiple of four, the common case
         brclr   r2, #2, .lt2
-        stm     r5
+        stm     r1
 .lt2:
         brclr   r2, #1, .done
-        st8     r5, [r1]
+        st8     r1, [r5]
 .done:
         ret

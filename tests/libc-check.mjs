@@ -108,9 +108,9 @@ function call(entry, dest, src, n) {
     after: m.mem.slice(BUF, BUF + SPAN),
     ret: m.R[0], sp: m.R[m.named.sp], r3: m.R[3], r4: m.R[4],
     cycles: m.cycles(),
-    // The first word either routine pushed: memcpy's `push r0, lr` leaves
-    // dest there, memmove's descending `push lr, r3, r4` leaves the return
-    // address.  The stack below SP0 is FILL before every call.
+    // The first word either routine pushed: memcpy's `push r3, r4, lr` leaves
+    // the R3 sentinel there, memmove's descending `push lr, r3, r4` leaves the
+    // return address.  The stack below SP0 is FILL before every call.
     pushed: m.mem[SP0 - 2] | m.mem[SP0 - 1] << 8,
   };
 }
@@ -181,7 +181,7 @@ function verify(name, r, dest, src, n) {
 // holds at every length, so every length is judged.
 function dispatch(name, r, dest, src, n) {
   if (r.why !== 'stopped') return;
-  const ascended = r.pushed === dest;
+  const ascended = r.pushed === R3;
   const descended = r.pushed === RET;
   // Ascending is legal exactly when the write never overtakes the read.
   const legal = dest <= src || src + n <= dest;
