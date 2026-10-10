@@ -1144,11 +1144,11 @@ __modsi3_mul:
 ; ----------------------------------------------------------------------------
 ;       divisor bits        1-16       17-32      33-48      49-64
 ;       here                1140-1200  2740-3120  1590-2010  690-990
-;       -mmul, below        260-270    345-350    600-605    405-410
+;       -mmul, below        275-285    365-370    605-610    415-420
 ;       libgcc2.c's         ~4100      ~3000      ~3300      1600-2600
 ;
 ; The range is over the widths in each column, 30 dividends a width.  561
-; bytes for all six, and 993 for the six with recip below, where libgcc2.c's
+; bytes for all six, and 929 for the six with recip below, where libgcc2.c's
 ; were 2.3K to 3.2K EACH, before the 32-bit division, multiply and clz table
 ; they called.  A divisor of 17 to 32 bits is the slow case: 48 steps of the
 ; general loop, and a loop of its own with R in two registers would be about
@@ -1572,28 +1572,15 @@ __udivmoddi4_mul:
 .m1:
         ld      r4, [r5, #0]            ; 4   d
         clz     r4, r4                  ; 2   s
-        mov     lr, #1                  ; 1
-        shl     lr, lr, r4              ; 1   2^s
-        mulhu   r5, r0, lr              ; 2   n << s, five words u4..u0:
-        mul     r0, r0, lr              ; 2   u0
-        mulhu   r4, r1, lr              ; 2
-        mul     r1, r1, lr              ; 2
-        or      r1, r1, r5              ; 1   u1
-        mulhu   r5, r2, lr              ; 2
-        mul     r2, r2, lr              ; 2
-        or      r2, r2, r4              ; 1   u2
-        mulhu   r4, r3, lr              ; 2   u4
-        mul     r3, r3, lr              ; 2
-        or      r3, r3, r5              ; 1   u3
-        push    r3, r2, r1              ; 7
+        call    .shift                  ; 3   n << s, five words u4..u0
         push    r0                      ; 5
-        ;      u0(0) u1(2) u2(4) u3(6) p(8) lr(10) r4(12)
-        ld      r5, [sp, #8]            ; 4   p
+        ;      u0(0) u1(2) u2(4) u3(6) u4(8) p(10) lr(12) r4(14)
+        ld      r5, [sp, #10]           ; 4   p
         ld      r1, [r5, #0]            ; 4   d
         clz     r5, r1                  ; 2
         shl     r1, r1, r5              ; 1   D, normalised
         recip   r2, r1, #0              ; 5   v
-        mov     r0, r4                  ; 1   R = u4, which is below D
+        ld      r0, [sp, #8]            ; 4   R = u4, which is below D
         mov     lr, #6                  ; 1   u3's offset: the count too
 .nloop:
         ld      r3, [sp, lr]            ; 4   u_j
@@ -1623,20 +1610,49 @@ __udivmoddi4_mul:
 .nnext:
         add     lr, lr, #-2             ; 1
         br      ge, lr, #0, .nloop      ; 3+1
-        ld      r5, [sp, #8]            ; 4   p
+        ld      r5, [sp, #10]           ; 4   p
         ld      r1, [r5, #0]            ; 4
         clz     r1, r1                  ; 2   s again
         lsr     r0, r0, r1              ; 1   the remainder; d's other
         st      r0, [r5, #0]            ; 5   words are zero already
         pop     r0                      ; 4   and the quotient
         pop     r1, r2, r3              ; 6
-        add     sp, sp, #2              ; 1
+        add     sp, sp, #4              ; 1   u4 and p
         pop     lr, r4                  ; 5
         ret                             ; 4
 .ng:
         add     r4, r4, #1              ; 1
         rsb     r0, r1, r0              ; 1
         jmpr    .nst                    ; 3
+
+; n << s, for all four cases: five words, of which the top four are pushed
+; and the bottom one is left in r0.  A shift by s is a mul by 2^s for each
+; word's low half and a mulhu for the bits it pushes into the next word up.
+;       in:  r0:r1:r2:r3  n             r4  s
+;       out: [sp] u1 u2 u3 u4, u4 deepest   r0 u0, r3 u3, r4 2^s, r5 not kept
+; THE TOP FOUR WORDS GO ON THE STACK because the return address takes the
+; register they would need.  Done inline, the shift used lr for 2^s and r4
+; and r5 for the carries; as a call, lr holds the way back.  But the words
+; come out top first, the order a push wants them in, and every caller
+; pushes them anyway: u4 goes as soon as it is made, which frees its
+; register to carry the rest.
+.shift:
+        mov     r5, #1                  ; 1
+        shl     r4, r5, r4              ; 1   2^s
+        mulhu   r5, r3, r4              ; 2   u4
+        push    r5                      ; 5
+        mul     r3, r3, r4              ; 2
+        mulhu   r5, r2, r4              ; 2
+        or      r3, r3, r5              ; 1   u3
+        mul     r2, r2, r4              ; 2
+        mulhu   r5, r1, r4              ; 2
+        or      r2, r2, r5              ; 1   u2
+        mul     r1, r1, r4              ; 2
+        mulhu   r5, r0, r4              ; 2
+        or      r1, r1, r5              ; 1   u1
+        mul     r0, r0, r4              ; 2   u0
+        push    r3, r2, r1              ; 7
+        ret                             ; 4
 
 ; The 3/2 step, for m = 2 and for the estimate at m = 3 and 4.
 ;       in:  r4:r1:r0 = u2:u1:u0, below D * 65536    r3:r2 = D, normalised
@@ -1692,31 +1708,19 @@ __udivmoddi4_mul:
         ; --- m = 2: d1 is not zero, and in lr ---------------------------------
 .m2:
         clz     r4, lr                  ; 2   s
-        mov     lr, #1                  ; 1
-        shl     lr, lr, r4              ; 1   2^s
-        mulhu   r5, r0, lr              ; 2   n << s, as for m = 1
-        mul     r0, r0, lr              ; 2   u0
-        mulhu   r4, r1, lr              ; 2
-        mul     r1, r1, lr              ; 2
-        or      r1, r1, r5              ; 1   u1
-        mulhu   r5, r2, lr              ; 2
-        mul     r2, r2, lr              ; 2
-        or      r2, r2, r4              ; 1   u2
-        mulhu   r4, r3, lr              ; 2   u4
-        mul     r3, r3, lr              ; 2
-        or      r3, r3, r5              ; 1   u3
-        push    r2, r1, r0              ; 7
+        call    .shift                  ; 3   n << s, as for m = 1
+        push    r0                      ; 5
         add     sp, sp, #-2             ; 1   and a slot for v
-        ;      v(0) u0(2) u1(4) u2(6) p(8) lr(10) r4(12)
-        ld      r5, [sp, #8]            ; 4   p
-        mov     r1, r4                  ; 1   the remainder so far, u4:u3
+        ;      v(0) u0(2) u1(4) u2(6) u3(8) u4(10) p(12) lr(14) r4(16)
+        ld      r5, [sp, #12]           ; 4   p
+        ld      r1, [sp, #10]           ; 4   the remainder so far, u4:u3
         mov     r0, r3                  ; 1
         ld      r2, [r5, #0]            ; 4   d << s
         ld      r3, [r5, #2]            ; 4
-        mulhu   r4, r2, lr              ; 2
-        mul     r2, r2, lr              ; 2   D0
-        mul     r3, r3, lr              ; 2
-        or      r3, r3, r4              ; 1   D1
+        mulhu   lr, r2, r4              ; 2
+        mul     r2, r2, r4              ; 2   D0
+        mul     r3, r3, r4              ; 2
+        or      r3, r3, lr              ; 1   D1
         recip   r5, r3, r2              ; 8   v
         st      r5, [sp, #0]            ; 5
         mov     r4, r1                  ; 1   q2 ...
@@ -1734,7 +1738,7 @@ __udivmoddi4_mul:
         ld      r0, [sp, #2]            ; 4
         call    .step                   ; 3
         st      r5, [sp, #2]            ; 5
-        ld      r5, [sp, #8]            ; 4   p
+        ld      r5, [sp, #12]           ; 4   p
         ld      r4, [r5, #2]            ; 4
         clz     r4, r4                  ; 2   s again
         rsb     r3, r4, #15             ; 1   r1:r0 >> s; r1 << (16 - s) is
@@ -1749,7 +1753,7 @@ __udivmoddi4_mul:
         pop     r0                      ; 4   the quotient
         pop     r1, r2                  ; 5
         mov     r3, #0                  ; 1
-        add     sp, sp, #2              ; 1   p
+        add     sp, sp, #6              ; 1   u3, u4 and p
         pop     lr, r4                  ; 5
         ret                             ; 4
 
@@ -1762,66 +1766,39 @@ __udivmoddi4_mul:
 .big:
         br      eq, r4, #0, .w1         ; 1
         clz     r4, r4                  ; 2   m = 4: c, with n and d where
-        mov     lr, #1                  ; 1   they are
-        shl     lr, lr, r4              ; 1   2^c
-        mulhu   r5, r0, lr              ; 2
-        mul     r0, r0, lr              ; 2
-        mulhu   r4, r1, lr              ; 2
-        mul     r1, r1, lr              ; 2
-        or      r1, r1, r5              ; 1
-        mulhu   r5, r2, lr              ; 2
-        mul     r2, r2, lr              ; 2
-        or      r2, r2, r4              ; 1
-        mulhu   r4, r3, lr              ; 2
-        mul     r3, r3, lr              ; 2
-        or      r3, r3, r5              ; 1
-        mov     r5, #0                  ; 1
+        mov     r5, #0                  ; 1   they are
         push    r5                      ; 5   R5 = 0
-        push    r4, r3, r2              ; 7   R4 R3 R2
-        push    r1, r0                  ; 6   R1 R0
+        call    .shift                  ; 3   R4 R3 R2 R1
+        push    r0                      ; 5   R0
         ld      r1, [sp, #12]           ; 4   p, for ldm; its own word goes
-        ldm     r0, r4, r2              ; 6   by r4, free until j
+        ldm     r0, lr, r2              ; 6   by lr, free until j
         ldm     r3                      ; 4
-        mov     r1, r4                  ; 1
-        mov     r4, #0                  ; 1   one quotient word, j = 0
+        mov     r1, lr                  ; 1
+        mov     lr, #0                  ; 1   one quotient word, j = 0
         jmpr    .bd                     ; 3
 .w1:
         ld      r4, [r5, #4]            ; 4   m = 3: c from d2, and n and d
         clz     r4, r4                  ; 2   a word up
-        mov     lr, #1                  ; 1
-        shl     lr, lr, r4              ; 1
-        mulhu   r5, r0, lr              ; 2
-        mul     r0, r0, lr              ; 2
-        mulhu   r4, r1, lr              ; 2
-        mul     r1, r1, lr              ; 2
-        or      r1, r1, r5              ; 1
-        mulhu   r5, r2, lr              ; 2
-        mul     r2, r2, lr              ; 2
-        or      r2, r2, r4              ; 1
-        mulhu   r4, r3, lr              ; 2
-        mul     r3, r3, lr              ; 2
-        or      r3, r3, r5              ; 1
-        push    r4, r3, r2              ; 7   R5 R4 R3
-        push    r1, r0                  ; 6   R2 R1
-        mov     r4, #0                  ; 1
-        push    r4                      ; 5   R0 = 0
-        ld      r1, [sp, #12]           ; 4   p, for ldm: d0 goes by r4
-        ldm     r4, r2, r3              ; 6
-        mov     r1, r4                  ; 1
+        call    .shift                  ; 3   R5 R4 R3 R2
+        mov     r5, #0                  ; 1
+        push    r0, r5                  ; 6   R1, and R0 = 0
+        ld      r1, [sp, #12]           ; 4   p, for ldm: d0 goes by lr
+        ldm     lr, r2, r3              ; 6
+        mov     r1, lr                  ; 1
         mov     r0, #0                  ; 1
-        mov     r4, #2                  ; 1   two quotient words, j = 1
+        mov     lr, #2                  ; 1   two quotient words, j = 1
 .bd:
-        push    r4                      ; 5   2j
-        mulhu   r4, r2, lr              ; 2   d << c, top word first
-        mul     r3, r3, lr              ; 2
-        or      r3, r3, r4              ; 1   D3
-        mulhu   r4, r1, lr              ; 2
-        mul     r2, r2, lr              ; 2
-        or      r2, r2, r4              ; 1   D2
-        mulhu   r4, r0, lr              ; 2
-        mul     r1, r1, lr              ; 2
-        or      r1, r1, r4              ; 1   D1
-        mul     r0, r0, lr              ; 2   D0
+        push    lr                      ; 5   2j
+        mulhu   r5, r2, r4              ; 2   d << c, top word first, by
+        mul     r3, r3, r4              ; 2   .shift's 2^c
+        or      r3, r3, r5              ; 1   D3
+        mulhu   r5, r1, r4              ; 2
+        mul     r2, r2, r4              ; 2
+        or      r2, r2, r5              ; 1   D2
+        mulhu   r5, r0, r4              ; 2
+        mul     r1, r1, r4              ; 2
+        or      r1, r1, r5              ; 1   D1
+        mul     r0, r0, r4              ; 2   D0
         push    r3, r2, r1              ; 7
         push    r0                      ; 5
         recip   r5, r3, r2              ; 8   v

@@ -341,7 +341,7 @@ low word a third product on the first DSP again and a second correction, 0 to
 half zeroed and its answer OR'd in. With `-mmul` every division libgcc does
 is built on it: the `_mul` routines in `libgcc/lib1funcs.s` divide a word at a
 time, so a 16-bit division is about 36 cycles, a 32-bit one about 80 against
-534 to 1074 for the C, and a 64-bit one 260 to 605 against 690 to 3120.
+534 to 1074 for the C, and a 64-bit one 275 to 610 against 690 to 3120.
 `rtl/alu.sv` instantiates the DSPs rather
 than letting yosys's `-dsp` infer them, because the inference copies the operand
 flops into the DSP's input registers and drags the logic in front of them to
