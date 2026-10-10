@@ -338,7 +338,10 @@ multiplier: a straight line per slot from one block RAM of 128 pairs, which
 lands 0 to 3 below, then a second product to find out how far, and for the
 low word a third product on the first DSP again and a second correction, 0 to
 4 down. It has two `SB_MAC16`s of its own. To the ALU it is `mul` with every
-half zeroed and its answer OR'd in.
+half zeroed and its answer OR'd in. With `-mmul` every division libgcc does
+is built on it: the `_mul` routines in `libgcc/lib1funcs.s` divide a word at a
+time, so a 16-bit division is about 36 cycles, a 32-bit one about 80 against
+534 to 1074 for the C, and a 64-bit one 270 to 630 against 700 to 3100.
 `rtl/alu.sv` instantiates the DSPs rather
 than letting yosys's `-dsp` infer them, because the inference copies the operand
 flops into the DSP's input registers and drags the logic in front of them to

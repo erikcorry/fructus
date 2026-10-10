@@ -420,8 +420,9 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     # --- 32-bit division, against its own identity --------------------------
     # tests/div32.c needs no reference implementation: a quotient and
     # remainder are right exactly when a == q * b + r and r < b, and the
-    # multiply that checks it shares no code with the division.
-    for o in -O2 -O0; do
+    # multiply that checks it shares no code with the division.  With -mmul
+    # the divisions are lib1funcs.s's `_mul' routines instead of the C.
+    for o in -O2 -O0 "-O2 -mmul"; do
         if tools/fcc $o tests/div32.c -o build/_d32 2>build/_err \
            && node tools/fcc-run.mjs build/_d32.bin; then
             printf 'ok    32-bit division at %s\n' "$o"
@@ -434,7 +435,7 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
 
     # --- 64-bit division, the same way ---------------------------------------
     # tests/div64.c reaches each path of libgcc's hand-written __udivmoddi4,
-    # and with -mmul checks it with __muldi3_mul's products instead.
+    # and with -mmul checks __udivmoddi4_mul's with __muldi3_mul's products.
     for o in -O2 -O0 "-O2 -mmul"; do
         if tools/fcc $o tests/div64.c -o build/_d64 2>build/_err \
            && node tools/fcc-run.mjs build/_d64.bin; then

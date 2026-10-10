@@ -393,6 +393,113 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   console.log(`ok    the four division helpers: ${signed.length} signed pairs, 2000 unsigned`);
 }
 
+// --- the same with recip, for -mmul ------------------------------------------
+// __udivmodhi4_mul's estimate comes from the divisor's reciprocal with its
+// bottom bit thrown away, and the claim is that one correction is always
+// enough.  Where that could fail is at particular divisors rather than at
+// random ones, so EVERY divisor is tried, against dividends spread over the
+// range and the edges, and ten - its own path - against every dividend.
+{
+  const divmod = (a, b) => run('__udivmodhi4_mul', { 0: a, 1: b, 2: 0x2222, 3: 0x3333 });
+  let wrong = 0, eg = '', n = 0, cyc = 0;
+  const tally = (a, b) => {
+    const q = divmod(a, b);
+    n++; cyc += q.cycles;
+    if (q.why !== 'stopped' || q.R[0] !== Math.floor(a / b) || q.R[1] !== a % b || q.sp !== SP0
+        || q.R[2] !== 0x2222 || q.R[3] !== 0x3333 || q.R[4] !== R4) {
+      if (!wrong++) eg = `${a}/${b} = ${Math.floor(a / b)},${a % b}, got ${q.R[0]},${q.R[1]}`;
+    }
+  };
+  for (let a = 0; a <= 0xffff; a++) tally(a, 10);
+  for (let b = 1; b <= 0xffff; b++)
+    for (const a of [b - 1, b, 0xffff, (b * 7 + 12345) & 0xffff]) tally(a, b);
+  check('__udivmodhi4_mul', wrong === 0, `${wrong} of ${n} wrong, e.g. ${eg}`);
+  const z = divmod(1234, 0);
+  check('__udivmodhi4_mul by zero terminates', z.why === 'stopped' && z.R[4] === R4,
+        `dividing by zero ${z.why}`);
+
+  let cycG = 0;
+  for (let i = 0; i < 400; i++) cycG += divmod(r16(), r16() || 1).cycles;
+  console.log(`ok    __udivmodhi4_mul: every divisor, every dividend by ten, ${n} in all; ` +
+              `${(cycG / 400).toFixed(0)} cycles for a random divisor`);
+
+  let wrongW = 0, egW = '';
+  for (let i = 0; i < 3000; i++) {
+    const a = s16(r16()), b = s16(r16() >>> (i % 16)) || 3;
+    const ua = a & 0xffff, ub = b & 0xffff;
+    for (const [name, want] of [
+      ['__divhi3_mul', Math.trunc(a / b) & 0xffff], ['__modhi3_mul', (a % b) & 0xffff],
+      ['__udivhi3_mul', Math.floor(ua / ub)], ['__umodhi3_mul', ua % ub]]) {
+      const q = run(name, { 0: ua, 1: ub, 2: 0x2222, 3: 0x3333 });
+      if (q.why !== 'stopped' || q.R[0] !== want || q.sp !== SP0
+          || q.R[2] !== 0x2222 || q.R[3] !== 0x3333 || q.R[4] !== R4) {
+        if (!wrongW++) egW = `${name}(${a}, ${b}) = ${want}, got ${q.R[0]}`;
+      }
+    }
+  }
+  check('the four division helpers with recip', wrongW === 0, `${wrongW} wrong, e.g. ${egW}`);
+  console.log('ok    the four division helpers with recip: 3000 pairs each, r2 and r3 kept');
+}
+
+// --- 32-bit division with recip ----------------------------------------------
+// __udivmodsi4_mul returns the quotient in r0:r1 and the remainder in r2:r3,
+// and is the libfunc gcc -mmul calls for both of a 32-bit / and %.  The cases
+// reach every divisor width - the width picks between the two-step 2/1 path
+// and the one-step 3/2 one - with dividends that are exact multiples, one
+// either side of them, and narrower than their divisors.
+{
+  let x = 0x2545f491;
+  const r32 = () => { x ^= x << 13; x >>>= 0; x ^= x >>> 17; x ^= x << 5; x >>>= 0; return x; };
+  const cases = [];
+  const edge = [0, 1, 2, 3, 10, 0x7fff, 0x8000, 0xffff, 0x10000, 0x10001, 0x7fffffff,
+                0x80000000, 0x80000001, 0xfffffffe, 0xffffffff, 1000000000];
+  for (const a of edge) for (const b of edge) if (b) cases.push([a, b]);
+  for (let bits = 1; bits <= 32; bits++)
+    for (let i = 0; i < 40; i++) {
+      const b = ((r32() >>> (32 - bits)) | 2 ** (bits - 1)) >>> 0;
+      cases.push([r32(), b], [r32() >>> (r32() % 32), b]);
+      const p = Math.floor(r32() / b) * b;
+      cases.push([p, b], [p + b - 1 < 2 ** 32 ? p + b - 1 : p, b], [p ? p - 1 : 0, b]);
+    }
+  const lo = (v) => v & 0xffff, hi = (v) => v >>> 16;
+  let wrong = 0, eg = '';
+  const cyc = { narrow: [0, 0], wide: [0, 0] };
+  for (const [a, b] of cases) {
+    const o = run('__udivmodsi4_mul', { 0: lo(a), 1: hi(a), 2: lo(b), 3: hi(b) });
+    const q = o.R[1] * 65536 + o.R[0], r = o.R[3] * 65536 + o.R[2];
+    const k = b < 65536 ? 'narrow' : 'wide';
+    cyc[k][0] += o.cycles; cyc[k][1]++;
+    if (o.why !== 'stopped' || q !== Math.floor(a / b) || r !== a % b || o.sp !== SP0 || o.R[4] !== R4) {
+      if (!wrong++) eg = `${a}/${b} = ${Math.floor(a / b)},${a % b}, got ${q},${r}`;
+    }
+  }
+  check('__udivmodsi4_mul', wrong === 0, `${wrong} of ${cases.length} wrong, e.g. ${eg}`);
+  const z = run('__udivmodsi4_mul', { 0: 1234, 1: 5678 });
+  check('__udivmodsi4_mul by zero terminates', z.why === 'stopped' && z.R[4] === R4,
+        `dividing by zero ${z.why}`);
+
+  let wrongW = 0, egW = '';
+  for (const [a0, b0] of cases)
+    for (const [sa, sb] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+      const a = (a0 * sa) | 0, b = (b0 * sb) | 0;
+      for (const [name, want] of [
+        ['__divsi3_mul', a === -0x80000000 && b === -1 ? a : Math.trunc(a / b) | 0],
+        ['__modsi3_mul', (a % b) | 0],
+        ['__udivsi3_mul', Math.floor((a >>> 0) / (b >>> 0)) | 0],
+        ['__umodsi3_mul', ((a >>> 0) % (b >>> 0)) | 0]]) {
+        const o = run(name, { 0: lo(a), 1: hi(a), 2: lo(b), 3: hi(b) });
+        const got = o.R[0] | o.R[1] << 16;
+        if (o.why !== 'stopped' || got !== want || o.sp !== SP0 || o.R[4] !== R4) {
+          if (!wrongW++) egW = `${name}(${a}, ${b}) = ${want}, got ${got}`;
+        }
+      }
+    }
+  check('the four 32-bit helpers with recip', wrongW === 0, `${wrongW} wrong, e.g. ${egW}`);
+  console.log(`ok    __udivmodsi4_mul and its four helpers: ${cases.length} pairs; ` +
+              `${(cyc.narrow[0] / cyc.narrow[1]).toFixed(0)} / ${(cyc.wide[0] / cyc.wide[1]).toFixed(0)} ` +
+              `cycles for a divisor under / over 65536`);
+}
+
 // --- the 64-bit divisions ----------------------------------------------------
 // Six entry points on one core.  n in r0-r3, d on the stack at [sp], and for
 // the divmod pair a remainder pointer at [sp, #8], which may be null.  BigInt
@@ -406,6 +513,7 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
 // the only ones whose remainder can double past 64 bits.
 {
   const SP = 0xf000, RP = 0xe000, M64 = (1n << 64n) - 1n;
+  const reached = new Set();
   const word = (v, i) => Number((v >> BigInt(16 * i)) & 0xffffn);
   const div = (name, n, d, rp) => {
     m.mem.fill(0);
@@ -422,7 +530,7 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
     m.pc = syms.get(name); m.halted = false; m.count = 0;
     m.reset();
     let why;
-    try { why = m.run({ max: 100000, stopAt: RET }); }
+    try { why = m.run({ max: 100000, stopAt: RET, trace: (at) => reached.add(at) }); }
     catch (e) { why = `ran off the rails: ${e.message}`; }
     let got = 0n, rem = 0n;
     for (let i = 3; i >= 0; i--) {
@@ -448,6 +556,15 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
       cases.push([r64(), b], [r64() >> BigInt(Number(r64() % 64n)), b],
                  [u64(b * (r64() >> 40n) + r64() % b), b]);
     }
+  // One less than a multiple of a divisor whose low words are large: the
+  // `_mul' core estimates each quotient word from d's top two words, and these
+  // are where the estimate is one too big and d has to be added back - and,
+  // for k = 65536 and a 33- to 48-bit d, where the remainder's top two words
+  // come out equal to d's and the quotient word is 0xffff without an estimate.
+  for (const b of [0x800000000001n, 0x8000ffffffffn, 0x1234ffffffffn, 0xffff0000ffffn,
+                   0x10000ffffffffn, 0x8000000000000001n, 0x1234ffffffffffffn])
+    for (const k of [1n, 2n, 7n, 0x1234n, 0xfffen, 0x10000n, 0x12345n])
+      if (k * b - 1n <= M64) cases.push([k * b - 1n, b]);
 
   for (const [name, q, r] of [
     ['__udivdi3', (a, b) => a / b],
@@ -456,6 +573,12 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
     ['__divdi3', (a, b) => u64(s64(a) / s64(b))],
     ['__moddi3', (a, b) => u64(s64(a) % s64(b))],
     ['__divmoddi4', (a, b) => u64(s64(a) / s64(b)), (a, b) => u64(s64(a) % s64(b))],
+    ['__udivdi3_mul', (a, b) => a / b],
+    ['__umoddi3_mul', (a, b) => a % b],
+    ['__udivmoddi4_mul', (a, b) => a / b, (a, b) => a % b],
+    ['__divdi3_mul', (a, b) => u64(s64(a) / s64(b))],
+    ['__moddi3_mul', (a, b) => u64(s64(a) % s64(b))],
+    ['__divmoddi4_mul', (a, b) => u64(s64(a) / s64(b)), (a, b) => u64(s64(a) % s64(b))],
   ]) {
     let wrong = 0, eg = '', n = 0;
     for (const [a, b] of cases)
@@ -472,17 +595,24 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
     check(name, wrong === 0, `${wrong} of ${n} wrong, e.g. ${eg}`);
   }
 
+  // The `_mul' core's rare paths, which the cases above exist to reach.
+  for (const path of ['back', 'top', 'sg', 'ng'])
+    check(`__udivmoddi4_mul.${path} is reached`, reached.has(syms.get(`__udivmoddi4_mul.${path}`)),
+          'no case takes it, so nothing checks it');
+
   // Cycles by divisor width, under full 64-bit dividends.
-  const cost = (bits) => {
+  const cost = (bits, name = '__udivdi3') => {
     let t = 0;
     for (let i = 0; i < 30; i++)
-      t += div('__udivdi3', r64() | 1n << 63n,
+      t += div(name, r64() | 1n << 63n,
                (r64() >> BigInt(64 - bits)) | (1n << BigInt(bits - 1)), 0).cycles;
     return (t / 30).toFixed(0);
   };
-  console.log(`ok    the six 64-bit divisions: ${cases.length} pairs each against BigInt; ` +
+  console.log(`ok    the six 64-bit divisions and their six with recip: ${cases.length} pairs each against BigInt; ` +
               `${cost(10)} / ${cost(32)} / ${cost(48)} / ${cost(64)} cycles ` +
-              `for a 10 / 32 / 48 / 64-bit divisor`);
+              `for a 10 / 32 / 48 / 64-bit divisor, and with recip ` +
+              `${cost(10, '__udivdi3_mul')} / ${cost(32, '__udivdi3_mul')} / ` +
+              `${cost(48, '__udivdi3_mul')} / ${cost(64, '__udivdi3_mul')}`);
 }
 
 // --- the shifts by a variable count -----------------------------------------

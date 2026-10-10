@@ -1,5 +1,5 @@
 /* 32-bit division, from C.  Returns 0, or the number of the check that
-   failed.  Run by tests/run.sh through tools/fcc at -O2 and -O0.
+   failed.  Run by tests/run.sh through tools/fcc at -O2, -O0 and -O2 -mmul.
 
    NO REFERENCE IMPLEMENTATION IS NEEDED, which is what makes this worth
    running on the machine itself: a quotient and remainder are right exactly
