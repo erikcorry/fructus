@@ -303,8 +303,10 @@ const SOURCES = [
           ret
   bump:   add  r1, r1, #1
           ret`,
-  // Stores read back: both widths, an odd address, every block move, and the
-  // pointer in a block's own list both ways.
+  // Stores read back: both widths, an odd address, every block move, the
+  // pointer in a block's own list both ways, and a register named twice in
+  // a pop and an ldm, where the later word wins - which libgcc's 64-bit
+  // division uses to step over a dead word of its frame.
   `       mov  sp, #0x4000
           mov  r1, #0x3000
           mov  r0, #0x1234
@@ -332,6 +334,10 @@ const SOURCES = [
           pop  sp
           push r6, r0
           pop  r0, r6
+          push r0, r2, r3
+          pop  r4, r4, r5
+          mov  r2, #0x3000
+          ldm  r3, r3
           halt`,
   // A copy loop, word by word, as memcpy would do it.
   `       mov  r2, #0x3000
