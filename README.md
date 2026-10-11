@@ -178,6 +178,7 @@ tests/                the test suite
 | `npm run gen` | emits `build/fructus.asm`, a customasm ruledef |
 | `npm run sim -- <bin>` | runs a flat binary. `--trace`, `--pc`, `--sp`, `--max` |
 | `npm run microtan -- <rom>` | runs a ROM on the simulated board |
+| `just profile <prog> [<prog2>]` | where a compiled program's cycles go — by function, kind of cost, mnemonic and, with `-g`, source line — or two builds compared row by row. `--from`/`--to` a symbol, `--per`, `--lines`, `--kinds` |
 | `npm run map` | the opcode map: `build/opcodes.html` and `docs/opcodes.svg` |
 | `npm run map6502` | the same map for the NMOS 6502: `build/6502.html` and `docs/6502.svg` |
 | `npm run rtl` | the generated files in `rtl/`, from the spec |
@@ -678,7 +679,9 @@ runs at the 25.175 MHz pixel clock. Bytes are the whole image — `.text`,
 `.rodata` and `.data`, printf and the libgcc helpers included. `-mmul` uses
 the 16×16 multiply in the DSPs; without it a multiply is a shift-and-add
 call. GCC 16.2.1, `MEM_METHOD` `MEM_STACK`. `just coremark` regenerates the
-table, in about seven minutes. CoreMark® is a trademark of EEMBC.
+table, in about seven minutes, and `just profile` shows where the cycles go —
+`tools/profile.mjs` has CoreMark at `-Os` against `-O2` as its example.
+CoreMark® is a trademark of EEMBC.
 
 ## Status
 

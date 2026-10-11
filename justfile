@@ -140,6 +140,12 @@ torture *args='-O2':
 coremark *args:
     @sh tests/coremark/run.sh {{args}}
 
+# Where a program's cycles go, by function, kind of cost, mnemonic and - with
+# -g - source line; or two builds compared.  tools/profile.mjs's header has the
+# options, and CoreMark at -Os against -O2 as an example.
+profile *args:
+    @node tools/profile.mjs {{args}}
+
 # ------------------------------------------------------------------ the spec --
 
 # Check isa/fructus.toml against its own invariants.
