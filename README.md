@@ -612,7 +612,8 @@ because it is a copy of a real machine.
 
 ```
 0x0400 - 0x040f  guard
-0x0410 - 0x047f  the CPU's   0x0410 shadow_sp, 0x0412 shadow_lr, 0x0414 shadow_isp
+0x0410 - 0x047f  the CPU's   0x0410 shadow_sp, 0x0412 shadow_lr, 0x0414 shadow_isp,
+                             0x0424 cycles (two words, low first)
 0x0480 - 0x04ef  the GPU's   docs/vga.md, "Registers"
 0x04f0 - 0x04ff  guard
 ```
@@ -640,6 +641,14 @@ So the GPU's 2 KB of sprite patterns cost the page four bytes.
 `sp` and `lr` for a crash report, a scheduler can swap them, and boot code can
 set `shadow_isp` with a store instead of the `rti` it needs otherwise. They
 are still not registers: no instruction names them.
+
+**The cycle counter** counts every clock since reset, 32 bits in two
+read-only words at 0x0424, low word first. It has no hold register, so the
+high word can move between the two loads: read high, low and high again, and
+go round once more if the high word changed. `fructus_cycles()` in
+`crt/include/fructus/cycles.h` does that. The simulator gives the same count
+as `rtl/cpu.sv` at every load, which `tests/cpu-check.mjs` holds it to, so a
+difference of two readings there is what the hardware takes.
 
 `tools/sim.js` implements all of this for a machine made with `io`, which is
 `tools/fcc-run.mjs`'s. A program that touches a guard there exits 124, naming

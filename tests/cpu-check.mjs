@@ -265,6 +265,23 @@ const SOURCES = [
           ld   r0, [r5, #-5]
           ld   r2, [r5, #-1]
           halt`,
+  // THE CYCLE COUNTER, [cpu.io] cycles: by word, by byte, by an odd word a
+  // byte at a time, by ldm a word a cycle, and after a loop with taken
+  // branches in it - each load takes the count as rtl/cpu.sv's capture sees
+  // it, which the simulator must give exactly.  A store to it changes nothing.
+  `       mov  r5, #0x424
+          ld   r0, [r5, #0]
+          ld   r2, [r5, #2]
+          ld8  r3, [r5, #0]
+          ld   r4, [r5, #1]
+          st   r5, [r5, #0]
+          mov  r1, #0x424
+          ldm  r0, r2, r3
+          mov  r4, #3
+  spin:   add  r4, r4, #-1
+          br   ne, r4, #0, spin
+          ld   r4, [r5, #0]
+          halt`,
   `       mov  r0, #5
           mov  r1, #0
   loop:   add  r1, r1, r0
@@ -423,6 +440,12 @@ const assembled = SOURCES.flatMap((src, i) => [src, `nop\n${src}`].map((text, j)
   rmSync(f, { force: true });
   return [...code];
 }));
+
+// The programs that read the cycle counter.  In blit mode the count is the
+// slower machine's, which the simulator does not model, and under interrupts
+// it includes theirs, so there only their pcs and memory are compared.
+const CLOCKED = new Set(SOURCES.flatMap((src, i) => (src.includes(`#0x${spec.cpu.io.cycles.toString(16)}`)
+  ? [2 * i, 2 * i + 1] : [])));
 
 const N_ALU = 60, N_LD = 20, N_ST = 20;
 const N_RANDOM = N_ALU + N_LD + N_ST;
@@ -682,7 +705,8 @@ function check(out, blit, what) {
     if (got.length !== trace.length) say(`: ${got.length} retired, the simulator ran ${trace.length}`);
     for (let i = 0; i < Math.min(got.length, trace.length); i++) {
       const g = got[i], t = trace[i];
-      if (g.pc !== t.pc || g.R.some((v, k) => v !== t.R[k]))
+      const clocked = blit && CLOCKED.has(p - N_RANDOM);
+      if (g.pc !== t.pc || !clocked && g.R.some((v, k) => v !== t.R[k]))
         say(` instruction ${i} at 0x${t.pc.toString(16)}: rtl pc ${g.pc.toString(16)} r=${g.R.map(hex4).join(' ')}, sim r=${t.R.map(hex4).join(' ')}`);
       if (!blit) instructions++;
     }
@@ -858,7 +882,8 @@ for (const blit of [false, true]) {
     if (+f[5] !== fin.hash) complain(`program ${p}: memory folds to ${f[5]} under interrupts${what} and ${fin.hash} without`);
     if (fin.ie && +f[15] !== +f[14] + 1)
       complain(`program ${p}${what}: waited at 0x${(+f[14]).toString(16)} and ended at 0x${(+f[15]).toString(16)}, not a byte on, after the interrupt at the halt`);
-    if (R.some((v, k) => v !== fin.R[k]))
+    // The interrupts' own cycles are in a count read after them.
+    if (!CLOCKED.has(p - N_RANDOM) && R.some((v, k) => v !== fin.R[k]))
       complain(`program ${p}: r=${R.map(hex4).join(' ')} under interrupts${what}, sim r=${fin.R.map(hex4).join(' ')}`);
   }
   if (irqSeen.size !== PROGRAMS) complain(`${PROGRAMS - irqSeen.size} programs printed nothing under interrupts${what}`);

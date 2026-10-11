@@ -28,6 +28,9 @@
 `define FRUCTUS_IO_SHADOW_LR  16'h0412
 `define FRUCTUS_IO_SHADOW_ISP 16'h0414
 
+// [cpu.io]: the cycle counter, two read-only words, low first.
+`define FRUCTUS_IO_CYCLES 16'h0424
+
 // The registers the exception routines and the block moves name.
 `define FRUCTUS_REG_SP 3'd6
 `define FRUCTUS_REG_LR 3'd7

@@ -431,6 +431,8 @@ shadow_sp   = 0x0410
 shadow_lr   = 0x0412
 shadow_isp  = 0x0414
 console     = 0x0420   # tools/fcc-run.mjs's only: a byte stored here is printed
+cycles      = 0x0424   # 32-bit count of clocks since reset, read-only, low word
+                       # first; read hi, lo, hi and retry if hi moved
 
 
 # =============================================================================

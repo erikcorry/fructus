@@ -206,6 +206,9 @@ export const BUILTIN = {
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };
 
+// See ioByte: the cycle counter's lead over this.cyc at a load's capture.
+const CYCLES_SKEW = 4;
+
 export class Machine {
   // `io`: the machine has the I/O page, [cpu.io] - its guards trap and its
   // shadow words are the shadows.  tools/fcc-run.mjs's machine has it; a
@@ -332,6 +335,17 @@ export class Machine {
     const name = (a & ~1) === io.shadow_sp ? 'shadow_sp'
                : (a & ~1) === io.shadow_lr ? 'shadow_lr'
                : (a & ~1) === io.shadow_isp ? 'shadow_isp' : null;
+    // THE CYCLE COUNTER, read-only: what rtl/cpu.sv's holds as the access
+    // captures it.  That is the cycle count at the instruction's dispatch,
+    // plus the pipeline's way from a reset to the first dispatch and from a
+    // dispatch to the first capture, CYCLES_SKEW, plus one for each access
+    // the instruction made before this one: the sequencer makes one a cycle.
+    // A store writes the memory beneath, which no load can read.
+    if ((a & ~3) === io.cycles && v === undefined) {
+      const n = this.cyc + CYCLES_SKEW + this.xfer - this.xfer0 - 1;
+      const byte = this.little ? a & 3 : (a & 2) | (~a & 1);
+      return (n >>> (8 * byte)) & 0xff;
+    }
     if (name === null) {
       if (v === undefined) return this.mem[a];
       this.mem[a] = v & 0xff; return;
@@ -453,7 +467,7 @@ export class Machine {
     }
     const d = e.d;
     this.pc = u16(at + d.nbytes);
-    const xfer = this.xfer;
+    const xfer = this.xfer0 = this.xfer;
     this.wrotePc = false;
     this.tmp = {};           // no scratch name outlives its instruction
     if (trace) trace(at, d, this);

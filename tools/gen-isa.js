@@ -54,6 +54,12 @@ if (shadowWords.some((a) => typeof a !== 'number' || a & 1) || new Set(shadowWor
 // 0 and 0xf, so the page must start on 256 bytes and each guard be 16.
 if (io.page & 0xff || io.guard_bytes !== 16)
   fail(`[cpu.io]: the page at 0x${io.page.toString(16)} must be 256-byte aligned and its guards 16 bytes, not ${io.guard_bytes}`);
+// And the cycle counter's two words, decoded like the shadows from bits
+// 15:2 - so on four bytes - and clear of them and of the guards.
+if (typeof io.cycles !== 'number' || io.cycles & 3 || (io.cycles & ~0xff) !== io.page
+    || (io.cycles & 0xf0) === 0 || (io.cycles & 0xf0) === 0xf0
+    || shadowWords.some((a) => (a & ~3) === io.cycles))
+  fail(`[cpu.io]: cycles must be four aligned bytes in the page, clear of the guards and shadows`);
 const ioGuard = spec.cpu.vectors.io_guard;
 if (typeof ioGuard !== 'number') fail('[cpu.vectors] has no io_guard');
 const divZero = spec.cpu.vectors.divide_by_zero;
@@ -114,6 +120,9 @@ process.stdout.write(`// =======================================================
 \`define FRUCTUS_IO_SHADOW_SP  16'h${hex(io.shadow_sp, 4)}
 \`define FRUCTUS_IO_SHADOW_LR  16'h${hex(io.shadow_lr, 4)}
 \`define FRUCTUS_IO_SHADOW_ISP 16'h${hex(io.shadow_isp, 4)}
+
+// [cpu.io]: the cycle counter, two read-only words, low first.
+\`define FRUCTUS_IO_CYCLES 16'h${hex(io.cycles, 4)}
 
 // The registers the exception routines and the block moves name.
 \`define FRUCTUS_REG_SP 3'd${sp}

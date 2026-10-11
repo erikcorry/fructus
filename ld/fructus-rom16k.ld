@@ -47,6 +47,7 @@ __io        = 0x0400;
 __shadow_sp  = 0x0410;
 __shadow_lr  = 0x0412;
 __shadow_isp = 0x0414;
+__cycles     = 0x0424;     /* crt/include/fructus/cycles.h */
 __display   = 0x0480;     /* the GPU's registers, crt/include/fructus/display.h */
 __stack_top = DEFINED(__stack_top) ? __stack_top : 0x1000;
 

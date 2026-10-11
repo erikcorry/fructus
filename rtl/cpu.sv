@@ -993,8 +993,40 @@ module cpu (
     wire         sh_sp  = mar[15:1] == SH_SP[15:1];
     wire         sh_lr  = mar[15:1] == SH_LR[15:1];
     wire         sh_isp = mar[15:1] == SH_ISP[15:1];
-    wire  [15:0] shword = sh_sp ? shadow_sp : sh_lr ? shadow_lr : shadow_isp;
-    wire         shrd   = sh_sp | sh_lr | sh_isp;
+    // AND THE CYCLE COUNTER, [cpu.io] cycles: two read-only words, low first,
+    // that a load takes as it takes a shadow and a store does not reach.  It
+    // counts every clock from reset and has no hold register - software reads
+    // hi, lo, hi and retries, crt/include/fructus/cycles.h - so it is a
+    // counter and one more word on the shadows' mux, after memory's word has
+    // already been passed over.
+    //
+    // FOUR BYTES, NOT ONE CARRY CHAIN.  An iCE40 carry chain is a column of
+    // cells one above the other, and nextpnr places it whole: 32 bits are five
+    // logic blocks in a line, wherever they land.  Nothing needs the count
+    // sooner than a clock after its increment, so each byte has a chain of its
+    // own and steps when `wrapq' says every bit below it is a one - decided a
+    // cycle early, from the low byte at 0xfe, so that it steps in the same
+    // cycle as one 32-bit increment would and the count is exactly that.
+    localparam [15:0] CYC = `FRUCTUS_IO_CYCLES;
+    logic [31:0] cycles;
+    logic  [3:1] wrapq;
+    always_ff @(posedge clk)
+        if (rst) begin
+            cycles <= 32'd0;
+            wrapq  <= 3'd0;
+        end else begin
+            cycles[7:0] <= cycles[7:0] + 8'd1;
+            if (wrapq[1]) cycles[15:8]  <= cycles[15:8]  + 8'd1;
+            if (wrapq[2]) cycles[23:16] <= cycles[23:16] + 8'd1;
+            if (wrapq[3]) cycles[31:24] <= cycles[31:24] + 8'd1;
+            wrapq[1] <= cycles[7:0] == 8'hfe;
+            wrapq[2] <= cycles[7:0] == 8'hfe && &cycles[15:8];
+            wrapq[3] <= cycles[7:0] == 8'hfe && &cycles[23:8];
+        end
+    wire         cy     = mar[15:2] == CYC[15:2];
+    wire  [15:0] shword = sh_sp ? shadow_sp : sh_lr ? shadow_lr : sh_isp ? shadow_isp
+                        : mar[1] ? cycles[31:16] : cycles[15:0];
+    wire         shrd   = sh_sp | sh_lr | sh_isp | cy;
     // THE GUARDS, the I/O page's first and last 16 bytes: a load or store
     // that touches one enters [cpu.vectors] io_guard at the next dispatch,
     // as an interrupt would, so lr is the address after it.  The instruction

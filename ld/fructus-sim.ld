@@ -3,7 +3,8 @@
  *   0x0000 - 0x0002   `jmp _start': the CPU starts at 0
  *   0x0003 - 0x01ff   zp_lo   .zplo, .zplo.bss      [rb, #-512..-1]
  *   0x0200 - 0x03ff   zp_hi   .zphi, .zphi.bss      [rb, #0..511]
- *   0x0400 - 0x04ff   the I/O page, [cpu.io]; 0x0420 is the console
+ *   0x0400 - 0x04ff   the I/O page, [cpu.io]; 0x0420 is the console,
+ *                     0x0424 the cycle counter
  *   0x0500 - 0x14ff   the stack, 4K, growing down towards the I/O page
  *   0x1500 - 0x7fff   the heap, crt/malloc.c's: 107 pages of 256 bytes
  *   0x8000 - 0xffff   code, then data, loaded as one flat image
@@ -55,6 +56,7 @@ __shadow_sp  = 0x0410;
 __shadow_lr  = 0x0412;
 __shadow_isp = 0x0414;
 __console    = 0x0420;
+__cycles     = 0x0424;
 __display    = 0x0480;    /* the GPU's registers, crt/include/fructus/display.h */
 __stack_top  = DEFINED(__stack_top) ? __stack_top : 0x1500;
 __heap_start = __stack_top;

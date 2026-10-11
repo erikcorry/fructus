@@ -19,6 +19,9 @@
 // stored to its console, 0x0420 (`__console' in the linker script), is
 // printed: that is this runner intercepting the store, not tools/sim.js.
 //
+// The cycle counter at 0x0424 (`__cycles') is the I/O page's own, in
+// tools/sim.js and rtl/cpu.sv alike; crt/include/fructus/cycles.h reads it.
+//
 // AND THE DISPLAY, tools/gpu.js: the frame buffers and the GPU's registers at
 // 0x0480, as tools/fpga-system.sv has them.  A frame is drawn whenever the
 // shown buffer changes or COPY starts, and once more at the end if the last
