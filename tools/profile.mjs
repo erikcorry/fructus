@@ -109,17 +109,21 @@ function symbols(elf) {
 }
 
 // The line table, from -g: each address's file and line, the last row at or
-// below it.  null without one.
+// below it - up to the end of its sequence, the row whose line is `-', or
+// one file's last row would claim all the code after it that has none: a
+// program built without -g, linked with a libgcc built with it.  null
+// without a table.
 function lines(elf) {
   const rows = [];
   for (const line of readelf('--debug-dump=decodedline', elf).split('\n')) {
-    const m = /^(\S+)\s+(\d+)\s+(0x[0-9a-f]+)/.exec(line);
-    if (m) rows.push({ file: m[1], line: Number(m[2]), addr: parseInt(m[3], 16) });
+    const m = /^(\S+)\s+(\d+|-)\s+(0x[0-9a-f]+)/.exec(line);
+    if (m) rows.push({ file: m[1], line: m[2] === '-' ? null : Number(m[2]), addr: parseInt(m[3], 16) });
   }
   if (!rows.length) return null;
   rows.sort((a, b) => a.addr - b.addr);    // stable: the last of equal addresses wins
   const at = new Array(0x10000).fill(null);
   rows.forEach((r, i) => {
+    if (r.line === null) return;
     for (let a = r.addr, end = rows[i + 1]?.addr ?? r.addr + 1; a < end; a++) at[a] = r;
   });
   return at;
