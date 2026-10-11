@@ -93,11 +93,14 @@ fi
 out=a.out
 prev=
 script="-T $root/ld/fructus-sim.ld"
+mul=
 for a in "$@"; do
     [ "$prev" = -o ] && out=$a
     case $a in
         -c|-S|-E) exec $CC "$@" ;;
         -T*|-Wl,-T*|-Wl,--script*|--script*) script= ;;
+        -mmul) mul=1 ;;
+        -mno-mul) mul= ;;
     esac
     prev=$a
 done
@@ -112,8 +115,20 @@ done
 # then find it fresh.  And the archive and crt0.o are built under other names
 # and renamed into place, so a compile already linking against the old ones,
 # outside the lock, never sees half of a new one.
-lib=$B/crt/libc.a
-mkdir -p $B/crt
+#
+# A LIBRARY FOR EACH -mmul SETTING.  libgcc needs no second copy, because
+# -mmul calls helpers with other names (__mulsi3_mul for __mulsi3), but the C
+# in libc.c, malloc.c and new.cc calls libgcc too, and a program built with
+# -mmul should not carry the shift-and-add multiplies for printf and fwrite.
+# The last of -mmul and -mno-mul wins, as it does in cc1.
+crt=$B/crt
+mflags=
+if [ -n "$mul" ]; then
+    crt=$B/crt/mmul
+    mflags=-mmul
+fi
+lib=$crt/libc.a
+mkdir -p $crt
 exec 9>$B/crt/.lock
 command -v flock >/dev/null && flock 9
 stale=
@@ -126,7 +141,7 @@ done
 if [ -n "$stale" ]; then
     new=$lib.new
     rm -f $new
-    $X/fructus-elf-as -o $B/crt/crt0.o.new $root/crt/crt0.s
+    $X/fructus-elf-as -o $crt/crt0.o.new $root/crt/crt0.s
     # snippets/digits3.s comes along because printf's decimal conversion calls
     # it: three digits at a time, with no divide anywhere.
     for s in $root/libc/*.s $root/snippets/digits3.s; do
@@ -139,9 +154,9 @@ if [ -n "$stale" ]; then
         # kept by the relocation that reaches it.
         { printf '\t.text\n'
           sed 's/^\([A-Za-z_][A-Za-z0-9_]*\):/\t.section\t.text.\1,"ax"\n\t.globl\t\1\n\1:/' $s
-        } > $B/crt/$n.s
-        $X/fructus-elf-as -o $B/crt/$n.o $B/crt/$n.s
-        $X/fructus-elf-ar rc $new $B/crt/$n.o
+        } > $crt/$n.s
+        $X/fructus-elf-as -o $crt/$n.o $crt/$n.s
+        $X/fructus-elf-ar rc $new $crt/$n.o
     done
     # The C half of the library: the odds and ends in libc.c, and the heap.
     # Each is one object, but a section per function, and the link below
@@ -156,24 +171,24 @@ if [ -n "$stale" ]; then
     # warnings to errors there would file working programs as compile
     # failures.
     for c in libc malloc; do
-        $CCC -Os -Wall -Werror -ffunction-sections -c $root/crt/$c.c -o $B/crt/$c.o
-        $X/fructus-elf-ar rc $new $B/crt/$c.o
+        $CCC $mflags -Os -Wall -Werror -ffunction-sections -c $root/crt/$c.c -o $crt/$c.o
+        $X/fructus-elf-ar rc $new $crt/$c.o
     done
     # THE C++ RUNTIME SUPPORT, ALWAYS BUILT AND ALWAYS ARCHIVED.  A C program
     # pays nothing for it: a member is extracted from an archive only to
     # resolve an UNDEFINED symbol, and a C program has no operator new to
     # resolve.  Building it unconditionally is what keeps the archive the same
     # whichever language the caller brought.
-    $CXXC -Os -Wall -Werror -ffunction-sections -c $root/crt/new.cc -o $B/crt/new.o
-    $X/fructus-elf-ar rc $new $B/crt/new.o
+    $CXXC $mflags -Os -Wall -Werror -ffunction-sections -c $root/crt/new.cc -o $crt/new.o
+    $X/fructus-elf-ar rc $new $crt/new.o
     $X/fructus-elf-ranlib $new
-    mv -f $B/crt/crt0.o.new $B/crt/crt0.o
+    mv -f $crt/crt0.o.new $crt/crt0.o
     mv -f $new $lib
 fi
 exec 9>&-
 
 # The image is RAM, code and data alike, so the one segment is RWX on purpose.
 $CC -nostdlib $script -Wl,--no-warn-rwx-segments,--gc-sections \
-    $B/crt/crt0.o "$@" \
+    $crt/crt0.o "$@" \
     -Wl,--start-group $lib $CXXLIB -L$B/gcc/fructus-elf/libgcc -lgcc -Wl,--end-group
 $X/fructus-elf-objcopy -O binary $out $out.bin
