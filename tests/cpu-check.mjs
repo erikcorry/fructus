@@ -22,8 +22,9 @@
 // The forms are drawn so that every length lands at both alignments.
 //
 // Needs iverilog; skips without it.  CPU_KEEP=1 leaves the programs in
-// build/cpu-prog-N.hex and their registers in build/cpu-reg-N.hex, for
-// looking at one that fails.  FRUCTUS_RTL=dir reads the RTL from dir instead
+// build/cpu-prog-N.hex, their registers in build/cpu-reg-N.hex and the last
+// bench's memory at each halt in build/cpu-mem-N.hex, for looking at one
+// that fails.  FRUCTUS_RTL=dir reads the RTL from dir instead
 // of rtl/, which is how tests/dontcare-check.mjs runs it with its don't-cares
 // filled.
 // =============================================================================
@@ -33,7 +34,7 @@ import { Machine } from '../tools/sim.js';
 import { buildDecoder, decode } from '../tools/decode.js';
 import { execFileSync } from 'node:child_process';
 import { assemble } from './harness.mjs';
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 
 const have = (cmd) => {
   try { execFileSync('sh', ['-c', `command -v ${cmd}`], { stdio: 'ignore' }); return true; }
@@ -380,6 +381,38 @@ const SOURCES = [
           ld   r2, [r5, #6]
           halt`,
 ];
+
+// THE POINTER AFTER A BLOCK MOVE: each push, pop, ldm and stm, of one, two
+// and three registers, from an even and an odd pointer, followed AT ONCE by
+// an ALU instruction or a branch that reads the pointer - as its left
+// operand, its right, both, through a one-byte form, and as a compare.  A
+// load writes its pointer first and a store last, and nothing forwards
+// either: rtl/cpu.sv says each lands before the next instruction is in
+// decode.  Delaying the pointer's write showed the margin, a cycle for
+// every store and for one aligned word loaded: two cycles late, and the
+// instruction after reads the old pointer.  One program, since the test
+// benches' cost is mostly per program, with the pointer set afresh before
+// each move so that the cases do not interact.
+{
+  const follow = (P) => [
+    `add  r0, ${P}, #1`, `mov  r0, ${P}`, `rsb  r0, ${P}, r3`, `rsb  r0, r3, ${P}`,
+    `iseq r0, ${P}, ${P}`, `xor  r0, r0, ${P}`, `shl  r0, ${P}, #3`, `lsr  r0, ${P}, #13`,
+    ...(P === 'r1' ? ['add  r0, r0, r1'] : []),
+    `br   eq, ${P}, r3, @`, `br   ne, ${P}, #0, @`, `add  ${P}, ${P}, #0`,
+  ];
+  const lines = [];
+  let n = 0;
+  for (const [op, P] of [['push', 'sp'], ['pop', 'sp'], ['ldm', 'r1'], ['stm', 'r5']])
+    for (const regs of [['r2'], ['r2', 'r3'], ['r2', 'r3', 'r4']])
+      for (const base of [0x3100, 0x3101]) {
+        lines.push(`mov  r3, #${base}`);
+        for (const f of follow(P)) {
+          const lab = `bp${n++}`;
+          lines.push(`mov  ${P}, #${base}`, `${op}  ${regs.join(', ')}`, f.replace('@', lab), `${lab}:`);
+        }
+      }
+  SOURCES.push([...lines, 'halt'].map((l) => '          ' + l).join('\n'));
+}
 // The second copy has its nop IN THE SOURCE, not put in front of the bytes:
 // a call or a jmp to a label is an absolute address, which the assembler
 // has to see move.
@@ -405,6 +438,32 @@ const fold = (mem) => {
   for (let k = 0; k < 65536; k++) hash = (Math.imul(hash, 31) + mem[k]) & 0x7fffffff;
   return hash;
 };
+// THE TEST BENCHES DUMP IT, and this folds the dump.  64K iterations of a
+// Verilog loop cost vvp 24 ms, and every program on every bench paid that
+// twice, to clear memory and to fold it - most of this test's time.
+// $readmemh and $writememh do the same in C.  So each bench reads its
+// memory clear from build/cpu-zero.hex, and writes it at the end to
+// build/cpu-mem-N.hex, whose fold goes into field 5 of the program's END or
+// IRQ line - where the bench's own used to be, so that its output can still
+// be compared whole against another run's.
+const foldDump = (p) => {
+  const text = readFileSync(`build/cpu-mem-${p}.hex`, 'latin1');
+  let hash = 0, k = 0;
+  for (const line of text.split('\n')) {
+    if (line === '' || line[0] === '/') continue;
+    const b = parseInt(line, 16);
+    hash = (Math.imul(hash, 31) + (Number.isNaN(b) ? 0x100 : b)) & 0x7fffffff;    // x is never a byte
+    k++;
+  }
+  return k === 65536 ? hash : -1;
+};
+const vvp = (file) => execFileSync('vvp', [file], { encoding: 'utf8', maxBuffer: 1 << 26 })
+  .split('\n').map((line) => {
+    const f = line.trim().split(/\s+/);
+    if (f[0] !== 'END' && f[0] !== 'IRQ') return line;
+    f[5] = String(foldDump(+f[1]));
+    return f.join(' ');
+  }).join('\n');
 // Built with FRUCTUS_BLIT, the test bench hands the processor each word again
 // a cycle later, as tools/fpga-system.sv does: \`late\` is the word at the
 // address sampled two edges ago.
@@ -413,6 +472,7 @@ const BLIT_WIRING = `\`ifdef FRUCTUS_BLIT
     always @(posedge clk) late <= rdata;
 \`endif`;
 mkdirSync('build', { recursive: true });
+writeFileSync('build/cpu-zero.hex', '00\n'.repeat(65536));
 let dtraps = 0;                        // divide-by-zero traps the simulator took
 for (let p = 0; p < PROGRAMS; p++) {
   let bytes, draws = val;
@@ -472,7 +532,7 @@ for (let p = 0; p < PROGRAMS; p++) {
   };
   const trace = [];
   let fault = null;                    // blit mode's first stack fault: where, and memory then
-  for (let guard = 0; !m.halted && guard < 1000; guard++) {
+  for (let guard = 0; !m.halted && guard < 5000; guard++) {
     const pc = m.pc;
     // A guard trap is a brk dispatched where the next instruction would be,
     // and so is a divide by zero.
@@ -547,7 +607,7 @@ ${BLIT_WIRING}
     endtask
     initial begin
         for (p = 0; p < ${PROGRAMS}; p = p + 1) begin
-            for (k = 0; k < 65536; k = k + 1) mem[k] = 8'h00;
+            $readmemh("build/cpu-zero.hex", mem);
             $sformat(name, "build/cpu-prog-%0d.hex", p); $readmemh(name, mem);
             $sformat(name, "build/cpu-reg-%0d.hex", p);  $readmemh(name, regs);
             rst = 1;
@@ -559,15 +619,14 @@ ${BLIT_WIRING}
             mem[${GVECTOR}] = 8'h${HALT.toString(16).padStart(2, '0')};
             mem[${DVECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
             rst = 0; cyc = 0;
-            while (!halted && !trapped && cyc < 5000) step;
+            while (!halted && !trapped && cyc < 20000) step;
             // AND ON A LITTLE: whatever stopped the machine must have stopped
             // everything, so nothing more may dispatch, retire or be written.
             k = cyc;
             repeat (12) step;
             cyc = k;
-            h = 0;
-            for (k = 0; k < 65536; k = k + 1) h = (h * 31 + mem[k]) & 32'h7fffffff;
-            $display("END %0d %0d %0d %0d %0d", p, halted, trapped, cyc, h);
+            $sformat(name, "build/cpu-mem-%0d.hex", p); $writememh(name, mem);
+            $display("END %0d %0d %0d %0d 0", p, halted, trapped, cyc);
         end
         $finish;
     end
@@ -576,7 +635,7 @@ endmodule
 const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare', 'recip']
   .map((m) => `${process.env.FRUCTUS_RTL ?? 'rtl'}/${m}.sv`);
 execFileSync('iverilog', ['-g2012', '-o', 'build/cpu-tb.vvp', ...RTL, 'build/cpu-tb.sv'], { stdio: 'inherit' });
-const out = execFileSync('vvp', ['build/cpu-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+const out = vvp('build/cpu-tb.vvp');
 
 // AND AGAIN WITH THE SB_MAC16 THAT SYNTHESIS GETS: yosys's own model of the
 // DSP, which checks the instance's parameters.  Every line must be the same, less the $finish, whose time unit
@@ -585,7 +644,7 @@ const CELLS = '/usr/share/yosys/ice40/cells_sim.v';
 execFileSync('iverilog', ['-g2012', '-DCPU_CELLS', '-o', 'build/cpu-tb.vvp', CELLS, ...RTL, 'build/cpu-tb.sv'],
              { stdio: ['ignore', 'ignore', 'inherit'] });
 const trace = (text) => text.split('\n').filter((l) => !/\$finish/.test(l)).join('\n');
-const outCells = execFileSync('vvp', ['build/cpu-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+const outCells = vvp('build/cpu-tb.vvp');
 if (trace(outCells) !== trace(out)) {
   console.log('FAIL  rtl/cpu.sv: with yosys\'s SB_MAC16 it runs differently from the plain multiply');
   process.exit(1);
@@ -661,14 +720,14 @@ if (bad) {
 // memory - so a late load finds the same bytes, a cycle later.
 execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', '-DBLIT_ON=1\'b0', '-o', 'build/cpu-tb.vvp', ...RTL, 'build/cpu-tb.sv'],
              { stdio: 'inherit' });
-const outOff = execFileSync('vvp', ['build/cpu-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+const outOff = vvp('build/cpu-tb.vvp');
 if (trace(outOff) !== trace(out)) {
   console.log('FAIL  rtl/cpu.sv: built for blit mode with the mode off, it runs differently');
   process.exit(1);
 }
 execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', '-DBLIT_ON=1\'b1', '-o', 'build/cpu-tb.vvp', ...RTL, 'build/cpu-tb.sv'],
              { stdio: 'inherit' });
-check(execFileSync('vvp', ['build/cpu-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 }), true, 'in blit mode, ');
+check(vvp('build/cpu-tb.vvp'), true, 'in blit mode, ');
 for (const f of ['build/cpu-tb.vvp', 'build/cpu-tb.sv']) rmSync(f, { force: true });
 
 // --- the interrupt line -----------------------------------------------------------
@@ -695,7 +754,7 @@ const finals = programs.map(({ bytes, reg, io }) => {
   m.ie = 1;
   reg.forEach((v, k) => { m.R[k] = v; });
   let cli = false;
-  for (let guard = 0; !m.halted && guard < 1000; guard++) {
+  for (let guard = 0; !m.halted && guard < 5000; guard++) {
     if (m.mem[m.pc] === excs[2].op) cli = true;
     m.step();
   }
@@ -746,7 +805,7 @@ ${BLIT_WIRING}
     endtask
     initial begin
         for (p = 0; p < ${PROGRAMS}; p = p + 1) begin
-            for (k = 0; k < 65536; k = k + 1) mem[k] = 8'h00;
+            $readmemh("build/cpu-zero.hex", mem);
             $sformat(name, "build/cpu-prog-%0d.hex", p); $readmemh(name, mem);
             $sformat(name, "build/cpu-reg-%0d.hex", p);  $readmemh(name, regs);
             mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
@@ -768,9 +827,8 @@ ${BLIT_WIRING}
             while (irq && cyc < k + 50) tick(0);
             irq = 0;
             repeat (40) tick(0);
-            h = 0;
-            for (k = 0; k < 65536; k = k + 1) h = (h * 31 + mem[k]) & 32'h7fffffff;
-            $display("IRQ %0d %0d %0d %0d %0d %h %h %h %h %h %h %h %h %0d %0d", p, halted, trapped, takes, h,
+            $sformat(name, "build/cpu-mem-%0d.hex", p); $writememh(name, mem);
+            $display("IRQ %0d %0d %0d %0d 0 %h %h %h %h %h %h %h %h %0d %0d", p, halted, trapped, takes,
                      u.R[0], u.R[1], u.R[2], u.R[3], u.R[4], u.R[5], u.R[6], u.R[7], pc1, u.pc);
         end
         $finish;
@@ -783,7 +841,7 @@ for (const blit of [false, true]) {
   const what = blit ? ' in blit mode' : '';
   execFileSync('iverilog', ['-g2012', ...(blit ? ['-DFRUCTUS_BLIT', '-DBLIT_ON=1\'b1'] : []),
     '-o', 'build/cpu-irq-tb.vvp', ...RTL, 'build/cpu-irq-tb.sv'], { stdio: 'inherit' });
-  const irqOut = execFileSync('vvp', ['build/cpu-irq-tb.vvp'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+  const irqOut = vvp('build/cpu-irq-tb.vvp');
   const irqSeen = new Set();
   for (const line of irqOut.split('\n')) {
     const f = line.trim().split(/\s+/);
@@ -807,6 +865,8 @@ for (const blit of [false, true]) {
 }
 for (const f of ['build/cpu-irq-tb.vvp', 'build/cpu-irq-tb.sv']) rmSync(f, { force: true });
 if (!process.env.CPU_KEEP) for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/cpu-prog-${p}.hex`, `build/cpu-reg-${p}.hex`]) rmSync(f, { force: true });
+if (!process.env.CPU_KEEP) for (let p = 0; p < PROGRAMS; p++) rmSync(`build/cpu-mem-${p}.hex`, { force: true });
+rmSync('build/cpu-zero.hex', { force: true });
 
 // The four guard programs, each run twice, must have ended at io_guard's halt.
 const GUARD_PROGRAMS = 8;

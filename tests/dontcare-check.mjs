@@ -94,7 +94,7 @@ function fill(dir, mode) {
 const WHAT = { zero: 'zeros', one: 'ones' };
 const TESTS = ['rtl-check', 'cpu-check', 'blit-check', 'boot-check'];
 const DIR = 'build/dontcare/rtl';
-const TIMEOUT = 300;    // seconds a test may take; cpu-check, the longest, needs 45
+const TIMEOUT = 300;    // seconds a test may take; cpu-check, the longest, needs 30
 let failed = false;
 for (const mode of modes) {
   if (!/^(zero|one|random(:\d+)?)$/.test(mode)) {
