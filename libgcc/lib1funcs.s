@@ -1144,11 +1144,11 @@ __modsi3_mul:
 ; ----------------------------------------------------------------------------
 ;       divisor bits        1-16       17-32      33-48      49-64
 ;       here                1140-1200  2740-3120  1590-2010  690-990
-;       -mmul, below        275-285    365-370    605-610    415-420
+;       -mmul, below        275-280    370-375    605-610    420
 ;       libgcc2.c's         ~4100      ~3000      ~3300      1600-2600
 ;
 ; The range is over the widths in each column, 30 dividends a width.  561
-; bytes for all six, and 929 for the six with recip below, where libgcc2.c's
+; bytes for all six, and 928 for the six with recip below, where libgcc2.c's
 ; were 2.3K to 3.2K EACH, before the 32-bit division, multiply and clz table
 ; they called.  A divisor of 17 to 32 bits is the slow case: 48 steps of the
 ; general loop, and a loop of its own with R in two registers would be about
@@ -1541,14 +1541,14 @@ __udivmoddi4_mul:
         call    .core                   ; 3
         ld      r5, [sp, #10]           ; 4   rp, past the pushed lr
         br      eq, r5, #0, .norp       ; 1
-        ld      lr, [sp, #2]            ; 4
-        st      lr, [r5, #0]            ; 5
-        ld      lr, [sp, #4]            ; 4
-        st      lr, [r5, #2]            ; 5
-        ld      lr, [sp, #6]            ; 4
-        st      lr, [r5, #4]            ; 5
-        ld      lr, [sp, #8]            ; 4
-        st      lr, [r5, #6]            ; 5
+        push    r0, r1                  ; 6   r0 and r1 free for the copy
+        add     r1, sp, #6              ; 1   the remainder, past them and lr
+        ldm     r0, lr                  ; 5
+        stm     r0, lr                  ; 6   through rp in r5
+        ldm     r0, lr                  ; 5
+        stm     r0, lr                  ; 6
+        pop     r1, r0, lr              ; 6   lr's pop comes free with them
+        ret                             ; 4
 .norp:
         pop     lr                      ; 4
         ret                             ; 4
