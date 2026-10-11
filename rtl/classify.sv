@@ -8,14 +8,14 @@
 // rtl/cpu.sv decides from kind, length and `two` whether the next dispatch
 // can follow at once, and latches the rest for the decode stage.
 //
-// 156 opcodes: 98 ALU, 45 microcoded - 40 of them memory instructions and
+// 159 opcodes: 101 ALU, 45 microcoded - 40 of them memory instructions and
 // 4 exception instructions or mul - 7 conditional branches, 6 jumps.
 // AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
 // MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
 // pc was worked out behind it, so the length is never used.  Pinned at one, as
 // it was, it measured 32.96 MHz against 33.59, and the length's lookup was on
 // the critical path in some seeds; free, it is on none.  The empty cells -
-// 100 of them - let synthesis carry the pattern of the rows and columns
+// 97 of them - let synthesis carry the pattern of the rows and columns
 // across them.
 // Rearranging the opcodes that ARE used, with the empties still pinned, made
 // it worse: 31.08.
@@ -152,16 +152,19 @@ module classify (
         8'h5e: t = 45'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_010;    // and
         8'h5f: t = 45'b00_10_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_010;    // and
         8'h60: t = 45'b00_10_1_1000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
+        8'h61: t = 45'b00_11_1_1000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
         8'h62: t = 45'b00_10_1_1000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
         8'h63: t = 45'b00_10_1_1000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
         8'h66: t = 45'b00_10_1_1000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
         8'h67: t = 45'b00_10_1_1000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
         8'h68: t = 45'b00_10_1_1011_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // asr
+        8'h69: t = 45'b00_11_1_1011_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // asr
         8'h6a: t = 45'b00_10_1_1011_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // asr
         8'h6b: t = 45'b00_10_1_1011_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // asr
         8'h6e: t = 45'b00_10_1_1011_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // asr
         8'h6f: t = 45'b00_10_1_1011_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // asr
         8'h70: t = 45'b00_10_1_1001_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // lsr
+        8'h71: t = 45'b00_11_1_1001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // lsr
         8'h72: t = 45'b00_10_1_1001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // lsr
         8'h73: t = 45'b00_10_1_1001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // lsr
         8'h76: t = 45'b00_10_1_1001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // lsr

@@ -373,6 +373,14 @@ irq0         = 0xffd0
 # would cost rtl/cpu.sv a 16-bit register and a mux, for a report that can
 # say "just before" anyway.
 io_guard     = 0xffcc
+# IMPLEMENTED: a recip whose divisor's high word has its top bit clear.  A
+# divisor is normalised before it reaches recip, so the one that arrives
+# without that bit is almost always 0 - clz gave 16, a shift by 16 is a shift
+# by 0, and nothing moved it.  Taken as io_guard is: the recip runs out and
+# writes rd, its answer for ra | 0x8000, and the trap is entered where the
+# next instruction would have been, so lr is that instruction's address and
+# an rti carries on after the recip as if nothing had happened.
+divide_by_zero = 0xffc8
 
 
 # =============================================================================
@@ -1179,10 +1187,11 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   a field, and the SWAR masks a popcount or bit reversal walks - all two
 #   bytes and no constant to build first.
 #
-#   The shifts take the same group shape but only three of the forms: no imm10
-#   (a shift count never needs ten bits), no mask forms, and no one-byte
-#   encodings.  Five opcodes each, and +1, +4 and +5 go unused in their
-#   groups.
+#   The shifts take the same group shape but only four of the forms: no mask
+#   forms and no one-byte encodings.  Six opcodes each, and +4 and +5 go
+#   unused in their groups.  +1 is there for its second register, not its
+#   width: a count is 0..15 in +0 and +1 alike, and their high bits are
+#   reserved - see the shifts' own section.
 #
 #     0x60  shl      0x68  asr      0x70  lsr
 #
@@ -2185,17 +2194,30 @@ semantics = "R[d] = R[a] & imm"
 
 
 # --- shl / asr / lsr --------------------------------------------------------
-# Three forms each, five opcodes each: a tied register with imm5, three
-# registers, and two registers with a table immediate.  No imm10 form - ten
-# bits of shift count would be absurd - and no one-byte encodings.
+# Four forms each, six opcodes each: a tied register with a count, three
+# registers, two registers with a table immediate, and two registers with any
+# count.  No one-byte encodings.
+#
+# THE imm10 COLUMN IS FOR THE UNTIED PAIR, not for ten bits of count.  The
+# tied form at +0 has every count but only rd = ra, and the table at +2 has a
+# free destination but only eight counts - so `lsr r1, r0, #13`, which
+# SHA-256's rotations are made of, took a mov and a tied shift.  +1 is the
+# three-byte form that has both, and it costs the RTL nothing: the column's
+# immediate is imm10 for every row, and the shifter reads its low four bits.
 #
 # Every shift uses only the low 4 bits of its count, whether that count comes
 # from a register or an immediate.  So a shift by 16 is a shift by 0, and a
-# shift by -1 is a shift by 15.  The `shift3` table spells that last one as 15
-# directly; the imm5 form does NOT translate, so `shl r0, r0, #-1` assembles
-# and means 15, which is legal but not a spelling to encourage.  Tightening
-# the imm5 form to an unsigned 0..15 would remove the trap at the cost of
-# rejecting counts the hardware would have accepted.
+# register count of -1 is a shift by 15.  The `shift3` table spells that last
+# one as 15 directly.
+#
+# AN IMMEDIATE COUNT IN THE +0 AND +1 FORMS IS 0..15.  There is never a reason
+# to set the bits above those four, so the encodings that do are RESERVED -
+# room for something later - and what they do is undefined.  The hardware
+# does not check: it reads the low four bits, so today a high bit changes
+# nothing.  The forms below still carry the whole imm5 and imm10, since the
+# binutils generators take only fields of those shapes; until the assemblers
+# learn the range, `shl r0, r0, #-1` assembles, and is a reserved encoding.
+# The imm3 form keeps `shift3`, whose -1 slot is what spells 15.
 [[insn]]
 mnemonic = "shl"
 summary  = "rd = ra << (rb & 15)"
@@ -2233,6 +2255,11 @@ semantics = "R[d] = shl(R[a], imm & 15)"
   name     = "reg_reg_imm3"
   encoding = "0110_001i  jjaa_addd"
   fields   = { i = "imm:shift3[0]", j = "imm:shift3[2:1]" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm10"
+  encoding = "0110_0001  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
 [[insn]]
@@ -2273,6 +2300,11 @@ semantics = "R[d] = asr(R[a], imm & 15)"
   encoding = "0110_101i  jjaa_addd"
   fields   = { i = "imm:shift3[0]", j = "imm:shift3[2:1]" }
 
+  [[insn.form]]
+  name     = "reg_reg_imm10"
+  encoding = "0110_1001  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
+
 
 [[insn]]
 mnemonic = "lsr"
@@ -2311,6 +2343,11 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
   name     = "reg_reg_imm3"
   encoding = "0111_001i  jjaa_addd"
   fields   = { i = "imm:shift3[0]", j = "imm:shift3[2:1]" }
+
+  [[insn.form]]
+  name     = "reg_reg_imm10"
+  encoding = "0111_0001  iiaa_addd  jjjj_jjjj"
+  fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
 # --- unary operations -------------------------------------------------------
@@ -2609,7 +2646,7 @@ extra_cycles = 1
 # 0 that is floor((2^32 - 1) / ra) - 2^16, the 2/1 reciprocal, and a 32 / 16
 # division is a mulhu by it; with a low word it is the 3/2 reciprocal, for a
 # 32-bit divisor.  ra's top bit is taken as 1, whatever it is: a divisor is
-# shifted until it is.
+# shifted until it is - and if it was not, the instruction traps; see below.
 #
 # EITHER WAY THE QUOTIENT'S ESTIMATE ERRS ONE WAY.  q = u2 + mulhu(v, u2) plus
 # the carry of mul(v, u2) + u1 - the paper's q1, without its + 1 - is never
@@ -2617,6 +2654,12 @@ extra_cycles = 1
 # division corrects with one loop: while the remainder is at least D, q + 1.
 # With the 2/1 reciprocal of a 32-bit divisor's high word alone, it erred both
 # ways, by up to 2 too big.
+#
+# A CLEAR TOP BIT TRAPS, to [cpu.vectors] divide_by_zero, after the recip has
+# written rd as if the bit were set.  A division normalises its divisor
+# first, so a high word without it is a divisor of 0.  The answer is still
+# the reciprocal of ra | 0x8000, so a handler that returns gets the junk a
+# division by zero always gave.
 #
 # 0xc3 IS THE 2/1 FORM, AND TWO CYCLES FASTER.  It is the imm3 column of the
 # row, and only #0 is defined: byte 1 is 00aa_addd, the natural imm3 decoding

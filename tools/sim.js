@@ -238,6 +238,9 @@ export class Machine {
     // A load or store touched a guard byte of the I/O page: `guardHit' while
     // it runs, `guardPending' until the next step enters io_guard.
     this.guardHit = this.guardPending = false;
+    // And a recip whose ra had bit 15 clear: [cpu.vectors] divide_by_zero,
+    // entered the same way.  Every machine has this one.
+    this.divHit = this.divPending = false;
     this.little = spec.cpu.endian === 'little';
     this.count  = 0;
     this.tmp    = {};      // scratch names, cleared at every instruction
@@ -370,7 +373,9 @@ export class Machine {
       case 'call': {
         const f = BUILTIN[node.fn];
         if (!f) throw new Error(`semantics: unknown builtin ${node.fn}`);
-        return f(...node.args.map((a) => this.ev(a, ops)));
+        const args = node.args.map((a) => this.ev(a, ops));
+        if (node.fn === 'recip' && !(args[0] & HALF)) this.divHit = true;
+        return f(...args);
       }
       case 'un': {
         const v = this.ev(node.e, ops);
@@ -435,7 +440,7 @@ export class Machine {
   // them means the address of the next instruction - which is what makes
   // `lr = pc` and `pc = pc + off` read the way the spec's summaries describe.
   step(trace = null) {
-    if (this.guardPending) return this.guardTrap(trace);
+    if (this.guardPending || this.divPending) return this.guardTrap(trace);
     const at = this.pc, mem = this.mem;
     const bytes = mem[at] | (mem[u16(at + 1)] << 8) | (mem[u16(at + 2)] << 16);
     let e = this.icache[at];
@@ -454,6 +459,7 @@ export class Machine {
     if (trace) trace(at, d, this);
     for (const s of e.body) this.exec(s, d.ops);
     if (this.guardHit) { this.guardHit = false; this.guardPending = true; }
+    if (this.divHit) { this.divHit = false; this.divPending = true; }
     this.cyc += this.cost(d, at, e.kind, this.xfer - xfer);
     this.count++;
     return d;
@@ -462,17 +468,20 @@ export class Machine {
   // [cpu.vectors] io_guard, a step of its own after the instruction that
   // touched a guard: a brk dispatched in that instruction's successor's
   // place, as an interrupt is, so lr is the successor's address.  Six cycles.
+  // divide_by_zero, after a recip, the same way.
   guardTrap(trace) {
     const at = this.pc, d = decode(this.dec, [0, 0, 0], 0);     // brk, opcode 0
     if (trace) trace(at, d, this);
     const sp = this.named.sp, lr = this.named.lr;
-    this.guardPending = false;
+    const vectors = this.spec.cpu.vectors;
+    const vector = this.guardPending ? vectors.io_guard : vectors.divide_by_zero;
+    this.guardPending = this.divPending = false;
     this.shadow_lr = this.R[lr];
     this.R[lr] = at;
     this.shadow_sp = this.R[sp];
     this.R[sp] = this.shadow_isp;
     this.ie = false;
-    this.pc = this.spec.cpu.vectors.io_guard;
+    this.pc = vector;
     this.cyc += 6;
     this.count++;
     return d;

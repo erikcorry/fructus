@@ -483,9 +483,10 @@ module cpu (
     // preempted instruction's address and rti restarts it.
     // A GUARD TRAP IS ONE TOO, and not maskable: `gq', below, says a load or
     // store touched a guard of the I/O page, and the next dispatch is its brk.
+    // So is a divide by zero: `dq', a recip whose ra had bit 15 clear.
     wire       ie_q;                           // below, with the shadows
-    logic      gq;
-    wire       take = go & ((ie_q & irq) | gq);
+    logic      gq, dq;
+    wire       take = go & ((ie_q & irq) | gq | dq);
     wire [7:0] opraw = pc[0] ? (use_nxt ? nxt : hi) : lo;
     wire [7:0] op = opraw & {8{~take}};
 
@@ -758,6 +759,7 @@ module cpu (
     // which the instruction then in decode takes through the bypass as usual.
     logic [2:0]  e_cnt;               // held cycles still to come
     logic        e_two;               // held: clz or popcount's unary arm reads q
+    logic        e_first;             // a held instruction's first ALU cycle
     wire         e_hold = e_cnt != 3'd0;
     wire         e_keep = e_hold & ~taken_q;   // held on; a squash ends it
     assign       xrel   = e_cnt == 3'd3;       // dispatch's release, for recip: above
@@ -770,6 +772,7 @@ module cpu (
         e_valid <= e_hold ? (e_cnt == 3'd1) & ~taken_q : (keep & (d_ext == 3'd0));   // the last cycle retires
         e_cnt   <= (rst | taken_q) ? 3'd0 : e_hold ? e_cnt - 3'd1 : keep ? d_ext : 3'd0;
         e_two   <= ~rst & (e_hold ? e_two : keep & (d_ext != 3'd0));
+        e_first <= ~rst & ~taken_q & ~e_hold & keep & (d_ext != 3'd0);
         aq      <= fwd_a ? y : R[an_rd];
         bq      <= fwd_b ? y : rb;
         if (!e_keep) e_we <= (keep & d_wen) ? 8'd1 << wn : 8'd0;
@@ -1114,20 +1117,31 @@ module cpu (
     mul  mulu (.clk(clk), .a(aq), .b(bq), .z(e_lsel), .p(mprod));
     assign prod = mprod | rprod;
     // A module of its own, or abc maps decode a cell deeper: rtl/recip.sv.
+    wire rgo = e_op == 4'd14 && e_lsel == 3'b111;
     (* keep_hierarchy *)
-    recip rcp (.clk(clk), .a(aq), .b(bq), .go(e_op == 4'd14 && e_lsel == 3'b111), .cnt(e_cnt), .p(rprod));
+    recip rcp (.clk(clk), .a(aq), .b(bq), .go(rgo), .cnt(e_cnt), .p(rprod));
     wire [15:0] lqsrc = (uLQ == 3'd1) ? pc
                       : (uLQ == 3'd2) ? shadow_sp
                       : (uLQ == 3'd3) ? shadow_lr : shadow_isp;
     assign urj    = uRJ != 2'd0;
     localparam [15:0] GVECTOR = `FRUCTUS_VECTOR_IO_GUARD;
-    assign rjaddr = (urj & uRJ[0]) ? (gent ? GVECTOR : VECTOR) : aq;   // aq: rti's, or a register jump's
+    localparam [15:0] DVECTOR = `FRUCTUS_VECTOR_DIVIDE_BY_ZERO;
+    assign rjaddr = (urj & uRJ[0]) ? (gent ? GVECTOR : dent ? DVECTOR : VECTOR) : aq;   // aq: rti's, or a register jump's
     // The guard trap: gq from the faulting access until its brk is taken;
     // gent through that brk's routine, which jumps to GVECTOR.
+    // THE DIVIDE BY ZERO is the same again, from recip's first ALU cycle,
+    // where aq is ra: dq until its brk is taken, dent through the routine.
+    // recip stops dispatch and releases it with three held cycles to come,
+    // so the next dispatch is two cycles after dq is set - never late.  A
+    // recip squashed behind a taken branch sets nothing.
+    logic        dent;
+    wire         dhit = e_first & rgo & ~aq[15] & ~taken_q;
     always_ff @(posedge clk) begin
         mldq <= ~rst & ((mstart & ldnow) | (aphase & ~mst));
         gq   <= ~rst & ~take & (gq | ghit);
         gent <= ~rst & (take ? gq : gent & ~(urj & uRJ[0]));
+        dq   <= ~rst & ~take & (dq | dhit);
+        dent <= ~rst & (take ? dq : dent & ~(urj & uRJ[0]));
     end
     assign wake   = halted & ie & irq;
     always_ff @(posedge clk) begin

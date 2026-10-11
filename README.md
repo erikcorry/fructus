@@ -333,7 +333,10 @@ division by a constant is a `mulhu` or `mulhs` by its reciprocal.
 `recip rd, ra, #0`, at 0xc3, is the 2/1 reciprocal of a 16-bit one, in five,
 and needs no register holding zero — only `#0` is defined there. Either way a
 quotient word estimated as `u2 + mulhu(v, u2)` plus a carry is never too big,
-and a division corrects it with one loop. It is `rtl/recip.sv` beside the
+and a division corrects it with one loop. A high word with bit 15 clear,
+which after normalising means a divisor of zero, traps to `divide_by_zero`,
+0xffc8, as a guard does: `recip` writes its answer for `ra | 0x8000`, and the
+trap is taken in place of the next instruction. It is `rtl/recip.sv` beside the
 multiplier: a straight line per slot from one block RAM of 128 pairs, which
 lands 0 to 3 below, then a second product to find out how far, and for the
 low word a third product on the first DSP again and a second correction, 0 to
