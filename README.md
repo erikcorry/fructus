@@ -19,7 +19,7 @@ instructions take one cycle, whatever their length, in a three-stage pipeline.
 Full barrel shifter and a 16×16 multiply, either half, in two of the iCE40's DSPs, but no
 cache or branch predictor.
 
-![The Fructus opcode map: 153 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
+![The Fructus opcode map: 159 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
 
 The design is RISC-inspired:
 - The only memory operations are load, store, push, pop, store-multiple, load-multiple.
