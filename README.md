@@ -657,6 +657,29 @@ the top guard. `rtl/cpu.sv` maps the shadows too and traps on the guards, for
 44 logic cells and no slowest path through any of it, and
 `tools/fpga-system.sv` has the GPU's registers.
 
+## Performance
+
+[CoreMark](tests/coremark/) v1.01, EEMBC's sources unmodified (`coremark.md5`
+checks them), built with this repository's GCC and run on the simulator.
+The cycles are the I/O page's counter, which `tests/cpu-check.mjs` holds to
+`rtl/cpu.sv`'s at every load, so they are the hardware's cycles rather than
+an estimate. Every build passes EEMBC's validation: ten seconds of run
+time, and the known CRCs for both the performance and validation seeds.
+
+| Build | Bytes | Cycles/iteration | CoreMark/MHz | CoreMark at 30 MHz | at 25.175 MHz |
+|---|---:|---:|---:|---:|---:|
+| `-Os` | 9026 | 2,356,028 | 0.424 | 12.73 | 10.69 |
+| `-Os -mmul` | 8558 | 1,449,558 | 0.690 | 20.70 | 17.37 |
+| `-O2` | 12694 | 1,970,771 | 0.507 | 15.22 | 12.77 |
+| `-O2 -mmul` | 12351 | 1,009,989 | 0.990 | 29.70 | 24.93 |
+
+30 MHz is the processor alone on the iCE40; with the VGA frame buffers it
+runs at the 25.175 MHz pixel clock. Bytes are the whole image — `.text`,
+`.rodata` and `.data`, printf and the libgcc helpers included. `-mmul` uses
+the 16×16 multiply in the DSPs; without it a multiply is a shift-and-add
+call. GCC 16.2.1, `MEM_METHOD` `MEM_STACK`. `just coremark` regenerates the
+table, in about seven minutes. CoreMark® is a trademark of EEMBC.
+
 ## Status
 
 The instruction set is settled enough to write real code against, and the

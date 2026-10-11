@@ -132,6 +132,14 @@ run-c file *flags='-O2':
 torture *args='-O2':
     @node tools/torture.mjs {{args}}
 
+# CoreMark on the simulator, at -Os and -O2 with and without -mmul: the
+# figures in the README.  Each build runs ten seconds of a 30 MHz clock, as
+# EEMBC's rules ask - about seven minutes in all.  `just coremark 3' runs
+# three iterations instead, the same CoreMark/MHz in seconds, which EEMBC's
+# report fails for the time alone.
+coremark *args:
+    @sh tests/coremark/run.sh {{args}}
+
 # ------------------------------------------------------------------ the spec --
 
 # Check isa/fructus.toml against its own invariants.
