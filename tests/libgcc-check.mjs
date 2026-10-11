@@ -27,10 +27,18 @@ const check = (name, ok, detail) => {
 const m = machine();
 const { code, syms } = assemble('libgcc/lib1funcs.s');
 const RET = 0x8000, SP0 = 0xfffe, R4 = 0xe4e4;
+// [cpu.vectors] divide_by_zero, where a recip of a divisor of 0 traps.
+const DIV0 = m.spec.cpu.vectors.divide_by_zero;
+const RTI = parseInt(m.spec.insn.find((i) => i.mnemonic === 'rti').form[0].encoding.replace(/[\s_]/g, ''), 2);
 
-function run(entry, regs) {
+// With `handler', an rti at divide_by_zero, so a trap there carries on after
+// the recip, and `traps' counts them.
+function run(entry, regs, { handler = false } = {}) {
   m.mem.fill(0);
   m.load(code);
+  if (handler) m.mem[DIV0] = RTI;
+  let traps = 0;
+  const trace = handler ? (at) => { if (at === DIV0) traps++; } : null;
   m.R.fill(0);
   m.R[m.named.sp] = SP0;
   m.R[m.named.lr] = RET;
@@ -39,9 +47,9 @@ function run(entry, regs) {
   m.pc = syms.get(entry); m.halted = false; m.count = 0;
   m.reset();
   let why;
-  try { why = m.run({ max: 8000, stopAt: RET }); }
+  try { why = m.run({ max: 8000, stopAt: RET, trace }); }
   catch (e) { why = `ran off the rails: ${e.message}`; }
-  return { why, R: [...m.R], sp: m.R[m.named.sp], cycles: m.cycles() };
+  return { why, R: [...m.R], sp: m.R[m.named.sp], cycles: m.cycles(), traps };
 }
 
 // A signed 16-bit reading of a bit pattern.
@@ -414,9 +422,11 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   for (let b = 1; b <= 0xffff; b++)
     for (const a of [b - 1, b, 0xffff, (b * 7 + 12345) & 0xffff]) tally(a, b);
   check('__udivmodhi4_mul', wrong === 0, `${wrong} of ${n} wrong, e.g. ${eg}`);
-  const z = divmod(1234, 0);
-  check('__udivmodhi4_mul by zero terminates', z.why === 'stopped' && z.R[4] === R4,
-        `dividing by zero ${z.why}`);
+  // BY ZERO IT TRAPS, to divide_by_zero, as recip does; and a handler that
+  // returns gets junk, but a return, with r4 kept.
+  const z = run('__udivmodhi4_mul', { 0: 1234, 1: 0 }, { handler: true });
+  check('__udivmodhi4_mul by zero traps once, then returns', z.traps === 1 && z.why === 'stopped' && z.R[4] === R4,
+        `dividing by zero trapped ${z.traps} times and ${z.why}`);
 
   let cycG = 0;
   for (let i = 0; i < 400; i++) cycG += divmod(r16(), r16() || 1).cycles;
@@ -474,9 +484,9 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
     }
   }
   check('__udivmodsi4_mul', wrong === 0, `${wrong} of ${cases.length} wrong, e.g. ${eg}`);
-  const z = run('__udivmodsi4_mul', { 0: 1234, 1: 5678 });
-  check('__udivmodsi4_mul by zero terminates', z.why === 'stopped' && z.R[4] === R4,
-        `dividing by zero ${z.why}`);
+  const z = run('__udivmodsi4_mul', { 0: 1234, 1: 5678 }, { handler: true });
+  check('__udivmodsi4_mul by zero traps once, then returns', z.traps === 1 && z.why === 'stopped' && z.R[4] === R4,
+        `dividing by zero trapped ${z.traps} times and ${z.why}`);
 
   let wrongW = 0, egW = '';
   for (const [a0, b0] of cases)

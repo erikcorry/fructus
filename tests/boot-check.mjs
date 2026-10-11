@@ -133,7 +133,7 @@ writeFileSync('build/boot-tb.sv', `module tb;
             end
         end
         $display("BAD %0d", bad);
-        $display("MODE %b %b %b %b", dut.want_a, dut.copy, dut.blit, dut.wthru);
+        $display("MODE %b %b %b %b", dut.want_a, dut.copy, dut.blit, dut.fb_st);
         cyc = 0;
         while (!dut.halted && !dut.trapped && cyc < 20000) begin @(posedge clk); cyc = cyc + 1; end
         repeat (2) @(posedge clk);
@@ -164,7 +164,7 @@ if (booted[1] !== '1') fails.push(`the flash was selected ${booted[1]} times, no
 if (booted[2] !== want) fails.push(`the flash's command was ${booted[2]}, not ${want}`);
 if (bad[0] !== '0') fails.push(`${bad[0]} words of the 32768 differ from the image:\n` +
   out.split('\n').filter((l) => l.startsWith('WORD ')).map((l) => `        ${l}`).join('\n'));
-if (mode.join('') !== '0000') fails.push(`the image's bytes in the I/O page set a mode: want_a copy blit wthru ${mode.join(' ')}`);
+if (mode.join('') !== '0000') fails.push(`the image's bytes in the I/O page set a mode: want_a copy blit fb_st ${mode.join(' ')}`);
 if (end[0] !== '1' || end[1] !== '0') fails.push(`the program did not halt: halted ${end[0]}, trapped ${end[1]}`);
 if (parseInt(end[3], 16) !== sum) fails.push(`the program's sum was ${end[3]}, not ${sum.toString(16).padStart(4, '0')}`);
 
