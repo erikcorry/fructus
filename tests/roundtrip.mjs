@@ -20,7 +20,7 @@
 // every byte and land exactly on the end.  A wrong length anywhere desynchronises
 // the rest of the file, so this is a sharp test of `length_from_first_byte`.
 //
-//      node tests/roundtrip.mjs snippets/*.s tests/stress.s
+//      node tests/roundtrip.mjs libc/*.s tests/stress.s
 // =============================================================================
 
 import { execFileSync } from 'node:child_process';

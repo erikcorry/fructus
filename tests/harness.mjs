@@ -1,4 +1,4 @@
-// Assemble a snippet and hand back a machine loaded with it.
+// Assemble a source file and hand back a machine loaded with it.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

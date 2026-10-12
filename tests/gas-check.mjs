@@ -3,7 +3,7 @@
 // gas-check.mjs - gas and customasm must emit the same bytes
 // =============================================================================
 //
-//   node tests/gas-check.mjs snippets/*.s ...
+//   node tests/gas-check.mjs libc/*.s ...
 //
 // Two assemblers, one spec.  gen-customasm.js turns isa/fructus.toml into
 // customasm ruledefs; gen-asm.js turns the same file into the form table gas

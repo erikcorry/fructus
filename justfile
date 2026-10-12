@@ -142,6 +142,11 @@ coremark *args:
 profile *args:
     @node tools/profile.mjs {{args}}
 
+# Five small C kernels in tests/bench: cycles, odd-address costs and bytes,
+# for weighing a compiler change, e.g. `just bench tools/fcc -Os'.
+bench *args:
+    @node tests/bench/bench.mjs {{args}}
+
 # ------------------------------------------------------------------ the spec --
 
 # Check isa/fructus.toml against its own invariants.

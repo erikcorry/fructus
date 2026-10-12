@@ -1,5 +1,6 @@
 build/
 node_modules/
+ai-transcripts
 
 # Local Claude Code permission state, not project content.
 .claude/settings.local.json

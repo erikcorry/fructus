@@ -134,7 +134,7 @@ command -v flock >/dev/null && flock 9
 stale=
 [ -f $lib ] || stale=1
 for s in $root/crt/crt0.s $root/crt/*.c $root/crt/*.cc $root/crt/include/*.h \
-         $root/libc/*.s $root/snippets/digits3.s $B/gcc/gcc/cc1 \
+         $root/libc/*.s $B/gcc/gcc/cc1 \
          $B/gcc/gcc/cc1plus $B/binutils/gas/as-new; do
     [ $s -nt $lib ] && stale=1
 done
@@ -142,9 +142,7 @@ if [ -n "$stale" ]; then
     new=$lib.new
     rm -f $new
     $X/fructus-elf-as -o $crt/crt0.o.new $root/crt/crt0.s
-    # snippets/digits3.s comes along because printf's decimal conversion calls
-    # it: three digits at a time, with no divide anywhere.
-    for s in $root/libc/*.s $root/snippets/digits3.s; do
+    for s in $root/libc/*.s; do
         n=$(basename $s .s)
         # A SECTION OF ITS OWN AS WELL AS A .globl, so that the --gc-sections
         # in the link below can drop a routine nobody calls.  These files hold

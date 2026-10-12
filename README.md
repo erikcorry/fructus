@@ -108,19 +108,27 @@ it's part of the documentation.
 
 ## Quick start
 
-You need [customasm](https://github.com/hlorenzi/customasm) (Rust, Apache-2.0)
-on your `PATH`:
-
 ```sh
-just install-deps
-cargo install customasm        # or grab a release binary
+just install-deps              # the apt packages: gcc's prerequisites, iverilog, yosys
+cargo install customasm        # the second assembler the suite checks gas against
 npm install                    # one dependency: a TOML parser
-npm run gen                    # generate build/fructus.asm from the spec
-npm test                       # 83 checks, ~800,000 assertions
+npm run gen                    # build/fructus.asm, the customasm ruledefs, from the spec
+just build-tools               # gas, ld, objdump and readelf for fructus-elf
+just build-gcc                 # the C compiler and libgcc
+npm test                       # the suite: 168 checks
 ```
 
-Then assemble and run something. `customasm` takes several input files, so the
-generated ruledef goes first:
+Then compile a C program and run it on the simulator. `tools/fcc` drives gcc,
+links crt0 and the C library, and writes a flat image; the exit status of the
+run is `main`'s:
+
+```sh
+just run-c examples/hello.c
+tools/fcc -O2 examples/hello.c -o build/hello && node tools/fcc-run.mjs build/hello.bin
+```
+
+Assembly runs on the bare simulator, which starts at address 0 and can trace
+each instruction:
 
 ```sh
 customasm -q build/fructus.asm myprog.s -f binary -o build/myprog.bin
@@ -168,8 +176,14 @@ isa/abi.s             the calling convention, as a file that assembles
 isa/mos6502.toml      the NMOS 6502 opcode table, for comparison - not part of Fructus
 tools/                the toolchain, all driven by the TOML
 rtl/                  hardware, generated from the spec - see below
-libc/                 a tiny libc, sized for a machine with 64K
-snippets/             worked routines, with their byte counts measured
+crt/                  crt0, the C library and malloc, in C
+libc/                 the libc routines written by hand in assembly
+libgcc/               gcc's support routines, in assembly
+ld/                   linker scripts: the simulator's, and a 16K ROM
+examples/             C programs to run on the simulator, with the display
+rom/                  a minimal ROM image, built by `just rom`
+docs/                 the generated opcode maps and instruction set reference
+ideas/                proposals, not yet built
 tests/                the test suite
 ```
 
@@ -181,6 +195,7 @@ tests/                the test suite
 | `npm run gen` | emits `build/fructus.asm`, a customasm ruledef |
 | `npm run sim -- <bin>` | runs a flat binary. `--trace`, `--pc`, `--sp`, `--max` |
 | `just profile <prog> [<prog2>]` | where a compiled program's cycles go — by function, kind of cost, mnemonic and, with `-g`, source line — or two builds compared row by row. `--from`/`--to` a symbol, `--per`, `--lines`, `--kinds` |
+| `just bench [<compiler>] [flags]` | five small C kernels in `tests/bench`, their cycles and bytes, for weighing a compiler change |
 | `npm run map` | the opcode map: `build/opcodes.html` and `docs/opcodes.svg` |
 | `npm run manual` | the instruction set reference, `docs/fructus-isa.pdf`, from the spec |
 | `npm run map6502` | the same map for the NMOS 6502: `build/6502.html` and `docs/6502.svg` |
@@ -402,8 +417,8 @@ The suite is layered, and each layer catches something the one below it cannot.
   the wrong order or a signed immediate read unsigned, which validate clean and
   round-trip wrong.
 - **It computes the right answer.** `tests/sim-check.mjs` runs the actual
-  assembled snippets on the simulator against exact BigInt arithmetic — not
-  another transcription of the algorithm.
+  assembled bytes on the simulator against an independently computed answer —
+  not another transcription of the algorithm.
 - **It survives every placement.** `tests/libc-check.mjs` runs `libc/` against
   a reference built from a snapshot rather than a second copy of the algorithm,
   sweeping every overlap of source and destination in a window, at two bases and
@@ -413,16 +428,6 @@ The suite is layered, and each layer catches something the one below it cannot.
   of equal bytes, makes a wrong-direction copy invisible. It also checks which
   loop `memmove` picked, since a version that always copies downwards writes
   exactly the right bytes and is three times slower.
-- **It is still as fast as the comment claims.** The `memcpy` ladder in
-  `snippets/memcpy.s` is executed at sixteen lengths and its cost is measured,
-  by differencing two buffer sizes so the setup cancels and the loop alone
-  shows. A rung that gets slower fails the suite. Prose about performance is the
-  thing in this repo most likely to go quietly stale.
-
-`tests/fpadd-check.mjs` and `tests/fpsub-check.mjs` are hand-written mirrors of
-two snippets. They predate the simulator and are kept for their exhaustiveness —
-a 47-million-combination sweep of two carry conditions, past what running real
-code case by case reaches.
 
 ## Design principles
 
@@ -436,7 +441,6 @@ and a scaled displacement could not express them at all.
 
 **There is no carry flag.** The carry out of a 16-bit add is recoverable from the
 result — `sum < A` — so 32-bit arithmetic is add, compare, conditionally bump.
-See `snippets/add32.s`.
 
 **`r5` belongs to the assembler.** Any immediate that does not fit its
 instruction expands through it, so no function can promise to preserve it. This
@@ -447,7 +451,7 @@ The rule that follows is **don't keep anything in `r5` that has to survive** —
 not "check whether this particular instruction expands". Whether `lsr r5, lr, #14`
 expands depends on which forms exist for that mnemonic, which is not something a
 reader should have to know. So it is enforced rather than remembered: `npm test`
-assembles every file in `snippets/` and `libc/` against the `--noat` ruledef,
+assembles every file in `libc/` and `libgcc/` against the `--noat` ruledef,
 which omits every rule that borrows the scratch. A file that assembles there
 cannot contain an expansion, and `r5` in it is an ordinary register.
 `isa/abi.s` is the one exception, and expands exactly once on purpose to show
@@ -660,7 +664,7 @@ CoreMark® is a trademark of EEMBC.
 ## Status
 
 The instruction set is settled enough to write real code against, and the
-snippets in `snippets/` are real code. Open:
+C programs compiled by gcc run on it, CoreMark among them. Open:
 
 - `clz`, `bitrev` and `popcount` are marked TENTATIVE in the spec.
 - Nothing checks that a call site and its callee agree about arity. The fix is

@@ -1,0 +1,145 @@
+Proposal for 32 bit Fructus:
+
+All registers 32 bit.
+Still only 8 registers, now 1-5 bytes per instruction.
+
+Most insns unchanged.
+
+Extra insns - 3-6 new rows:
+
+ld16 - new name of ld, zero extending.
+st16 - new name of st, zero extending.
+st - 32 bit store
+ld - 32 bit store
+bic - lhs & (~rhs), needed because of immbit5 change.
+mov #imm32 to set all 32 bits. We should take advantage of variable length and avoid the mov/movhi dance.
+Maybe rot for hash functions.
+
+Addressing modes:
+imbit5 now just 1 << n, no inverted immediates with mostly 1's, but see bic.
+immask5 needs a new set.  We have 32 codes, they don't have to be 16 and their inverses.
+
+push, pop, ldm, stm now are 32 bit
+
+shifts now use low 5 bits to shift.  imm5 covers full range and is interpreted unsigned
+due to the truncation.
+
+Long jumps and calls now use 32 bit immediate locations.
+
+Open questions:
+
+  Should branches have 2 bytes of relative indirection?
+    Would make them 4 byte instructions.
+    A branch over a long jump looks stressful for the branch predictor
+  Should we make minimum insn length 2.
+    Single byte instructions are not that common and it seems like
+    it would make the worst case for a parallel insn decoder simpler.
+    Or even more radical, we should abolish 3 byte insns, leaving
+    2, 4, 5 only.  See imm10 below.  The other 3 byte insns are
+    mov #imm16, which would be replaced with two lines, #imm8 and #imm24.
+  Should imm10 (three byte insns) be replaced with imm18 (four byte insns).
+    Probably not, +-512 bytes is OK and we would still need r5 and mov #imm32.
+  Should we restrict insn sizes to 2, 4, 5
+
+
+--------------------------------------------------------------
+
+
+Addressing modes:  r0-7 r0-7 r0-7        2 bytes, 2 columns, like fructus
+                   r0-31 r0-31 r0-31     3 bytes, 1 column, spare bit scales rhs *1 or *2
+                   r0-31 r0-31 r0-31     3 bytes, 1 column, spare bit scales rhs *4 or *8
+                   r0-31 imm3            2 bytes, 1 column
+                   r0-31 r0-31 immbit5   3 bytes, 1 column, like fructus, add bic for notted version
+                   r0-31 r0-31 immask5            shares column with immbit
+                   r0-31 r0-31 imm6      3 bytes, 1 column
+                   r0-31 r0-31 imm14     4 bytes, 1 column
+
+             mov   r0-7 imm32            5 bytes one row
+             mov   r0-31 imm32           6 bytes, one insn
+
+Extra rows:
+ld32
+st32
+bic
+
+Missing rows:
+one-byte specials
+
+Scaling, does it make sense:
+
+add            y
+rsb            ?
+and/or/xor     ?
+shifts         ?
+loads/stores  yy
+Unaries        n
+
+
+-----------------------------------------------------------
+
+Addressing modes:  r0-7 r0-7 r0-7        2 bytes, 2 columns, like fructus
+                   r0-31 r0-31 r0-31     3 bytes, 1 column, spare bit is 0
+                   r0-31 r0-31 imm5      3 bytes, shared column, spare bit is 1  (Good for shift, not sign extended, have sub instead of rsb!)
+                   r0-31 imm3            2 bytes, 1 column - ++, --, small shifts, &= 1.
+                   r0-31 r0-31 imm32     6 bytes, 4 columns!
+
+Store [#-1] not encodable, must be a 5-byte insn - actually rare in V8.
+Load [#-1] needs a shuffle because it overwrites address reg - map load :-/
+  Could bias the imm5...  pass through the 0 bit and LUT4 the others.  Skip 29, not 31!
+Spend half a row on four two-byte mov insns.
+Spend half a row on four two-byte rd = rd - ra insns.
+Spend two rows on 4xfour scaled two-byte rd = rd + ra insns - rd is the scaled one!
+Spend a row on mov r0-7 imm32  5 byte.
+mov r0-31 imm32   6 byte insn
+
+
+-----------------------------------------------------------
+
+Crazy 24 register version.
+
+Addressing modes:  r0-7 r0-7 r0-7        2 bytes, 2 columns, like fructus
+                   r0-23 r0-23 r0-23     3 bytes, 1 column
+                   r0-23 r0-23 24-63     3 bytes, shared column, -8 to +31
+                   r0-23 r0-23 imm16     4 bytes  576 values, 2½ columns give 640 values.
+                   r0-23 r0-23 imm32     6 bytes  576 values, 2½ columns give 640 values.
+
+Low 6 bits of byte1 give the low bits of the register numbers
+One bit of byte1 gives the imm16 or imm32. - yrk!
+Top bit and 5 different column values (3 bits) give the high bits 0-2, 0-2.  10 input values, only 9 needed.
+Last value gives ??
+
+-------------
+
+For a 22 register machine, 2 regs fit in 9 bits.
+
+Addressing modes:  r0-7 r0-7 r0-7        2 bytes, 2 columns, like fructus
+                   r0-21 r0-21           2 bytes, 2 columns
+                   r0-21 r0-21 r0-21     3 bytes, 1 column
+                   r0-21 r0-21           3 bytes, shared column, about +-60 imm.
+                   r0-21 r0-21 imm32     6 bytes, 2 columns
+                   r0-21 imm3            2 bytes, 1 column
+
+It's impossible to decode 9 bits into two 22 value results though.
+
+-------------
+
+For a 20 register machine, 2 regs easily fit in 9 bits.
++ Gives a slightly bigger range on the 2-reg+imm 3 byte insn.
++ Gives a two byte any two-register mode, in addition to the 3-byte any-3-reg mode.
+- No imm16 mode
+- 2 lut levels just to get the two regs.
++ Insn length in first byte.
+
+Addressing modes:  r0-7 r0-7 r0-7        2 bytes, 2 columns, like fructus
+                   r0-19 r0-19           2 bytes, 2 columns
+                   r0-19 r0-19 r0-19     3 bytes, 1 column
+                   r0-19 r0-19 #imm      3 bytes, shared column, about +-60 imm or funky imms.
+                   r0-19 r0-19 imm32     6 bytes, 2 columns
+                   r0-19 imm3            2 bytes, 1 column
+
+Of the 9 bits, 4 are taken for the low bits.
+Each register needs 0-4 inclusive for the high bits, which is 25 values from 5 bits.
+Make a 0-4 and 0-2 with 5 LUTs on the low 4 bits.
+for the other reg add the 0-2 to the high bit (as 0 or 3).
+Gives 4 read-only regs for the ra:   PC, mulhi, 0, 1?
+For 5 rows we can have mov16 and mov32 to any register in 5 bytes, but we already have 6 bytes above.

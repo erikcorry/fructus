@@ -138,8 +138,7 @@ __mulhi3:
 ;       lr  multiplicand low                r5  scratch
 ;
 ; THE PAIR IS r0:r1 AS LOW:HIGH, which is what isa/abi.s says a 32-bit value
-; is, and the same order as snippets/mul.s's mul_16_16_32.  This one is called
-; by compiler-generated code and has to match.
+; is.  This one is called by compiler-generated code and has to match.
 ;
 ; IT SORTS FIRST AND ASKS ABOUT OVERFLOW SECOND, which makes both cheaper.
 ; Sorted, the overflow question is about the LARGER operand alone - if that is

@@ -103,7 +103,7 @@
 ;
 ; DO NOT TUNE ANY OF THIS AROUND 32-BIT ARGUMENTS.  f(long, long) is the shape
 ; that consumes the whole argument file at once, and it is tempting to reason
-; from it because the 32-bit routines in snippets/ are written that way.  Those
+; from it because hand-written 32-bit library routines take that shape.  Those
 ; are library internals.  In ordinary code a 32-bit argument is rare, and a pair
 ; of them is rarer, so the rows that matter for the design are the top two.
 ;

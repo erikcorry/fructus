@@ -237,7 +237,7 @@ puts (const char *s)
 
 /* ---- decimal, without dividing ------------------------------------------ */
 
-/* snippets/digits3.s: three ASCII digits of a number under 1000, with no
+/* libc/digits3.s: three ASCII digits of a number under 1000, with no
    divide at all - 41n is n/100 in fixed point, and each digit falls out of
    the top four bits.  */
 extern void digits3 (unsigned, char *);
@@ -399,8 +399,8 @@ vsnprintf (char *buf, size_t size, const char *fmt, va_list ap)
 
 	   AND IT WAS NEVER THIS MACHINE'S FLOAT ANYWAY.  What fructus works in
 	   is the BBC Micro's five-byte format - an 8-bit biased exponent and a
-	   32-bit mantissa, see snippets/fpadd.s - which shares no code and no
-	   layout with IEEE double.  If printing a float is ever wanted here, it
+	   32-bit mantissa - which shares no code and no layout with IEEE
+	   double.  If printing a float is ever wanted here, it
 	   wants that format, and it wants to cost what that format costs.  */
 	case 's':
 	  str = va_arg (ap, const char *);

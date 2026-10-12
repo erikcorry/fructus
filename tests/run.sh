@@ -34,7 +34,7 @@ else
 fi
 
 # --- everything must assemble in r5 mode ------------------------------------
-for src in snippets/*.s libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/data.s tests/branch-cost.s; do
+for src in libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/data.s tests/branch-cost.s; do
     cat build/fructus.asm "$src" > build/_t.asm
     if "$CA" -q -o /dev/null build/_t.asm 2>build/_err; then
         printf 'ok    %s\n' "$src"
@@ -47,13 +47,10 @@ done
 # The decoder is a second reading of the same `encoding` strings, sharing no
 # code with the generator below the point where both parse the TOML.  If they
 # disagree about a field, the re-assembled bytes differ.
-# snippets/clz.s and tests/data.s are excluded because they contain DATA: this
-# test decodes linearly from byte 0 and requires the whole file to tile as
-# instructions, which a lookup table cannot.  clz.s passed for a while by
-# accident - every byte of its two tables happened to be a valid opcode - and
-# stopped the moment a row moved and 0x08 became free.  That is the test being
-# right, not the file being wrong.
-if node tests/roundtrip.mjs $(ls snippets/*.s | grep -v clz) libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
+# tests/data.s is excluded because it contains DATA: this test decodes
+# linearly from byte 0 and requires the whole file to tile as instructions,
+# which data need not.
+if node tests/roundtrip.mjs libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
 
 # --- and binutils' disassembler against ours, operand by operand -------------
 # A THIRD reading of the encoding: hand-written C over the generated tables,
@@ -62,7 +59,7 @@ if node tests/roundtrip.mjs $(ls snippets/*.s | grep -v clz) libc/*.s libgcc/*.s
 # the earlier structure-only check passed for weeks while every eight-bit
 # displacement was read from the wrong byte.  Skips itself when the toolchain
 # is not built; see tools/build-binutils.sh.
-if node tests/dis-check.mjs $(ls snippets/*.s | grep -v clz) libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
+if node tests/dis-check.mjs libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
 
 # --- and gas against customasm, byte for byte --------------------------------
 # The two assemblers choose encodings by different mechanisms - customasm ranks
@@ -70,9 +67,9 @@ if node tests/dis-check.mjs $(ls snippets/*.s | grep -v clz) libc/*.s libgcc/*.s
 # - so identical output is evidence that both readings of the spec agree.
 # Files needing the assembler scratch are skipped; gas has no long-immediate
 # expansion.
-if node tests/gas-check.mjs $(ls snippets/*.s | grep -v clz) libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
+if node tests/gas-check.mjs libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/branch-cost.s; then :; else fail=1; fi
 
-# --- the snippets, actually executed -----------------------------------------
+# --- assembled code, actually executed ---------------------------------------
 if node tests/sim-check.mjs; then :; else fail=1; fi
 
 # --- libc, against a reference rather than a second copy of the algorithm ----
@@ -96,7 +93,7 @@ if node tests/string-check.mjs; then :; else fail=1; fi
 #
 # isa/abi.s is the one exception and is checked separately below, because it
 # demonstrates the clobber on purpose.
-for src in libc/*.s snippets/*.s libgcc/*.s; do
+for src in libc/*.s libgcc/*.s; do
     cat build/fructus-noat.asm "$src" > build/_t.asm
     if "$CA" -q -o /dev/null build/_t.asm 2>build/_err; then
         printf 'ok    %s needs no assembler scratch\n' "$src"
@@ -496,15 +493,6 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
 else
     printf 'skip  the compiler is not built, the sliding convention not checked\n'
 fi
-
-# --- snippet arithmetic, which assembling cannot check -----------------------
-for t in tests/fpadd-check.mjs tests/fpsub-check.mjs; do
-    if out=$(node "$t" 2>&1) && ! printf '%s' "$out" | grep -q MISMATCH; then
-        printf 'ok    %s\n%s\n' "$t" "$out"
-    else
-        printf 'FAIL  %s\n%s\n' "$t" "$out"; fail=1
-    fi
-done
 
 # --- isa/abi.s expands exactly once, on purpose ------------------------------
 # It shows what a frame larger than 512 bytes costs, and the third line of that

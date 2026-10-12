@@ -631,8 +631,8 @@ signed = true
 # shares; see there.
 #
 # The complements are not padding.  `and rd, rd, #0x7fff` clears the sign bit,
-# which is the renormalisation step in every floating-point routine in
-# snippets/, and 0x7fff is the largest positive 16-bit value.
+# which is the renormalisation step in a floating-point routine, and 0x7fff is
+# the largest positive 16-bit value.
 #
 # Note what is NOT here: 0, -1, and everything with two or more bits set.  Those
 # still come from imm5, imm3 and imm10, which is why this is an ADDITION to the
@@ -3214,10 +3214,10 @@ semantics = "base = sp; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 # post-update leaves each pointer one past the last byte it moved - ready for
 # the next iteration with nothing to add.
 #
-# WHY THEY ARE WORTH FOUR OPCODES.  snippets/memcpy.s's fastest rung reaches
-# its speed by pointing sp at the buffers and using push and pop, and then
-# spends more than a third of its cycles handing sp back and forth between the
-# source and the destination.  These have no handover at all: the pointers are
+# WHY THEY ARE WORTH FOUR OPCODES.  A memcpy built from push and pop reaches
+# its speed by pointing sp at the buffers, and then spends more than a third
+# of its cycles handing sp back and forth between the source and the
+# destination.  These have no handover at all: the pointers are
 # different registers and each one updates itself.
 #
 # THE ORDER IS THE SAME AS push's: the first register named is stored first, so
