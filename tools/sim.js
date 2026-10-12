@@ -197,11 +197,9 @@ export const BUILTIN = {
   // any 32-bit product, where Math.imul would keep only the low half.
   mulhu:    (x, y) => Math.floor(((x & MASK) * (y & MASK)) / 0x10000),
   mulhs:    (x, y) => Math.floor((s16(x) * s16(y)) / 0x10000),
-  // Moller and Granlund's v for the divisor x:y, x with its top bit set.  A
-  // double holds 2^48 - 1 exactly, and its quotient is within 2^-36 of the
-  // true one, which is never within 1/D <= 2^-31 below an integer without
-  // being one - so the floor is exact.
-  recip:    (x, y) => Math.floor((2 ** 48 - 1) / (((x & MASK) | HALF) * 0x10000 + (y & MASK))) - 0x10000,
+  // Moller and Granlund's 2/1 v for the divisor x, its top bit set.  y is
+  // the instruction's immediate, which only #0 is defined for.
+  recip:    (x, y) => Math.floor(0xffffffff / ((x & MASK) | HALF)) - 0x10000,
   clmul:    (x) => { let r = 0; for (let i = 0; i < 8; i++) if ((x >>> i) & 1) r ^= ((x >>> 8) & 0xff) << i; return r; },
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };

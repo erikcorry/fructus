@@ -72,6 +72,13 @@ function rowsFor(insn, form, swapped) {
   const slots = [], anchor = new Map(), ref = new Map();
   for (const op of ops) {
     const lt = t[op.type];
+    // A fixed operand the syntax does not write - `recip rd, ra', whose #0 is
+    // pinned - is not a slot: gas has nothing to parse, and its bits are the
+    // form's literal ones.
+    if (op.name in fix && !new RegExp(`\\{${op.name}(\\.\\w+)?\\}`).test(insn.syntax ?? '')) {
+      if (encType.has(op.name)) throw new Error(`${insn.mnemonic}: ${op.name} is unwritten but has a field`);
+      continue;
+    }
     if (lt.kind === 'combo') {
       if (lt.parts.length !== 2 || lt.parts[0] !== 'cond' || lt.parts[1] !== 'imm')
         throw new Error(`${insn.mnemonic}: combo ${op.type} is not (cond, imm)`);

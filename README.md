@@ -313,12 +313,15 @@ already has. `clz` and `popcount` are computed beside it with a flop in the
 middle, and taken a cycle later — `extra_cycles` in the spec, which the
 simulator counts.
 
-`mul` takes the low half of a 16×16 product from an `SB_MAC16`, at 0x30
-(`rd, rd, #imm5`), 0x31 (`rd, ra, #imm10`) and 0x36/0x37 (`rd, ra, rb`) — the
-unary row's free columns, in the ALU groups' shapes. Like `clz` and `popcount`
+The instructions that need the DSPs — `mul`, `recip`, `mulhu` and `mulhs`, all
+optional and emitted by gcc only with `-mmul` — are one block, 0xb0 to 0xc7,
+above 0x80 and away from the base instruction set.
+`mul` takes the low half of a 16×16 product from an `SB_MAC16`, at 0xb0
+(`rd, rd, #imm5`), 0xb1 (`rd, ra, #imm10`) and 0xb6/0xb7 (`rd, ra, rb`), in the
+ALU groups' shapes. Like `clz` and `popcount`
 it takes two cycles: the ALU stage holds it while the DSP's registered product
 arrives. `mulhu` and `mulhs` take the high half, unsigned and signed, at
-0xb6/0xb7 and 0xbe/0xbf, three registers only. To everything but the DSPs the
+0xbe/0xbf and 0xc6/0xc7, three registers only. To everything but the DSPs the
 three are one ALU operation; the classifier's `lsel` column, which the
 operation had no use for, drives the DSPs' synchronous `OLOAD` pins, so each
 half not wanted loads zero into its output register and the result is the
@@ -328,24 +331,24 @@ since a part without a multiplier has none of them; without it a product is a
 call to libgcc's `__mulhi3`. With it a 16×16→32 product is `mul` and `mulhu`
 or `mulhs` inline, a 32×32→32 is four products inline at `-O2`, and a
 division by a constant is a `mulhu` or `mulhs` by its reciprocal.
-`recip` is Möller and Granlund's reciprocal of a normalised divisor,
-`floor((2⁴⁸−1)/D) − 2¹⁶` for `D = (ra | 0x8000):rb`. `recip rd, ra, rb`, at
-0xc6/0xc7, is the 3/2 reciprocal of a 32-bit divisor, in eight cycles;
-`recip rd, ra, #0`, at 0xc3, is the 2/1 reciprocal of a 16-bit one, in five,
-and needs no register holding zero — only `#0` is defined there. Either way a
-quotient word estimated as `u2 + mulhu(v, u2)` plus a carry is never too big,
-and a division corrects it with one loop. A high word with bit 15 clear,
+`recip rd, ra`, at 0xbb, is Möller and Granlund's 2/1 reciprocal of a
+normalised divisor, `floor((2³²−1)/d) − 2¹⁶` for `d = ra | 0x8000`, in five
+cycles. Its byte 1 is the imm3 column's with the immediate pinned at `#0`,
+which the assembler does not write. A 32-bit divisor's 3/2 reciprocal, with
+which a quotient word's estimate errs only one way, is made from it in
+software by their Algorithm 6: one more product and two rare corrections.
+It was an instruction, three cycles longer, until it turned out to cost 480
+logic cells for about 20 cycles of a wide 32-bit division. A high word with bit 15 clear,
 which after normalising means a divisor of zero, traps to `divide_by_zero`,
 0xffc8, as a guard does: `recip` writes its answer for `ra | 0x8000`, and the
 trap is taken in place of the next instruction. It is `rtl/recip.sv` beside the
 multiplier: a straight line per slot from one block RAM of 128 pairs, which
-lands 0 to 3 below, then a second product to find out how far, and for the
-low word a third product on the first DSP again and a second correction, 0 to
-4 down. It has two `SB_MAC16`s of its own. To the ALU it is `mul` with every
+lands 0 to 3 below, then a second product to find out how far. It has two
+`SB_MAC16`s of its own. To the ALU it is `mul` with every
 half zeroed and its answer OR'd in. With `-mmul` every division libgcc does
 is built on it: the `_mul` routines in `libgcc/lib1funcs.s` divide a word at a
-time, so a 16-bit division is about 36 cycles, a 32-bit one about 80 against
-534 to 1074 for the C, and a 64-bit one 275 to 610 against 690 to 3120.
+time, so a 16-bit division is about 36 cycles, a 32-bit one 80 to 93 against
+534 to 1074 for the C, and a 64-bit one 285 to 620 against 690 to 3120.
 `rtl/alu.sv` instantiates the DSPs rather
 than letting yosys's `-dsp` infer them, because the inference copies the operand
 flops into the DSP's input registers and drags the logic in front of them to
@@ -495,7 +498,7 @@ odd address; a taken branch four; a jump or call three, or four through a
 register; a load of N accesses N + 3 and a store N + 4, where an access is a
 byte or a whole word at an even address, so `ld` is four aligned and five not,
 and a three-register `push` seven with sp even and ten with it odd; mul, mulhu,
-mulhs, clz and popcount two, and recip five, or eight with a low word. A taken branch is what
+mulhs, clz and popcount two, and recip five. A taken branch is what
 makes a longer unrolled loop worth anything once the instruction mix is fixed,
 and a memory instruction is the slowest thing a program does often. The
 simulator does not keep a list of which instructions are which: the semantics

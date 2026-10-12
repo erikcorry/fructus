@@ -510,6 +510,92 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
               `cycles for a divisor under / over 65536`);
 }
 
+// --- the 3/2 reciprocal, made from recip's 2/1 one ----------------------------
+// A divisor of 65536 or more wants the 3/2 reciprocal of both its words, and
+// recip makes the 2/1 reciprocal of the high word alone: __udivmodsi4_mul's
+// .wide and __udivmoddi4_mul's m = 2 and m = 3, 4 fold the low word in with
+// Moller and Granlund's Algorithm 6, three copies of it.  The arithmetic is
+// checked over all 2^31 normalised divisors, as the copies do it; then each
+// copy is run from its recip to the fold's end on divisors from every path
+// through it - all of the rarest, where p == d1 and t0 decides, about two in
+// a million - against the exact reciprocal.  The paths' shares are printed,
+// since the copies are laid out for the common ones to fall through.
+{
+  const B = 0x10000;
+  const exact = (d1, d0) => {
+    const d = d1 * B + d0, x = 2 ** 48 - 1;
+    let q = Math.floor(x / d);
+    while (q * d > x) q--;
+    while ((q + 1) * d <= x) q++;
+    return q - B;
+  };
+  // Algorithm 6 as each copy does it, and the path it takes: bits 0-1 for
+  // d0's carry, 1, and p >= d1 after it, 2; bits 2-3 for t1's carry with p
+  // below d1, 4, above, 8, or equal, 12.  Written out inline: the loop runs
+  // 2^31 times.
+  const fold = (d1, d0) => {
+    let v = Math.floor(0xffffffff / d1) - B, p = ((d1 * v) % B + d0) % B, k = 0;
+    if (p < d0) { k = 1; v--; if (p >= d1) { k = 2; v--; p -= d1; } p = (p - d1 + B) % B; }
+    const t = v * d0, t1 = Math.floor(t / B), t0 = t % B;
+    p = (p + t1) % B;
+    if (p < t1) { k |= p < d1 ? 4 : p > d1 ? 8 : 12; v--; if (p > d1 || (p === d1 && t0 >= d0)) v--; }
+    return [v, k];
+  };
+  const NAME = (k) => ['nc', 'c', 'cge'][k & 3] + ['', '/lo', '/hi', '/eq'][k >> 2];
+  const count = new Float64Array(16), pick = Array.from({ length: 16 }, () => []);
+  let wrongA = 0, egA = '';
+  for (let d1 = 0x8000; d1 < B; d1++) {
+    const v1 = Math.floor(0xffffffff / d1) - B;
+    for (let d0 = 0; d0 < B; d0++) {
+      let v = v1, p = ((d1 * v) % B + d0) % B, k = 0;
+      if (p < d0) { k = 1; v--; if (p >= d1) { k = 2; v--; p -= d1; } p = (p - d1 + B) % B; }
+      const t = v * d0, t1 = Math.floor(t / B), t0 = t % B;
+      p = (p + t1) % B;
+      if (p < t1) { k |= p < d1 ? 4 : p > d1 ? 8 : 12; v--; if (p > d1 || (p === d1 && t0 >= d0)) v--; }
+      count[k]++;
+      if (k >= 12) pick[k].push([d1, d0]);         // every divisor of the rarest
+      if (v !== exact(d1, d0) && !wrongA++) egA = `d = ${d1.toString(16)}:${d0.toString(16)}`;
+    }
+  }
+  // and 300 at random of each other path
+  let seed = 0x1d872b41;
+  const rnd = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) >>> 8;
+  while (pick.some((a, k) => count[k] && k < 12 && a.length < 300)) {
+    const d1 = 0x8000 | (rnd() & 0x7fff), d0 = rnd() & 0xffff, k = fold(d1, d0)[1];
+    if (pick[k].length < 300) pick[k].push([d1, d0]);
+  }
+  check('Algorithm 6 against the exact reciprocal', wrongA === 0, `${wrongA} wrong, e.g. ${egA}`);
+
+  // Each copy: from its recip, the first one after its entry, to its fold's
+  // last label, with d's high word in r3 and its low word in r2.
+  const enc = m.spec.insn.find((i) => i.mnemonic === 'recip').form[0].encoding.replace(/[\s_]/g, '');
+  const RECIP = parseInt(enc.slice(0, 8), 2);
+  const copies = [['__udivmodsi4_mul', 'vc', 'lr'], ['__udivmoddi4_mul', 'ic', 5], ['__udivmoddi4_mul', 'jc', 5]];
+  let wrongC = 0, egC = '', runs = 0;
+  for (const [fn, end, vreg] of copies) {
+    const stop = syms.get(`${fn}.${end}`);
+    // the last recip before the fold's end: the copy's own
+    let at = stop;
+    while (at > syms.get(fn) && !(code[at] === RECIP && code[at + 1] === ((3 << 3) | (vreg === 'lr' ? m.named.lr : vreg)))) at--;
+    const vr = vreg === 'lr' ? m.named.lr : vreg;
+    // The fold neither loads nor stores, so the memory is loaded once.
+    m.mem.fill(0); m.load(code);
+    for (const k of pick)
+      for (const [d1, d0] of k) {
+        m.R.fill(0);
+        m.R[m.named.sp] = SP0; m.R[3] = d1; m.R[2] = d0;
+        m.pc = at; m.halted = false; m.count = 0; m.reset();
+        const why = m.run({ max: 200, stopAt: stop });
+        runs++;
+        if (why !== 'stopped' || m.R[vr] !== exact(d1, d0))
+          if (!wrongC++) egC = `${fn}.${end}, d = ${d1.toString(16)}:${d0.toString(16)}: ${m.R[vr]}, not ${exact(d1, d0)}`;
+      }
+  }
+  check('the three copies of Algorithm 6', wrongC === 0, `${wrongC} wrong, e.g. ${egC}`);
+  const share = [...count].map((n, k) => n && `${NAME(k)} ${(100 * n / 2 ** 31).toFixed(n < 1e5 ? 4 : 1)}%`).filter(Boolean).join(', ');
+  console.log(`ok    the 3/2 reciprocal from recip's 2/1: Algorithm 6 over 2^31 divisors, ${runs} runs of its three copies; paths ${share}`);
+}
+
 // --- the 64-bit divisions ----------------------------------------------------
 // Six entry points on one core.  n in r0-r3, d on the stack at [sp], and for
 // the divmod pair a remainder pointer at [sp, #8], which may be null.  BigInt

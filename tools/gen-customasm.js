@@ -208,6 +208,9 @@ function product(lists) {
   return lists.reduce((acc, xs) => acc.flatMap((a) => xs.map((x) => [...a, x])), [[]]);
 }
 
+// Whether an instruction's syntax writes an operand, whole or in part.
+const writes = (insn, name) => new RegExp(`\\{${name}(\\.\\w+)?\\}`).test(insn.syntax ?? '');
+
 function rulesFor(insn, form, formIdx, swapped = false) {
   const { runs, encType, nbytes } = decodeEncoding(insn, form);
   const ops  = insn.operands ?? [];
@@ -223,6 +226,12 @@ function rulesFor(insn, form, formIdx, swapped = false) {
     const et = types[encType.get(op.name)];    // encoded type, if encoded
 
     // ---- fixed by the form -------------------------------------------------
+    // A fixed operand the syntax does not write - `recip rd, ra', whose #0 is
+    // pinned - has nothing to check: its bits are the form's literal ones.
+    if (op.name in fix && !writes(insn, op.name)) {
+      if (encType.has(op.name)) throw new Error(`${insn.mnemonic}: ${op.name} is unwritten but has a field`);
+      return [{ patt: {}, val: null, pre: [], asserts: [], pins: {} }];
+    }
     if (op.name in fix) {
       const v = fix[op.name];
       const a = (lt.kind === 'reg' || lt.kind === 'enum')

@@ -239,8 +239,7 @@ length_from_first_byte = true
 #     jmp and call to a target in their bytes        3
 #     jmp ra, call ra, ret - a target in a register  4
 #     mul, clz, popcount                             1 + extra_cycles = 2
-#     recip rd, ra, #0                               1 + extra_cycles = 5
-#     recip rd, ra, rb                               1 + extra_cycles = 8
+#     recip                                          1 + extra_cycles = 5
 #     a load of N accesses: ld8, ld, pop, ldm        N + 3
 #     a store of N accesses: st8, st, push, stm      N + 4
 #       - an access is a byte, or a whole word at an EVEN address;
@@ -304,9 +303,8 @@ length_from_first_byte = true
 # register - clz and popcount's registered halfway so that they do not set the
 # clock every other instruction runs at, mul's because the DSP delivers its
 # product a cycle late.  The first cycle writes a wrong result, the second the
-# right one - see rtl/cpu.sv.  recip takes four, or seven with a low word: a
-# table, two products and a correction, each registered, and then a third
-# product and a second correction - see rtl/recip.sv.
+# right one - see rtl/cpu.sv.  recip takes four: a table, two products and a
+# correction, each registered - see rtl/recip.sv.
 #
 # The simulator does not need a list of which instructions are which - the
 # semantics already say.  `if (...) pc = pc + off` is a conditional branch;
@@ -1074,11 +1072,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   0010_1101                mov  rd, #immask5          2 bytes
 #   0010_111b                movhi rd, ra, rb           2 bytes
 #
-#   0011_0000                mul  rd, rd, #imm5         2 bytes
-#   0011_0001                mul  rd, ra, #imm10        3 bytes
+#   0011_0000 .. 0011_0001   -- free
 #   0011_001s                unary ops, 5 in TWO opcodes 2 bytes
-#   0011_0100 .. 0011_0101   -- free
-#   0011_011b                mul  rd, ra, rb            2 bytes
+#   0011_0100 .. 0011_0111   -- free
 #
 #   THE mov ROW IS AN ALU GROUP WITHOUT AN ALU OPERATION, and it is numbered as
 #   one.  `mov rd, #imm` is `or rd, #imm` with the register half thrown away, so
@@ -1100,10 +1096,10 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   THE UNARY OPERATIONS HAVE A ROW OF THEIR OWN, which they did not before -
 #   they shared mov's, three constants and eight operations in eight opcodes.
 #   Nothing about that was wrong, but the two have nothing to do with each other
-#   and the row read as two half-rows.  The free slots let mul take the ALU
-#   group's shape around them: +0, +1 and +6/+7, with the unary pair in +2/+3.
-#   It is the row's other operation that is registered - the unary pair at 0x33
-#   is the first - so the row holds both of the machine's slow operations.
+#   and the row read as two half-rows.  mul held the ALU group's shape around
+#   them, +0, +1 and +6/+7, until the -mmul instructions moved to a block of
+#   their own at 0xb0: so +1 is free for more unary operations, and +6/+7, the
+#   three-register columns, for a three-register clmul.
 #
 #   AND +4 AND +5 ARE AN EXPANSION PATH WORTH SAYING OUT LOUD.  Each is free and
 #   has the `dddi_iiii` shape: one register and FIVE spare bits.  A unary whose
@@ -1115,7 +1111,8 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #       -> 32 single-register unary operations
 #
 #   That is more than five times the two-opcode form's six, out of ONE opcode,
-#   and +5 could do the same again.  +0 held this paragraph until mul took it.
+#   and +5 could do the same again.  +0 held this paragraph until mul took
+#   it, and is free again.
 #   So the six at 0011_001s are not a ceiling on unary operations; they are the
 #   ceiling on unary operations that want a separate destination.  Nothing
 #   occupies +4 yet because nothing needs it - it is written down so that "the
@@ -1212,7 +1209,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   THE GROUPED REGION IS NOW FULL: fifteen rows of eight, 0000_1xxx through
 #   0111_1xxx, with no gaps between them.  A sixteenth grouped operation has
-#   nowhere contiguous to go, which is the price of the tidiness - there are 73
+#   nowhere contiguous to go, which is the price of the tidiness - there are 71
 #   free opcodes at 1011_xxxx and above, but none of them adjoin this block.
 #   ------------------------------------------------------------------------
 #
@@ -1299,15 +1296,25 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1010_1101                brset   ra, #immask5, target
 #   1010_1110                sei                        1 byte, ie = 1
 #   1010_1111                cli                        1 byte, ie = 0
-#   1011_0000 .. 1011_0101   -- free
-#   1011_011b                mulhu rd, ra, rb          2 bytes
-#   1011_1000 .. 1011_1101   -- free
-#   1011_111b                mulhs rd, ra, rb          2 bytes
-#   1100_0000 .. 1100_0010   -- free
-#   1100_0011                recip rd, ra, #0          2 bytes, byte 1 00aa_addd
-#   1100_0100 .. 1100_0101   -- free
-#   1100_011b                recip rd, ra, rb          2 bytes
+#   1011_0000                mul   rd, rd, #imm5       2 bytes
+#   1011_0001                mul   rd, ra, #imm10      3 bytes
+#   1011_0010 .. 1011_0101   -- free
+#   1011_011b                mul   rd, ra, rb          2 bytes
+#   1011_1000 .. 1011_1010   -- free
+#   1011_1011                recip rd, ra              2 bytes, byte 1 00aa_addd
+#   1011_1100 .. 1011_1101   -- free
+#   1011_111b                mulhu rd, ra, rb          2 bytes
+#   1100_0000 .. 1100_0101   -- free
+#   1100_011b                mulhs rd, ra, rb          2 bytes
 #   1100_1000 .. 1111_1111   -- free, 56 slots
+#
+#   0xb0 .. 0xc7 IS -mmul, ALL OF IT: the four instructions that need the
+#   SB_MAC16s, in one block above 0x80 and away from the base instruction set,
+#   since they are optional - a part without the DSPs leaves the block empty
+#   rather than holes in the rows the base set uses.  mul keeps the ALU
+#   group's columns in its row, +0 imm5, +1 imm10 and +6/+7 three registers;
+#   recip, which takes place beside the ALU rather than in it, is the imm3
+#   column at +b; mulhu and mulhs are the three-register columns that follow.
 #
 #   AND THE COLUMNS SAY WHAT BYTE 1 LOOKS LIKE, exactly as they do everywhere
 #   else in the map:
@@ -1369,8 +1376,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   0111_1xxx                iseq / isset               see above
 #
-#   1011_xxxx                -- free, 16 slots
-#   11xx_xxxx                -- free, a quarter of the map
+#   1011_xxxx                -mmul: mul, recip, mulhu   see above
+#   1100_011x                -mmul: mulhs               see above
+#   11xx_xxxx                otherwise free, a quarter of the map
 #
 # Note how cheap the one-byte two-register block is: `01dddsss` costs a quarter
 # of the opcode space and buys a fully general reg,reg operation.  That trade -
@@ -2505,14 +2513,14 @@ semantics = "R[d] = clmul(R[a])"
 
 
 # --- mul ---------------------------------------------------------------------
-# The low sixteen bits of a product, in the unary row's four free columns with
-# the ALU group's shapes: +0 imm5, +1 imm10, +6/+7 three registers.  There is
-# no imm3 form - +2/+3 are the unary opcodes - and no mask forms, because a
-# power of two is a shift and a mask is nothing to multiply by.
+# The low sixteen bits of a product, at the head of the -mmul block with the
+# ALU group's shapes: +0 imm5, +1 imm10, +6/+7 three registers.  There is no
+# imm3 form and no mask forms, because a power of two is a shift and a mask
+# is nothing to multiply by.
 #
-#     0x30  mul rd, rd, #imm5      2 bytes
-#     0x31  mul rd, ra, #imm10     3 bytes
-#     0x36  mul rd, ra, rb         2 bytes, with 0x37
+#     0xb0  mul rd, rd, #imm5      2 bytes
+#     0xb1  mul rd, ra, #imm10     3 bytes
+#     0xb6  mul rd, ra, rb         2 bytes, with 0xb7
 #
 # SIGNED AND UNSIGNED ARE THE SAME INSTRUCTION.  The low half of a product does
 # not depend on how its operands are read, so one mul serves both and the
@@ -2550,7 +2558,7 @@ extra_cycles = 1
 
   [[insn.form]]
   name     = "three_reg"
-  encoding = "0011_011b  ccaa_addd"
+  encoding = "1011_011b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 [[insn]]
@@ -2567,22 +2575,22 @@ extra_cycles = 1
 
   [[insn.form]]
   name     = "reg_imm5"
-  encoding = "0011_0000  iiii_iddd"
+  encoding = "1011_0000  iiii_iddd"
   fields   = { i = "imm:imm5" }
   tie      = { a = "d" }
 
   [[insn.form]]
   name     = "reg_reg_imm10"
-  encoding = "0011_0001  iiaa_addd  jjjj_jjjj"
+  encoding = "1011_0001  iiaa_addd  jjjj_jjjj"
   fields   = { i = "imm:imm10[1:0]", j = "imm:imm10[9:2]" }
 
 
 # --- mulhu, mulhs --------------------------------------------------------------
 # The HIGH sixteen bits of the same product, unsigned and signed.  Three
-# registers only, in the three-register columns of two empty rows:
+# registers only, in the three-register columns that follow mul's:
 #
-#     0xb6  mulhu rd, ra, rb       2 bytes, with 0xb7
-#     0xbe  mulhs rd, ra, rb       2 bytes, with 0xbf
+#     0xbe  mulhu rd, ra, rb       2 bytes, with 0xbf
+#     0xc6  mulhs rd, ra, rb       2 bytes, with 0xc7
 #
 # NO IMMEDIATE FORMS.  A constant multiplier wanting the high half is a
 # division by a constant, which runs once per division; the constant's mov is
@@ -2614,7 +2622,7 @@ extra_cycles = 1
 
   [[insn.form]]
   name     = "three_reg"
-  encoding = "1011_011b  ccaa_addd"
+  encoding = "1011_111b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 [[insn]]
@@ -2631,31 +2639,31 @@ extra_cycles = 1
 
   [[insn.form]]
   name     = "three_reg"
-  encoding = "1011_111b  ccaa_addd"
+  encoding = "1100_011b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
 
 
 # --- recip -------------------------------------------------------------------
 # The reciprocal of a normalised divisor, Moller and Granlund's v, in sixteen
-# bits: with the divisor D = (ra | 0x8000) : rb, high word first,
+# bits: with the divisor d = ra | 0x8000,
 #
-#     0xc3  recip rd, ra, #0       2 bytes, byte 1 00aa_addd   5 cycles
-#     0xc6  recip rd, ra, rb       2 bytes, with 0xc7          8 cycles
+#     0xbb  recip rd, ra           2 bytes, byte 1 00aa_addd   5 cycles
 #
-#     rd = floor((2^48 - 1) / D) - 2^16
+#     rd = floor((2^32 - 1) / d) - 2^16
 #
-# as in "Improved division by invariant integers" (2011).  With a low word of
-# 0 that is floor((2^32 - 1) / ra) - 2^16, the 2/1 reciprocal, and a 32 / 16
-# division is a mulhu by it; with a low word it is the 3/2 reciprocal, for a
-# 32-bit divisor.  ra's top bit is taken as 1, whatever it is: a divisor is
-# shifted until it is - and if it was not, the instruction traps; see below.
+# as in "Improved division by invariant integers" (2011): the 2/1
+# reciprocal, and a 32 / 16 division is a mulhu by it.  ra's top bit is taken
+# as 1, whatever it is: a divisor is shifted until it is - and if it was not,
+# the instruction traps; see below.
 #
-# EITHER WAY THE QUOTIENT'S ESTIMATE ERRS ONE WAY.  q = u2 + mulhu(v, u2) plus
-# the carry of mul(v, u2) + u1 - the paper's q1, without its + 1 - is never
-# too big, and too small by one 36% of the time and by two 0.07%, so a
-# division corrects with one loop: while the remainder is at least D, q + 1.
-# With the 2/1 reciprocal of a 32-bit divisor's high word alone, it erred both
-# ways, by up to 2 too big.
+# THE 3/2 RECIPROCAL IS SOFTWARE'S.  A 32-bit divisor's, which makes a
+# quotient estimate that errs only one way, is the 2/1 reciprocal of its high
+# word with the low word folded in by one product and two rare corrections -
+# the paper's Algorithm 6, in libgcc/lib1funcs.s.  It was an instruction,
+# recip rd, ra, rb, three cycles longer than this one: the third product and
+# its correction on 36-bit numbers took 480 logic cells, nearly a tenth of
+# the part, for about 20 cycles of a 32-bit division by a divisor of 65536
+# or more and 12 of a 64-bit one.
 #
 # A CLEAR TOP BIT TRAPS, to [cpu.vectors] divide_by_zero, after the recip has
 # written rd as if the bit were set.  A division normalises its divisor
@@ -2663,39 +2671,20 @@ extra_cycles = 1
 # the reciprocal of ra | 0x8000, so a handler that returns gets the junk a
 # division by zero always gave.
 #
-# 0xc3 IS THE 2/1 FORM, AND TWO CYCLES FASTER.  It is the imm3 column of the
-# row, and only #0 is defined: byte 1 is 00aa_addd, the natural imm3 decoding
-# at index 1.  The three other patterns, #2, #4 and #8, would change the answer
-# for 1, 18 and 19 of the 32768 high words, and the unit does not read them:
-# they are reserved, and what they do is undefined.  So a 16-bit divisor needs
-# no register holding 0.
+# IT IS THE imm3 COLUMN, WITH ITS IMMEDIATE PINNED AT 0.  Byte 1 is
+# 00aa_addd, the natural imm3 decoding at index 1, which is #0, and the
+# assembler writes the instruction without it.  The three other patterns, #2,
+# #4 and #8, would change the answer for 1, 18 and 19 of the 32768 high words,
+# and the unit does not read them: they are reserved, and what they do is
+# undefined.  So a divisor needs no register holding 0.
 #
-# A TABLE, A PRODUCT, A SECOND PRODUCT AND A CORRECTION make the 2/1 answer,
-# in rtl/recip.sv with a block RAM and two SB_MAC16s of its own: v is first
-# read as A - S*lo >> 12 from 128 pairs indexed by d[14:8], which is within
-# three below, and then corrected by comparing beta^2 - 1 - (beta + v) * d with
-# d, 2d and 3d.  The low word takes A THIRD PRODUCT, v * d0, on the first
-# SB_MAC16 again, and a second correction, 0 .. 4 down, against the remainder
-# beta^3 - 1 - (beta + v) * D.  To everything but those it is mul: op 14, with
-# an lsel of 111 that zeroes every half the SB_MAC16s beside the ALU make,
-# and its own answer OR'd in.
-
-[[insn]]
-mnemonic = "recip"
-summary  = "rd = floor((2^48 - 1) / ((ra | 0x8000):rb)) - 2^16"
-operands = [
-  { name = "d", type = "reg" },
-  { name = "a", type = "reg" },
-  { name = "b", type = "reg" },
-]
-syntax   = "{d}, {a}, {b}"
-semantics = "R[d] = recip(R[a], R[b])"
-extra_cycles = 7
-
-  [[insn.form]]
-  name     = "three_reg"
-  encoding = "1100_011b  ccaa_addd"
-  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+# A TABLE, A PRODUCT, A SECOND PRODUCT AND A CORRECTION make the answer, in
+# rtl/recip.sv with a block RAM and two SB_MAC16s of its own: v is first read
+# as A - S*lo >> 12 from 128 pairs indexed by d[14:8], which is within three
+# below, and then corrected by comparing beta^2 - 1 - (beta + v) * d with d,
+# 2d and 3d.  To everything but those it is mul: op 14, with an lsel of 111
+# that zeroes every half the SB_MAC16s beside the ALU make, and its own answer
+# OR'd in.
 
 [[insn]]
 mnemonic = "recip"
@@ -2705,14 +2694,15 @@ operands = [
   { name = "a",   type = "reg" },
   { name = "imm", type = "int16" },
 ]
-syntax   = "{d}, {a}, #{imm}"
+syntax   = "{d}, {a}"
 semantics = "R[d] = recip(R[a], imm)"
 extra_cycles = 4
 
-  # Only #0: byte 1's top two bits are imm3's index bits 2:1, pinned at 00.
+  # Only #0, and the assembler does not write it: byte 1's top two bits are
+  # imm3's index bits 2:1, pinned at 00.
   [[insn.form]]
   name     = "reg_reg_zero"
-  encoding = "1100_0011  00aa_addd"
+  encoding = "1011_1011  00aa_addd"
   fix      = { imm = 0 }
 
 

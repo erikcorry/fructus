@@ -214,7 +214,12 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     recip's LOW WORD, 0xc6 eight cycles, as here   2811    30.60  29.6 .. 31.4
+//     recip WITHOUT ITS LOW WORD, 0xbb, as here      2400    29.45  27.3 .. 31.3
+//       2100 LUT4 against 2393 with the cycle counter, 30.00 then; the 3/2
+//       reciprocal is libgcc's, from this one.  The system, 4536 cells and
+//       unplaceable, is 4024.  Critical paths decode's, seven cells, in
+//       fourteen seeds, the other two nine cells to pcc; none in recip
+//     recip's LOW WORD, 0xc6 eight cycles            2811    30.60  29.6 .. 31.4
 //       2308 LUT4 against 2044, the same RAM and DSPs - mac1 makes the third
 //       product too; 0xc3, recip rd, ra, #0, still five cycles.  Critical
 //       paths decode's, seven cells, or the first correction's in five
@@ -1151,7 +1156,7 @@ module cpu (
     // A module of its own, or abc maps decode a cell deeper: rtl/recip.sv.
     wire rgo = e_op == 4'd14 && e_lsel == 3'b111;
     (* keep_hierarchy *)
-    recip rcp (.clk(clk), .a(aq), .b(bq), .go(rgo), .cnt(e_cnt), .p(rprod));
+    recip rcp (.clk(clk), .a(aq), .go(rgo), .cnt(e_cnt), .p(rprod));
     wire [15:0] lqsrc = (uLQ == 3'd1) ? pc
                       : (uLQ == 3'd2) ? shadow_sp
                       : (uLQ == 3'd3) ? shadow_lr : shadow_isp;

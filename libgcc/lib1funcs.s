@@ -698,7 +698,7 @@ __udivmodhi4_mul:
         push lr                         ; 5   We need one more register
         clz r5, r1                      ; 2   Bits to shift away
         shl lr, r1, r5                  ; 1   Normalize
-        recip lr, lr, #0                ; 5   Reciprocal, the #0 is the low word
+        recip lr, lr                    ; 5   Reciprocal
         lsr lr, lr, #1                  ; 1   The reciprocal has an implicit 1
                                         ;     in bit 16, so shift down...
         or lr, lr, #0x8000              ; 1   ... and make the top bit explicit
@@ -861,9 +861,11 @@ __modhi3_mul:
 ; costs one step.
 ;
 ; A DIVISOR OF 65536 OR MORE leaves a quotient of one word, which is their
-; 3/2 division: one step, with the reciprocal of both of the divisor's words
-; from recip's three-register form.  A high word of n below d's is a
-; quotient of 0, and is tested first.
+; 3/2 division: one step, with the reciprocal of both of the divisor's words.
+; recip makes the 2/1 reciprocal of the high word, and their Algorithm 6
+; folds the low word into it with one more product and two rare corrections;
+; it needs three registers where two are free, so u0 waits on the stack.
+; A high word of n below d's is a quotient of 0, and is tested first.
 ;
 ; DIVISION BY ZERO returns junk and does not hang: there is no loop.
 
@@ -881,7 +883,7 @@ __udivmodsi4_mul:
         shl     r1, r1, r5              ; 1
         or      r1, r1, r3              ; 1   u1
         shl     r0, r0, r5              ; 1   u0
-        recip   r3, r2, #0              ; 5   v
+        recip   r3, r2                  ; 5   v
         br      ne, r4, #0, .hi         ; 1   u2:u1 >= d: a high quotient
         br      hs, r1, r2, .hi         ; 1   word to make first
         mov     lr, #0                  ; 1   otherwise it is 0, and u1 is
@@ -958,8 +960,22 @@ __udivmodsi4_mul:
         lsr     lr, r0, lr              ; 1
         or      r1, r1, lr              ; 1   u1
         shl     r0, r0, r5              ; 1   u0
-.go:
-        recip   lr, r3, r2              ; 8   v
+.go:    ; v, the 3/2 reciprocal: d1's, with d0 folded in - Algorithm 6
+        push    r0                      ; 5   u0, for a register
+        recip   lr, r3                  ; 5   v from d1 alone
+        mul     r5, r3, lr              ; 2   p = d1 * v + d0, mod 65536
+        add     r5, r5, r2              ; 1
+        br      hs, r5, r2, .va         ; 1   no carry, 37%
+        sub     lr, lr, #1              ; 1
+        br      hs, r5, r3, .ve         ; 1   p >= d1, rarely
+.vb:
+        rsb     r5, r3, r5              ; 1   p -= d1
+.va:
+        mulhu   r0, lr, r2              ; 2   t1
+        add     r5, r5, r0              ; 1   p += t1
+        br      lo, r5, r0, .vf         ; 1   a carry, 29%
+.vc:
+        pop     r0                      ; 4
         mulhu   r5, lr, r4              ; 2
         mul     lr, lr, r4              ; 2
         add     lr, lr, r1              ; 1   q0
@@ -1013,6 +1029,23 @@ __udivmodsi4_mul:
         rsb     r0, r2, r0              ; 1
         rsb     r1, r3, r1              ; 1
         jmpr    .wd                     ; 3
+.ve:    ; the fold's rare cases: d0's carry with p >= d1 ...
+        sub     lr, lr, #1              ; 1
+        rsb     r5, r3, r5              ; 1
+        jmp     .vb                     ; 3
+.vf:   ; ... and t1's carry: v one less, or two if p:t0 >= d1:d0, t0 the
+        sub     lr, lr, #1              ; 1   low half of the old v * d0
+        br      hs, r5, r3, .vg         ; 1
+        jmp     .vc                     ; 3
+.vg:
+        br      hi, r5, r3, .vg2        ; 1
+        mul     r0, lr, r2              ; 2
+        add     r0, r0, r2              ; 1   t0
+        br      lo, r0, r2, .vc         ; 1
+.vg2:
+        sub     lr, lr, #1              ; 1
+        jmp     .vc                     ; 3
+
 
 ; ============================================================================
 ; The 32-bit helpers GCC calls, with recip
@@ -1579,7 +1612,7 @@ __udivmoddi4_mul:
         ld      r1, [r5, #0]            ; 4   d
         clz     r5, r1                  ; 2
         shl     r1, r1, r5              ; 1   D, normalised
-        recip   r2, r1, #0              ; 5   v
+        recip   r2, r1                  ; 5   v
         ld      r0, [sp, #8]            ; 4   R = u4, which is below D
         mov     lr, #6                  ; 1   u3's offset: the count too
 .nloop:
@@ -1721,7 +1754,19 @@ __udivmoddi4_mul:
         mul     r2, r2, r4              ; 2   D0
         mul     r3, r3, r4              ; 2
         or      r3, r3, lr              ; 1   D1
-        recip   r5, r3, r2              ; 8   v
+        recip   r5, r3                  ; 5   v from D1, then D0 in, as in
+        mul     lr, r3, r5              ; 2   __udivmodsi4_mul
+        add     lr, lr, r2              ; 1
+        br      hs, lr, r2, .ia         ; 1   no carry, 37%
+        sub     r5, r5, #1              ; 1
+        br      hs, lr, r3, .ie         ; 1   p >= d1, rarely
+.ib:
+        rsb     lr, r3, lr              ; 1   p -= d1
+.ia:
+        mulhu   r4, r5, r2              ; 2   t1
+        add     lr, lr, r4              ; 1   p += t1
+        br      lo, lr, r4, .if         ; 1   a carry, 29%
+.ic:
         st      r5, [sp, #0]            ; 5
         mov     r4, r1                  ; 1   q2 ...
         mov     r1, r0                  ; 1
@@ -1756,6 +1801,23 @@ __udivmoddi4_mul:
         add     sp, sp, #6              ; 1   u3, u4 and p
         pop     lr, r4                  ; 5
         ret                             ; 4
+
+.ie:    ; the fold's rare cases: d0's carry with p >= d1 ...
+        sub     r5, r5, #1              ; 1
+        rsb     lr, r3, lr              ; 1
+        jmpr    .ib                     ; 3
+.if:   ; ... and t1's carry: v one less, or two if p:t0 >= d1:d0, t0 the
+        sub     r5, r5, #1              ; 1   low half of the old v * d0
+        br      hs, lr, r3, .ig         ; 1
+        jmpr    .ic                     ; 3
+.ig:
+        br      hi, lr, r3, .ig2        ; 1
+        mul     r4, r5, r2              ; 2
+        add     r4, r4, r2              ; 1   t0
+        br      lo, r4, r2, .ic         ; 1
+.ig2:
+        sub     r5, r5, #1              ; 1
+        jmpr    .ic                     ; 3
 
         ; --- m = 3 or 4: d3 in r4 ---------------------------------------------
         ; The frame, once built, with R the six words of n shifted, j the
@@ -1801,9 +1863,37 @@ __udivmoddi4_mul:
         mul     r0, r0, r4              ; 2   D0
         push    r3, r2, r1              ; 7
         push    r0                      ; 5
-        recip   r5, r3, r2              ; 8   v
+        recip   r5, r3                  ; 5   v from D3, then D2 in, as in
+        mul     lr, r3, r5              ; 2   __udivmodsi4_mul
+        add     lr, lr, r2              ; 1
+        br      hs, lr, r2, .ja         ; 1   no carry, 37%
+        sub     r5, r5, #1              ; 1
+        br      hs, lr, r3, .je         ; 1   p >= d1, rarely
+.jb:
+        rsb     lr, r3, lr              ; 1   p -= d1
+.ja:
+        mulhu   r4, r5, r2              ; 2   t1
+        add     lr, lr, r4              ; 1   p += t1
+        br      lo, lr, r4, .jf         ; 1   a carry, 29%
+.jc:
         push    r5                      ; 5
         jmpr    .bloop                  ; 3
+.je:    ; the fold's rare cases: d0's carry with p >= d1 ...
+        sub     r5, r5, #1              ; 1
+        rsb     lr, r3, lr              ; 1
+        jmpr    .jb                     ; 3
+.jf:   ; ... and t1's carry: v one less, or two if p:t0 >= d1:d0, t0 the
+        sub     r5, r5, #1              ; 1   low half of the old v * d0
+        br      hs, lr, r3, .jg         ; 1
+        jmpr    .jc                     ; 3
+.jg:
+        br      hi, lr, r3, .jg2        ; 1
+        mul     r4, r5, r2              ; 2
+        add     r4, r4, r2              ; 1   t0
+        br      lo, r4, r2, .jc         ; 1
+.jg2:
+        sub     r5, r5, #1              ; 1
+        jmpr    .jc                     ; 3
 ; R's top two words are D's.  The 3/2 step cannot take that - its quotient
 ; would not fit a word - but the remainder so far is below D, so its next
 ; two words are below D1:D0, and that makes q_j exactly 0xffff: R is at

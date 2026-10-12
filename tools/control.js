@@ -159,7 +159,7 @@ export const ALU_OPS = [
   { code: 16, name: 'mulhs', does: 'lhs * rhs, high half, signed' },
   // And so is the reciprocal, whose answer rtl/recip.sv ORs into the product
   // with all three halves zeroed.
-  { code: 17, name: 'recip', does: 'floor((2^48 - 1) / ((lhs | 0x8000):rhs)) - 2^16, from rtl/recip.sv' },
+  { code: 17, name: 'recip', does: 'floor((2^32 - 1) / (lhs | 0x8000)) - 2^16, from rtl/recip.sv' },
 ];
 
 // The operations whose result is registered, so that an instruction using one
@@ -293,8 +293,8 @@ export function unaryLayout() {
   const ops = [];
   for (const insn of spec.insn)
     for (const form of insn.form ?? []) {
-      // recip rd, ra, #0 has the shape too, its imm3 index pinned, but reads
-      // the immediate as an operand: only R[d] = f(R[a]) is unary.
+      // recip rd, ra has the shape too, its imm3 index pinned at #0, but
+      // reads the immediate as an operand: only R[d] = f(R[a]) is unary.
       if (!/^R\[d\] = \w+\(R\[a\]\)$/.test(insn.semantics ?? '')) continue;
       const bits = (form.encoding ?? '').replace(/[\s_]/g, '');
       const m = /^([01]{8})([01]{2})a{3}d{3}$/.exec(bits);

@@ -362,18 +362,18 @@ const SOURCES = [
           ldm  r3, r3
           halt`,
   // A DIVIDE BY ZERO, [cpu.vectors] divide_by_zero: a recip whose ra has
-  // bit 15 clear traps after writing its answer, both lengths, and the rti
-  // at the vector comes back to the add after each.  Then one with the bit
-  // set, which does not.  The shifts' two-register imm10 forms come along.
+  // bit 15 clear traps after writing its answer, and the rti at the vector
+  // comes back to the add after each.  Then one with the bit set, which does
+  // not.  The shifts' two-register imm10 forms come along.
   `       mov  r1, #0x1234
-          recip r0, r1, #0
+          recip r0, r1
           add  r0, r0, #1
           mov  r2, #0
           mov  r3, #5
-          recip r4, r2, r3
+          recip r4, r2
           add  r4, r4, r0
           mov  r1, #0x9234
-          recip r2, r1, r3
+          recip r2, r1
           lsr  r3, r2, #13
           shl  r5, r2, #11
           asr  r1, r1, #5

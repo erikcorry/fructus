@@ -517,76 +517,46 @@ endmodule
     run('alu', ['-DCPU_CELLS', cells, `${RTL}/alu.sv`], 'alu-tb');
   } else console.log("skip  rtl/alu.sv's SB_MAC16: yosys's ice40 cell models not found");
 
-  // --- recip's low word, as the unit does it, over every divisor -------------
-  // From the 2/1 answer v2 and its remainder r2 - the first correction's, which
-  // the block below checks through the RTL - the second correction compares
-  // G[k] = beta * (r2 - d0) + beta - 1 + k * D with v2 * d0 for k = 0 .. 3, and
-  // takes v2 less the number below.  All 2^31 divisors, against the 3/2
-  // reciprocal itself; about nine seconds.
-  {
-    const B = 0x10000, N48 = 2 ** 48 - 1;
-    let bad = 0;
-    for (let d1 = 0x8000; d1 < B; d1++) {
-      const v2 = Math.floor((B * B - 1) / d1) - B, r2 = (B * B - 1) - (B + v2) * d1;
-      for (let d0 = 0; d0 < B; d0++) {
-        const D = d1 * B + d0, p3 = v2 * d0, g0 = (r2 - d0) * B + 0xffff;
-        const n = (g0 < p3) + (g0 + D < p3) + (g0 + 2 * D < p3) + (g0 + 3 * D < p3);
-        if (v2 - n !== Math.floor(N48 / D) - B && bad++ < 5)
-          console.log(`  MISMATCH d=${hex4(d1)}:${hex4(d0)}: ${v2 - n}`);
-      }
-    }
-    if (bad) { console.log(`FAIL  rtl/recip.sv's low-word correction: ${bad} of 2^31 divisors wrong`); failed = true; }
-    else console.log("ok    rtl/recip.sv's low-word correction: all 2^31 divisors, as the unit computes it");
-  }
-
-  // --- recip: both lengths, against tools/sim.js -------------------------------
-  // Each one through the cycles rtl/cpu.sv gives it - aq and bq in the first,
-  // e_cnt counting 4 or 7 down to 0, lsel 111 - and its answer read in the
-  // last; and the answer must be zero in every other cycle, since it is ORed
-  // into the product.  0xc3's for all 65536 operands, with bq whatever it is, so the
-  // top bit and bq are seen to be ignored; 0xc6's for every high word with
-  // the lowest and highest low words, 0 and 0xffff - where the corrections
-  // are smallest and largest - and one at random, and 10000 pairs at random,
-  // the arithmetic having been checked over all of them above; all in a shuffled
-  // order, so the long flop is seen to clear between them.  Behavioural, and
-  // then through yosys's SB_MAC16 model.
+  // --- recip, against tools/sim.js ------------------------------------------------
+  // Each one through the cycles rtl/cpu.sv gives it - aq in the first, e_cnt
+  // counting 4 down to 0, lsel 111 - and its answer read in the last; and the
+  // answer must be zero in every other cycle, since it is ORed into the
+  // product.  All 65536 operands, so the top bit is seen to be ignored, in a
+  // shuffled order.  Behavioural, and then through yosys's SB_MAC16 model.
   {
     let seed = 12345;
     const rnd = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) >>> 8;
     const vec = [];
-    for (let x = 0; x < 0x10000; x++) vec.push([4, x, rnd() & 0xffff]);
-    for (let x = 0; x < 0x8000; x++)
-      for (const y of [0, 0xffff, rnd() & 0xffff]) vec.push([7, x | (rnd() & 0x8000), y]);
-    for (let i = 0; i < 10000; i++) vec.push([7, rnd() & 0xffff, rnd() & 0xffff]);
+    for (let x = 0; x < 0x10000; x++) vec.push([4, x]);
     for (let i = vec.length - 1; i > 0; i--) { const j = rnd() % (i + 1); [vec[i], vec[j]] = [vec[j], vec[i]]; }
-    writeFileSync('build/recip-tb.hex', vec.map(([k, a, b]) =>
-      `${k} ${hex4(a)} ${hex4(b)} ${hex4(BUILTIN.recip(a, k === 4 ? 0 : b))}`).join('\n') + '\n');
+    writeFileSync('build/recip-tb.hex', vec.map(([k, a]) =>
+      `${k} ${hex4(a)} ${hex4(BUILTIN.recip(a, 0))}`).join('\n') + '\n');
     var recipTb = `module tb;
-    logic clk = 0, go = 0; logic [2:0] cnt = 0; logic [15:0] a = 0, b = 0, xa, xb, want_; wire [15:0] p;
+    logic clk = 0, go = 0; logic [2:0] cnt = 0; logic [15:0] a = 0, xa, want_; wire [15:0] p;
     integer f, rr, len, k, n = 0, bad = 0, stray = 0;
-    recip u (.clk(clk), .a(a), .b(b), .go(go), .cnt(cnt), .p(p));
+    recip u (.clk(clk), .a(a), .go(go), .cnt(cnt), .p(p));
     initial begin
         f = $fopen("build/recip-tb.hex", "r");
         #1 clk = 1; #1 clk = 0;          // p's first value, zero
         #1 clk = 1; #1 clk = 0;
         while (!$feof(f)) begin
-            rr = $fscanf(f, "%d %h %h %h\\n", len, xa, xb, want_);
-            if (rr == 4) begin
+            rr = $fscanf(f, "%d %h %h\\n", len, xa, want_);
+            if (rr == 3) begin
                 n = n + 1;
                 for (k = len; k >= 0; k = k - 1) begin
-                    // aq and bq hold the operands in the first cycle only
-                    a = k == len ? xa : $random; b = k == len ? xb : $random;
+                    // aq holds the operand in the first cycle only
+                    a = k == len ? xa : $random;
                     go = 1; cnt = k[2:0];
                     #1; if (k != 0 && p !== 16'd0) stray = stray + 1;
                     if (k == 0 && p !== want_) begin
                         bad = bad + 1;
-                        if (bad < 6) $display("  MISMATCH len=%0d d=%h:%h: want %h got %h", len, xa, xb, want_, p);
+                        if (bad < 6) $display("  MISMATCH d=%h: want %h got %h", xa, want_, p);
                     end
                     #1 clk = 1; #1 clk = 0;
                 end
             end
         end
-        if (bad == 0 && stray == 0) $display("ok    rtl/recip.sv\${WHICH}: %0d operands of both lengths against tools/sim.js, and zero between", n);
+        if (bad == 0 && stray == 0) $display("ok    rtl/recip.sv\${WHICH}: %0d operands against tools/sim.js, and zero between", n);
         else $display("FAIL  rtl/recip.sv\${WHICH}: %0d of %0d wrong, %0d cycles not zero", bad, n, stray);
         $finish;
     end
