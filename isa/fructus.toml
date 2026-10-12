@@ -2419,11 +2419,11 @@ semantics = "R[d] = lsr(R[a], imm & 15)"
 #
 #     index  value  rhs[2:1]  mnemonic   byte 0  byte 1 high bits
 #       0     -1       11     -- free     0x32   00
-#       1      0       00     clz         0x33   00     TENTATIVE
+#       1      0       00     clz         0x33   00
 #       2      1       00     clmul       0x32   01     TENTATIVE, fast
 #       3      2       01     -- free     0x33   01     (clmul, slow)
 #       4      3       01     bitrev      0x32   10     TENTATIVE
-#       5      4       10     popcount    0x33   10     TENTATIVE
+#       5      4       10     popcount    0x33   10
 #       6      6       11     sxt8        0x32   11
 #       7      8       00     -- free     0x33   11
 #

@@ -666,7 +666,7 @@ CoreMark® is a trademark of EEMBC.
 The instruction set is settled enough to write real code against, and the
 C programs compiled by gcc run on it, CoreMark among them. Open:
 
-- `clz`, `bitrev` and `popcount` are marked TENTATIVE in the spec.
+- `clmul` and `bitrev` are marked TENTATIVE in the spec.
 - Nothing checks that a call site and its callee agree about arity. The fix is
   a `.args` declaration the assembler and linker verify; `isa/abi.s` describes
   it and why it is not written yet.
