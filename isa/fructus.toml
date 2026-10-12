@@ -2811,9 +2811,11 @@ semantics = "if (test(k.cond, R[a], k.imm, 16)) pc = pc + off"
 #     byte 2:  t t t t t t t t    displacement
 #
 # THE OPERAND IS A MASK, NOT A BIT NUMBER.  `brset ra, #0x8000` tests the sign
-# bit; `brset ra, #15` is not an instruction, because 15 has four bits set and
-# immbit5 holds no such value.  The assembler rejects it rather than guessing,
-# which is the right outcome for a change of meaning this quiet.
+# bit; `brset ra, #7` is not an instruction, because 7 is in neither immbit5
+# nor immask5, and the assembler rejects it rather than guessing.  That
+# catches most bit numbers written by mistake, but not all: 1, 2, 4 and 8 are
+# single-bit masks and 3, 12 and 15 are immask5 entries, so `brset ra, #15`
+# assembles - and tests the low four bits, not bit 15.
 [[insn]]
 mnemonic = "brclr"
 summary  = "branch if ra & mask is zero"
