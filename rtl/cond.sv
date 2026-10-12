@@ -34,8 +34,8 @@
 //
 //      0  eq #0            eq
 //      1  ne #0            ne
-//      2  lt #0        not le
-//      3  ge #0            le
+//      2  eq #4            eq
+//      3  ne #4            ne
 //      4  eq #1            eq
 //      5  ne #1            ne
 //      6  lt #1        not le
@@ -54,16 +54,14 @@
 //     19  ge #32766        le
 //     20  lt #-32767   not le
 //     21  lt #-32766   not le
-//     22  lo #2        not ls
-//     23  hs #2            ls
+//     22  lo #10       not ls
+//     23  hs #10           ls
 //     24  hs #3            ls
-//     25  lo #4        not ls
-//     26  hs #4            ls
+//     25  lo #32       not ls
+//     26  hs #32           ls
 //     27  lo #6        not ls
 //     28  lo #8        not ls
 //     29  hs #8            ls
-//     30  lo #256      not ls
-//     31  hs #256          ls
 //
 // The whole table needs only eq, ne, not le, le, not ls, ls.
 // =============================================================================
@@ -83,8 +81,8 @@ module cond (
     always_comb case (k)
         5'd0: tab = 4'b0_100;    // eq #0
         5'd1: tab = 4'b0_101;    // ne #0
-        5'd2: tab = 4'b1_010;    // lt #0
-        5'd3: tab = 4'b0_010;    // ge #0
+        5'd2: tab = 4'b0_100;    // eq #4
+        5'd3: tab = 4'b0_101;    // ne #4
         5'd4: tab = 4'b0_100;    // eq #1
         5'd5: tab = 4'b0_101;    // ne #1
         5'd6: tab = 4'b1_010;    // lt #1
@@ -103,16 +101,15 @@ module cond (
         5'd19: tab = 4'b0_010;    // ge #32766
         5'd20: tab = 4'b1_010;    // lt #-32767
         5'd21: tab = 4'b1_010;    // lt #-32766
-        5'd22: tab = 4'b1_011;    // lo #2
-        5'd23: tab = 4'b0_011;    // hs #2
+        5'd22: tab = 4'b1_011;    // lo #10
+        5'd23: tab = 4'b0_011;    // hs #10
         5'd24: tab = 4'b0_011;    // hs #3
-        5'd25: tab = 4'b1_011;    // lo #4
-        5'd26: tab = 4'b0_011;    // hs #4
+        5'd25: tab = 4'b1_011;    // lo #32
+        5'd26: tab = 4'b0_011;    // hs #32
         5'd27: tab = 4'b1_011;    // lo #6
         5'd28: tab = 4'b1_011;    // lo #8
         5'd29: tab = 4'b0_011;    // hs #8
-        5'd30: tab = 4'b1_011;    // lo #256
-        5'd31: tab = 4'b0_011;    // hs #256
+        default: tab = 4'bx_xxx;    // free: no instruction encodes it
     endcase
 
     wire [3:0] field = {1'b0, insn[10:8]};

@@ -207,8 +207,8 @@ module immgen (
     always_comb case (n5)
         5'd0: ccon = 16'h0000;
         5'd1: ccon = 16'h0000;
-        5'd2: ccon = 16'h0000;
-        5'd3: ccon = 16'h0000;
+        5'd2: ccon = 16'h0004;
+        5'd3: ccon = 16'h0004;
         5'd4: ccon = 16'h0001;
         5'd5: ccon = 16'h0001;
         5'd6: ccon = 16'h0001;
@@ -227,16 +227,15 @@ module immgen (
         5'd19: ccon = 16'h7ffe;
         5'd20: ccon = 16'h8001;
         5'd21: ccon = 16'h8002;
-        5'd22: ccon = 16'h0002;
-        5'd23: ccon = 16'h0002;
+        5'd22: ccon = 16'h000a;
+        5'd23: ccon = 16'h000a;
         5'd24: ccon = 16'h0003;
-        5'd25: ccon = 16'h0004;
-        5'd26: ccon = 16'h0004;
+        5'd25: ccon = 16'h0020;
+        5'd26: ccon = 16'h0020;
         5'd27: ccon = 16'h0006;
         5'd28: ccon = 16'h0008;
         5'd29: ccon = 16'h0008;
-        5'd30: ccon = 16'h0100;
-        5'd31: ccon = 16'h0100;
+        default: ccon = 16'hxxxx;   // free: no instruction encodes it
     endcase
 
     // --- the mode mux, a tree on the column bits ------------------------------

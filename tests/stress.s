@@ -108,8 +108,20 @@ btarget:
         br      ge, r3, #32766, btarget   ; 3  does r3 += 2 overflow
         br      lt, r3, #-32767, btarget  ; 3  does r3-- underflow
         br      lt, r3, #-32766, btarget  ; 3  tagged decrement underflows
-        br      lo, r3, #256, btarget     ; 3  does r3 fit in a byte
-        br      hs, r3, #256, btarget     ; 3  ... and the other way
+        br      lo, r3, #10, btarget      ; 3  is r3 a digit, after - '0'
+        br      hs, r3, #32, btarget      ; 3  is r3 out of shift range
+        br      ne, r3, #4, btarget       ; 3  a flag word against 4
+        br      lo, r3, #256, btarget     ; 3  TWIN -> brclr #0xff00, does r3 fit in a byte
+        br      hs, r3, #256, btarget     ; 3  TWIN -> brset #0xff00
+        br      lt, r3, #0, btarget       ; 3  TWIN -> brset #0x8000
+        br      ge, r3, #0, btarget       ; 3  TWIN -> brclr #0x8000
+        br      gt, r3, #-1, btarget      ; 3  TWIN -> brclr #0x8000
+        br      ls, r3, #1, btarget       ; 3  TWIN -> brclr #0xfffe
+        br      hi, r3, #15, btarget      ; 3  TWIN -> brset #0xfff0
+        brclr   r3, #0xfff8, btarget      ; 3  TWIN -> br lo #8
+        brset   r3, #0xfff8, btarget      ; 3  TWIN -> br hs #8
+        brclr   r3, #0xffff, btarget      ; 3  TWIN -> br eq #0
+        brset   r3, #-1, btarget          ; 3  TWIN -> br ne #0
         br      hs, r3, #1, btarget       ; 3  REWRITE -> ne #0
         br      lo, r3, #1, btarget       ; 3  REWRITE -> eq #0
         br      gt, r3, #1, btarget       ; 3  REWRITE -> ge #2

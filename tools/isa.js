@@ -125,8 +125,8 @@ export function encodedBits(types, typeName) {
 //   enum    the index selects a NAME, because a condition is not a number
 //   combo   the index selects one entry per name in `parts`
 //
-// Returns undefined for an index no table entry covers - condimm5 has one free
-// slot, and a decoder must be able to say "that is not an instruction" rather
+// Returns undefined for an index no table entry covers - condimm5 has free
+// slots, and a decoder must be able to say "that is not an instruction" rather
 // than silently reading past the end of the array.
 export function decodeField(types, typeName, raw) {
   const t = types[typeName];

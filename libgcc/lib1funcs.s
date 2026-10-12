@@ -621,7 +621,7 @@ __udivmodhi4:
         ret                             ; 4
 
 .not_pow2:
-        mov     r5, #10                 ; 1   condimm5 has no 10, so compare
+        mov     r5, #10                 ; 1   condimm5 has no ne #10, so compare
         br      ne, r1, r5, .general    ; 1   against a register
 
         ; --- b is ten --------------------------------------------------------

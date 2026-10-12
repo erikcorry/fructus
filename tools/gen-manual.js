@@ -24,6 +24,7 @@ import { join } from 'path';
 import { loadSpec, root, decodeEncoding, encodedBits, intRange } from './isa.js';
 import { Machine } from './sim.js';
 import { Pdf, A4, width } from './pdf.js';
+import { brEquivalents, spellings } from './brequiv.js';
 
 const spec  = loadSpec();
 const types = spec.optype;
@@ -495,7 +496,65 @@ function valueTable(flow, name) {
     ];
     flow.para('Also accepted: ' + extra.join('; ') + '.', { size: 8, gap: 0 });
   }
+  if (t.kind === 'combo' && t.values.length < 1 << t.bits)
+    flow.para(`Field values ${t.values.length}–${(1 << t.bits) - 1} are free: no instruction encodes them.`, { size: 8, gap: 0 });
   flow.y += 6;
+}
+
+// --- conditions, their spellings, and the branches that are each other ----
+
+// Every condition name in prose, from cond3's `meaning`, in the order a reader
+// looks for them: equality, then signed, then unsigned, then overflow.
+function conditionPages(flow) {
+  const m = types.cond3.meaning ?? {};
+  const order = ['eq', 'ne', 'lt', 'le', 'gt', 'ge', 'lo', 'ls', 'hi', 'hs', 'cc', 'cs', 'vs', 'vc'];
+  const names = [...order, ...Object.keys(m).filter((n) => !order.includes(n))].filter((n) => m[n]);
+  if (!names.length) return;
+  flow.heading('Conditions');
+  flow.para('A condition compares the first operand, a, with the second, b or the constant, in that order: lt means a < b.  The letters are ARM\'s: signed comparisons say Less and Greater, unsigned ones LOwer and HIgher.', { size: 8.5 });
+  flow.table([{ title: 'Name', w: 40, font: 'C' }, { title: 'Branches when', w: W - 40 }],
+    names.map((n) => [n, m[n]]), { size: 8.2 });
+}
+
+// Each condimm5 entry with every other way of writing it - `le #3` is `lt #4`,
+// and `eq #32767` is `ge #32767` because nothing is above 32767.  Found by
+// comparing truth sets, as the assemblers do.
+function constantSpellings(flow) {
+  const t = types.condimm5;
+  flow.heading('Spellings of the Constant Comparisons');
+  flow.para('Each entry of condimm5 is a test on the register, and most tests can be written more than one way.  The assembler accepts any of them and encodes the entry; a disassembler prints the entry\'s own spelling.', { size: 8.5 });
+  const fmt = (c, k) => `${c} #${k}`;
+  flow.table([{ title: 'Field', w: 30 }, { title: 'Entry', w: 70, font: 'C' }, { title: 'Also written', w: W - 100, font: 'C' }],
+    t.values.map(([c, k], i) => [String(i), fmt(c, k),
+      spellings(spec, c, k).filter((s) => !(s.cond === c && (s.imm & 0xffff) === (k & 0xffff)))
+        .map((s) => fmt(s.cond, s.imm)).join(', ') || '\u2014']), { size: 8.2 });
+}
+
+// The branches that are the same test written with the other instruction,
+// listed on both pages: `br lt, ra, #0` assembles as `brset ra, #0x8000`, and
+// `brclr ra, #0xfff8` as `br lo, ra, #8`.  From tools/brequiv.js, which the
+// assemblers read too.
+const EQUIV = brEquivalents(spec);
+function twinPages(flow, g) {
+  const rows = EQUIV.filter((e) => e.from.mnemonic === g.mnemonic || e.to.mnemonic === g.mnemonic);
+  if (!rows.length) return;
+  const hex = (v) => '#0x' + v.toString(16).toUpperCase().padStart(4, '0');
+  const side = (s, reg) => s.cond === null
+    ? `${s.mnemonic} ${reg}, ${hex(s.imm)}`
+    : `${s.mnemonic} ${s.cond}, ${reg}, #${s.imm >= 0x8000 && !['lo', 'ls', 'hi', 'hs'].includes(s.cond) ? s.imm - 0x10000 : s.imm}`;
+  // One row per target, with every spelling that reaches it.
+  const byTarget = new Map();
+  for (const e of rows) {
+    const k = side(e.to, 'ra');
+    if (!byTarget.has(k)) byTarget.set(k, []);
+    byTarget.get(k).push(side(e.from, 'ra'));
+  }
+  flow.heading('Same Test, Other Instruction');
+  flow.para('Some comparisons against a constant are bit tests: R[a] <u 256 holds exactly when none of bits 8–15 is set, and R[a] < 0 when bit 15 is.  When the test written has no encoding of its own but the other instruction encodes the same test, the assembler uses that instead, in either direction - same length, same cycles, same branch.  A disassembler prints what was encoded.', { size: 8.5 });
+  // One spelling to a row, since a spelling has commas of its own, and the
+  // target repeated on each so that no row is read against an empty cell.
+  flow.table([{ title: 'Written', w: W - 150, font: 'C' }, { title: 'Assembles as', w: 150, font: 'C' }],
+    [...byTarget].flatMap(([to, from]) => from.map((f) => [f, to])), { size: 8.2 });
 }
 
 // --- one mnemonic's page(s) --------------------------------------------------
@@ -655,6 +714,9 @@ function instructionPages(g) {
       flow.heading('Operand Values');
       for (const n of used) valueTable(flow, n);
     }
+    if (used.includes('cond3')) conditionPages(flow);
+    if (used.includes('condimm5')) constantSpellings(flow);
+    twinPages(flow, g);
 
     flow.heading('Operation');
     for (const insn of g.views) {

@@ -79,8 +79,11 @@ const nibRows = [0, 1, 2, 3].map((c) =>
   `        3'b1_${c.toString(2).padStart(2, '0')}: nib = 4'b${c === OVERRIDE ? 'xxxx' : nibble[c].toString(2).padStart(4, '0')};`)).join('\n');
 const specialRows = special.map((v, row) => `        2'd${row}: special = ${hex16(v)};`).join('\n');
 
+// A table shorter than its index leaves the rest free: no instruction encodes
+// them, so they are don't-cares rather than a latch - condimm5 holds slots back.
 const caseBody = (name, vals, w) =>
-  vals.map((v, n) => `        ${w}'d${n}: ${name} = ${hex16(v)};`).join('\n');
+  vals.map((v, n) => `        ${w}'d${n}: ${name} = ${hex16(v)};`).join('\n')
+  + (vals.length < 1 << w ? `\n        default: ${name} = 16'hxxxx;   // free: no instruction encodes it` : '');
 
 const caseTable = (name, vals, w, sel) =>
   `    always_comb case (${sel})\n` +

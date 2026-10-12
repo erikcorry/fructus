@@ -16,8 +16,9 @@
 // tools/fpga-system.py.  Its floor is the pixel clock, 25.175 MHz, which is
 // also the processor's clock in that system.
 //
-// --jobs N places N seeds at a time, rather than one a core: a placement of
-// the system takes the better part of a gigabyte.
+// --jobs N places N seeds at a time, rather than one a core.  A placement of
+// the system takes the better part of a gigabyte, so one a core fits only
+// while /tmp, a RAM filesystem, isn't holding big leftovers.
 //
 // WHY SIXTEEN SEEDS AND A MEDIAN.  nextpnr's placer is randomised, and a single
 // placement of this design wanders by two or three MHz - enough to reverse the

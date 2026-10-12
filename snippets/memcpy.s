@@ -113,8 +113,9 @@ memcpy2:
 .done:
         ret
 
-; `lo` and `hs` are the unsigned pair, and 2 is in the condimm5 table, so both
-; tests are three bytes with no register loaded first.  Signed `lt` here would
+; `lo` and `hs` are the unsigned pair, and against 2 both are bit tests - any
+; of bits 1-15 set - so they assemble as `brclr` and `brset r2, #0xfffe`:
+; three bytes with no register loaded first.  Signed `lt` here would
 ; be a bug waiting for a count above 32767.
 
 

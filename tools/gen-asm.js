@@ -26,6 +26,7 @@
 
 import { loadSpec, decodeEncoding, nameIndex } from './isa.js';
 import { buildDecoder } from './decode.js';
+import { brEquivalents } from './brequiv.js';
 
 const spec = loadSpec();
 const t = spec.optype;
@@ -292,7 +293,7 @@ for (const r of rows)
 // condimm5: the spellings the assembler accepts
 // =============================================================================
 //
-// The table holds 32 (condition, constant) pairs, and a programmer may write a
+// The table holds up to 32 (condition, constant) pairs, and a programmer may write a
 // different pair that means the same thing - `le #3` for `lt #4`, `hs #1` for
 // `ne #0`.  Those are found by comparing truth sets at the instruction's own
 // width, rather than by a rule about +/-1, because the interesting ones are not
@@ -354,6 +355,11 @@ for (const w of WIDTHS) {
         accept.push({ cond: c, imm: u16(kk), index: idx, width: w });
       }
 }
+
+// The same test spelled with the other branch: `br lo, ra, #256' when
+// condimm5 has no entry for it is `brclr ra, #0xff00', and `brclr ra, #0xfff8'
+// when no mask table holds it is `br lo, ra, #8'.  See brequiv.js.
+const equiv = brEquivalents(spec);
 
 // =============================================================================
 // Aliases: pure text rewrites, exactly as customasm gets them
@@ -504,7 +510,7 @@ typedef struct fructus_cand
 extern const fructus_cand fructus_opcode_cand[];
 extern const short fructus_opcode_first[257];	/* [b] .. [b+1] is b's range */
 
-/* The condimm5 spellings the assembler accepts: the 32 table entries, plus
+/* The condimm5 spellings the assembler accepts: the table's entries, plus
    every other way of writing the same predicate.  \`le #3' and \`lt #4' are one
    entry; so are \`hs #1' and \`ne #0'.  Derived by comparing truth sets at both
    8 and 16 bits, not by a rule about +/-1.  */
@@ -518,6 +524,23 @@ typedef struct fructus_condimm
 
 extern const fructus_condimm fructus_condimm_accept[];
 extern const unsigned int fructus_ncondimm_accept;
+
+/* A branch whose test has no encoding of its own but is the same test as an
+   encodable branch of the other kind: \`br lo, ra, #256' is
+   \`brclr ra, #0xff00', and \`brclr ra, #0xfff8' is \`br lo, ra, #8'.  COND
+   is NULL on the mask side.  Tried when no form takes the line as written.  */
+typedef struct fructus_brequiv
+{
+  const char *   mnemonic;
+  const char *   cond;
+  unsigned short imm;
+  const char *   to_mnemonic;
+  const char *   to_cond;
+  unsigned short to_imm;
+} fructus_brequiv;
+
+extern const fructus_brequiv fructus_brequiv_accept[];
+extern const unsigned int fructus_nbrequiv_accept;
 
 /* An alias is a text rewrite: it captures each operand's text unexamined and
    builds the line the target would have been written as, then ordinary form
@@ -629,6 +652,17 @@ ${accept.map((a) => `    { "${a.cond}", 0x${a.imm.toString(16).padStart(4, '0')}
 
 const unsigned int fructus_ncondimm_accept = ${accept.length};
 
+const fructus_brequiv fructus_brequiv_accept[] =
+  {
+${equiv.map((e) => {
+  const c = (x) => (x === null ? 'NULL' : `"${x}"`);
+  return `    { "${e.from.mnemonic}", ${c(e.from.cond)}, 0x${e.from.imm.toString(16).padStart(4, '0')}, `
+       + `"${e.to.mnemonic}", ${c(e.to.cond)}, 0x${e.to.imm.toString(16).padStart(4, '0')} }`;
+}).join(',\n')}
+  };
+
+const unsigned int fructus_nbrequiv_accept = ${equiv.length};
+
 const fructus_alias fructus_aliases[] =
   {
 ${aliases.map((a) => `    { "${a.mnemonic}", "${a.syntax}", ${a.nslots}, "${a.body}" }`).join(',\n')}
@@ -641,4 +675,5 @@ ${nameArr('fructus_cond_accept', condAccept)}`);
 }
 
 process.stderr.write(`gen-asm: ${rows.length} forms, ${accept.length} condimm5 spellings, `
+                   + `${equiv.length} branch equivalents, `
                    + `${aliases.length} aliases\n`);

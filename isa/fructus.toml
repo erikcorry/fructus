@@ -738,15 +738,35 @@ values = [
 # Against ARM's sixteen, only `mi` and `pl` are absent, and deliberately.  `mi`
 # is N=1 while `lt` is N!=V: they differ only when the subtraction overflows,
 # and in that case `lt` is the correct signed comparison and `mi` is the broken
-# one.  Sign-testing a single value - `mi`'s real use - is `lt` against #0 in
-# the condimm5 table, or `brset ra, #0x8000` on the sign bit directly.  Subtracting
-# zero cannot overflow, so those are provably identical to `mi`.
+# one.  Sign-testing a single value - `mi`'s real use - is `br lt, ra, #0`,
+# which assembles as `brset ra, #0x8000` on the sign bit directly.  Subtracting
+# zero cannot overflow, so that is provably identical to `mi`.
+#
+# `meaning` is each spelling in prose, for the manual.  The names are ARM's:
+# SIGNED comparisons say less and greater, UNSIGNED ones lower and higher, so
+# the second letter is all that separates `lt` from `lo`.
 [optype.cond3]
 kind    = "enum"
 bits    = 3
 names   = ["lt", "lo", "le", "ls", "eq", "ne", "vs", "vc"]
 aliases = { cc = "lo" }
 swapped = { gt = "lt", ge = "le", hi = "lo", hs = "ls", cs = "ls" }
+
+  [optype.cond3.meaning]
+  eq = "EQual: the two values are the same bit pattern.  Signed and unsigned agree."
+  ne = "Not Equal: the two values differ in any bit."
+  lt = "Less Than, signed: a < b reading both as two's complement, -32768 to 32767.  -1 is less than 0."
+  le = "Less than or Equal, signed: a <= b as two's complement."
+  gt = "Greater Than, signed: a > b as two's complement.  Encoded as lt with the operands exchanged."
+  ge = "Greater than or Equal, signed: a >= b as two's complement.  Encoded as le with the operands exchanged."
+  lo = "LOwer, unsigned: a < b reading both as 0 to 65535.  0xffff is the largest value, not -1."
+  ls = "Lower or Same, unsigned: a <= b as 0 to 65535."
+  hi = "HIgher, unsigned: a > b as 0 to 65535.  Encoded as lo with the operands exchanged."
+  hs = "Higher or Same, unsigned: a >= b as 0 to 65535.  Encoded as ls with the operands exchanged."
+  cc = "Carry Clear: another name for lo, from ARM, where a - b clears the carry flag exactly when it borrows - when a is lower.  Fructus has no flags; only the name is kept."
+  cs = "Carry Set: another name for hs, from ARM - a - b does not borrow."
+  vs = "oVerflow Set: a - b does not fit in a signed 16-bit result - the true difference is above 32767 or below -32768.  Registers only: there is no vs against a constant, and none is needed, since the overflow tests that matter are plain comparisons (see condimm5)."
+  vc = "oVerflow Clear: a - b fits in a signed 16-bit result.  Registers only."
 
 # FIVE BITS THAT CARRY A CONDITION AND A CONSTANT TOGETHER, so a compare against
 # a small literal is one three-byte instruction rather than a load and a branch.
@@ -806,6 +826,19 @@ swapped = { gt = "lt", ge = "le", hi = "lo", hs = "ls", cs = "ls" }
 # `x <u 1` and `x == 0`.  check.js compares TRUTH SETS rather than spellings, so
 # a slot spent on a synonym fails the build instead of quietly halving the table.
 #
+# NO ENTRY IS A MASK TEST EITHER, which is the same rule one instruction over.
+# brclr and brset ask whether `R[a] & mask` is zero, in the same three bytes,
+# and when the mask is a run of high ones that question is an unsigned bound:
+# `x <u 256` is `(x & 0xff00) == 0`, and the sign bit makes `x < 0` a brset of
+# 0x8000.  Eight entries here used to be such twins - `lt` and `ge #0`, and
+# `lo` and `hs` against 2, 4 and 256 - and carried about a quarter of every
+# compare-with-constant in SOM++, libc, libgcc, libsupc++ and CoreMark while
+# adding nothing those two could not already encode.  check.js now fails an
+# entry whose truth set is a mask branch's, and the spellings still assemble:
+# gas, customasm and gcc take the twin, in both directions, so `br lt, ra, #0`
+# is `brset ra, #0x8000` and `brclr ra, #0xfff8`, whose mask neither table
+# holds, is `br lo, ra, #8`.  tools/brequiv.js derives the list.
+#
 # THE OTHER SPELLINGS ARE DERIVED, NOT LISTED.  Every `le`, `gt`, `ls` and `hi`
 # a programmer writes assembles onto whichever entry means the same thing, and
 # tools/gen-customasm.js works out which by comparing truth sets rather than by
@@ -825,8 +858,12 @@ bits   = 5
 parts  = ["cond", "imm"]
 domain = { cond = "cond3", imm = "int16" }
 values = [
-  # signed and equality, against 0, 1, -1 and 2
-  ["eq",  0], ["ne",  0], ["lt",  0], ["ge",  0],
+  # equality against 0 and 4; equality and signed bounds against 1, -1 and 2.
+  # `lt #0' and `ge #0' are not here: they are `brset' and `brclr #0x8000',
+  # the sign bit, in the same three bytes - see NO ENTRY IS A MASK TEST below.
+  # #4 took their slots for libsupc++, whose type_info walks test a flags word
+  # against 4 in five places and paid a `mov' and a register for each.
+  ["eq",  0], ["ne",  0], ["eq",  4], ["ne",  4],
   ["eq",  1], ["ne",  1], ["lt",  1], ["ge",  1],
   ["eq", -1], ["ne", -1], ["lt", -1], ["ge", -1],
   ["eq",  2], ["ne",  2], ["lt",  2], ["ge",  2],
@@ -837,20 +874,21 @@ values = [
   # is the largest signed value there is, and a slot spent on the synonym would
   # buy nothing.
   ["ge", 32767], ["ge", 32766], ["lt", -32767], ["lt", -32766],
-  # unsigned, against the constants a bound check actually uses.  1 is absent
-  # because `lo #1` and `hs #1` are zero tests, and `eq #0` and `ne #0` are too.
-  ["lo",  2], ["hs",  2],             ["hs",  3],
-  ["lo",  4], ["hs",  4], ["lo",  6],
+  # unsigned, against the bounds code actually checks.  None is a power of two
+  # whose mask brclr and brset already hold: `lo #2', `lo #4', `lo #16' and
+  # `lo #256' are `brclr #0xfffe', `#0xfffc', `#0xfff0' and `#0xff00'.  #8 is
+  # here because 0xfff8 is in neither mask table.
+  #
+  # IS IT A DIGIT: `c - '0' <u 10', in every number parser - SOM's
+  # ParseInteger, vsnprintf, strtoul, CoreMark's state machine - and seven
+  # `mov' plus two-register branches across those before this entry.  IS IT A
+  # SHIFT COUNT: a 32-bit shift on a 16-bit machine asks whether its count
+  # reaches 32, and the C++ personality routine asks the same of a ULEB's
+  # shift.  1 is absent because `lo #1' and `hs #1' are zero tests.
+  ["lo", 10], ["hs", 10],             ["hs",  3],
+  ["lo", 32], ["hs", 32], ["lo",  6],
   ["lo",  8], ["hs",  8],
-  # IS IT A BYTE.  The entry the freed constants bought, and it pays for itself
-  # in libgcc: __umulhisi3 asks whether its larger operand fits in eight bits,
-  # which was `lsr r5, r0, #8` then `br eq, r5, #0` - five bytes, two
-  # instructions and the assembler scratch - and is one three-byte instruction
-  # with no scratch now.  Both senses, because a branch needs whichever way its
-  # fall-through goes.  `lo #3` and `hs #6` paid for them and for the fourth
-  # overflow test: they were the least useful entries in the block, since three
-  # and six are not shapes anything actually bounds against.
-  ["lo", 256], ["hs", 256],
+  # Indices 30 and 31 are free, held back until a corpus shows what earns them.
 ]
 
 # Spellings the assembler accepts and canonicalises onto an entry that IS in the
@@ -2707,8 +2745,27 @@ extra_cycles = 4
 
 
 # --- br ---------------------------------------------------------------------
-# Conditional subtract-and-branch.  The comparison is a subtract whose result
-# is discarded; only the condition it sets is used, at 16-bit width.
+# Compare and branch.  `br cond, ra, rb, L` branches to L when R[a] cond R[b]
+# holds, and `br cond, ra, #k, L` when R[a] cond k does; otherwise execution
+# falls through to the next instruction.  L must lie within -128..+127 bytes
+# of the next instruction.  Nothing else changes: there are no flags, so a
+# comparison and the branch that uses it are always one instruction.
+#
+# The conditions are two letters, eq, ne, lt, le, gt, ge, lo, ls, hi, hs, vs
+# and vc, plus cc and cs for lo and hs, and are explained one by one under
+# Conditions.  Every one is available between two registers.  Against a
+# constant, the pair (condition, constant) must be one of the 30 the condimm5
+# table holds - a constant costs no extra byte because the pair is one 5-bit
+# index - though each pair can be written in all of its spellings: `br le, ra,
+# #3` is the entry `lt #4`, and `br eq, ra, #32767` is `ge #32767`, since
+# nothing is above 32767.  A comparison the table lacks may still be one
+# instruction, because some comparisons are bit tests: `x <u 256` asks whether
+# any of bits 8-15 is set, and `x < 0` is the sign bit.  The assembler writes
+# those as `brclr` or `brset`, in the same three bytes - see Same Test, Other
+# Instruction.  Anything else needs the constant in a register first.
+#
+# HOW IT WORKS.  The comparison is a subtract whose result is discarded; only
+# the condition it sets is used, at 16-bit width.
 #
 # The two-register form is the `rsb` three-register encoding with its
 # DESTINATION field replaced by a 3-bit condition, plus a displacement byte:
@@ -2716,10 +2773,6 @@ extra_cycles = 4
 #     byte 0:  1 0 1 0 0 1 1 z    0xa6/0xa7
 #     byte 1:  c c c b b b e e    condition, SECOND reg, first reg bits 2 and 1
 #     byte 2:  t t t t t t t t    signed displacement from the next instruction
-#
-# BIT 3 IS CLEAR IN BOTH FORMS.  It was a width bit, putting a byte-wide row
-# eight opcodes below this one the way st/st8 and ld/ld8 sit.  That row is free
-# now and the bit is a constant.
 #
 # THE TWO REGISTERS ARE THE OTHER WAY ROUND FROM THE SYNTAX, and that is what
 # lets the comparison be an `rsb` with no extra multiplexing.  `rsb rd, ra, rb`
@@ -2991,19 +3044,10 @@ semantics = "R[d] = (R[a] & mask) != 0"
 # Push and pop are separate microcode state machines and the first opcode
 # selects which, so nothing here is shared between them.
 #
-# THE TWO WIDTHS HAVE DIFFERENT JOBS, and that is what sets the shape of this
-# block.  8-bit push and pop exist for ARGUMENTS: a char on the stack is one
-# byte, pushed on its own, and there is never a reason to move two of them at
-# once.  16-bit push and pop exist for SAVING REGISTERS across a call, which is
-# always several at a time and always in a fixed order.  So the byte forms are
-# single-register only and the word forms come in ones, twos and threes.
-#
-#     push8  ra                       one byte, one register
-#     pop8   ra                       zero extended
 #     push ra                       one word
 #     push ra, rb                   two
 #     push ra, rb, rc               three - TWO opcodes
-#     pop  ra   / ra, rb / ra, rb, rc
+#     pop  ra / ra, rb / ra, rb, rc
 #
 # EVERY ONE OF THESE IS WRITTEN BY HAND.  There is no coalescing: the assembler
 # does not merge adjacent pushes and the disassembler does not split them, so
@@ -3037,12 +3081,6 @@ semantics = "R[d] = (R[a] & mask) != 0"
 #     0x95    "                  0x9d    "
 #     0x96  push ra, rb, rc      0x9e  pop  ra, rb, rc
 #     0x97    "                  0x9f    "
-#
-# THE ROW IS FULL, and the four even slots that were `push8` and `pop8` are
-# what made the three-register block moves possible: a third register needs an
-# opcode bit, so it needs an ADJACENT EVEN/ODD PAIR, and every odd slot in this
-# row was already free while every even one was taken.  See the stm/ldm section
-# below for what replaced them and why the byte forms were affordable to lose.
 #
 # ORDER.  A push writes its registers left to right, and the stack grows down,
 # so the FIRST register named lands at the HIGHEST address.  A pop reads left to
@@ -3112,18 +3150,6 @@ semantics = "base = sp; M16[base - 2] = R[a]; M16[base - 4] = R[b]; M16[base - 6
 
 
 # --- pop --------------------------------------------------------------------
-# THERE ARE NO BYTE-WIDE STACK OPERATIONS.  `push8` and `pop8` were here and
-# are gone; the four opcodes they held are the three-register stm and ldm
-# below, which could not have existed without them.
-#
-# WHAT IT COSTS: NOTHING NOW.  While the ABI passed a byte argument on the
-# stack unpadded, a caller wrote `add sp, sp, #-1` and then `st8`, four bytes
-# where `push8` was two.  The ABI now gives a byte argument a word slot with
-# the value in its low byte - see isa/abi.s - so the word `push` of the
-# register holding it is the byte push, and sp stays even.
-#
-# `pop8` was rarer still - nothing in libc, nothing in libgcc, and no pattern
-# in the compiler emitted it.
 [[insn]]
 mnemonic = "pop"
 summary  = "pop a word into ra"

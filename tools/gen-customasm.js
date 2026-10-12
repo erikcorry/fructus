@@ -73,6 +73,7 @@
 //
 // =============================================================================
 
+import { brEquivalents } from './brequiv.js';
 import { join } from 'node:path';
 import { loadSpec, decodeEncoding, intRange, nameIndex, root } from './isa.js';
 
@@ -262,7 +263,7 @@ function rulesFor(insn, form, formIdx, swapped = false) {
     if (et && et.kind === 'combo') {
       // Every table entry, plus every OTHER SPELLING OF THE SAME PREDICATE,
       // which encodes the index of the entry it canonicalises onto - so
-      // `hs #1` assembles as `ne #0` and `hi #255` as `hs #256`.
+      // `hs #1` assembles as `ne #0` and `hi #9` as `hs #10`.
       //
       // These are derived, not listed.  A hand-written list was fine while the
       // constants were an imm3 index and there were thirteen of them, and it
@@ -624,6 +625,25 @@ for (const al of spec.alias ?? []) {
     emit(`        ${rewrite}`);
     emit('    }');
   }
+}
+
+// The same test spelled with the other branch - `br lo, ra, #256' as
+// `brclr ra, #0xff00', `brclr ra, #0xfff8' as `br lo, ra, #8' - when the
+// spelling written has no encoding and its twin does.  brequiv.js lists only
+// those, so these never tie with a real rule: every real rule for the same
+// line fails its constant's assert.
+for (const e of brEquivalents(spec)) {
+  const from = e.from.cond === null
+    ? `${e.from.mnemonic} {a: reg}, #{k}, {off}`
+    : `${e.from.mnemonic} ${e.from.cond}, {a: reg}, #{k}, {off}`;
+  const to = e.to.cond === null
+    ? `${e.to.mnemonic} {a}, #${hex(e.to.imm)}, {off}`
+    : `${e.to.mnemonic} ${e.to.cond}, {a}, #${e.to.imm >= 0x8000 ? e.to.imm - 0x10000 : e.to.imm}, {off}`;
+  emit(`    ${from} =>`);
+  emit(`    {   ; the same test as ${e.to.mnemonic}`);
+  emit(`        $assert((k & 0xffff) == ${hex(e.from.imm)})`);
+  emit(`        asm { ${to} }`);
+  emit('    }');
 }
 emit('}');
 emit();

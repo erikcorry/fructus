@@ -92,7 +92,8 @@ const used = [...new Set(table.map((e) => `${e.neg ? 'not ' : ''}${e.name}`))];
 const rows = table.map((e) =>
   `//     ${String(e.i).padStart(2)}  ${`${e.C} #${e.k}`.padEnd(12)} ${e.neg ? 'not ' : '    '}${e.name}`).join('\n');
 const cases = table.map((e) =>
-  `        5'd${e.i}: tab = 4'b${e.neg}_${e.c.toString(2).padStart(3, '0')};    // ${e.C} #${e.k}`).join('\n');
+  `        5'd${e.i}: tab = 4'b${e.neg}_${e.c.toString(2).padStart(3, '0')};    // ${e.C} #${e.k}`).join('\n')
+  + (table.length < 32 ? `\n        default: tab = 4'bx_xxx;    // free: no instruction encodes it` : '');
 
 process.stdout.write(`// =============================================================================
 // cond.sv - the condition a comparison tests

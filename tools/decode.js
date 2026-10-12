@@ -83,7 +83,7 @@ export function buildDecoder(spec) {
 }
 
 // Decode one instruction at `addr`.  Returns null if no form matches, which is
-// how an unused encoding is reported - condimm5 has a free slot, so "these
+// how an unused encoding is reported - condimm5 has free slots, so "these
 // bytes are not an instruction" is a state the machine can genuinely reach.
 export function decode(dec, mem, addr) {
   const b0 = mem[addr & 0xffff];

@@ -162,9 +162,10 @@ ${arr('fructus_imm3', t.imm3.values)}
 ${arr('fructus_shift3', t.shift3.values)}
 ${arr('fructus_immbit5', t.immbit5.values)}
 ${arr('fructus_immask5', t.immask5.values)}
+/* A free index has no condition: no instruction encodes it.  */
 const char * const fructus_condimm5_cond[32] =
   {
-${cd.map((e, i) => `    "${e[0]}"${i < cd.length - 1 ? ',' : ' '}`).join('\n')}
+${Array.from({ length: 32 }, (_, i) => `    ${cd[i] ? `"${cd[i][0]}"` : 'NULL'}${i < 31 ? ',' : ' '}`).join('\n')}
   };
 
 const short fructus_condimm5_imm[32] =

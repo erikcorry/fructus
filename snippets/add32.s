@@ -79,12 +79,10 @@ no_carry3:
 ; The boundary behaves: at k = 0 the sum is XL and `XL >= 0` is always true, so
 ; it correctly reports no carry.
 ;
-; THIS WORKS FOR k IN {1, 2, 3, 4, 6, 8} - the imm3 values, minus the two that
-; are degenerate as unsigned bounds.  That is not a coincidence: condimm5's
-; unsigned constants were chosen to be imm3 precisely so that widening an
-; `add #k` can test against the same k.  Under the earlier powers-of-two table
-; this very sequence was impossible for 3 and 6, and cost nine bytes and a
-; scratch register instead of seven.
+; THIS WORKS FOR EVERY k WHOSE `hs #k` IS ONE INSTRUCTION: 3, 8, 10 and 32 from
+; the condimm5 table, and the powers of two 2, 4, 16, 256, 4096 and 16384,
+; which are bit tests and assemble as `brset r0, #-k` in the same three bytes.
+; Any other k costs nine bytes and a scratch register instead of seven.
 ;
 ; DECREMENT IS NOT THIS SHAPE.  `+= -1` is a 32-bit add of 0xffffffff, so the
 ; high word adds 0xffff too rather than just taking a carry, and the sequence

@@ -164,6 +164,9 @@ for (let sel = 0; sel <= 5; sel++)
   for (const cimm of [0, 1])
     for (let top = 0; top < 8192; top++) {
       const insn = (top << 11) | ((((top * 157) ^ (top >> 5)) & 0xff) << 3) | sel;
+      // A free condimm5 index encodes no instruction, so immgen may say
+      // anything there - its table leaves those rows don't-care.
+      if (want(insn, cimm) === undefined) continue;
       vecs.push(`${hex6(insn)} ${cimm} ${hex4(want(insn, cimm))}`);
     }
 

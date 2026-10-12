@@ -313,6 +313,40 @@ for (const [name, t] of Object.entries(types)) {
   if (unmodelled)
     err(`optype ${name}: ${unmodelled} entries use a condition check.js cannot evaluate`);
 
+  // NOR MAY AN ENTRY BE A MASK TEST.  brclr and brset ask whether R[a] & mask
+  // is zero, in the same three bytes, and some of those questions are
+  // comparisons: `lo #256' is `brclr #0xff00', `lt #0' is `brset #0x8000'.  An
+  // entry that one of them already asks is a slot spent on a synonym exactly
+  // as a duplicate inside the table is, and the assemblers and gcc reach the
+  // mask branch for that spelling anyway (tools/brequiv.js).  The mask tables
+  // are whatever the mask branches' fields read, found by their semantics.
+  if (name === 'condimm5') {
+    const maskSets = new Map();
+    for (const insn of spec.insn) {
+      const sm = /^if \(\(R\[a\] & mask\) (==|!=) 0\)/.exec(insn.semantics ?? '');
+      if (!sm) continue;
+      for (const form of insn.form)
+        for (const [, tn] of Object.entries(form.fields ?? {})
+               .filter(([, f]) => f.startsWith('mask:')).map(([l, f]) => [l, f.split(':')[1].split('[')[0]]))
+          for (const m of types[tn]?.values ?? []) {
+            const bits = Buffer.alloc(0x10000 / 8);
+            for (let x = 0; x < 0x10000; x++)
+              if (((x & m & 0xffff) !== 0) === (sm[1] === '!='))
+                bits[x >> 3] |= 1 << (x & 7);
+            const key = bits.toString('base64');
+            if (!maskSets.has(key))
+              maskSets.set(key, `${insn.mnemonic} #0x${(m & 0xffff).toString(16).padStart(4, '0')}`);
+          }
+    }
+    for (const entry of t.values) {
+      const set = truthSet(entry[ci], entry[ki], 16);
+      const twin = set && maskSets.get(set.toString('base64'));
+      if (twin)
+        err(`optype ${name}: '${entry[ci]} #${entry[ki]}' is '${twin}', which encodes `
+          + `in the same three bytes - the slot is a synonym`);
+    }
+  }
+
   // Rewrites: spellings the assembler accepts and canonicalises onto an entry
   // that IS in the table.  Each must be a genuine identity - checked the same
   // way the duplicates are, by comparing truth sets - with a source that is not
