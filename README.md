@@ -21,6 +21,10 @@ cache or branch predictor.
 
 ![The Fructus opcode map: 159 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
 
+The [instruction set reference](docs/fructus-isa.pdf) (PDF) has a page for every
+instruction: each of its encodings in hex and drawn bit by bit, its cycle
+counts, its semantics and the spec's notes on it.
+
 The design is RISC-inspired:
 - The only memory operations are load, store, push, pop, store-multiple, load-multiple.
 - 8 16 bit registers, and all ALU instructions can use all 8.
@@ -180,6 +184,7 @@ tests/                the test suite
 | `npm run microtan -- <rom>` | runs a ROM on the simulated board |
 | `just profile <prog> [<prog2>]` | where a compiled program's cycles go — by function, kind of cost, mnemonic and, with `-g`, source line — or two builds compared row by row. `--from`/`--to` a symbol, `--per`, `--lines`, `--kinds` |
 | `npm run map` | the opcode map: `build/opcodes.html` and `docs/opcodes.svg` |
+| `npm run manual` | the instruction set reference, `docs/fructus-isa.pdf`, from the spec |
 | `npm run map6502` | the same map for the NMOS 6502: `build/6502.html` and `docs/6502.svg` |
 | `npm run rtl` | the generated files in `rtl/`, from the spec |
 | `npm test` | everything, `npm run check` included |
