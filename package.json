@@ -13,7 +13,6 @@
     "torture": "node tools/torture.mjs",
     "test": "sh tests/run.sh",
     "sim": "node tools/sim.js",
-    "microtan": "node tools/microtan.js",
     "map": "mkdir -p build docs && node tools/gen-opcode-map.js > build/opcodes.html && node tools/gen-opcode-map.js --svg > docs/opcodes.svg && echo \"build/opcodes.html docs/opcodes.svg\"",
     "map6502": "mkdir -p build docs && node tools/gen-6502-map.js > build/6502.html && node tools/gen-6502-map.js --svg > docs/6502.svg && echo \"build/6502.html docs/6502.svg\"",
     "manual": "mkdir -p docs && node tools/gen-manual.js > docs/fructus-isa.pdf && echo docs/fructus-isa.pdf"

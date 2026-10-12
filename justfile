@@ -82,10 +82,6 @@ rom *sources='rom/hello.s': build-tools
     echo "build/fructus.rom: 16384 bytes, $((16#$text)) in .text"
     echo "reset slot at 0xfffc: opcode 0x$op, jmp 0x$hi$lo"
 
-# Run a ROM image on the microtan board.
-run-rom rom='build/fructus.rom' *args:
-    @node tools/microtan.js {{rom}} {{args}}
-
 # Remove the toolchain build tree.  The installed copy is left alone.
 clean-tools:
     rm -rf {{build}}

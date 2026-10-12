@@ -170,7 +170,6 @@ tools/                the toolchain, all driven by the TOML
 rtl/                  hardware, generated from the spec - see below
 libc/                 a tiny libc, sized for a machine with 64K
 snippets/             worked routines, with their byte counts measured
-tangerine/            the Microtan monitor ROM
 tests/                the test suite
 ```
 
@@ -181,7 +180,6 @@ tests/                the test suite
 | `npm run check` | validates the encoding invariants and the object format, prints the opcode census |
 | `npm run gen` | emits `build/fructus.asm`, a customasm ruledef |
 | `npm run sim -- <bin>` | runs a flat binary. `--trace`, `--pc`, `--sp`, `--max` |
-| `npm run microtan -- <rom>` | runs a ROM on the simulated board |
 | `just profile <prog> [<prog2>]` | where a compiled program's cycles go — by function, kind of cost, mnemonic and, with `-g`, source line — or two builds compared row by row. `--from`/`--to` a symbol, `--per`, `--lines`, `--kinds` |
 | `npm run map` | the opcode map: `build/opcodes.html` and `docs/opcodes.svg` |
 | `npm run manual` | the instruction set reference, `docs/fructus-isa.pdf`, from the spec |
@@ -406,8 +404,6 @@ The suite is layered, and each layer catches something the one below it cannot.
 - **It computes the right answer.** `tests/sim-check.mjs` runs the actual
   assembled snippets on the simulator against exact BigInt arithmetic — not
   another transcription of the algorithm.
-- **The board works.** `tests/microtan-check.mjs` checks reset, the ROM window,
-  the keyboard handshake and the display.
 - **It survives every placement.** `tests/libc-check.mjs` runs `libc/` against
   a reference built from a snapshot rather than a second copy of the algorithm,
   sweeping every overlap of source and destination in a window, at two bases and
@@ -427,34 +423,6 @@ The suite is layered, and each layer catches something the one below it cannot.
 two snippets. They predate the simulator and are kept for their exhaustiveness —
 a 47-million-combination sweep of two carry conditions, past what running real
 code case by case reaches.
-
-## The machine
-
-`tools/microtan.js` puts the core on a board shaped like the Microtan 65, a 1979
-single-board 6502 from Tangerine Computer Systems:
-
-```
-0x0001           keyboard port, one byte
-0x0200 - 0x03ff  screen, 32 x 16 characters, row major
-0xfc00 - 0xffff  ROM, 1K, read only
-0xfffd           where the CPU starts
-```
-
-The reset address is three bytes from the top of memory and `jmp target` is a
-three-byte instruction, so the vector and the code that uses it are the same
-three bytes.
-
-A key press is delivered to `0x0001` only when that byte reads zero — the
-handshake the monitor completes by clearing it after a read. ROM writes are
-dropped and counted, because a monitor that stores into its own ROM has a bug
-and the count is the only evidence it will leave.
-
-```sh
-make boot          # assemble tangerine/monitor.s and run it
-```
-
-Interactive mode takes over the terminal; `--keys "..."` runs the same machine
-headless and dumps the screen, which is how the tests drive it.
 
 ## Design principles
 
@@ -610,9 +578,7 @@ and the heap; it must be a multiple of 256. A program that needs more than
 `asm (".globl __heap_end\n.set __heap_end, 0x6000");` for 40K, which the
 script's default gives way to. The console is at 0x0420. The `jmp` also keeps every object off address 0, which is NULL;
 `ld/fructus-rom16k.ld` keeps the two bytes free for the same reason.
-`tools/fpga-system.sv` has its registers in the I/O page. The Microtan board in
-`tools/microtan.js` keeps the original's map, with its screen at 0x0200,
-because it is a copy of a real machine.
+`tools/fpga-system.sv` has its registers in the I/O page.
 
 ## The I/O page
 
@@ -697,7 +663,6 @@ The instruction set is settled enough to write real code against, and the
 snippets in `snippets/` are real code. Open:
 
 - `clz`, `bitrev` and `popcount` are marked TENTATIVE in the spec.
-- The monitor in `tangerine/` is barely started.
 - Nothing checks that a call site and its callee agree about arity. The fix is
   a `.args` declaration the assembler and linker verify; `isa/abi.s` describes
   it and why it is not written yet.

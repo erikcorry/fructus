@@ -320,8 +320,8 @@ taken_branch_penalty = 3
 # Where an exception enters.  Each of these is an ADDRESS THE MACHINE JUMPS TO,
 # and not a pointer it reads.
 #
-# THAT IS THE DEPARTURE FROM THE 6502, whose layout the microtan hardware used
-# to borrow.  A jump is one internal register write and no bus cycle at all; an
+# THAT IS THE DEPARTURE FROM THE 6502, whose layout this machine used to
+# borrow.  A jump is one internal register write and no bus cycle at all; an
 # indirect vector is an address cycle and two data cycles at the front of EVERY
 # exception.  The indirection earns its keep on a 6502 because that part has no
 # instruction that can sit at a fixed address and reach anywhere - so the vector

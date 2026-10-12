@@ -34,7 +34,7 @@ else
 fi
 
 # --- everything must assemble in r5 mode ------------------------------------
-for src in snippets/*.s libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/data.s tests/branch-cost.s tests/microtan-smoke.s; do
+for src in snippets/*.s libc/*.s libgcc/*.s isa/abi.s tests/stress.s tests/longimm.s tests/data.s tests/branch-cost.s; do
     cat build/fructus.asm "$src" > build/_t.asm
     if "$CA" -q -o /dev/null build/_t.asm 2>build/_err; then
         printf 'ok    %s\n' "$src"
@@ -108,9 +108,6 @@ done
 
 # --- libgcc, against plain arithmetic ----------------------------------------
 if node tests/libgcc-check.mjs; then :; else fail=1; fi
-
-# --- the Microtan board: reset, ROM window, keyboard, display ----------------
-if node tests/microtan-check.mjs; then :; else fail=1; fi
 
 # --- the RTL, against the spec's own value tables ----------------------------
 # Every generated file under rtl/ is regenerated here before it is checked: a

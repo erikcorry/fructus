@@ -209,9 +209,8 @@ const CYCLES_SKEW = 4;
 
 export class Machine {
   // `io`: the machine has the I/O page, [cpu.io] - its guards trap and its
-  // shadow words are the shadows.  tools/fcc-run.mjs's machine has it; a
-  // board with a map of its own, like tools/microtan.js, and the tests that
-  // use memory anywhere do not.
+  // shadow words are the shadows.  tools/fcc-run.mjs's machine has it; the
+  // tests that use memory anywhere do not.
   constructor(spec, { io = false } = {}) {
     this.spec  = spec;
     this.dec   = buildDecoder(spec);
