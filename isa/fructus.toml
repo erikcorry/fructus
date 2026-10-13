@@ -1274,23 +1274,26 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   has to be remembered.
 #
 #   1001_0000                push ra                  2 bytes
-#   1001_0001                stm  ra                  2 bytes
+#   1001_0001                -- free
 #   1001_0010                push ra, rb              2 bytes
 #   1001_0011                stm  ra, rb              2 bytes
 #   1001_010c                stm  ra, rb, rc          TWO opcodes
 #   1001_011c                push ra, rb, rc          TWO opcodes
 #   1001_1000                pop  ra                  2 bytes
-#   1001_1001                ldm  ra                  2 bytes
+#   1001_1001                -- free
 #   1001_1010                pop  ra, rb              2 bytes
 #   1001_1011                ldm  ra, rb              2 bytes
 #   1001_110c                ldm  ra, rb, rc          TWO opcodes
 #   1001_111c                pop  ra, rb, rc          TWO opcodes
 #
-#   THE ROW IS FULL, AND IT IS THE SAME SHAPE FOUR TIMES: one register, two
-#   registers, three registers, for each of push, stm, pop and ldm.  Reading
-#   down a column still tells you the shape of byte 1 and nothing else has to
-#   be remembered - the low half stores and the high half loads, the stack
-#   forms on the even column pair and the pointer-walking forms on the odd.
+#   THE ROW IS THE SAME SHAPE FOUR TIMES: one register, two registers, three
+#   registers, for push and pop, and the same less the one-register form for
+#   stm and ldm - see their section for why that form went.  Reading down a
+#   column still tells you the shape of byte 1 and nothing else has to be
+#   remembered - the low half stores and the high half loads, the stack forms
+#   on the even column pair and the pointer-walking forms on the odd.  The two
+#   free slots, 0x91 and 0x99, are odd ones: a one-register shape could go
+#   back there, a three-register one could not.
 #
 #   WHAT PAID FOR IT.  `push8` and `pop8` held 1001_0100 and 1001_1100, and a
 #   three-register form needs an ADJACENT EVEN/ODD PAIR for the opcode bit that
@@ -3074,7 +3077,7 @@ semantics = "R[d] = (R[a] & mask) != 0"
 # exactly as the three-register ALU forms do - same trick, same reason.
 #
 #     0x90  push ra              0x98  pop  ra
-#     0x91  stm  ra              0x99  ldm  ra
+#     0x91  -- free              0x99  -- free
 #     0x92  push ra, rb          0x9a  pop  ra, rb
 #     0x93  stm  ra, rb          0x9b  ldm  ra, rb
 #     0x94  stm  ra, rb, rc      0x9c  ldm  ra, rb, rc
@@ -3100,8 +3103,8 @@ semantics = "R[d] = (R[a] & mask) != 0"
 #     pop  sp    has no effect on sp: it is left holding the stepped pointer,
 #                and the word that was loaded into it is discarded
 #
-# and the same for `stm r5` and `ldm r1`.  Neither case is useful, but both are
-# well defined, and no assembler has to know about them.
+# and the same for r5 in the list of a `stm` and r1 in an `ldm`.  Neither case
+# is useful, but both are well defined, and no assembler has to know about them.
 #
 # IT IS ALSO WHAT THE HARDWARE DOES FOR ITS OWN REASONS.  The register file has
 # ONE write port, and a pop already fills it with the words it is loading, so
@@ -3214,27 +3217,24 @@ semantics = "base = sp; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 # post-update leaves each pointer one past the last byte it moved - ready for
 # the next iteration with nothing to add.
 #
-# WHY THEY ARE WORTH FOUR OPCODES.  A memcpy built from push and pop reaches
+# WHY THEY ARE WORTH SIX OPCODES.  A memcpy built from push and pop reaches
 # its speed by pointing sp at the buffers, and then spends more than a third
 # of its cycles handing sp back and forth between the source and the
 # destination.  These have no handover at all: the pointers are
 # different registers and each one updates itself.
 #
+# THERE IS NO ONE-REGISTER FORM.  There was, and it earned nothing: GCC never
+# emits these, and every hand-written use was the last word of a four-word
+# move done as three then one, which costs the same as two then two - a load
+# is N + 3 cycles and a store N + 4, so either split pays the overhead twice,
+# and both are four bytes.  A lone word is `ld` or `st`, with an offset to
+# reach it and an `add` only if the pointer is still wanted after.  A "multiple"
+# of one register was a misnomer anyway.  0x91 and 0x99 are free again.
+#
 # THE ORDER IS THE SAME AS push's: the first register named is stored first, so
 # with a pointer that counts up it lands at the LOWEST address.  A save through
 # stm and a reload through ldm therefore take the SAME register list, where a
 # push/pop pair reverses it.
-[[insn]]
-mnemonic = "stm"
-summary  = "store ra through r5, stepping r5 past it"
-operands = [{ name = "a", type = "reg" }]
-syntax   = "{a}"
-semantics = "base = r5; M16[base] = R[a]; r5 = base + 2"
-
-  [[insn.form]]
-  name     = "single"
-  encoding = "1001_0001  0000_0aaa"
-
 [[insn]]
 mnemonic = "stm"
 summary  = "store ra then rb through r5"
@@ -3258,17 +3258,6 @@ semantics = "base = r5; M16[base] = R[a]; M16[base + 2] = R[b]; M16[base + 4] = 
   name     = "triple"
   encoding = "1001_010z  ccbb_baaa"
   fields   = { z = "c:reg[0]", c = "c:reg[2:1]" }
-
-[[insn]]
-mnemonic = "ldm"
-summary  = "load ra through r1, stepping r1 past it"
-operands = [{ name = "a", type = "reg" }]
-syntax   = "{a}"
-semantics = "base = r1; R[a] = M16[base]; r1 = base + 2"
-
-  [[insn.form]]
-  name     = "single"
-  encoding = "1001_1001  0000_0aaa"
 
 [[insn]]
 mnemonic = "ldm"

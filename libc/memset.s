@@ -17,7 +17,7 @@
 ; ----------------------------------------------------------------------------
 ;       fill loop       1.5625 cycles/byte  16 bytes an iteration, even or odd
 ;       tail            1.5000 cycles/byte  up to 15 bytes, straight-line
-;       sizes           bzero 12 bytes, memset 56, 68 together
+;       sizes           bzero 12 bytes, memset 59, 71 together
 ;
 ; An odd buffer runs the loop at the even rate because one byte stored first
 ; makes the pointer even; without it every stm would go a byte at a time, at
@@ -87,9 +87,11 @@ memset:
 .lt4:
         brclr   r2, #3, .done           ; a multiple of four, the common case
         brclr   r2, #2, .lt2
-        stm     r1
-.lt2:
+        st      r1, [r5]                ; the last word: r5 need not step
         brclr   r2, #1, .done
+        st8     r1, [r5, #2]            ; ... so the byte after it is at +2
+        ret
+.lt2:                                   ; bit 1 clear but not bit 0
         st8     r1, [r5]
 .done:
         ret

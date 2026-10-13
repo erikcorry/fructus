@@ -1389,8 +1389,8 @@ __udivmoddi4:
         jmp     .word                   ; 3   branch reaches
 .wend:
         ld      r5, [sp, #18]           ; 4   p: R is the remainder, stored
-        stm     r0, r1, r2              ; 7   through it
-        stm     r3                      ; 5
+        stm     r0, r1                  ; 6   through it
+        stm     r2, r3                  ; 6
         pop     r0, r0, r1              ; 6   and the quotient, popped: T goes
         pop     r2, r3                  ; 5   into r0 and is overwritten
         add     sp, sp, #10             ; 1   d and p
@@ -1464,8 +1464,8 @@ __divmoddi4:
         push    r3, r2, r1              ; 7   |n|, while d is fetched
         push    r0                      ; 5
         mov     r1, r5                  ; 1   d, through ldm's r1, whose own
-        ldm     r0, lr, r2              ; 6   word goes by lr: free here
-        ldm     r3                      ; 4
+        ldm     r0, lr                  ; 5   word goes by lr: free here
+        ldm     r2, r3                  ; 5
         mov     r1, lr                  ; 1
         brclr   r3, #0x8000, .dpos      ; 3+1
         call    .neg                    ; 3   |d|
@@ -1473,8 +1473,8 @@ __divmoddi4:
         push    r3, r2, r1              ; 7   |d| below |n|, where the core
         push    r0                      ; 5   can have it
         add     r1, sp, #8              ; 1   |n| back, the same way
-        ldm     r0, lr, r2              ; 6
-        ldm     r3                      ; 4
+        ldm     r0, lr                  ; 5
+        ldm     r2, r3                  ; 5
         mov     r1, lr                  ; 1
         mov     r5, sp                  ; 1
         call    __udivmoddi4.core       ; 3
@@ -1482,16 +1482,16 @@ __divmoddi4:
         call    .neg                    ; 3
 .qpos:
         add     r5, sp, #8              ; 1   the quotient over |n|
-        stm     r0, r1, r2              ; 7
-        stm     r3                      ; 5
+        stm     r0, r1                  ; 6
+        stm     r2, r3                  ; 6
         pop     r0, r1, r2              ; 6   and the remainder popped out of
         pop     r3                      ; 4   |d|'s slots
         brclr   r4, #0x8000, .rpos      ; 3+1
         call    .neg                    ; 3
 .rpos:
         ld      r5, [sp, #8]            ; 4   p
-        stm     r0, r1, r2              ; 7
-        stm     r3                      ; 5
+        stm     r0, r1                  ; 6
+        stm     r2, r3                  ; 6
         pop     r0, r1, r2              ; 6   the quotient, with p into r5 to
         pop     r3, r5                  ; 5   step over it
         pop     lr, r4                  ; 5
@@ -1832,8 +1832,8 @@ __udivmoddi4_mul:
         call    .shift                  ; 3   R4 R3 R2 R1
         push    r0                      ; 5   R0
         ld      r1, [sp, #12]           ; 4   p, for ldm; its own word goes
-        ldm     r0, lr, r2              ; 6   by lr, free until j
-        ldm     r3                      ; 4
+        ldm     r0, lr                  ; 5   by lr, free until j
+        ldm     r2, r3                  ; 5
         mov     r1, lr                  ; 1
         mov     lr, #0                  ; 1   one quotient word, j = 0
         jmpr    .bd                     ; 3
@@ -1974,8 +1974,8 @@ __udivmoddi4_mul:
         br      hi, r1, r3, .back       ; 1   rare
 .bst:
         add     r5, r4, #12             ; 1   the remainder so far, through
-        stm     r2, lr, r0              ; 7   r5, free until the next q_j
-        stm     r1                      ; 5
+        stm     r2, lr                  ; 6   r5, free until the next q_j
+        stm     r0, r1                  ; 6
         ld      r4, [sp, #10]           ; 4
         add     r4, r4, #-2             ; 1   the next word down
         st      r4, [sp, #10]           ; 5
@@ -2017,8 +2017,8 @@ __udivmoddi4_mul:
         or      r2, r2, r5              ; 1
         lsr     r3, r3, r4              ; 1
         ld      r5, [sp, #24]           ; 4   p, stm's pointer
-        stm     r0, r1, r2              ; 7
-        stm     r3                      ; 5
+        stm     r0, r1                  ; 6
+        stm     r2, r3                  ; 6
         add     sp, sp, #20             ; 1   the quotient, R5:R4, popped
         pop     r0, r1, r5              ; 6   with p into r5 to step over it
         mov     r2, #0                  ; 1
@@ -2109,8 +2109,8 @@ __divmoddi4_mul:
         push    r3, r2, r1              ; 7   |n|, while d is fetched
         push    r0                      ; 5
         mov     r1, r5                  ; 1   d, through ldm's r1, whose own
-        ldm     r0, lr, r2              ; 6   word goes by lr: free here
-        ldm     r3                      ; 4
+        ldm     r0, lr                  ; 5   word goes by lr: free here
+        ldm     r2, r3                  ; 5
         mov     r1, lr                  ; 1
         brclr   r3, #0x8000, .dpos      ; 3+1
         call    .neg                    ; 3   |d|
@@ -2118,8 +2118,8 @@ __divmoddi4_mul:
         push    r3, r2, r1              ; 7   |d| below |n|, where the core
         push    r0                      ; 5   can have it
         add     r1, sp, #8              ; 1   |n| back, the same way
-        ldm     r0, lr, r2              ; 6
-        ldm     r3                      ; 4
+        ldm     r0, lr                  ; 5
+        ldm     r2, r3                  ; 5
         mov     r1, lr                  ; 1
         mov     r5, sp                  ; 1
         call    __udivmoddi4_mul.core   ; 3
@@ -2127,16 +2127,16 @@ __divmoddi4_mul:
         call    .neg                    ; 3
 .qpos:
         add     r5, sp, #8              ; 1   the quotient over |n|
-        stm     r0, r1, r2              ; 7
-        stm     r3                      ; 5
+        stm     r0, r1                  ; 6
+        stm     r2, r3                  ; 6
         pop     r0, r1, r2              ; 6   and the remainder popped out of
         pop     r3                      ; 4   |d|'s slots
         brclr   r4, #0x8000, .rpos      ; 3+1
         call    .neg                    ; 3
 .rpos:
         ld      r5, [sp, #8]            ; 4   p
-        stm     r0, r1, r2              ; 7
-        stm     r3                      ; 5
+        stm     r0, r1                  ; 6
+        stm     r2, r3                  ; 6
         pop     r0, r1, r2              ; 6   the quotient, with p into r5 to
         pop     r3, r5                  ; 5   step over it
         pop     lr, r4                  ; 5

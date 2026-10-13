@@ -58,10 +58,10 @@ memcpy:
         brset   r2, #0xfff0, .top       ; 16 or more left
 .tail:
         brclr   r2, #8, .lt8
-        ldm     r3, r4, lr
-        stm     r3, r4, lr
-        ldm     r3
-        stm     r3
+        ldm     r3, r4
+        stm     r3, r4
+        ldm     r3, r4
+        stm     r3, r4
 .lt8:
         brclr   r2, #4, .lt4
         ldm     r3, r4
@@ -69,10 +69,14 @@ memcpy:
 .lt4:
         brclr   r2, #3, .done           ; a multiple of four, the common case
         brclr   r2, #2, .lt2
-        ldm     r3
-        stm     r3
-.lt2:
+        ld      r3, [r1]                ; the last word: nothing after it
+        st      r3, [r5]                ; needs the pointers stepped
         brclr   r2, #1, .done
+        ld8     r3, [r1, #2]            ; ... so the byte after it is at +2
+        st8     r3, [r5, #2]
+        pop     lr, r4, r3
+        ret
+.lt2:                                   ; bit 1 clear but not bit 0
         ld8     r3, [r1]
         st8     r3, [r5]
 .done:

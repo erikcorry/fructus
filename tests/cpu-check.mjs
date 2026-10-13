@@ -349,7 +349,7 @@ const SOURCES = [
           mov  r5, #0x3101
           stm  r0, r2, r5
           add  r1, r1, #-4
-          ldm  r2
+          ldm  r2, r0
           mov  r1, #0x3101
           ldm  r3, r1, r4
           push sp
@@ -382,9 +382,10 @@ const SOURCES = [
   `       mov  r1, #0x3000
           mov  r5, #0x3000
           mov  r0, #0x0102
-          mov  r3, #4
-  fill:   stm  r0
-          add  r0, r0, #0x0202
+          mov  r3, #2
+  fill:   add  r2, r0, #0x0202
+          stm  r0, r2
+          add  r0, r0, #0x0404
           add  r3, r3, #-1
           br   ne, r3, #0, fill
           mov  r5, #0x3401
@@ -399,8 +400,8 @@ const SOURCES = [
           halt`,
 ];
 
-// THE POINTER AFTER A BLOCK MOVE: each push, pop, ldm and stm, of one, two
-// and three registers, from an even and an odd pointer, followed AT ONCE by
+// THE POINTER AFTER A BLOCK MOVE: each push, pop, ldm and stm, of one (push
+// and pop only), two and three registers, from an even and an odd pointer, followed AT ONCE by
 // an ALU instruction or a branch that reads the pointer - as its left
 // operand, its right, both, through a one-byte form, and as a compare.  A
 // load writes its pointer first and a store last, and nothing forwards
@@ -420,7 +421,7 @@ const SOURCES = [
   const lines = [];
   let n = 0;
   for (const [op, P] of [['push', 'sp'], ['pop', 'sp'], ['ldm', 'r1'], ['stm', 'r5']])
-    for (const regs of [['r2'], ['r2', 'r3'], ['r2', 'r3', 'r4']])
+    for (const regs of [['r2'], ['r2', 'r3'], ['r2', 'r3', 'r4']].slice(P === 'sp' ? 0 : 1))
       for (const base of [0x3100, 0x3101]) {
         lines.push(`mov  r3, #${base}`);
         for (const f of follow(P)) {

@@ -8,14 +8,14 @@
 // rtl/cpu.sv decides from kind, length and `two` whether the next dispatch
 // can follow at once, and latches the rest for the decode stage.
 //
-// 157 opcodes: 99 ALU, 45 microcoded - 40 of them memory instructions and
+// 155 opcodes: 99 ALU, 43 microcoded - 38 of them memory instructions and
 // 4 exception instructions or mul - 7 conditional branches, 6 jumps.
 // AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
 // MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
 // pc was worked out behind it, so the length is never used.  Pinned at one, as
 // it was, it measured 32.96 MHz against 33.59, and the length's lookup was on
 // the critical path in some seeds; free, it is on none.  The empty cells -
-// 99 of them - let synthesis carry the pattern of the rows and columns
+// 101 of them - let synthesis carry the pattern of the rows and columns
 // across them.
 // Rearranging the opcodes that ARE used, with the empties still pinned, made
 // it worse: 31.08.
@@ -189,7 +189,6 @@ module classify (
         8'h8e: t = 45'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
         8'h8f: t = 45'b00_11_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
         8'h90: t = 45'b01_10_0_0000_0110_0011_1000_xx_xx_1_1_1_01_1_1_1_00111_000_0_xxx;    // push
-        8'h91: t = 45'b01_10_0_0000_0101_0011_1000_xx_xx_1_1_1_01_1_0_1_00111_000_0_xxx;    // stm
         8'h92: t = 45'b01_10_0_0000_0110_0011_1000_xx_xx_1_1_1_10_1_1_1_10000_000_0_xxx;    // push
         8'h93: t = 45'b01_10_0_0000_0101_0011_1000_xx_xx_1_1_1_10_1_0_1_10000_000_0_xxx;    // stm
         8'h94: t = 45'b01_10_0_0000_0101_0011_1000_xx_xx_1_1_1_11_1_0_1_10110_000_0_xxx;    // stm
@@ -197,7 +196,6 @@ module classify (
         8'h96: t = 45'b01_10_0_0000_0110_0011_1000_xx_xx_1_1_1_11_1_1_1_10110_000_0_xxx;    // push
         8'h97: t = 45'b01_10_0_0000_0110_0011_1000_xx_xx_1_1_1_11_1_1_1_10110_000_0_xxx;    // push
         8'h98: t = 45'b01_10_0_0000_0110_0011_1000_xx_xx_1_0_1_01_1_0_1_00010_000_1_xxx;    // pop
-        8'h99: t = 45'b01_10_0_0000_0001_0011_1000_xx_xx_1_0_1_01_1_0_1_00010_000_1_xxx;    // ldm
         8'h9a: t = 45'b01_10_0_0000_0110_0011_1000_xx_xx_1_0_1_10_1_0_1_00011_000_0_xxx;    // pop
         8'h9b: t = 45'b01_10_0_0000_0001_0011_1000_xx_xx_1_0_1_10_1_0_1_00011_000_0_xxx;    // ldm
         8'h9c: t = 45'b01_10_0_0000_0001_0011_1000_xx_xx_1_0_1_11_1_0_1_00100_000_0_xxx;    // ldm
@@ -239,9 +237,9 @@ module classify (
     // Read only for a row with a routine, so the rest are the mapper's.
     always_comb
         case (op)
-        8'h03, 8'h04, 8'h18, 8'h19, 8'h1a, 8'h1b, 8'h1e, 8'h1f, 8'h20, 8'h21, 8'h22, 8'h23, 8'h26, 8'h27, 8'h99, 8'h9b, 8'h9c, 8'h9d:
+        8'h03, 8'h04, 8'h18, 8'h19, 8'h1a, 8'h1b, 8'h1e, 8'h1f, 8'h20, 8'h21, 8'h22, 8'h23, 8'h26, 8'h27, 8'h9b, 8'h9c, 8'h9d:
             ulate = 1'b1;
-        8'h00, 8'h02, 8'h09, 8'h0a, 8'h0b, 8'h0e, 8'h0f, 8'h11, 8'h12, 8'h13, 8'h16, 8'h17, 8'h90, 8'h91, 8'h92, 8'h93, 8'h94, 8'h95, 8'h96, 8'h97, 8'h98, 8'h9a, 8'h9e, 8'h9f, 8'hae, 8'haf:
+        8'h00, 8'h02, 8'h09, 8'h0a, 8'h0b, 8'h0e, 8'h0f, 8'h11, 8'h12, 8'h13, 8'h16, 8'h17, 8'h90, 8'h92, 8'h93, 8'h94, 8'h95, 8'h96, 8'h97, 8'h98, 8'h9a, 8'h9e, 8'h9f, 8'hae, 8'haf:
             ulate = 1'b0;
         default: ulate = 1'bx;
         endcase
