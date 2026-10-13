@@ -56,6 +56,12 @@ disagrees only on program 110, which reads the cycle counter.
 | W2p    | IB_MAXS1 IB_PRECL        | 2730 | 29.14 | 3,608,288        | 123.8 |
 | W4p    | 'IBW_N 4' IB_PRECL       | 2740 | 29.23 | 3,558,530        | 121.7 |
 | A8p    | IB_WIN IB_PRECL          | 2843 | 26.05 | 3,558,530        | 136.6 |
+| **s1** | W3q, ST_EARLY=1          | 2615 | 30.20 | 3,422,247        | 113.3 |
+
+s1's cells and MHz are on the ISA after 197601f, which dropped the
+one-register stm and ldm; W3q there is 2598 LC at 29.78 MHz.  Its DeltaBlue
+cycles are on the ISA before, since the SOM++ binary's hand-written libc and
+libgcc routines still use them (`git show 197601f^` gives the generators).
 
 W3q is +158 LC over the old core for -7.9% cycles.  Its critical paths are
 the ALU's and the microcode's (`aq`, `bq` -> `R`, ROM -> `aq`), as the old
@@ -73,10 +79,35 @@ Lessons:
   into the opcode first cost 7 MHz), and late signals must only select
   among candidates worked out from flops.
 
+## Stores release a step early (s1)
+
+With the buffer, dispatch no longer needs the bus, so a store releases
+dispatch a step before its last access: the next instruction reaches decode
+in step N + 1, after the routine's last read through decode's borrowed port
+in step N - 1, and a block move's pointer, written at N + 1, reaches it
+through the bypass of the routine's last write.  A store of one access
+releases in its ALU cycle, through predecode's `urs`, as a one-access load
+does.  Only the generators change, `st-early.patch`; `ST_EARLY=1` with
+`mk.sh` applies it to a copy of `tools/` and regenerates `ucode.sv` and
+`classify.sv`.
+
+Every store is a cycle shorter - 3 cycles for one access, against 4 in W3q
+and 5 in the old core - and DeltaBlue is -4.2% on W3q, -11.7% on the old
+core, for 17 LC and no loss of clock.  Two steps early would gain nothing:
+a store that is not a block move has at most two accesses, and a block
+move's pointer is written through the ALU at N + 1.
+
+**It breaks the I/O guard trap by one instruction.**  `gq` is set from the
+store's access, and the instruction after the store now dispatches in that
+cycle, so it runs before io_guard is entered (the checker's programs 106 and
+107).  The fix is either a guard test on the first address in the ALU
+cycle - through the adder, as the blit stack fault was - or squashing that
+instruction in decode.
+
 ## Still to do
 
-- Blit mode (the delayed load) and traps with the buffer.
-- Stores could release the bus a cycle earlier: about -4.4% on DeltaBlue.
+- Blit mode (the delayed load) and traps with the buffer, including the
+  guard trap above.
 - One-byte instructions (`mov` to and from r5 is very common), and a branch
   predictor fed from the fetcher.
 - Then `tools/sim.js`'s cost model, `tests/cpu-check.mjs`'s cadence and the
@@ -87,6 +118,7 @@ Lessons:
 From the repo root:
 
     experiments/ib/mk.sh w3q IB_PRECL IB_1L        # build/ib/rtl-w3q
+    ST_EARLY=1 experiments/ib/mk.sh s1 IB_PRECL IB_1L
     experiments/ib/cells.sh build/ib/rtl-w3q w3q   # LUT4 and LC
 
 The checker and `tools/speed.mjs` take the RTL from `FRUCTUS_RTL`

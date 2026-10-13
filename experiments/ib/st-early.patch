@@ -1,0 +1,28 @@
+--- a/tools/ucode.js
++++ b/tools/ucode.js
+@@ -61,7 +61,13 @@
+   const step = Array.from({ length: STEPS + 2 }, () => ({}));
+   if (st) {
+     for (let k = 1; k <= N; k++) step[k].A = 1;
+-    step[N].R = 1;
++    // EXPERIMENT (experiments/ib): with an instruction buffer dispatch no
++    // longer needs the bus, so a store releases a step before its last
++    // access, and the next instruction reaches decode after the routine's
++    // last read through decode's port.  A routine of one access releases
++    // in its ALU cycle - predecode's `urs`, as a one-access load does.
++    const r = N - 1;
++    if (r >= 1) step[r].R = 1;
+     if (blk) { step[N + 1].P = 1; step[N + 1].D = 1; } else step[N].D = 1;
+     // In step k the next access, access k, is made ready: register k / B,
+     // half k % B.  Access 0 was made ready in the ALU cycle.
+--- a/tools/gen-classify.js
++++ b/tools/gen-classify.js
+@@ -177,7 +177,7 @@
+   // the next instruction reaches decode as its write lands - a load of one
+   // register, in one access.  ld8's is always one; ld's, pop's and ldm's of
+   // one register only when aligned, which rtl/cpu.sv learns in that cycle.
+-  const urs = (mem && !mem.st && mem.n === 1);
++  const urs = (mem && mem.n === 1);   // EXPERIMENT (experiments/ib): stores too
+   if (mem) memRows++;
+   if (exc !== null) excRows++;
+   const writes = (k === KIND.alu || jump) && r.v.dest !== X;
