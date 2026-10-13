@@ -61,7 +61,11 @@ function memSteps({ st, blk, w2, n }, late = 0, aligned = 0) {
   const step = Array.from({ length: STEPS + 2 }, () => ({}));
   if (st) {
     for (let k = 1; k <= N; k++) step[k].A = 1;
-    step[N].R = 1;
+    // Released a step before the last access: the next instruction then
+    // reaches decode after the routine's last read through decode's port.
+    // A routine of one access releases in its ALU cycle instead, through
+    // predecode's `urs`, as a one-access load does.
+    if (N >= 2) step[N - 1].R = 1;
     if (blk) { step[N + 1].P = 1; step[N + 1].D = 1; } else step[N].D = 1;
     // In step k the next access, access k, is made ready: register k / B,
     // half k % B.  Access 0 was made ready in the ALU cycle.

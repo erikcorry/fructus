@@ -17,9 +17,14 @@
 # of the system, unpinned, had a seed at 24.63, below the pixel clock.
 #
 # The regions overlap by two columns, so neither side is squeezed at the seam.
+#
+# THE SPLIT MOVED FROM 13 TO 14 with the instruction buffer: the processor,
+# 4229 cells for the system, no longer placed in its region at any seed.  The
+# core before it measured the same at 14 as at 13, 26.68 MHz against 26.65,
+# medians of sixteen, so the column is room and not speed.
 # =============================================================================
 
-SPLIT = 13
+SPLIT = 14
 ctx.createRectangularRegion("cpu", 0, 0, SPLIT, 31)
 ctx.createRectangularRegion("vid", SPLIT - 2, 0, 25, 31)
 

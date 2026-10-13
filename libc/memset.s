@@ -15,8 +15,11 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED, by tests/libc-check.mjs
 ; ----------------------------------------------------------------------------
-;       fill loop       1.5625 cycles/byte  16 bytes an iteration, even or odd
-;       tail            1.5000 cycles/byte  up to 15 bytes, straight-line
+;       fill loop       1.3125 cycles/byte  16 bytes an iteration, even or odd
+;       tail            0.5714 cycles/byte  up to 15 bytes, straight-line
+;
+; (The figures are the instruction buffer's; the breakdown below is still
+; the core's before it, rtl/ as of commit 4d59ff9.)
 ;       sizes           bzero 12 bytes, memset 59, 71 together
 ;
 ; An odd buffer runs the loop at the even rate because one byte stored first

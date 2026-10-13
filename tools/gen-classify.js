@@ -173,11 +173,11 @@ const cases = rows.map((r) => {
   // SB_MAC16 registered at both ends, measured no faster and put a second
   // bubble's flop on dispatch's path.)
   if (ext === 2 || ext > 7) throw new Error(`opcode ${r.op}: ${ext} extra cycles, and rtl/cpu.sv holds 1 or 3 to 7`);
-  // Released in the ALU cycle: whatever finishes in its first step, so that
-  // the next instruction reaches decode as its write lands - a load of one
-  // register, in one access.  ld8's is always one; ld's, pop's and ldm's of
-  // one register only when aligned, which rtl/cpu.sv learns in that cycle.
-  const urs = (mem && !mem.st && mem.n === 1);
+  // Released in the ALU cycle: a routine of one access, so that the next
+  // instruction reaches decode as a load's write lands, or after a store's
+  // last read.  ld8's and st8's is always one; ld's, st's, pop's and push's
+  // of one register only when aligned, which rtl/cpu.sv learns in that cycle.
+  const urs = (mem && mem.n === 1);
   if (mem) memRows++;
   if (exc !== null) excRows++;
   const writes = (k === KIND.alu || jump) && r.v.dest !== X;

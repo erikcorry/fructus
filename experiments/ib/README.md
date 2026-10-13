@@ -1,7 +1,12 @@
 # An instruction buffer and fetcher
 
-An experiment, not the core: nothing in `rtl/`, `docs/` or `tools/sim.js`
-reflects it, and the cycle figures there are still the old core's.
+**Landed.**  s1 - W3q with the stores' early release - is `rtl/` now, and
+`tools/sim.js` models its fetcher.  What is here is the record of how it was
+chosen: `cpu.sv` with its variants, and `mk.sh`, which builds them in a
+checkout of commit 4d59ff9 - it copies that `rtl/` and patches that
+`tools/` - and the figures below, measured on the way.  The guard trap's behaviour under interrupts changed when it landed: an
+interrupt taken in the cycle of a guard hit is the guard's brk, where here
+the hit was lost.
 
 ## The idea
 
@@ -115,6 +120,20 @@ debugging hint, not something to return from, so the plan is to keep it one
 instruction late and have tools/sim.js model that.  Interrupts and the
 divide-by-zero trap are unaffected: an interrupt is a brk dispatched in
 place of whatever instruction is next, which is always a clean boundary.
+
+## Code may not write just ahead of itself
+
+The buffer holds up to six bytes past the instruction being dispatched, and
+a store into them does not reach the copy already fetched.  The old core
+saw such a store, since it fetched only after a store's last address.  This
+is documented, not handled - nothing needs it, and a check on every store
+would cost logic.  For isa/fructus.toml's cost model, when this lands:
+
+    CODE MAY NOT WRITE JUST AHEAD OF ITSELF.  The fetcher reads up to six
+    bytes past the instruction being dispatched, and a store to them is not
+    seen by what it has already read.  Code that writes instructions must
+    reach them through a taken branch, a jump, a call, a return or rti,
+    each of which empties the buffer and reads memory afresh.
 
 ## Still to do
 

@@ -132,7 +132,9 @@ const GVECTOR = spec.cpu.vectors.io_guard;
 const DVECTOR = spec.cpu.vectors.divide_by_zero;
 const excs = ['brk', 'sei', 'cli'].map((mn) => ({ op: oneByte(mn), nbytes: 1, b1s: [0] }));
 const EXC = /^(brk|rti|sei|cli)$/;
-const EXC_CYCLES = { brk: 6, rti: 6, sei: 5, cli: 5 };
+// The least each takes: brk and rti redirect the fetch, and the target's
+// word arrives a cycle later.
+const EXC_CYCLES = { brk: 7, rti: 7, sei: 4, cli: 4 };
 
 // THE JUMPS, found by their semantics.  An immediate target is patched in
 // after layout like a branch's offset.  A register target is a pair: a
@@ -541,6 +543,10 @@ for (let p = 0; p < PROGRAMS; p++) {
   m.mem[GVECTOR] = HALT;
   m.mem[DVECTOR] = RTI;
   reg.forEach((v, k) => { m.R[k] = v; });
+  // AND ITS TWIN IN BLIT MODE, stepped alongside: the same machine but for
+  // its loads' timing, which changes what the fetcher has when.
+  const mb = new Machine(spec, { io, blit: true }).load(m.mem, 0);
+  mb.R.set(m.R);
   // WHETHER A BRANCH IS TAKEN IS NOT WHERE THE pc LANDS: a branch to the
   // very next instruction lands there either way, and the processor still
   // pays for taking it.  So a branch is stepped a second time, on a copy
@@ -560,7 +566,7 @@ for (let p = 0; p < PROGRAMS; p++) {
     const pc = m.pc;
     // A guard trap is a brk dispatched where the next instruction would be,
     // and so is a divide by zero.
-    const trap = m.guardPending || m.divPending;
+    const trap = m.divPending || (m.guardPending && m.fe.t >= m.guardAt);
     if (m.divPending) dtraps++;
     const d = decode(dec, trap ? [0, 0, 0]
                                          : [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
@@ -569,7 +575,7 @@ for (let p = 0; p < PROGRAMS; p++) {
     // ra, ret - which goes through taken_q; `call lr` goes to the next pc,
     // not the register, and costs three.
     const jm = JUMP_SEM.exec(d.insn.semantics ?? '');
-    const jump = !jm ? 0 : /R\[a\]|^pc = lr$/.test(jm[0]) && !(/^lr = pc; pc = R\[a\]$/.test(jm[0]) && d.ops.a === 7) ? 4 : 3;
+    const jump = !jm ? 0 : /R\[a\]|^pc = lr$/.test(jm[0]) && !(/^lr = pc; pc = R\[a\]$/.test(jm[0]) && d.ops.a === 7) ? 5 : 4;
     const exc = EXC.test(d.insn.mnemonic) ? EXC_CYCLES[d.insn.mnemonic]
               : d.insn.extra_cycles > 0 ? 1 + d.insn.extra_cycles : 0;
     const mem = memBytes(d.insn.semantics ?? '');
@@ -580,12 +586,14 @@ for (let p = 0; p < PROGRAMS; p++) {
     const sp = m.R[6], first = (memst ? sp - mem : sp) & 0xffff, last = (first + mem - 1) & 0xffff;
     const sfault = /^base = sp; /.test(d.insn.semantics ?? '') && ((first | last) & 0x8000) !== 0;
     if (sfault && !fault) fault = { at: trace.length, hash: fold(m.mem) };
-    const before = m.cycles(), xfer0 = m.xfer;
+    const before = m.cycles(), xfer0 = m.xfer, beforeb = mb.cycles();
     m.step();
+    mb.step();
     const cyc = m.cycles() - before;   // what the simulator charged it
+    const cycb = mb.cycles() - beforeb; // and in blit mode
     // A memory instruction's accesses: an aligned word is one, a byte one.
     const acc = mem ? m.xfer - xfer0 : 0;
-    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, acc, memst, late, sfault, exc, cyc, R: Array.from(m.R) });
+    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, acc, memst, late, sfault, exc, cyc, cycb, R: Array.from(m.R) });
   }
   programs.push({ bytes, reg, trace, hash: fold(m.mem), fault, io, gtrap: m.pc === ((GVECTOR + 1) & 0xffff) });
   writeFileSync(`build/cpu-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
@@ -713,19 +721,23 @@ function check(out, blit, what) {
     }
     // The dispatch cadence: the halt is dispatched too, so there is one more
     // dispatch than retirement - and so is a faulting push or pop.
+    // tools/sim.js's cost model, which every cycle count in the repo comes
+    // from, must charge what the processor takes - and that depends on what
+    // the fetcher has, so it is the simulator's own model of the fetcher
+    // that is held to the processor here.  What the checker knows without
+    // it is a floor: what each instruction takes at least, the next one's
+    // bytes there as soon as the back end lets it go.
     for (let i = 1; i < Math.min(ds.length, trace.length + 1); i++) {
       const prev = trace[i - 1];
-      const want = prev.exc ? prev.exc
-                 : prev.mem ? prev.acc + (prev.memst ? 4 : 3) + (blit && prev.late ? 1 : 0)
-                 : prev.jump ? prev.jump : prev.taken ? 4
-                 : (prev.pc & 1) && prev.len === 3 ? 2 : 1;
+      const want = blit ? prev.cycb : prev.cyc;
+      const floor = prev.exc ? prev.exc
+                  : prev.mem ? prev.acc + 2 + (blit && prev.late ? 1 : 0)
+                  : prev.jump ? prev.jump : prev.taken ? 5 : 1;
       if (ds[i].pc !== (whole[i]?.pc ?? ds[i].pc)) say(` dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
       if (ds[i].cyc - ds[i - 1].cyc !== want)
-        say(` dispatch ${i}: ${ds[i].cyc - ds[i - 1].cyc} cycles after the one at 0x${prev.pc.toString(16)}, want ${want}`);
-      // And tools/sim.js's cost model, which every cycle count in the repo
-      // comes from, must charge what the processor takes.
-      if (!blit && prev.cyc !== want)
-        say(` instruction at 0x${prev.pc.toString(16)}: tools/sim.js charges ${prev.cyc} cycles, the processor takes ${want}`);
+        say(` dispatch ${i}: ${ds[i].cyc - ds[i - 1].cyc} cycles after the one at 0x${prev.pc.toString(16)}, tools/sim.js charges ${want}`);
+      if (want < floor)
+        say(` instruction at 0x${prev.pc.toString(16)}: tools/sim.js charges ${want} cycles, less than the ${floor} it takes at least`);
     }
     if (!blit) cycles += ends[p]?.cyc ?? 0;
   });
@@ -771,7 +783,12 @@ for (const f of ['build/cpu-tb.vvp', 'build/cpu-tb.sv']) rmSync(f, { force: true
 // A PROGRAM THAT RAN cli may rightly take none, and one whose ie is clear at
 // the halt is not woken; the simulator, started with ie set as the test bench
 // sets the RTL's, says which those are.
-const finals = programs.map(({ bytes, reg, io }) => {
+// A GUARD TRAP MAY COME AN INSTRUCTION EARLIER under interrupts: an
+// interrupt taken in the cycle the hit sets gq becomes the guard's brk, at
+// the dispatch the trap would otherwise have let one more instruction take.
+// So a program ends as the simulator's run does, or as one whose guard traps
+// are all taken at the very next dispatch.
+const finalOf = ({ bytes, reg, io }, exact) => {
   const m = new Machine(spec, { io }).load(bytes, 0);
   m.mem[VECTOR] = RTI;
   m.mem[GVECTOR] = HALT;
@@ -782,12 +799,15 @@ const finals = programs.map(({ bytes, reg, io }) => {
   for (let guard = 0; !m.halted && guard < 5000; guard++) {
     if (m.mem[m.pc] === excs[2].op) cli = true;
     m.step();
+    if (exact && m.guardPending) m.guardAt = 0;
   }
   m.mem[m.pc] = HALT;                            // as the test bench puts after the halt
   let hash = 0;
   for (let k = 0; k < 65536; k++) hash = (Math.imul(hash, 31) + m.mem[k]) & 0x7fffffff;
   return { R: Array.from(m.R), hash, cli, ie: m.ie };
-});
+};
+const finals = programs.map((q) => finalOf(q, false));
+const exacts = programs.map((q) => finalOf(q, true));
 writeFileSync('build/cpu-irq-tb.sv', `module tb;
     logic clk = 0, rst = 1, irq = 0, drop;
     integer next, lfsr;
@@ -871,7 +891,8 @@ for (const blit of [false, true]) {
   for (const line of irqOut.split('\n')) {
     const f = line.trim().split(/\s+/);
     if (f[0] !== 'IRQ') continue;
-    const p = +f[1], R = f.slice(6, 14).map((x) => parseInt(x, 16)), fin = finals[p];
+    const p = +f[1], R = f.slice(6, 14).map((x) => parseInt(x, 16));
+    const fin = +f[5] === exacts[p].hash && R.every((v, k) => v === exacts[p].R[k]) ? exacts[p] : finals[p];
     irqSeen.add(p);
     if (!blit) irqTakes += +f[4];
     if (blit && programs[p].fault) {

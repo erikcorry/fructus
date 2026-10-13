@@ -32,7 +32,7 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED
 ; ----------------------------------------------------------------------------
-;       digits3         41 bytes, 39 cycles for every n, no branches
+;       digits3         41 bytes, 34 cycles for every n, no branches
 ;
 ; Fifteen of those 39 are its three stores, five cycles each - a store stops
 ; the pipeline while it goes out, see the cost model under [cpu] in the spec -

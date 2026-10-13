@@ -204,14 +204,15 @@ export const BUILTIN = {
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };
 
-// See ioByte: the cycle counter's lead over this.cyc at a load's capture.
-const CYCLES_SKEW = 4;
+// See ioByte: the cycle counter's lead over the dispatch's cycle at a load's capture.
+const CYCLES_SKEW = 3;
 
 export class Machine {
   // `io`: the machine has the I/O page, [cpu.io] - its guards trap and its
   // shadow words are the shadows.  tools/fcc-run.mjs's machine has it; the
-  // tests that use memory anywhere do not.
-  constructor(spec, { io = false } = {}) {
+  // tests that use memory anywhere do not.  `blit`: loads but pop take their
+  // bytes a cycle late, as rtl/cpu.sv's do in blit mode - only the timing.
+  constructor(spec, { io = false, blit = false } = {}) {
     this.spec  = spec;
     this.dec   = buildDecoder(spec);
     this.mem   = new Uint8Array(1 << spec.cpu.addr_bits);
@@ -238,6 +239,7 @@ export class Machine {
     // A load or store touched a guard byte of the I/O page: `guardHit' while
     // it runs, `guardPending' until the next step enters io_guard.
     this.guardHit = this.guardPending = false;
+    this.guardAt = 0;      // and the first cycle the trap may take a dispatch
     // And a recip whose ra had bit 15 clear: [cpu.vectors] divide_by_zero,
     // entered the same way.  Every machine has this one.
     this.divHit = this.divPending = false;
@@ -251,11 +253,13 @@ export class Machine {
     // cycle; step() charges each instruction the cycles from its dispatch to
     // the next one's.
     this.cyc     = 0;      // cycles, dispatch to dispatch
-    this.odd     = 0;      // of them, cycles lost to a three-byte instruction at an odd address
+    this.starve  = 0;      // of them, cycles the fetcher fell behind: see advance()
     this.bus     = 0;      // data bytes read or written
     this.xfer    = 0;      // data accesses: a byte, or an aligned word
     this.split   = 0;      // of them, cycles lost to words at odd addresses
     this.penalty = spec.cpu.taken_branch_penalty ?? 0;
+    this.blit    = blit;
+    this.fe      = null;   // the fetcher at the next dispatch: see advance()
 
     // WHICH INSTRUCTIONS PAY IT COMES FROM THE SEMANTICS, not from a list here
     // that would have to be kept in step.  An instruction is a relative branch
@@ -297,17 +301,26 @@ export class Machine {
 
   // AN ALIGNED WORD IS ONE ACCESS, any other a byte at a time: memory is a
   // word wide, and rtl/cpu.sv takes a word whole when its address is even.
-  rd8 (a)    { this.bus += 1; this.xfer += 1; return this.peek(a); }
-  wr8 (a, v) { this.bus += 1; this.xfer += 1; this.poke(a, v); }
+  // `access` is which of the instruction's accesses a byte is in, for the
+  // guard's timing.
+  rd8 (a)    { this.access = this.xfer - this.xfer0; this.bus += 1; this.xfer += 1; return this.peek(a); }
+  wr8 (a, v) { this.access = this.xfer - this.xfer0; this.bus += 1; this.xfer += 1; this.poke(a, v); }
   rd16(a)    {
+    const k = this.xfer - this.xfer0;
     this.bus += 2; this.xfer += a & 1 ? 2 : 1; this.split += a & 1;
-    const lo = this.peek(a), hi = this.peek(a + 1);
+    this.access = k;
+    const lo = this.peek(a);
+    this.access = k + (a & 1);
+    const hi = this.peek(a + 1);
     return this.little ? lo | (hi << 8) : hi | (lo << 8);
   }
   wr16(a, v) {
+    const k = this.xfer - this.xfer0;
     this.bus += 2; this.xfer += a & 1 ? 2 : 1; this.split += a & 1;
     const lo = v & 0xff, hi = (v >>> 8) & 0xff;
+    this.access = k;
     this.poke(a,     this.little ? lo : hi);
+    this.access = k + (a & 1);
     this.poke(a + 1, this.little ? hi : lo);
   }
 
@@ -328,18 +341,26 @@ export class Machine {
     const io = this.io, off = a - io.page;
     // A GUARD IS MEMORY THAT TRAPS AFTERWARDS: the access is made, the
     // instruction runs out, and the next step is the trap - rtl/cpu.sv's way.
-    if (off < io.guard_bytes || off >= 0x100 - io.guard_bytes) this.guardHit = true;
+    if (off < io.guard_bytes || off >= 0x100 - io.guard_bytes) {
+      // The trap takes the first dispatch from the fourth cycle after its
+      // access's dispatch on, plus a cycle for each access before it: a
+      // store's access goes out a cycle after a load's would, and its hit is
+      // registered at once, a load's a cycle after its data.
+      if (!this.guardHit && !this.guardPending) this.guardAt = (this.fe?.t ?? 0) + 4 + this.access;
+      this.guardHit = true;
+    }
     const name = (a & ~1) === io.shadow_sp ? 'shadow_sp'
                : (a & ~1) === io.shadow_lr ? 'shadow_lr'
                : (a & ~1) === io.shadow_isp ? 'shadow_isp' : null;
     // THE CYCLE COUNTER, read-only: what rtl/cpu.sv's holds as the access
-    // captures it.  That is the cycle count at the instruction's dispatch,
-    // plus the pipeline's way from a reset to the first dispatch and from a
-    // dispatch to the first capture, CYCLES_SKEW, plus one for each access
-    // the instruction made before this one: the sequencer makes one a cycle.
+    // captures it.  That is the cycles from reset to the instruction's
+    // dispatch - the fetcher's clock, which counts the cycles before the
+    // first dispatch too - plus the way from a dispatch to the first
+    // capture, CYCLES_SKEW, plus one for each access the instruction made
+    // before this one: the sequencer makes one a cycle.
     // A store writes the memory beneath, which no load can read.
     if ((a & ~3) === io.cycles && v === undefined) {
-      const n = this.cyc + CYCLES_SKEW + this.xfer - this.xfer0 - 1;
+      const n = this.fe.t + CYCLES_SKEW + this.xfer - this.xfer0 - 1;
       const byte = this.little ? a & 3 : (a & 2) | (~a & 1);
       return (n >>> (8 * byte)) & 0xff;
     }
@@ -451,17 +472,11 @@ export class Machine {
   // them means the address of the next instruction - which is what makes
   // `lr = pc` and `pc = pc + off` read the way the spec's summaries describe.
   step(trace = null) {
-    if (this.guardPending || this.divPending) return this.guardTrap(trace);
-    const at = this.pc, mem = this.mem;
-    const bytes = mem[at] | (mem[u16(at + 1)] << 8) | (mem[u16(at + 2)] << 16);
-    let e = this.icache[at];
-    if (e === undefined || ((bytes ^ e.bytes) & e.mask) !== 0) {
-      const d = decode(this.dec, mem, at);
-      if (!d) throw new Error(`no instruction at 0x${at.toString(16)} (first byte 0x${mem[at].toString(16)})`);
-      e = { d, bytes, mask: (1 << (8 * d.nbytes)) - 1,
-            body: this.sem.get(d.insn), kind: this.kind.get(d.insn) };
-      this.icache[at] = e;
-    }
+    if (this.divPending || (this.guardPending && this.fe.t >= this.guardAt)) return this.guardTrap(trace);
+    const at = this.pc;
+    const e = this.entry(at);
+    if (!e) throw new Error(`no instruction at 0x${at.toString(16)} (first byte 0x${this.mem[at].toString(16)})`);
+    this.dispatch(at);
     const d = e.d;
     this.pc = u16(at + d.nbytes);
     const xfer = this.xfer0 = this.xfer;
@@ -471,9 +486,24 @@ export class Machine {
     for (const s of e.body) this.exec(s, d.ops);
     if (this.guardHit) { this.guardHit = false; this.guardPending = true; }
     if (this.divHit) { this.divHit = false; this.divPending = true; }
-    this.cyc += this.cost(d, at, e.kind, this.xfer - xfer);
+    this.cyc += this.advance(at, d.nbytes, this.timing(d, e.kind, this.xfer - xfer));
     this.count++;
     return d;
+  }
+
+  // The decoded instruction at `at`, or null if its bytes are none.
+  entry(at) {
+    const mem = this.mem;
+    const bytes = mem[at] | (mem[u16(at + 1)] << 8) | (mem[u16(at + 2)] << 16);
+    let e = this.icache[at];
+    if (e === undefined || ((bytes ^ e.bytes) & e.mask) !== 0) {
+      const d = decode(this.dec, mem, at);
+      if (!d) return null;
+      e = { d, bytes, mask: (1 << (8 * d.nbytes)) - 1,
+            body: this.sem.get(d.insn), kind: this.kind.get(d.insn) };
+      this.icache[at] = e;
+    }
+    return e;
   }
 
   // [cpu.vectors] io_guard, a step of its own after the instruction that
@@ -482,6 +512,7 @@ export class Machine {
   // divide_by_zero, after a recip, the same way.
   guardTrap(trace) {
     const at = this.pc, d = decode(this.dec, [0, 0, 0], 0);     // brk, opcode 0
+    this.dispatch(at);
     if (trace) trace(at, d, this);
     const sp = this.named.sp, lr = this.named.lr;
     const vectors = this.spec.cpu.vectors;
@@ -493,7 +524,8 @@ export class Machine {
     this.R[sp] = this.shadow_isp;
     this.ie = false;
     this.pc = vector;
-    this.cyc += 6;
+    // brk's routine; it has no bytes of its own, so it moves nothing out.
+    this.cyc += this.advance(at, 0, { hold: 6, redirect: 5 });
     this.count++;
     return d;
   }
@@ -511,51 +543,120 @@ export class Machine {
       stores: sem.split(';').some((s) => /^\s*M(8|16)\[/.test(s.trim())),
       extra:  insn.extra_cycles ?? 0,
       branch: /^if /.test(sem) && this.relative.get(insn),
+      pops:   /^base = sp; /.test(sem),
       viaReg: /\bpc = (lr|R\[[a-z]\])$/.test(sem),
       callA:  /^lr = pc; pc = R\[a\]$/.test(sem),
     };
   }
 
-  // The cycles from this instruction's dispatch to the next one's, on the
-  // pipeline in rtl/cpu.sv.  `moved` is the data accesses it made: a byte,
-  // or a word at an even address.  `k` is what classify() made of it.
-  cost(d, at, k, moved) {
-    // AN EXCEPTION IS SIX CYCLES, and it is recognised by naming a shadow -
-    // which only `brk' and `rti' do: a microcode routine that moves sp and lr
-    // through the shadows, and a redirect of the fetch through taken_q.  sei
-    // and cli are routines too, without the redirect, and cost five.
-    if (k.fixed) return k.fixed;
-    // A MEMORY INSTRUCTION STOPS DISPATCH until its last address is out, and
-    // makes an access a cycle: a word when it is aligned, a byte when not.  A
-    // load's first address comes straight out of the ALU's adder, so N
-    // accesses cost N + 3; a store registers its address first and costs
-    // N + 4.  ld8 and an aligned ld 4, an odd one 5; st8 and an aligned st 5,
-    // an odd one 6; push of three registers 7 aligned, 10 not.  How many
-    // accesses is what the semantics made.
-    if (k.memory) return moved + (k.stores ? 4 : 3);
-    // mul, clz and popcount run a two-step routine: `extra_cycles` beyond one.
-    if (k.extra) return 1 + k.extra;
-    // A CONDITIONAL BRANCH FLOWS DOWN THE PIPE LIKE AN ALU INSTRUCTION, with
-    // dispatch carrying on behind it.  TAKEN, it squashes the three behind it
-    // and fetches the target: `taken_branch_penalty` more.  Taken means the
-    // assignment to pc RAN, not that pc ended up somewhere else - a branch to
-    // the very next instruction still pays, which tests/branch-cost.s pins.
-    if (k.branch) {
-      if (this.wrotePc) return 1 + this.penalty;
-    } else if (this.wrotePc) {
-      // A JUMP OR CALL stops dispatch behind it and fetches the target in its
-      // ALU cycle: three cycles.  Through a register - jmp ra, call ra, ret -
-      // the target goes through taken_q, a cycle later: four.  `call lr` goes
-      // to the NEW lr, the next pc, which is no register read: three.
-      const viaReg = k.viaReg && !(k.callA && d.ops.a === this.named.lr);
-      return viaReg ? 4 : 3;
+  // AN INSTRUCTION'S COST IS THE CYCLES FROM ITS DISPATCH TO THE NEXT ONE'S,
+  // and two things set it: when the back end lets dispatch go on, and when
+  // the fetcher has the next instruction's bytes.  timing() is the first, a
+  // fixed fact about each instruction, counted from its dispatch:
+  //
+  //   hold      the first cycle the next instruction may dispatch in
+  //   busy      the cycles the sequencer has the bus, so the fetcher reads nothing
+  //   redirect  the cycle a jump, a taken branch, brk or rti reads its target
+  //
+  // and advance() is the second.  `moved` is the data accesses it made: a
+  // byte, or a word at an even address.  `k` is what classify() made of it.
+  timing(d, k, moved) {
+    // brk AND rti are routines that redirect the fetch from their third step,
+    // through taken_q; sei and cli release dispatch from their first.
+    if (k.fixed === 6) return { hold: 6, redirect: 5 };
+    if (k.fixed) return { hold: 4 };
+    // A MEMORY INSTRUCTION STOPS DISPATCH until a step before its last
+    // access, and makes an access a cycle from its ALU cycle on, two after
+    // its dispatch: a word when it is aligned, a byte when not.  A load's
+    // first address is the ALU's own; a store registers its address first,
+    // a cycle later.  Either way the next instruction may dispatch N + 2
+    // cycles after it - in blit mode, a load but pop one more.
+    if (k.memory) {
+      const busy = [];
+      for (let i = 0; i < moved; i++) busy.push((k.stores ? 3 : 2) + i);
+      return { hold: moved + 2 + (this.blit && !k.stores && !k.pops ? 1 : 0), busy };
     }
-    // ANYTHING ELSE IS ONE CYCLE, unless its bytes cannot be there in time.
-    // Memory is a word wide and the fetch holds the word after the pc's: three
-    // bytes at an odd address reach into the word after that, which arrives a
-    // cycle late.
-    if (d.nbytes === 3 && (at & 1)) { this.odd++; return 2; }
-    return 1;
+    // mul, clz, popcount and recip hold the ALU stage: `extra_cycles` more.
+    if (k.extra) return { hold: 1 + k.extra };
+    // A CONDITIONAL BRANCH FLOWS DOWN THE PIPELINE LIKE AN ALU INSTRUCTION,
+    // with dispatch carrying on behind it.  TAKEN, the ALU stage decides it,
+    // the instructions behind it are squashed, and its target is read the
+    // cycle after: `taken_branch_penalty` cycles after its dispatch.  Taken
+    // means the assignment to pc RAN, not that pc ended up somewhere else - a
+    // branch to the very next instruction still pays, which
+    // tests/branch-cost.s pins.
+    if (k.branch) {
+      if (this.wrotePc) return { hold: 1 + this.penalty, redirect: this.penalty };
+    } else if (this.wrotePc) {
+      // A JUMP OR CALL stops dispatch behind it and reads its target in its
+      // ALU cycle.  Through a register - jmp ra, call ra, ret - the target
+      // goes through taken_q, a cycle later.  `call lr` goes to the NEW lr,
+      // the next pc, which is no register read.
+      const viaReg = k.viaReg && !(k.callA && d.ops.a === this.named.lr);
+      return viaReg ? { hold: 4, redirect: 3 } : { hold: 3, redirect: 2 };
+    }
+    return { hold: 1 };
+  }
+
+  // THE FETCHER, as rtl/cpu.sv's: a buffer of three words, whole words in,
+  // so its first byte is at an even address.  `nw` is the words it holds and
+  // `finq` whether a word is on its way, read last cycle.  In every cycle
+  // the bus is its own it reads the next word, and keeps it if there will
+  // be room - if what stays, with the word arriving, is at most two words.
+  // A dispatch moves out the words the pc passes.  A redirect empties it,
+  // and its own read is the target's word.  An instruction may dispatch
+  // when the buffer holds all its bytes; a trap's brk needs any.
+  //
+  // advance() runs it from this instruction's dispatch, cycle by cycle,
+  // until the next one dispatches, and returns the cycles between.
+  advance(at, len, { hold, busy = [], redirect = -1 }) {
+    const fe = this.fe;
+    for (const b of busy) fe.busy.push(fe.t + b);
+    let { nw, finq } = fe;
+    for (let c = 0; ; c++) {
+      const t = fe.t + c;
+      if (c >= hold && this.ready(nw, t)) {
+        fe.busy = fe.busy.filter((b) => b >= t);
+        Object.assign(fe, { nw, finq, t, pc: this.pc });
+        // Starved: beyond the least it could cost - after a redirect, its
+        // target's word arriving and dispatching at once.
+        this.starve += c - Math.max(hold, redirect + 2);
+        return c;
+      }
+      if (c === redirect) { nw = 0; finq = 1; continue; }
+      const stay = nw + finq - (c === 0 ? ((at & 1) + len) >> 1 : 0);
+      finq = stay <= 2 && !fe.busy.includes(t) ? 1 : 0;
+      nw = stay;
+    }
+  }
+
+  // Whether the instruction at pc could dispatch in cycle t from a buffer of
+  // nw words - or a trap's brk, which needs any.  A guard trap waits for its
+  // flop, and anything ready before it dispatches as usual.
+  ready(nw, t) {
+    if (this.halted) return true;
+    if (this.divPending || (this.guardPending && t >= this.guardAt)) return nw >= 1;
+    const len = this.entry(this.pc)?.d.nbytes ?? 1;
+    return nw >= 2 || (nw === 1 && ((this.pc & 1) ? len === 1 : len !== 3));
+  }
+
+  // AS IF THE FETCHER HAD KEPT UP: the buffer full at the next dispatch, for
+  // a test that pins an instruction's own cost.
+  prime() {
+    this.fe = { nw: 3, finq: 0, t: this.fe?.t ?? 0, pc: this.pc, busy: [] };
+    return this;
+  }
+
+  // THE FETCHER AT THIS DISPATCH.  advance() left it so, unless the pc was
+  // set from outside - a test starting a program, or the first step - which
+  // runs as the processor does from reset: an empty buffer, the first word
+  // read in the first cycle.  Nothing is charged for that.
+  dispatch(at) {
+    if (this.fe?.pc === at) return;
+    const starve = this.starve;
+    this.fe = { nw: 0, finq: 0, t: 0, pc: at, busy: [] };
+    this.advance(at, 0, { hold: 0 });
+    this.starve = starve;
   }
 
   // Run until halted, until `stopAt` is reached, or until `max` instructions.
@@ -571,7 +672,7 @@ export class Machine {
   // Zero the cost counters.  Tests used to open-code this, and open-coded the
   // SUM as well - which is how the taken-branch penalty went unnoticed by every
   // cycle assertion in the suite the moment it was added.  One definition.
-  reset() { this.cyc = this.odd = this.bus = this.xfer = this.split = 0; return this; }
+  reset() { this.cyc = this.starve = this.bus = this.xfer = this.split = 0; return this; }
   cycles() { return this.cyc; }
 }
 

@@ -10,11 +10,15 @@
 ; MEASURED, by tests/string-check.mjs, against the C that crt/libc.c had
 ; ----------------------------------------------------------------------------
 ;                       here        s2 odd      C       faster by
-;       strlen          2.5000                 12.00      4.80x  optimistic path
+;       strlen          2.2500                 12.00      5.33x  optimistic path
 ;       strlen          4.5000                 12.00      2.67x  every block a
 ;                                                                false alarm
-;       strcmp          6.2500     6.7500      19.00      3.04x
-;       strncmp         7.0000     7.5000      23.00      3.29x
+;       strcmp          5.7500     6.2500      19.00      3.30x
+;       strncmp         6.5000     7.0000      23.00      3.54x
+;
+; (The first two columns are the instruction buffer's; the C's, the
+; false-alarm row and the breakdown below are still the core's before it,
+; rtl/ as of commit 4d59ff9.)
 ;
 ; Cycles per byte of string, differenced across two lengths so the call and the
 ; setup cancel.  The C is the obvious byte loops, compiled noinline at -Os by

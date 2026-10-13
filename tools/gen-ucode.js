@@ -37,7 +37,8 @@
 // at a time, one for a byte or for an aligned word, whose copy of the
 // routine sits at the entry with bit 3 set:
 //
-//     store  address 1 .. N; release at N; done at N, or N + 1 for a block,
+//     store  address 1 .. N; release at N - 1, or in the ALU cycle if N is
+//            1; done at N, or N + 1 for a block,
 //            whose pointer is written then - last, so a stored register that
 //            is the pointer is read as it was
 //     load   address 1 .. N - 1 - the first went out in the ALU cycle;

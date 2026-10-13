@@ -248,12 +248,12 @@ function dispatch(name, r, dest, src, n) {
   const a = 64, b = MAXN;
   const cost = (n) => call(entry, BUF + HIGH, BUF + LOW, n).cycles;
   const per = (cost(b) - cost(a)) / (b - a);
-  check('memcpy bulk cost', Math.abs(per - 2.625) < 0.0001,
-        `${per.toFixed(4)} cycles/byte, the file says 2.625`);
+  check('memcpy bulk cost', Math.abs(per - 35 / 16) < 0.0001,
+        `${per.toFixed(4)} cycles/byte, the file says 35 for 16`);
 
   // The tail's worst case is 15 bytes: every one of its four steps runs.
   const tail = (cost(15) - cost(0)) / 15;
-  check('memcpy tail cost', Math.abs(tail - 46 / 15) < 0.0001, `${tail.toFixed(2)} cycles/byte`);
+  check('memcpy tail cost', Math.abs(tail - 25 / 15) < 0.0001, `${tail.toFixed(2)} cycles/byte`);
   console.log(`ok    bulk loop ${per.toFixed(4)} cycles/byte, ` +
               `tail ${tail.toFixed(2)} for up to 15 bytes`);
 }
@@ -267,8 +267,8 @@ function dispatch(name, r, dest, src, n) {
   const cost = (n, odd = 0) => call(entry, BUF + HIGH + 2 + odd, BUF + HIGH + odd, n).cycles;
   const loop = (odd) => (cost(MAXN, odd) - cost(64, odd)) / (MAXN - 64);
   const per = loop(0);
-  check('memmove bulk cost', Math.abs(per - 47 / 16) < 0.0001,
-        `${per.toFixed(4)} cycles/byte, the file says 47 for 16`);
+  check('memmove bulk cost', Math.abs(per - 40 / 16) < 0.0001,
+        `${per.toFixed(4)} cycles/byte, the file says 40 for 16`);
   check('memmove aligns an odd source end', Math.abs(loop(1) - per) < 0.0001,
         `the loop costs ${loop(1).toFixed(4)} cycles/byte from an odd end, ${per.toFixed(4)} from an even one`);
   console.log(`ok    descending loop ${per.toFixed(4)} cycles/byte, even or odd`);
@@ -379,12 +379,12 @@ function dispatch(name, r, dest, src, n) {
   const cost = (n, odd = 0) => shot(memset, { 0: BUF + AT + odd, 1: 0xff, 2: n }).cycles;
   const loop = (odd) => (cost(64 + 32 * 32, odd) - cost(64, odd)) / (32 * 32);
   const bulk = loop(0);
-  check('memset fill loop', Math.abs(bulk - 1.5625) < 0.0005,
-        `${bulk.toFixed(4)} cycles/byte, the file says 1.5625`);
+  check('memset fill loop', Math.abs(bulk - 1.3125) < 0.0005,
+        `${bulk.toFixed(4)} cycles/byte, the file says 1.3125`);
   // The tail is straight-line code, a step for each bit of what is left;
   // measured over an even length so it is the 8, 4 and 2 steps alone.
   const tail = (cost(14) - cost(0)) / 14;
-  check('memset tail', Math.abs(tail - 1.5) < 0.0005, `${tail.toFixed(4)} cycles/byte`);
+  check('memset tail', Math.abs(tail - 8 / 14) < 0.0005, `${tail.toFixed(4)} cycles/byte`);
 
   // THE ALIGNMENT BYTE, which no byte comparison can see.  Without it an odd
   // buffer fills correctly a byte at a time, at 2.06 cycles a byte; with it

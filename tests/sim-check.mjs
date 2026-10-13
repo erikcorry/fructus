@@ -36,12 +36,15 @@ const m = machine();
 }
 
 // --- the cost model: what a taken branch costs -------------------------------
-// Every performance figure in this repo rests on what a taken branch, a jump
-// and a three-byte instruction at an odd address are charged.  Nothing else in
-// the suite would catch the simulator drifting from the spec: the numbers would
+// Every performance figure in this repo rests on what a taken branch and a
+// jump are charged, and on the fetcher behind them.  Nothing else in the
+// suite would catch the simulator drifting from the spec: the numbers would
 // all move together, and each assertion would be re-tightened around the new
 // wrong value by whoever ran the tests next.  So it is measured here directly,
-// one instruction at a time.
+// one instruction at a time, each from a full instruction buffer - prime() -
+// so that what is left is the instruction's own cost and its target's refill.
+// A redirect's target dispatches two cycles after its word is read if its
+// instruction is in that word, three if it reaches into the next.
 {
   const { code, syms } = assemble('tests/branch-cost.s');
   const cost = (label) => {
@@ -51,34 +54,36 @@ const m = machine();
     m.pc = syms.get(label);
     m.halted = false;
     m.reset();
+    m.prime();
     m.step();
     return m.cycles();
   };
 
   const want = [
-    ['b_taken', 4, 'a 3-byte branch, taken'],
-    ['b_odd',   2, 'a 3-byte branch at an odd address, not taken'],
+    ['b_taken', 6, 'a 3-byte branch, taken, to an odd 3-byte instruction: two words'],
+    ['b_odd',   2, 'a 3-byte branch at an odd address, not taken, before an even 3-byte one: five bytes are not six'],
     ['b_even',  1, 'a 3-byte branch at an even address, not taken'],
-    ['j_rel',   3, 'a 2-byte relative jump'],
-    ['j_abs',   3, 'a 3-byte absolute jump'],
-    ['c_abs',   3, 'a 3-byte absolute call'],
-    ['c_lr',    3, '`call lr`, to the next instruction'],
-    ['j_reg',   4, 'a 2-byte jump through a register'],
-    ['i_ret',   4, 'ret: one byte, and four cycles through a register'],
+    ['j_rel',   5, 'a 2-byte relative jump, to an odd 3-byte instruction'],
+    ['j_abs',   5, 'a 3-byte absolute jump, to an even 3-byte instruction'],
+    ['c_abs',   5, 'a 3-byte absolute call, to an odd 2-byte instruction'],
+    ['c_lr',    5, '`call lr`, to the next instruction, odd and 2 bytes'],
+    ['j_reg',   6, 'a 2-byte jump through a register, to an even 3-byte instruction'],
+    ['i_ret',   6, 'ret: one byte, through a register, to an even 3-byte instruction'],
   ];
   for (const [label, cycles, what] of want)
     check('branch cost', cost(label) === cycles,
           `${what} cost ${cost(label)} cycles, want ${cycles}`);
 
   // The pair that isolates the cause: the same branch, the same three bytes,
-  // both at even addresses, taken and not.
-  check('branch cost', cost('b_taken') - cost('b_even') === spec.cpu.taken_branch_penalty,
-        `taken and not-taken differ by ${cost('b_taken') - cost('b_even')}, want ${spec.cpu.taken_branch_penalty}`);
+  // both at even addresses, taken and not.  Taken, it is the cycle any
+  // instruction costs, the penalty, and its target's two words.
+  check('branch cost', cost('b_taken') - cost('b_even') === spec.cpu.taken_branch_penalty + 2,
+        `taken and not-taken differ by ${cost('b_taken') - cost('b_even')}, want ${spec.cpu.taken_branch_penalty} + 2`);
 
   // The penalty is declared in the spec, not buried in the simulator.
   check('branch cost', spec.cpu.taken_branch_penalty === 3,
         `spec says the penalty is ${spec.cpu.taken_branch_penalty}`);
-  console.log('ok    cost model: a taken branch 4 cycles, a jump 3, through a register 4, three bytes at an odd address 2');
+  console.log('ok    cost model: a taken branch 5 or 6 cycles, a jump 4 or 5, through a register 5 or 6, as its target needs one word or two');
 }
 
 // --- zeroed memory traps, and does not run away ------------------------------
@@ -164,10 +169,12 @@ const m = machine();
 // moves that are wrong in the same direction - a shadow written but never read
 // looks right from one end and the value is simply lost.
 //
-// AND THE CYCLE COUNT IS PINNED, because the cost model charges it: six cycles,
-// dispatch to dispatch - a microcode routine in rtl/cpu.sv that moves sp and lr
-// through the shadows one register a cycle, since there is no mux in front of
-// the register file to swap them, and a redirect of the fetch through taken_q.
+// AND THE CYCLE COUNT IS PINNED, because the cost model charges it: seven
+// cycles, dispatch to dispatch - a microcode routine in rtl/cpu.sv that moves
+// sp and lr through the shadows one register a cycle, since there is no mux
+// in front of the register file to swap them, a redirect of the fetch through
+// taken_q, and the target's word arriving.  Both targets here are one byte,
+// so their first word is enough.
 {
   const opcodeOf = (mnemonic) => {
     const i = spec.insn.find((x) => x.mnemonic === mnemonic && !(x.operands ?? []).length);
@@ -191,7 +198,7 @@ const m = machine();
   check('brk loads the interrupt stack',   m.R[SP] === 0x2000,      `sp=${hex(m.R[SP])}`);
   check('brk parks the interrupted lr',    m.shadow_lr === 0xbeef,  `shadow_lr=${hex(m.shadow_lr)}`);
   check('brk disables interrupts',         m.ie === false,          `ie=${m.ie}`);
-  check('brk costs six cycles',            m.cycles() === 6,        `${m.cycles()} cycles`);
+  check('brk costs seven cycles',          m.cycles() === 7,        `${m.cycles()} cycles`);
 
   const half = m.cycles();
   m.step();
@@ -200,23 +207,30 @@ const m = machine();
   check('rti restores sp',                 m.R[SP] === 0x1000,      `sp=${hex(m.R[SP])}`);
   check('rti puts the interrupt stack back', m.shadow_isp === 0x2000, `shadow_isp=${hex(m.shadow_isp)}`);
   check('rti enables interrupts',          m.ie === true,           `ie=${m.ie}`);
-  check('rti costs six cycles',            m.cycles() - half === 6, `${m.cycles() - half} cycles`);
-  console.log('ok    brk and rti: every register back where it started, six cycles each');
+  check('rti costs seven cycles',          m.cycles() - half === 7, `${m.cycles() - half} cycles`);
+  console.log('ok    brk and rti: every register back where it started, seven cycles each');
 }
 
 // --- the I/O page: [cpu.io] -------------------------------------------------
 // A machine made with `io` has it.  Every access that touches a guard byte
 // traps to io_guard - after the instruction, which runs out, its store landing
-// - with lr the next instruction's address, as an interrupt saves it; the
-// bytes just inside the guards do not trap; the shadows read
-// and write through their words, a byte at a time as well; and a machine
-// without `io' is plain memory there.
+// - with lr the address of the instruction the trap took the place of, as an
+// interrupt saves it; the bytes just inside the guards do not trap; the
+// shadows read and write through their words, a byte at a time as well; and a
+// machine without `io' is plain memory there.
+//
+// THE TRAP CAN BE AN INSTRUCTION LATE, as rtl/cpu.sv's is: a memory
+// instruction releases dispatch a step before its last access, and a hit on
+// that access is known only after the next instruction has dispatched.  So
+// a hit on the only access, or the second of an odd word's two, lets the
+// `nop` after it run first; a hit on the first of two does not.
 {
   const io = spec.cpu.io, VEC = spec.cpu.vectors.io_guard;
   const hex = (v) => `0x${v.toString(16)}`;
   const run = (body, { mach = new Machine(spec, { io: true }), setup = () => {}, stopAt = VEC } = {}) => {
-    writeFileSync('build/_io.s', `start:\n${body}\nafter:  halt\n`);
+    writeFileSync('build/_io.s', `start:\n${body}\nnext:   nop\nafter:  halt\n`);
     const { code, syms } = assemble('build/_io.s');
+    mach.next = syms.get('next');
     mach.after = syms.get('after');
     const SP = mach.named.sp;
     mach.load(code); mach.pc = 0; mach.R[SP] = 0x1000; mach.shadow_isp = 0x3000;
@@ -225,19 +239,20 @@ const m = machine();
     return mach;
   };
   const top = io.page + 0x100 - io.guard_bytes;
-  const traps = [
-    ['ld8 from the first guard byte', io.page, 'ld8  r0, [r1, #0]'],
-    ['st8 to the last bottom guard byte', io.page + io.guard_bytes - 1, 'st8  r0, [r1, #0]'],
-    ['ld from the first top guard word', top, 'ld   r0, [r1, #0]'],
-    ['st to the last top guard word', io.page + 0xfe, 'st   r0, [r1, #0]'],
-    ['an odd ld whose high byte is the guard', top - 1, 'ld   r0, [r1, #0]'],
-    ['an odd st whose low byte is the guard', io.page + io.guard_bytes - 1, 'st   r0, [r1, #0]'],
+  const traps = [         // ... and whether the nop after it runs first
+    ['ld8 from the first guard byte', io.page, 'ld8  r0, [r1, #0]', true],
+    ['st8 to the last bottom guard byte', io.page + io.guard_bytes - 1, 'st8  r0, [r1, #0]', true],
+    ['ld from the first top guard word', top, 'ld   r0, [r1, #0]', true],
+    ['st to the last top guard word', io.page + 0xfe, 'st   r0, [r1, #0]', true],
+    ['an odd ld whose high byte is the guard', top - 1, 'ld   r0, [r1, #0]', true],
+    ['an odd st whose low byte is the guard', io.page + io.guard_bytes - 1, 'st   r0, [r1, #0]', false],
   ];
-  for (const [what, addr, insn] of traps) {
+  for (const [what, addr, insn, late] of traps) {
     const m = run(`        mov  r0, #0x5a5a\n        mov  r1, #${addr}\n        ${insn}`);
+    const want = late ? m.after : m.next;
     check(`${what} traps`, m.pc === VEC, `pc=${hex(m.pc)}`);
-    check(`${what}: lr is the instruction after`, m.R[m.named.lr] === m.after,
-          `lr=${hex(m.R[m.named.lr])}, want ${hex(m.after)}`);
+    check(`${what}: lr is the instruction ${late ? 'after the nop' : 'after'}`, m.R[m.named.lr] === want,
+          `lr=${hex(m.R[m.named.lr])}, want ${hex(want)}`);
     if (/^st/.test(insn))
       check(`${what}: the store landed`, m.mem[addr] === 0x5a, `mem[${hex(addr)}]=${hex(m.mem[addr])}`);
   }
@@ -382,7 +397,7 @@ const m = machine();
     else if (r[2] !== 0x2222 || r[3] !== 0x3333 || r[4] !== 0x4444) { bad = n; why = 'clobbered a callee saved register'; }
   }
   check('digits3 is right', bad < 0, `n = ${bad}: ${why}`);
-  check('digits3 costs 39', best === 39 && worst === 39, `measured ${best}..${worst}`);
+  check('digits3 costs 34', best === 34 && worst === 34, `measured ${best}..${worst}`);
   console.log('ok    libc/digits3.s: 1000 inputs, and its cycle count');
 }
 
