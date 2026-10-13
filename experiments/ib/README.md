@@ -58,10 +58,18 @@ disagrees only on program 110, which reads the cycle counter.
 | A8p    | IB_WIN IB_PRECL          | 2843 | 26.05 | 3,558,530        | 136.6 |
 | **s1** | W3q, ST_EARLY=1          | 2615 | 30.20 | 3,422,247        | 113.3 |
 
-s1's cells and MHz are on the ISA after 197601f, which dropped the
-one-register stm and ldm; W3q there is 2598 LC at 29.78 MHz.  Its DeltaBlue
-cycles are on the ISA before, since the SOM++ binary's hand-written libc and
-libgcc routines still use them (`git show 197601f^` gives the generators).
+The table above is the ISA before 197601f, which dropped the one-register
+stm and ldm, except s1's cells and MHz.  On the ISA after it, with SOM++
+rebuilt (its hand-written libc and libgcc routines had used them; the
+simulator says 3,875,117 cycles, 81 fewer):
+
+| Build  | LC   | MHz   | DeltaBlue cycles      | ms    |
+|--------|-----:|------:|----------------------:|------:|
+| old    | 2421 | 30.11 | 3,875,174             | 128.7 |
+| W3q    | 2598 | 29.78 | 3,570,732 (-7.9%)     | 119.9 |
+| **s1** | 2615 | 30.20 | 3,422,518 (-11.7%)    | 113.3 |
+
+The old core's RTL is 57 cycles above the simulator on both binaries.
 
 W3q is +158 LC over the old core for -7.9% cycles.  Its critical paths are
 the ALU's and the microcode's (`aq`, `bq` -> `R`, ROM -> `aq`), as the old
@@ -102,7 +110,11 @@ store's access, and the instruction after the store now dispatches in that
 cycle, so it runs before io_guard is entered (the checker's programs 106 and
 107).  The fix is either a guard test on the first address in the ALU
 cycle - through the adder, as the blit stack fault was - or squashing that
-instruction in decode.
+instruction in decode.  Neither is worth area or MHz: the guard is a
+debugging hint, not something to return from, so the plan is to keep it one
+instruction late and have tools/sim.js model that.  Interrupts and the
+divide-by-zero trap are unaffected: an interrupt is a brk dispatched in
+place of whatever instruction is next, which is always a clean boundary.
 
 ## Still to do
 
