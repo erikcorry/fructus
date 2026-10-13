@@ -281,7 +281,7 @@ export class Machine {
     for (const [alias, target] of Object.entries(reg.aliases ?? {})) this.named[alias] = nameIndex(reg, target);
 
     this.sem = new Map();          // insn object -> parsed statement list
-    this.kind = new Map();         // insn object -> its cost class, see cost()
+    this.kind = new Map();         // insn object -> its cost class, see timing()
     for (const insn of spec.insn) {
       if (insn.semantics === undefined) throw new Error(`${insn.mnemonic}: no semantics`);
       const body = parse(insn.semantics);
@@ -531,14 +531,16 @@ export class Machine {
   }
 
 
-  // WHAT cost() NEEDS TO KNOW ABOUT AN INSTRUCTION, read from its semantics
+  // WHAT timing() NEEDS TO KNOW ABOUT AN INSTRUCTION, read from its semantics
   // once, when the machine is built, rather than by matching its text at
   // every step - which was an eighth of the simulator's time.  What each
-  // pattern means is explained in cost(), where it is used.
+  // pattern means is explained in timing(), where it is used.  `fixed` is
+  // the cost of a routine that takes the same time whatever its operands:
+  // brk and rti's least, as their targets can be, and sei and cli's.
   classify(insn) {
     const sem = insn.semantics ?? '';
     return {
-      fixed:  /shadow_lr|shadow_sp/.test(sem) ? 6 : /^ie = [01]$/.test(sem) ? 5 : 0,
+      fixed:  /shadow_lr|shadow_sp/.test(sem) ? 7 : /^ie = [01]$/.test(sem) ? 4 : 0,
       memory: /M(8|16)\[/.test(sem),
       stores: sem.split(';').some((s) => /^\s*M(8|16)\[/.test(s.trim())),
       extra:  insn.extra_cycles ?? 0,
@@ -563,8 +565,8 @@ export class Machine {
   timing(d, k, moved) {
     // brk AND rti are routines that redirect the fetch from their third step,
     // through taken_q; sei and cli release dispatch from their first.
-    if (k.fixed === 6) return { hold: 6, redirect: 5 };
-    if (k.fixed) return { hold: 4 };
+    if (k.fixed === 7) return { hold: 6, redirect: 5 };
+    if (k.fixed) return { hold: k.fixed };
     // A MEMORY INSTRUCTION STOPS DISPATCH until a step before its last
     // access, and makes an access a cycle from its ALU cycle on, two after
     // its dispatch: a word when it is aligned, a byte when not.  A load's

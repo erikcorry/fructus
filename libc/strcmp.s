@@ -10,30 +10,27 @@
 ; MEASURED, by tests/string-check.mjs, against the C that crt/libc.c had
 ; ----------------------------------------------------------------------------
 ;                       here        s2 odd      C       faster by
-;       strlen          2.2500                 12.00      5.33x  optimistic path
-;       strlen          4.5000                 12.00      2.67x  every block a
+;       strlen          2.2500                 15.00      6.67x  optimistic path
+;       strlen          5.0000                 15.00      3.00x  every block a
 ;                                                                false alarm
-;       strcmp          5.7500     6.2500      19.00      3.30x
-;       strncmp         6.5000     7.0000      23.00      3.54x
-;
-; (The first two columns are the instruction buffer's; the C's, the
-; false-alarm row and the breakdown below are still the core's before it,
-; rtl/ as of commit 4d59ff9.)
+;       strcmp          5.7500     6.2500      20.00      3.48x
+;       strncmp         6.5000     7.0000      26.00      4.00x
 ;
 ; Cycles per byte of string, differenced across two lengths so the call and the
 ; setup cancel.  The C is the obvious byte loops, compiled noinline at -Os by
-; the gcc in vendor/gcc, as measured when this file replaced them; a byte load
-; costs what it did then.  `s2 odd' is s2 at the other parity from s1, whose
+; the gcc in vendor/gcc; every byte of it pays a taken branch, five or six
+; cycles on this core.  `s2 odd' is s2 at the other parity from s1, whose
 ; words then go a byte at a time.
 ;
-; EVERY OTHER THREE-BYTE BRANCH STARTS AT AN ODD ADDRESS and costs two cycles
-; falling through, not one - see the cost model under [cpu] in the spec.  The
-; loops are runs of them, and only an instruction of odd length moves the
-; parity, which would cost the cycle it saved; so strcmp's loop is 25 cycles
-; for four bytes where its instructions' own costs sum to 23.  strncmp's is 28:
-; its count, and a test of it in place of strcmp's last branch.  The figures
-; are for the file assembled at an even address; at an odd one strncmp's loop
-; can pay one more.
+; A RUN OF THREE-BYTE BRANCHES OUTRUNS THE FETCHER, which brings two bytes a
+; cycle, so from the second in a row on, every other one waits a cycle for
+; its last byte - see the cost model under [cpu] in the spec.  The loads in
+; front of them let it fill the buffer, which is where the first ones run
+; from.  So strcmp's loop is 23 cycles for four bytes where its instructions'
+; own costs sum to 21, and strncmp's 26 against 22: its count, and a test of
+; it in place of strcmp's last branch.  The figures are for the file
+; assembled at an even address; at an odd one .top is odd, the two-byte ldm
+; there reaches into a second word, and both loops pay one or two more.
 ; ============================================================================
 
 ; ============================================================================
@@ -76,16 +73,16 @@ strcmp:
         add     r0, r0, r1              ; r0 = s2
         rsb     r1, r1, r0              ; r1 = s1, ldm's cursor
 .top:
-        ldm     r3, r4                  ; s1, four bytes, r1 += 4       5
-        ld      r5, [r0]                ; s2                            4
-        ld      lr, [r0, #2]            ;                               4
+        ldm     r3, r4                  ; s1, four bytes, r1 += 4       4
+        ld      r5, [r0]                ; s2                            3
+        ld      lr, [r0, #2]            ;                               3
         add     r0, r0, #4              ;                               1
         br      ne, r3, r5, .w0         ;                               1
-        brclr   r3, #0x00ff, .zero      ; at an odd address             2
+        brclr   r3, #0x00ff, .zero      ; the fetcher behind            2
         brclr   r3, #0xff00, .zero      ;                               1
-        br      ne, r4, lr, .w1         ; odd                           2
+        br      ne, r4, lr, .w1         ; behind                        2
         brclr   r4, #0x00ff, .zero      ;                               1
-        brset   r4, #0xff00, .top       ; odd, taken                    4
+        brset   r4, #0xff00, .top       ; taken                         5
 .zero:
         mov     r0, #0
         jmpr    .out
@@ -130,18 +127,18 @@ strncmp:
         rsb     r1, r1, r0              ; r1 = s1, ldm's cursor
         brclr   r2, #0xfffc, .tail      ; fewer than four left
 .top:
-        ldm     r3, r4                  ; s1, four bytes, r1 += 4       5
-        ld      r5, [r0]                ; s2                            4
-        ld      lr, [r0, #2]            ;                               4
+        ldm     r3, r4                  ; s1, four bytes, r1 += 4       4
+        ld      r5, [r0]                ; s2                            3
+        ld      lr, [r0, #2]            ;                               3
         add     r0, r0, #4              ;                               1
         add     r2, r2, #-4             ;                               1
         br      ne, r3, r5, .w0         ;                               1
-        brclr   r3, #0x00ff, .zero      ; at an odd address             2
+        brclr   r3, #0x00ff, .zero      ; the fetcher behind            2
         brclr   r3, #0xff00, .zero      ;                               1
-        br      ne, r4, lr, .w1         ; odd                           2
+        br      ne, r4, lr, .w1         ; behind                        2
         brclr   r4, #0x00ff, .zero      ;                               1
-        brclr   r4, #0xff00, .zero      ; odd                           2
-        brset   r2, #0xfffc, .top       ;                               4
+        brclr   r4, #0xff00, .zero      ; behind                        2
+        brset   r2, #0xfffc, .top       ; taken                         5
 .tail:
         br      eq, r2, #0, .zero
         ld8     r5, [r1]
@@ -183,26 +180,27 @@ strncmp:
 ; failure of this assumption is probably a space character just before or after
 ; a capital letter, but the slower fallback is still pretty fast.
 ;
-; 2.5 cycles/byte when the optimism holds: the loop is unrolled once, eight
+; 2.25 cycles/byte when the optimism holds: the loop is unrolled once, eight
 ; bytes a trip, so one taken branch serves two blocks.  A false alarm costs a
 ; second trip round the byte tests, and there are TWO ways in, at two prices:
-; the low bytes AND to zero (4.50), or the high bytes do (4.00).  The second is
+; the low bytes AND to zero (5.00), or the high bytes do (4.50).  The second is
 ; cheaper because reaching it means both low bytes are already known non-zero,
 ; so only the high ones are worth testing - which is why it has its own two
 ; tests rather than sharing .slow_block's four.
 ;
-; THE UNROLL MADE THAT SECOND PATH DEARER: 3.75 before it, 4.50 after - and
-; 4.00 now, since ldm moved to r1 and every branch below changed parity.  Both
-; paths return to .top, the first half, and there a high-byte alarm is a taken
-; `brclr` to .slow_block_low_bytes_ok, four cycles, where the second half's
-; falls through for one.  Every block that alarmed on its high bytes paid three
-; more, and every eight clean bytes saved three; on text, where it takes a
-; space beside a capital letter, the unroll is far ahead.
+; THE UNROLL MADE THAT SECOND PATH DEARER.  Both paths return to .top, the
+; first half, and there a high-byte alarm is a taken `brclr` to
+; .slow_block_low_bytes_ok, six cycles - the instruction there is three
+; bytes, so its target's first word does not hold it - where the second
+; half's falls through for one.  Every block that alarmed on its high bytes
+; pays five more, and every eight clean bytes save four, a taken branch; on
+; text, where it takes a space beside a capital letter, the unroll is far
+; ahead.
 ;
 ; Either way it is a SLOWDOWN AND NOT AN ERROR: both paths return to .top when
 ; they find no zero byte, which is what the two `brset ..., .top` are for.
 ; Measured over all 625 four-byte patterns drawn from { 01, 0f, 10, f0, ff },
-; at two lengths each: worst 4.50 cycles/byte, none wrong.
+; at two lengths each: worst 5.00 cycles/byte, none wrong.
 ;
 ; ldm walks r1 and only r1, so r1 is the cursor and the pair lands in r2 and
 ; r3.  r0 is free to be the block-AND scratch: r5 holds the start, and the
@@ -219,14 +217,14 @@ strlen:
   push r2, r3
   mov r1, r0                         ; ldm's cursor
 .top:
-  ldm r2, r3        ; Load 32 bits, r1 += 4   ; 5
+  ldm r2, r3        ; Load 32 bits, r1 += 4   ; 4
   and r0, r2, r3                              ; 1
-  brclr   r0, #0xff, .slow_block              ; 1, at an even address
-  brclr r0, #0xff00, .slow_block_low_bytes_ok ; 2, at an odd address
-  ldm r2, r3        ; Load 32 bits, r1 += 4   ; 5
+  brclr   r0, #0xff, .slow_block              ; 1
+  brclr r0, #0xff00, .slow_block_low_bytes_ok ; 1
+  ldm r2, r3        ; Load 32 bits, r1 += 4   ; 4
   and r0, r2, r3                              ; 1
-  brclr   r0, #0xff, .slow_block              ; 1, at an even address
-  brset r0, #0xff00, .top                     ; 4
+  brclr   r0, #0xff, .slow_block              ; 1
+  brset r0, #0xff00, .top                     ; 5
 .slow_block_low_bytes_ok:
 ; Slow case, but the low bytes are known not zero.
   brclr   r2, #0xff00, .minus3                ; 1
@@ -234,7 +232,7 @@ strlen:
   jmpr .minus1
 .slow_block:
   brclr   r2, #0xff, .minus4                  ; 1
-  brclr   r2, #0xff00, .minus3                ; 2
+  brclr   r2, #0xff00, .minus3                ; 2, the fetcher behind
   brclr   r3, #0xff, .minus2                  ; 1
   brset r3, #0xff00, .top    ; no zero byte here after all: keep scanning
   jmpr .minus1               ; r3's high byte is the zero

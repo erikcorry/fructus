@@ -27,11 +27,11 @@
 // difference's share of the whole gap, sorted by that; a negative row is one
 // the second build is slower in.
 //
-// THE KINDS ARE cost()'S OWN CASES, named by asking the machine what it did:
-// load and store (a cycle per access and three or four more, push and pop
+// THE KINDS ARE timing()'S OWN CASES, named by asking the machine what it
+// did: load and store (a cycle per access and two more, push and pop
 // included), mul (the two-step routine), a branch taken or not, a jump, call
-// or ret, a plain ALU instruction, and one with three bytes at an odd address,
-// which waits a cycle for its last byte.
+// or ret, a plain ALU instruction, and one that cost more than a cycle
+// because the fetcher had not yet brought the next instruction's bytes.
 //
 // FUNCTIONS, NOT CALL TREES.  A function's row is the instructions inside it,
 // so code inlined into a caller is the caller's - which is what makes two
@@ -167,13 +167,13 @@ function profile({ elf }) {
     const d = m.step();
     if (!on) continue;
     const c = m.cyc - c0;
-    const k = m.icache[pc]?.kind ?? { fixed: 6 };       // a trap's step has no entry
+    const k = m.icache[pc]?.kind ?? { fixed: 7 };       // a trap's step has no entry
     const kind = k.fixed ? 'exception'
       : k.memory ? (k.stores ? 'store' : 'load')
       : k.extra ? 'mul'
       : k.branch ? (m.wrotePc ? 'branch taken' : 'branch not taken')
       : m.wrotePc ? 'jump, call, ret'
-      : c > 1 ? 'alu, odd 3-byte' : 'alu';
+      : c > 1 ? 'alu, starved' : 'alu';
     const f = owner[pc];
     add(p.fn, f, c); add(p.kind, kind, c); add(p.mnem, d.insn.mnemonic, c);
     const fk = (p.fnKind[f] ??= {});

@@ -20,33 +20,33 @@
 ; THE OFFSETS ARE ALL imm3 ENTRIES - 0, 2, 4, 6, 8 are five of the eight - so
 ; every one of these ten accesses is a two-byte instruction.
 ;
-;       setjmp   12 bytes, 35 cycles
-;       longjmp  15 bytes, 34 cycles when val is non-zero, 33 when it is zero
+;       setjmp   12 bytes, 21 cycles
+;       longjmp  15 bytes, 26 cycles when val is non-zero, 23 when it is zero
 ;
-; Thirty of setjmp's cycles and twenty-five of longjmp's are its five accesses:
-; a store stops the pipeline for six cycles and a load for five - see the cost
-; model under [cpu] in the spec.  The zero case is the CHEAPER one, though it
-; has to make the 1, because it falls through the branch at two cycles - three
-; bytes at an odd address - where the non-zero case takes it at four.
+; Fifteen of each one's cycles are its five accesses: a load or a store of
+; an aligned word stops the pipeline for three cycles - see the cost model
+; under [cpu] in the spec.  The zero case is the CHEAPER one, though it has
+; to make the 1, because it falls through the branch at one cycle where the
+; non-zero case takes it at five.
 ; ============================================================================
 
 setjmp:
-        st      r2, [r0, #0]            ; 6
-        st      r3, [r0, #2]            ; 6
-        st      r4, [r0, #4]            ; 6
-        st      sp, [r0, #6]            ; 6
-        st      lr, [r0, #8]            ; 6   where the caller resumes
+        st      r2, [r0, #0]            ; 3
+        st      r3, [r0, #2]            ; 3
+        st      r4, [r0, #4]            ; 3
+        st      sp, [r0, #6]            ; 3
+        st      lr, [r0, #8]            ; 3   where the caller resumes
         mov     r0, #0                  ; 1   pinned: a direct call returns 0
-        ret                             ; 4
+        ret                             ; 5
 
 longjmp:
-        ld      r2, [r0, #0]            ; 5
-        ld      r3, [r0, #2]            ; 5
-        ld      r4, [r0, #4]            ; 5
-        ld      sp, [r0, #6]            ; 5   the frame is the caller's again
-        ld      lr, [r0, #8]            ; 5
+        ld      r2, [r0, #0]            ; 3
+        ld      r3, [r0, #2]            ; 3
+        ld      r4, [r0, #4]            ; 3
+        ld      sp, [r0, #6]            ; 3   the frame is the caller's again
+        ld      lr, [r0, #8]            ; 3
         mov     r0, r1                  ; 1   pinned: val is what setjmp returns
-        br      ne, r0, #0, .ret        ; 2, taken 4
+        br      ne, r0, #0, .ret        ; 1, taken 5
         mov     r0, #1                  ; 1   longjmp (env, 0) returns 1, says C
 .ret:
-        ret                             ; 4   back into the setjmp call
+        ret                             ; 5   back into the setjmp call

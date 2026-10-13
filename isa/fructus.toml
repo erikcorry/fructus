@@ -228,74 +228,94 @@ length_from_first_byte = true
 # THE COST MODEL
 # =============================================================================
 # The processor is a three-stage pipeline - dispatch, decode, ALU - over a
-# memory a word wide, and it DISPATCHES ONE INSTRUCTION A CYCLE when the bytes
-# allow it.  An instruction's cost is the cycles from its dispatch to the next
-# one's; rtl/cpu.sv says why each is what it is, tools/sim.js counts them, and
+# memory a word wide, behind a fetcher that reads ahead into a buffer, and it
+# DISPATCHES ONE INSTRUCTION A CYCLE when the bytes allow it.  An
+# instruction's cost is the cycles from its dispatch to the next one's;
+# rtl/cpu.sv says why each is what it is, tools/sim.js counts them, and
 # tests/cpu-check.mjs holds the two together instruction by instruction.
 #
+# These are its own costs, with the next instruction's bytes already in the
+# buffer - see THE FETCHER, below, for when they are not:
+#
 #     an ALU instruction, a branch not taken, nop    1
-#       - of three bytes, at an ODD address           2
-#     a conditional branch, taken                    1 + taken_branch_penalty = 4
-#     jmp and call to a target in their bytes        3
-#     jmp ra, call ra, ret - a target in a register  4
+#     a conditional branch, taken                    taken_branch_penalty + 2 = 5
+#     jmp and call to a target in their bytes        4
+#     jmp ra, call ra, ret - a target in a register  5
+#       - and call lr, which goes to the next one    4
 #     mul, clz, popcount                             1 + extra_cycles = 2
 #     recip                                          1 + extra_cycles = 5
-#     a load of N accesses: ld8, ld, pop, ldm        N + 3
-#     a store of N accesses: st8, st, push, stm      N + 4
+#     a load or store of N accesses: ld8, ld, pop,
+#       ldm, st8, st, push, stm                      N + 2
 #       - an access is a byte, or a whole word at an EVEN address;
 #         a word at an odd address is two
-#     sei, cli                                       5
-#     brk, rti, and an interrupt                     6
+#     sei, cli                                       4
+#     brk, rti, and an interrupt                     7
 #
-# LENGTH IS NOT TIME ANY MORE.  The byte-serial core this replaced - rtl/ as of
-# commit 9a1d953 - took a cycle a byte, so a short form was fast as well as
-# small.  Here a one-byte `add` and a three-byte one both take a cycle, and
-# bytes are what they cost in memory, not in time.  The exception is the odd
-# three-byte one: the fetch holds the word after the pc's, and three bytes at an
-# odd address reach into the word after THAT, which arrives a cycle late.
+# A redirect - a taken branch, a jump, a call, a return, brk, rti - costs
+# one more when the instruction at its target reaches into a second word:
+# two bytes at an odd address, or three at any.  In a system built in blit
+# mode, ld, ld8 and ldm cost one more as well; see rtl/cpu.sv.
 #
-# WHAT THAT COSTS, MEASURED on tests/bench's kernels: 1.5% of all cycles at
-# -Os and at -O2, and it is the ceiling on anything alignment could win.  Only
-# placement can win it - reordering within a block never changes the parity
-# of what follows - and aligning every loop head to an even address with a
-# `nop` won 0.13% at -O2 for five bytes, because moving one loop flips the
-# parity of the next: matmul got worse.  Padding would have to be chosen per
-# loop, by which parity its body pays less at.
+# THE FETCHER reads a word, two bytes, in every cycle the bus is not a load's
+# or a store's, into a buffer of three words, whole words in, and an
+# instruction dispatches once all its bytes are there.  A one- or two-byte
+# ALU instruction takes no more than it brings, and anything of two cycles
+# or more lets it gain, so the costs above are what code usually sees.  It
+# falls behind in a run of three-byte instructions, which take more than two
+# bytes a cycle, and after a run of loads and stores, which take the bus.
+# tools/sim.js models it cycle by cycle, so its counts are exact, and counts
+# what the fetcher cost as `starve`: 6% of tests/bench's cycles.
 #
-# A TAKEN BRANCH IS FOUR because the pipeline runs on down the fall-through
-# path behind it: the ALU stage decides it, the three instructions behind it are
-# squashed, and the target's word is read.  Not taken, it cost what any
-# instruction does.  Taken means the assignment to pc RAN - a branch to the very
-# next instruction still pays, and tests/branch-cost.s says so.
+# LENGTH IS NOT TIME ANY MORE.  The byte-serial core before this pipeline -
+# rtl/ as of commit 9a1d953 - took a cycle a byte, so a short form was fast
+# as well as small.  Here a one-byte `add` and a three-byte one both take a
+# cycle, and bytes are what they cost in memory, and in the fetcher's
+# bandwidth when it is behind.  The pipeline before the fetcher - rtl/ as of
+# commit 4d59ff9 - read each instruction's word as it dispatched, and an odd
+# three-byte instruction cost a cycle more; with the buffer it costs nothing
+# while the fetcher keeps up, at either parity.
+#
+# CODE MAY NOT WRITE JUST AHEAD OF ITSELF.  The fetcher reads up to six bytes
+# past the instruction being dispatched, and a store to them is not seen by
+# what it has already read.  Code that writes instructions must reach them
+# through a taken branch, a jump, a call, a return or rti, each of which
+# empties the buffer and reads memory afresh.
+#
+# A TAKEN BRANCH IS FIVE because the pipeline runs on down the fall-through
+# path behind it: the ALU stage decides it, the three instructions behind it
+# are squashed, and the target's word is read, arriving the cycle after.  Not
+# taken, it costs what any instruction does.  Taken means the assignment to
+# pc RAN - a branch to the very next instruction still pays, and
+# tests/branch-cost.s says so.
 #
 # A JUMP OR CALL STOPS DISPATCH behind it, since its fall-through is never
-# right, and fetches its target in its ALU cycle.  Through a register the
+# right, and reads its target in its ALU cycle.  Through a register the
 # target goes through a flop first, a cycle later.  `call lr` goes to the NEW
-# lr - the next instruction - and reads no register, so it costs three.
+# lr - the next instruction - and reads no register, so it costs four.
 #
 # THAT IS WHY `jmp ra` IS NOT ONE BYTE.  It was, pinned to r5, and the byte it
 # saved bought nothing the pin did not take back: an indirect jump through the
 # one register the assembler may clobber is a jump you have to arrange for.
-# Two bytes and any register is the same four cycles.
+# Two bytes and any register is the same five cycles.
 #
-# A MEMORY INSTRUCTION STOPS DISPATCH TOO, until its last address is out, so
-# that no fetch shares the bus with it, and it makes an access a cycle.  A
-# load's first address comes straight from the ALU's adder; a store registers
-# it first, and pays one more.  So `ld r1, [r2, #4]` is four cycles if r2 + 4 is
-# even and five if it is odd, and `push r0-r2`, six bytes, is seven with sp
-# even and ten with it odd - a memory instruction is the slowest thing a
-# program does often, and keeping a value in a register is worth several ALU
-# instructions.
+# A MEMORY INSTRUCTION STOPS DISPATCH TOO, and makes an access a cycle.  A
+# load's first address comes straight from the ALU's adder; a store
+# registers it first, a cycle later, but releases dispatch a step before its
+# last access, since the next instruction's bytes come from the buffer and
+# not the bus.  So loads and stores cost the same: `ld r1, [r2, #4]` is three
+# cycles if r2 + 4 is even and four if it is odd, and `push r0-r2`, six
+# bytes, is five with sp even and eight with it odd - a memory instruction is
+# still the slowest thing a program does often, and keeping a value in a
+# register is worth a few ALU instructions.
 #
 # AN ALIGNED WORD IS ONE ACCESS because memory is a word wide: both bytes are
 # read or written in the same cycle.  A word at an odd address still works,
 # with no fault, a byte at a time.  The FIRST address decides for the whole
 # instruction - a block move's words all share its parity - so a push, pop,
-# stm or ldm with its pointer odd pays a cycle for every byte, as every memory
-# instruction did before, and one with it even a cycle a register.  Nothing
-# splits an unaligned run into a byte, aligned words and a byte: that would
-# cost microcode for a case software can avoid by keeping sp and its buffers
-# even.
+# stm or ldm with its pointer odd pays a cycle for every byte, and one with
+# it even a cycle a register.  Nothing splits an unaligned run into a byte,
+# aligned words and a byte: that would cost microcode for a case software can
+# avoid by keeping sp and its buffers even.
 #
 # AND AN INSTRUCTION MAY DECLARE EXTRA CYCLES, with `extra_cycles` on its entry:
 # cycles beyond the one it would otherwise cost.  clz, popcount and mul take
@@ -310,7 +330,9 @@ length_from_first_byte = true
 # semantics already say.  `if (...) pc = pc + off` is a conditional branch;
 # any other assignment to pc is a jump; M8[] and M16[] are memory.
 #
-# The cycles beyond one that a TAKEN conditional branch costs.
+# The cycle, counted from a TAKEN conditional branch's dispatch, in which it
+# reads its target's word; the target dispatches two cycles later at the
+# earliest.
 taken_branch_penalty = 3
 
 
@@ -1408,7 +1430,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   .1 IS THE REGISTER COLUMN, and it keeps the jump-against-call sense of bit
 #   3 exactly: `jmp ra` above, `call ra` below, the same `0000_0aaa` byte 1 and
-#   the same four cycles - the register goes through a flop on its way to the
+#   the same five cycles - the register goes through a flop on its way to the
 #   fetch.  It used to hold the leftovers, a short `jmpr` against an indirect
 #   `call`, which shared no byte-1 layout at all; giving
 #   the register forms the column and the displacement its own at .3 costs
@@ -2961,7 +2983,7 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 #   or a 1, in two bytes, with no shift and no mask-then-compare.
 #
 #   BRANCHLESS SELECTION.  A predicate as a VALUE rather than as control flow -
-#   which on a machine whose taken branches cost four cycles and whose ALU
+#   which on a machine whose taken branches cost five cycles and whose ALU
 #   instructions cost one, is often the cheaper shape.
 #
 #   BOOL-RETURNING FUNCTIONS WITH NO BRANCH AT ALL.  A C function returning
@@ -3226,7 +3248,7 @@ semantics = "base = sp; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 # THERE IS NO ONE-REGISTER FORM.  There was, and it earned nothing: GCC never
 # emits these, and every hand-written use was the last word of a four-word
 # move done as three then one, which costs the same as two then two - a load
-# is N + 3 cycles and a store N + 4, so either split pays the overhead twice,
+# or a store is N + 2 cycles, so either split pays the overhead twice,
 # and both are four bytes.  A lone word is `ld` or `st`, with an offset to
 # reach it and an `add` only if the pointer is still wanted after.  A "multiple"
 # of one register was a misnomer anyway.  0x91 and 0x99 are free again.
@@ -3300,7 +3322,7 @@ semantics = "base = r1; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 # byte-serial core a relative target cost a CYCLE MORE, because the adder and
 # the verdict landed in flops an edge later than the instruction's own bytes
 # did: three bytes and four cycles against three and three.  On the pipeline
-# both would be three cycles, so what they cost now is two opcodes, for
+# both would be four cycles, so what they cost now is two opcodes, for
 # position independence that a machine with a linker and no address-space
 # randomisation never asked for.
 #
@@ -3433,7 +3455,7 @@ semantics = "pc = lr"
 # a switch table, a tail call through a pointer, a dispatch - can choose which
 # register holds the address.  The second half of that is true and the first
 # half was the wrong shape: one opcode and a byte of register field is two
-# bytes, not eight opcodes, and it costs the SAME FOUR CYCLES either way,
+# bytes, not eight opcodes, and it costs the SAME FIVE CYCLES either way,
 # because what this instruction pays for is reading a register, not fetching a
 # byte.  So the pin bought one byte of code and charged for it in register
 # allocation - every indirect jump had to get its address into the one

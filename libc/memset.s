@@ -18,16 +18,17 @@
 ;       fill loop       1.3125 cycles/byte  16 bytes an iteration, even or odd
 ;       tail            0.5714 cycles/byte  up to 15 bytes, straight-line
 ;
-; (The figures are the instruction buffer's; the breakdown below is still
-; the core's before it, rtl/ as of commit 4d59ff9.)
 ;       sizes           bzero 12 bytes, memset 59, 71 together
 ;
 ; An odd buffer runs the loop at the even rate because one byte stored first
 ; makes the pointer even; without it every stm would go a byte at a time, at
-; 2.06 cycles a byte.  The floor is 0.50 - one cycle to write each aligned
-; word.  A stm stops the pipeline for four cycles beyond its accesses -
-; 0.75 a byte over three of them and 16 bytes - and the add and the taken
-; branch are the other 0.31.
+; about 1.8 cycles a byte.  The floor is 0.50 - one cycle to write each
+; aligned word.  A stm stops the pipeline for two cycles beyond its
+; accesses - 0.375 a byte over three of them and 16 bytes - and the add and
+; the taken branch are the other 0.4375.  The branch is six cycles, not five:
+; .loop is at an odd address, so the stm there reaches into a second word,
+; which its target's read does not bring.  Assembled a byte later the loop
+; would be 20 cycles, 1.25 a byte.
 ; ============================================================================
 
 

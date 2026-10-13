@@ -61,7 +61,7 @@ is one you cannot spend on anything else — so the design question behind almos
 every decision in here is *what does this cost in bytes*. The first core also
 fetched a byte a cycle, so bytes were time as well; the pipelined core that
 replaced it runs most instructions in a cycle whatever their length, and bytes
-are now space alone.
+are now space, and time only where its fetcher falls behind.
 
 The non-interactive SVG opcode map above and the interactive HTML form with per-cell tooltips come from
 `npm run map`.
@@ -242,22 +242,29 @@ the time it was added; what the whole system reaches depends on whether the
 VGA is in the same FPGA and how much memory is attached.
 
 `rtl/cpu.sv` is a **three-stage pipeline** over a 16-bit memory port — the
-UP5K's SPRAM, read a word at a time:
+UP5K's SPRAM, read a word at a time — behind a fetcher:
 
+- **fetch** reads a word in every cycle the bus is not a load's or a store's,
+  into a buffer of three words, whole words in;
 - **dispatch** looks the opcode up in `rtl/classify.sv`, a table generated from
   the spec, and decides from its kind and length alone whether the next
-  instruction can dispatch in the very next cycle;
-- **decode** has the whole instruction, part of it perhaps still on the memory
-  port, reads both operands from the register file and latches them, with a
-  bypass from the instruction just ahead;
+  instruction can dispatch in the very next cycle, once the buffer holds all
+  its bytes;
+- **decode** has the whole instruction, in the buffer's flops, reads both
+  operands from the register file and latches them, with a bypass from the
+  instruction just ahead;
 - **ALU** is two operand flops, the ALU and the register write.
 
-So an ALU instruction takes one cycle whatever its length, except a three-byte
-one at an odd address, which spans three words and takes two. A conditional
-branch flows through all three stages and is decided in the ALU stage, beside
-the ALU: not taken it costs nothing extra, taken it costs four cycles. Jumps and
-calls take three, or four through a register. Measured behind a real SPRAM,
-the processor runs at 30.8 MHz (`just speed`, medians of sixteen placements).
+So an ALU instruction takes one cycle whatever its length, while the fetcher
+keeps up: it brings two bytes a cycle, and falls behind in a run of three-byte
+instructions or after a run of loads and stores - 6% of the cycles of the
+benchmark kernels. A conditional branch flows through all three stages and is
+decided in the ALU stage, beside the ALU: not taken it costs nothing extra,
+taken it costs five cycles, six if the instruction at its target spans two
+words. Jumps and calls take four, or five through a register, with the same
+extra cycle. Measured behind a real SPRAM, the processor runs at 30.2 MHz
+(medians of sixteen placements); [experiments/ib](experiments/ib/README.md)
+has how the buffer was chosen.
 `tools/sim.js` counts the same cycles, and `tests/cpu-check.mjs` holds the two
 together instruction by instruction on random programs. The header of
 `rtl/cpu.sv` has the reasons for each choice and what the alternatives measured.
@@ -365,8 +372,8 @@ lands 0 to 3 below, then a second product to find out how far. It has two
 `SB_MAC16`s of its own. To the ALU it is `mul` with every
 half zeroed and its answer OR'd in. With `-mmul` every division libgcc does
 is built on it: the `_mul` routines in `libgcc/lib1funcs.s` divide a word at a
-time, so a 16-bit division is about 36 cycles, a 32-bit one 80 to 93 against
-534 to 1074 for the C, and a 64-bit one 285 to 620 against 690 to 3120.
+time, so a 16-bit division is about 33 cycles, a 32-bit one 82 to 95 against
+about 470 for the C, and a 64-bit one 260 to 580 against 720 to 3160.
 `rtl/alu.sv` instantiates the DSPs rather
 than letting yosys's `-dsp` infer them, because the inference copies the operand
 flops into the DSP's input registers and drags the logic in front of them to
@@ -469,12 +476,13 @@ into a zeroed page all trap to the handler with the faulting address in `lr`,
 where a monitor can print it. `nop` is at `0x87`, as far from them as the
 one-byte region reaches.
 
-**The cost model is the pipeline's**, and it is under `[cpu]` in the spec: an
-ALU instruction or an untaken branch is one cycle, or two for three bytes at an
-odd address; a taken branch four; a jump or call three, or four through a
-register; a load of N accesses N + 3 and a store N + 4, where an access is a
-byte or a whole word at an even address, so `ld` is four aligned and five not,
-and a three-register `push` seven with sp even and ten with it odd; mul, mulhu,
+**The cost model is the pipeline's**, and it is under `[cpu]` in the spec,
+with the fetcher keeping up: an ALU instruction or an untaken branch is one
+cycle; a taken branch five; a jump or call four, or five through a register,
+and any of them one more when the instruction at the target spans two words;
+a load or store of N accesses N + 2, where an access is a byte or a whole word
+at an even address, so `ld` is three aligned and four not, and a
+three-register `push` five with sp even and eight with it odd; mul, mulhu,
 mulhs, clz and popcount two, and recip five. A taken branch is what
 makes a longer unrolled loop worth anything once the instruction mix is fixed,
 and a memory instruction is the slowest thing a program does often. The
@@ -647,10 +655,10 @@ time, and the known CRCs for both the performance and validation seeds.
 
 | Build | Bytes | Cycles/iteration | CoreMark/MHz | CoreMark at 30 MHz | at 25.175 MHz |
 |---|---:|---:|---:|---:|---:|
-| `-Os` | 8993 | 2,141,796 | 0.467 | 14.01 | 11.75 |
-| `-Os -mmul` | 8538 | 1,162,493 | 0.860 | 25.81 | 21.66 |
-| `-O2` | 12690 | 1,970,771 | 0.507 | 15.22 | 12.77 |
-| `-O2 -mmul` | 12350 | 1,009,989 | 0.990 | 29.70 | 24.93 |
+| `-Os` | 8998 | 2,200,622 | 0.454 | 13.63 | 11.44 |
+| `-Os -mmul` | 8591 | 1,107,099 | 0.903 | 27.10 | 22.74 |
+| `-O2` | 12695 | 2,047,476 | 0.488 | 14.65 | 12.30 |
+| `-O2 -mmul` | 12403 | 924,144 | 1.082 | 32.46 | 27.24 |
 
 30 MHz is the processor alone on the iCE40; with the VGA frame buffers it
 runs at the 25.175 MHz pixel clock. Bytes are the whole image — `.text`,

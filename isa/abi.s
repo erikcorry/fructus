@@ -255,24 +255,24 @@
 ; Byte count is no proxy for run time: the processor dispatches an instruction
 ; a cycle, whatever its length - see the cost model under [cpu] in the spec.
 ; A push or a pop is the exception that matters here.  It stops the pipeline
-; while it moves its bytes, one a cycle, and for four cycles more if it
-; writes, three if it reads:
+; while it moves its words, one a cycle with sp even, and for two cycles
+; more:
 ;
-;       push    lr                      2 bytes     6 cycles   pop 5
-;       push    lr, r4                  2 bytes     8 cycles   pop 7
-;       push    lr, r4, r3              2 bytes    10 cycles   pop 9
+;       push    lr                      2 bytes     3 cycles   pop 3
+;       push    lr, r4                  2 bytes     4 cycles   pop 4
+;       push    lr, r4, r3              2 bytes     5 cycles   pop 5
 ;
 ; THE SECOND AND THIRD REGISTERS OF A PUSH ARE FREE IN SPACE AND NOT IN TIME,
-; though they are cheap in time: two cycles each, where the push itself is
-; four.  That matters for reasoning about the save convention, because it is
+; though they are cheap in time: a cycle each, where the push itself is
+; three.  That matters for reasoning about the save convention, because it is
 ; easy to look at the byte counts alone and conclude that preserving three
 ; registers is as cheap as preserving one.
 ;
 ; The comparison still comes out the same way, and by more than the bytes
-; suggest.  Using a callee saved register costs 4 extra cycles ONCE PER
-; INVOCATION - two on the push, two on the pop.  A caller spilling one value
-; around a call costs 4 bytes and 11 cycles - a push of its own at six and a pop
-; at five - EVERY TIME THAT CALL SITE EXECUTES.  A call inside a loop pays the
+; suggest.  Using a callee saved register costs 2 extra cycles ONCE PER
+; INVOCATION - one on the push, one on the pop.  A caller spilling one value
+; around a call costs 4 bytes and 6 cycles - a push of its own at three and a
+; pop at three - EVERY TIME THAT CALL SITE EXECUTES.  A call inside a loop pays the
 ; second cost per iteration and the first not at all, which is the case the
 ; sliding convention is really aimed at.
 ;
@@ -401,7 +401,7 @@
 ; a pointer and a length, a pointer and a reference count - is the shape a
 ; language with fat pointers returns constantly, and pushing every one of them
 ; through memory would cost a stack slot, and a store and a load at every
-; call - eleven cycles at the least, against none in registers.  Since structs are already decomposed for ARGUMENTS, and
+; call - six cycles at the least, against none in registers.  Since structs are already decomposed for ARGUMENTS, and
 ; a two-word struct is already passed in two registers, returning it in two
 ; registers needs no new machinery at all.
 ;
@@ -427,7 +427,7 @@ fat_bump:
         ret                             ; 1
 
 ; Through a hidden pointer the same function would be a `ld`, an `add`, two
-; `st`s and the pointer to return - about twenty cycles and eight bytes of
+; `st`s and the pointer to return - about a dozen cycles and eight bytes of
 ; caller stack, for a function whose entire work is one instruction.
 ;
 ; ----------------------------------------------------------------------------
@@ -603,9 +603,9 @@ full_example:
         ret                             ;                                1
 
 ; THE THIRD REGISTER IS FREE IN BYTES AND NOT IN CYCLES.  This push is the same
-; two bytes as `push lr` and moves three times the data: 10 cycles against 6,
-; and 9 against 5 on the pop.  Naming a register you do not use costs no space
-; and four cycles to execute, two each way, so the prologue should still name
+; two bytes as `push lr` and moves three times the data: 5 cycles against 3,
+; and the same on the pop.  Naming a register you do not use costs no space
+; and two cycles to execute, one each way, so the prologue should still name
 ; only what the body actually touches.
 
 ; POP ORDER IS THE REVERSE OF PUSH ORDER.  A push writes its registers left to
@@ -683,14 +683,15 @@ loop_body_alt:
         ret                             ;                    total  27   1
 
 ; 12 bytes of loop body against 16, and the difference is not only bytes: the
-; two extra instructions are a push and a pop, eleven cycles every iteration in
-; a loop whose other instructions cost 22 - two loads at five, the call at
-; three, the `ret` that comes back at four, an add and the taken branch.  The
+; two extra instructions are a push and a pop, six cycles every iteration in
+; a loop whose other instructions cost 22 - two loads at three, the call at
+; four, the `ret` that comes back at five, an add, and the taken branch at
+; six, since the `ld` it goes to is at an odd address and spans two words.  The
 ; push that replaced them is one instruction executed once.
 ;
 ; THE PROLOGUES ARE THE SAME SIZE.  `push lr, r4, r3` and `push lr, r4` are
 ; both two bytes, so the extra callee-saved register cost this function no
-; space and 4 cycles once.  That is the whole trade, and it is the reason
+; space and 2 cycles once.  That is the whole trade, and it is the reason
 ; the sliding convention is cheap to lose with: when arity guesses wrong, the
 ; loser pays two bytes, and when it guesses right the winner stops paying in a
 ; loop.

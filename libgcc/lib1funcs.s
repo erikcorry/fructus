@@ -102,17 +102,17 @@
 __mulhi3:
         br      ls, r1, r0, .sorted     ; 1   b <= a: b is the multiplier
         mov     r5, r0                  ; 1   otherwise a is, and b stays put
-        jmpr    .go                     ; 3
+        jmpr    .go                     ; 4
 .sorted:                                ;     ENTRY: r1 already the smaller
         mov     r5, r1                  ; 1   the multiplier
         mov     r1, r0                  ; 1   the multiplicand, pinned
 .go:
         mov     r0, #0                  ; 1   the accumulator, pinned
 .top:
-        brclr   r5, #0x0001, .s0        ; 2
+        brclr   r5, #0x0001, .s0        ; 1
         add     r0, r0, r1              ; 1
 .s0:
-        brclr   r5, #0x0002, .s1        ; 2
+        brclr   r5, #0x0002, .s1        ; 1
         add     r0, r0, r1              ; 1   twice: r1 has not moved, and
         add     r0, r0, r1              ; 1   two of a<<i is a<<(i+1)
 .s1:
@@ -126,8 +126,8 @@ __mulhi3:
 .s3:
         shl     r1, r1, #2              ; 1
         lsr     r5, r5, #4              ; 1
-        br      ne, r5, #0, .top        ; 2
-        ret                             ; 4
+        br      ne, r5, #0, .top        ; 1
+        ret                             ; 5
 
 
 ; ============================================================================
@@ -155,22 +155,22 @@ __mulhi3:
 ; every int multiply would pay for that.
 
 __umulhisi3:
-        br      ls, r1, r0, .sorted     ; 2   b is already the smaller
+        br      ls, r1, r0, .sorted     ; 1   b is already the smaller
         mov     r5, r0                  ; 1
         mov     r0, r1                  ; 1   pinned
         mov     r1, r5                  ; 1
 .sorted:
         lsr     r5, r0, #8              ; 1   the LARGER operand only
-        br      eq, r5, #0, .narrow     ; 2   under 256: it cannot overflow
+        br      eq, r5, #0, .narrow     ; 1   under 256: it cannot overflow
 
         ; --- the general case: shift and add, both sides widened -------------
-        push    r2, r3, lr              ; 7
+        push    r2, r3, lr              ; 5
         lsr     r2, r0, #15             ; 1   multiplicand high = a >> 15
         shl     lr, r0, #1              ; 1   multiplicand low  = a << 1
         mov     r3, #0                  ; 1   accumulator high
         brset   r1, #1, .entry          ; 1   bit 0 set: r0 is already the sum
         mov     r0, #0                  ; 1
-        jmpr    .entry                  ; 3
+        jmpr    .entry                  ; 5
 .set:
         add     r0, r0, lr              ; 1
         add     r3, r3, r2              ; 1
@@ -184,18 +184,18 @@ __umulhisi3:
 .entry:
         lsr     r1, r1, #1              ; 1   LOGICAL, or the loop never ends
 .end:
-        brset   r1, #1, .set            ; 2
+        brset   r1, #1, .set            ; 1
         br      ne, r1, #0, .clear      ; 1
 .done:
         mov     r1, r3                  ; 1   the high half; the low is in r0
-        pop     lr, r3, r2              ; 6
-        ret                             ; 4
+        pop     lr, r3, r2              ; 5
+        ret                             ; 5
 .narrow:
-        push    lr                      ; 5
-        call    __mulhi3.sorted         ; 3   past the comparison already made
-        pop     lr                      ; 4
+        push    lr                      ; 3
+        call    __mulhi3.sorted         ; 5   past the comparison already made
+        pop     lr                      ; 3
         mov     r1, #0                  ; 1   the product is the LOW half, in r0
-        ret                             ; 4
+        ret                             ; 5
 
 
 ; ============================================================================
@@ -215,18 +215,18 @@ __umulhisi3:
 ; survive the call and do not need a second copy.
 
 __mulhisi3:
-        push    r2, r3, lr              ; 7
+        push    r2, r3, lr              ; 5
         mov     r2, r0                  ; 1   keep a
         mov     r3, r1                  ; 1   keep b
-        call    __umulhisi3             ; 3   r0:r1 = low:high, unsigned
-        brclr   r2, #0x8000, .a_pos     ; 2   a negative?
+        call    __umulhisi3             ; 5   r0:r1 = low:high, unsigned
+        brclr   r2, #0x8000, .a_pos     ; 1   a negative?
         rsb     r1, r3, r1              ; 1   high -= b
 .a_pos:
         brclr   r3, #0x8000, .b_pos     ; 1   b negative?
         rsb     r1, r2, r1              ; 1   high -= a
 .b_pos:
-        pop     lr, r3, r2              ; 6
-        ret                             ; 4
+        pop     lr, r3, r2              ; 5
+        ret                             ; 5
 
 
 ; ============================================================================
@@ -246,9 +246,9 @@ __mulhisi3:
 ; needs all thirty-two, which is __umulhisi3 - and its low:high result is
 ; already in the right registers, so folding the cross terms in is one `add`.
 ;
-; ONE PUSH, NOT TWO.  A three-register push is seven cycles and two bytes
-; where pushing two and then one is eleven cycles and four - a push stops the
-; pipeline for four cycles beyond its words however many registers it carries,
+; ONE PUSH, NOT TWO.  A three-register push is five cycles and two bytes
+; where pushing two and then one is seven cycles and four - a push stops the
+; pipeline for two cycles beyond its words however many registers it carries,
 ; see the cost model under [cpu] in the spec - and the order works out: `push
 ; r4, lr, r0` writes r4 highest and al lowest, so `ld r0, [sp]` finds al, and
 ; the later `pop r0` then `pop lr, r4` unwind it in the right order.
@@ -269,7 +269,7 @@ __mulhisi3:
 ;
 ;       or      r5, r1, r3              ; both high words at once
 ;
-; Two cycles to ask, and it turns 443 into about 221 - or about 83 when the
+; Two cycles to ask, and it turns 511 into about 257 - or about 95 when the
 ; low halves are small enough for __umulhisi3's own shortcut.  A `long` holding
 ; a value that fits in sixteen bits is the common case in real code by a wide
 ; margin, which is what makes this worth its eleven bytes.
@@ -281,24 +281,24 @@ __mulhisi3:
 __mulsi3:
         or      r5, r1, r3              ; 1   ah | bh
         br      eq, r5, #0, .narrow     ; 1   both zero: a 16 x 16 widening
-        push    r4, lr, r0              ; 7   one push, not two:
+        push    r4, lr, r0              ; 5   one push, not two:
                                         ;     al ends up lowest, so [sp] finds it
         mov     r0, r2                  ; 1   bl * ah, with ah already in r1
-        call    __mulhi3                ; 3
+        call    __mulhi3                ; 5
         mov     r4, r0                  ; 1
-        ld      r0, [sp]                ; 4   al back, but leave it there
+        ld      r0, [sp]                ; 3   al back, but leave it there
         mov     r1, r3                  ; 1   al * bh
-        call    __mulhi3                ; 3
+        call    __mulhi3                ; 5
         add     r4, r4, r0              ; 1   the two cross terms
-        pop     r0                      ; 4   al, for the last time
+        pop     r0                      ; 3   al, for the last time
         mov     r1, r2                  ; 1   al * bl, widened
-        call    __umulhisi3             ; 3
+        call    __umulhisi3             ; 5
         add     r1, r1, r4              ; 1   fold the cross terms into the high
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 .narrow:
         mov     r1, r2                  ; 1   bl; al is already in r0
-        jmp     __umulhisi3             ; 3   its low:high result is ours
+        jmp     __umulhisi3             ; 5   its low:high result is ours
 
 
 ; ============================================================================
@@ -347,25 +347,25 @@ __mulsi3:
 __umulsidi3:
         or      r5, r1, r3              ; 1   ah | bh
         br      eq, r5, #0, .narrow     ; 1   both zero: it is a 16 x 16
-        push    r4, lr, r1              ; 7   r4, lr, ah      ah lowest
-        push    r0, r3, r2              ; 7   al, bh, bl      bl lowest
+        push    r4, lr, r1              ; 5   r4, lr, ah      ah lowest
+        push    r0, r3, r2              ; 5   al, bh, bl      bl lowest
         add     sp, sp, #-2             ; 1   and a slot for w0
         ;      w0(0)  bl(2)  bh(4)  al(6)  ah(8)  lr(10)  r4(12)
 
         ; --- P1 = al * bh ---------------------------------------------------
-        ld      r0, [sp, #6]            ; 4
-        ld      r1, [sp, #4]            ; 4
-        call    __umulhisi3             ; 3
+        ld      r0, [sp, #6]            ; 3
+        ld      r1, [sp, #4]            ; 3
+        call    __umulhisi3             ; 5
         mov     r2, r1                  ; 1   X.hi
         mov     r3, r0                  ; 1   X.lo
 
         ; --- P2 = ah * bl, and X = P1 + P2 ----------------------------------
-        ld      r0, [sp, #8]            ; 4
-        ld      r1, [sp, #2]            ; 4
-        call    __umulhisi3             ; 3
+        ld      r0, [sp, #8]            ; 3
+        ld      r1, [sp, #2]            ; 3
+        call    __umulhisi3             ; 5
         mov     r4, #0                  ; 1   cx
         add     r3, r3, r0              ; 1   X.lo
-        br      hs, r3, r0, .nc1        ; 2
+        br      hs, r3, r0, .nc1        ; 1
         add     r1, r1, #1              ; 1   into P2.hi; it cannot wrap
 .nc1:
         add     r2, r2, r1              ; 1   X.hi
@@ -374,23 +374,23 @@ __umulsidi3:
 .nc2:
 
         ; --- P0 = al * bl ---------------------------------------------------
-        ld      r0, [sp, #6]            ; 4
-        ld      r1, [sp, #2]            ; 4
-        call    __umulhisi3             ; 3
-        st      r0, [sp, #0]            ; 5   w0 is finished
+        ld      r0, [sp, #6]            ; 3
+        ld      r1, [sp, #2]            ; 3
+        call    __umulhisi3             ; 5
+        st      r0, [sp, #0]            ; 3   w0 is finished
         add     r3, r3, r1              ; 1   w1 = X.lo + P0.hi
         br      hs, r3, r1, .nc3        ; 1
         add     r2, r2, #1              ; 1   k1 into X.hi ...
-        br      ne, r2, #0, .nc3        ; 2   ... which CAN wrap
+        br      ne, r2, #0, .nc3        ; 1   ... which CAN wrap
         add     r4, r4, #1              ; 1
 .nc3:
 
         ; --- P3 = ah * bh ---------------------------------------------------
-        ld      r0, [sp, #8]            ; 4
-        ld      r1, [sp, #4]            ; 4
-        call    __umulhisi3             ; 3
+        ld      r0, [sp, #8]            ; 3
+        ld      r1, [sp, #4]            ; 3
+        call    __umulhisi3             ; 5
         add     r2, r2, r0              ; 1   w2 = X.hi + k1 + P3.lo
-        br      hs, r2, r0, .nc4        ; 2
+        br      hs, r2, r0, .nc4        ; 1
         add     r4, r4, #1              ; 1
 .nc4:
         add     r4, r4, r1              ; 1   w3 = P3.hi + cx + k2
@@ -398,10 +398,10 @@ __umulsidi3:
         ; --- place the four words and unwind --------------------------------
         mov     r1, r3                  ; 1   w1; w2 is in r2 already
         mov     r3, r4                  ; 1   w3, before the pop restores r4
-        ld      r0, [sp, #0]            ; 4   w0
+        ld      r0, [sp, #0]            ; 3   w0
         add     sp, sp, #10             ; 1
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 
 ; BOTH HIGH WORDS ZERO leaves only P0, so the answer is one widening multiply
 ; with two zero words above it.  IT IS A TAIL CALL: the zero words go in r2 and
@@ -411,7 +411,7 @@ __umulsidi3:
         mov     r1, r2                  ; 1   bl; al is already in r0
         mov     r2, #0                  ; 1   w2
         mov     r3, r2                  ; 1   w3
-        jmp     __umulhisi3             ; 3
+        jmp     __umulhisi3             ; 5
 
 ; ============================================================================
 ; WITH THE MULTIPLIER - what gcc -mmul calls instead
@@ -423,13 +423,13 @@ __umulsidi3:
 ; library is built once, without -mmul, and has to run on a part without
 ; one.  A program built with -mmul calls these; --gc-sections drops the rest.
 ;
-;       __mulsi3_mul        32 x 32 -> 32            13 bytes  14 cycles
-;       __umulsidi3_mul     32 x 32 -> 64 unsigned   83 bytes  15, or 54 on average
+;       __mulsi3_mul        32 x 32 -> 32            13 bytes  15 cycles
+;       __umulsidi3_mul     32 x 32 -> 64 unsigned   83 bytes  18, or 55 on average
 ;
 ; and __muldi3_mul, in C on top of them, in the GCC tree's
 ; libgcc/config/fructus/lib2mul.c.  The cycles are from entry to the return.
-; __mulsi3_mul never branches; __umulsidi3_mul is 15 when both high words
-; are zero, and 54 is its mean over random full-width operands.
+; __mulsi3_mul never branches; __umulsidi3_mul is 18 when both high words
+; are zero, and 55 is its mean over random full-width operands.
 
 ; ============================================================================
 ; __mulsi3_mul - 32 x 32 -> 32, signed or unsigned, with mul         13 bytes
@@ -450,7 +450,7 @@ __mulsi3_mul:
         mulhu   r3, r0, r2              ; 2   al*bl, high
         add     r1, r1, r3              ; 1   hi
         mul     r0, r0, r2              ; 2   lo
-        ret                             ; 4
+        ret                             ; 5
 
 
 ; ============================================================================
@@ -469,10 +469,11 @@ __mulsi3_mul:
 ;
 ; A CARRY IS A COMPARE AND A BRANCH: the sum is below an addend exactly when
 ; it wrapped.  The branch goes to the carry, out of line, so that no carry
-; is a branch not taken - one or two cycles against four.  Between random
-; 32-bit operands a carry is about as likely as not, and this is still 54
-; cycles on average against 56 the other way round; between operands whose
-; high words are small, a carry is rare and the difference larger.
+; is a branch not taken - one cycle against five or six.  Between random
+; 32-bit operands a carry is about as likely as not, and this is 55 cycles on
+; average; the other way round was two more, measured on the core before the
+; instruction buffer, whose taken branch cost a cycle less.  Between operands
+; whose high words are small, a carry is rare and the difference larger.
 ;
 ; Each of a and b is read by two products and dies after its second, and the
 ; products are ordered so that seven registers suffice - r4 and lr, saved,
@@ -480,8 +481,8 @@ __mulsi3_mul:
 
 __umulsidi3_mul:
         or      r5, r1, r3              ; 1   ah | bh
-        br      eq, r5, #0, .narrow     ; 2   both zero: it is a 16 x 16
-        push    r4, lr                  ; 6
+        br      eq, r5, #0, .narrow     ; 1   both zero: it is a 16 x 16
+        push    r4, lr                  ; 4
         mulhu   r4, r0, r3              ; 2   w2 = P1.hi
         mul     r5, r0, r3              ; 2   w1 = P1.lo
         mul     lr, r1, r3              ; 2   P3.lo
@@ -492,7 +493,7 @@ __umulsidi3_mul:
         mulhu   lr, r1, r2              ; 2   P2.hi
         mul     r1, r1, r2              ; 2   P2.lo; ah is dead
         add     r4, r4, lr              ; 1   w2 += P2.hi
-        br      lo, r4, lr, .k2         ; 2
+        br      lo, r4, lr, .k2         ; 1
 .r2:
         add     r5, r5, r1              ; 1   w1 += P2.lo
         br      lo, r5, r1, .k3         ; 1
@@ -500,11 +501,11 @@ __umulsidi3_mul:
         mulhu   r1, r0, r2              ; 2   P0.hi
         mul     r0, r0, r2              ; 2   w0 = P0.lo
         add     r1, r5, r1              ; 1   w1 += P0.hi
-        br      lo, r1, r5, .k4         ; 2
+        br      lo, r1, r5, .k4         ; 1
 .r4:
         mov     r2, r4                  ; 1   w2
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 
 ; The carries.  One into w2 can wrap w2 in turn, and then it carries on into
 ; w3, which itself cannot overflow: the product fits in 64 bits.
@@ -530,7 +531,7 @@ __umulsidi3_mul:
         mul     r0, r0, r2              ; 2   and low
         mov     r2, #0                  ; 1   w2
         mov     r3, r2                  ; 1   w3
-        ret                             ; 4
+        ret                             ; 5
 
 ; ============================================================================
 ; __udivmodhi4 - 16 / 16 -> quotient and remainder, unsigned
@@ -539,7 +540,7 @@ __umulsidi3_mul:
 ;
 ; Two arguments and a 32-bit result, so by isa/abi.s this owns r0, r1 and r5
 ; and must give back r2, r3 and r4 - which is why the general loop, needing a
-; fourth register, borrows r2 - five cycles to push it and four to pop it.
+; fourth register, borrows r2 - three cycles to push it and three to pop it.
 ;
 ; BOTH RESULTS AT ONCE, because the caller usually wants both.  `x / 10' and
 ; `x % 10' next to each other is every digit of every number ever printed,
@@ -609,15 +610,15 @@ __umulsidi3_mul:
 ; ============================================================================
 
 __udivmodhi4:
-        popcount r5, r1                 ; 4
+        popcount r5, r1                 ; 2
         br      ne, r5, #1, .not_pow2   ; 1   0 bits set is not 1 either
         ; --- b is a power of two: mask and shift -----------------------------
-        clz     r5, r1                  ; 4   15 - log2(b)
+        clz     r5, r1                  ; 2   15 - log2(b)
         rsb     r5, r5, #15             ; 1   log2(b), and imm5 reaches 15
         sub     r1, r1, #1              ; 1   b - 1, the remainder's mask
         and     r1, r1, r0              ; 1   a mod b
         lsr     r0, r0, r5              ; 1   a div b
-        ret                             ; 4
+        ret                             ; 5
 
 .not_pow2:
         mov     r5, #10                 ; 1   condimm5 has no ne #10, so compare
@@ -638,37 +639,37 @@ __udivmodhi4:
         rsb     r1, r1, r0              ; 1   r = a - 10q, in 0..19
         add     r1, r1, #-10            ; 1   the corrected remainder ...
         add     r0, r5, #1              ; 1   ... and the corrected quotient
-        br      ge, r1, #0, .ten_ret    ; 3+1 r was >= 10: they are the answer
+        br      ge, r1, #0, .ten_ret    ; 1, taken 5  r was >= 10: they are the answer
         mov     r0, r5                  ; 1   otherwise put both back
         add     r1, r1, #10             ; 1
 .ten_ret:
-        ret                             ; 4
+        ret                             ; 5
 
 .general:
-        br      lo, r0, r1, .smaller    ; 3+1 a < b: quotient 0, remainder a
-        push    r2                      ; 5   the fourth register, the quotient
-        clz     r5, r1                  ; 4
-        clz     r2, r0                  ; 4
+        br      lo, r0, r1, .smaller    ; 1, taken 5  a < b: quotient 0, remainder a
+        push    r2                      ; 3   the fourth register, the quotient
+        clz     r5, r1                  ; 2
+        clz     r2, r0                  ; 2
         rsb     r5, r2, r5              ; 1   s = clz(b) - clz(a), >= 0 here
         shl     r1, r1, r5              ; 1   d = b << s
         mov     r2, #0                  ; 1   the quotient
 .loop:
         add     r2, r2, r2              ; 1   q <<= 1
-        br      lo, r0, r1, .nofit      ; 3+1
+        br      lo, r0, r1, .nofit      ; 1, taken 6
         rsb     r0, r1, r0              ; 1   r -= d
         add     r2, r2, #1              ; 1   q |= 1
 .nofit:
         lsr     r1, r1, #1              ; 1   d >>= 1
         add     r5, r5, #-1             ; 1   s is the counter too
-        br      ge, r5, #0, .loop       ; 3+1 s+1 iterations
+        br      ge, r5, #0, .loop       ; 1, taken 5  s+1 iterations
         mov     r1, r0                  ; 1   the remainder, pinned
         mov     r0, r2                  ; 1   the quotient
-        pop     r2                      ; 4
-        ret                             ; 4
+        pop     r2                      ; 3
+        ret                             ; 5
 .smaller:
         mov     r1, r0                  ; 1   pinned
         mov     r0, #0                  ; 1   pinned
-        ret                             ; 4
+        ret                             ; 5
 
 ; ============================================================================
 ; __udivmodhi4_mul - 16 / 16 -> quotient and remainder, unsigned, -mmul version
@@ -694,7 +695,7 @@ __udivmodhi4_mul:
         br eq, r1, r5, .ten             ; Common enough to special case.
         ; Recip takes an argument that is normalized to have a 1 in the high
         ; bit and returns its reciprocal, as defined by Möller and Granlund.
-        push lr                         ; 5   We need one more register
+        push lr                         ; 3   We need one more register
         clz r5, r1                      ; 2   Bits to shift away
         shl lr, r1, r5                  ; 1   Normalize
         recip lr, lr                    ; 5   Reciprocal
@@ -710,13 +711,13 @@ __udivmodhi4_mul:
         br hs, r0, r1, .adjust          ; 1   Unsigned, and rarely taken
         mov r1, r0                      ; 1   Put remainder in r1
         mov r0, lr                      ; 1   Put result in r0
-        pop lr                          ; 4
-        ret                             ; 4
+        pop lr                          ; 3
+        ret                             ; 5
 .adjust:
         rsb r1, r1, r0                  ; 1   Subtract one divisor from remainder
         add r0, lr, #1                  ; 1   Increase answer by one.
-        pop lr                          ; 4
-        ret                             ; 4
+        pop lr                          ; 3
+        ret                             ; 5
 .ten:
         or      r1, r0, #0              ; 1
         mov     r0, #0xcccd             ; 1 or 2
@@ -724,7 +725,7 @@ __udivmodhi4_mul:
         lsr     r0, r0, #3              ; 1
         mul     r5, r0, #10             ; 2
         rsb     r1, r5, r1              ; 1
-        ret                             ; 4
+        ret                             ; 5
 
 ; ============================================================================
 ; The four helpers GCC actually calls
@@ -738,51 +739,51 @@ __udivmodhi4_mul:
 ; remainder in r1 is allowed, since a 16-bit return says nothing about r1.
 
 __udivhi3:
-        jmp     __udivmodhi4            ; 3
+        jmp     __udivmodhi4            ; 4
 
 __umodhi3:
-        push    lr                      ; 5
-        call    __udivmodhi4            ; 3
+        push    lr                      ; 3
+        call    __udivmodhi4            ; 4
         mov     r0, r1                  ; 1   the remainder, pinned
-        pop     lr                      ; 4
-        ret                             ; 4
+        pop     lr                      ; 3
+        ret                             ; 5
 
 ; C rounds a signed quotient TOWARDS ZERO, so the magnitudes divide and the
 ; sign goes back on after: negative exactly when the operands' signs differ,
 ; which is the top bit of a ^ b.
 __divhi3:
-        push    lr, r2                  ; 6
+        push    lr, r2                  ; 4
         xor     r2, r0, r1              ; 1   bit 15 is the quotient's sign
-        br      ge, r0, #0, .a_pos      ; 3+1
+        br      ge, r0, #0, .a_pos      ; 1, taken 6
         rsb     r0, r0, #0              ; 1   |a|
 .a_pos:
-        br      ge, r1, #0, .b_pos      ; 3+1
+        br      ge, r1, #0, .b_pos      ; 1, taken 6
         rsb     r1, r1, #0              ; 1   |b|
 .b_pos:
-        call    __udivmodhi4            ; 3
-        br      ge, r2, #0, .pos        ; 3+1
+        call    __udivmodhi4            ; 4
+        br      ge, r2, #0, .pos        ; 1, taken 5
         rsb     r0, r0, #0              ; 1
 .pos:
-        pop     r2, lr                  ; 5
-        ret                             ; 4
+        pop     r2, lr                  ; 4
+        ret                             ; 5
 
 ; And a remainder takes the sign of the DIVIDEND, so that a == (a/b)*b + a%b.
 __modhi3:
-        push    lr, r2                  ; 6
+        push    lr, r2                  ; 4
         mov     r2, r0                  ; 1   keep a, for its sign
-        br      ge, r0, #0, .a_pos      ; 3+1
+        br      ge, r0, #0, .a_pos      ; 1, taken 6
         rsb     r0, r0, #0              ; 1   |a|
 .a_pos:
-        br      ge, r1, #0, .b_pos      ; 3+1
+        br      ge, r1, #0, .b_pos      ; 1, taken 6
         rsb     r1, r1, #0              ; 1   |b|
 .b_pos:
-        call    __udivmodhi4            ; 3
+        call    __udivmodhi4            ; 4
         mov     r0, r1                  ; 1   the remainder, pinned
-        br      ge, r2, #0, .pos        ; 3+1
+        br      ge, r2, #0, .pos        ; 1, taken 5
         rsb     r0, r0, #0              ; 1
 .pos:
-        pop     r2, lr                  ; 5
-        ret                             ; 4
+        pop     r2, lr                  ; 4
+        ret                             ; 5
 
 ; ============================================================================
 ; The same four with recip, for -mmul
@@ -791,47 +792,47 @@ __modhi3:
 ; and a saved lr, so r2 is free to carry a sign across the call here too.
 
 __udivhi3_mul:
-        jmp     __udivmodhi4_mul        ; 3
+        jmp     __udivmodhi4_mul        ; 5
 
 __umodhi3_mul:
-        push    lr                      ; 5
-        call    __udivmodhi4_mul        ; 3
+        push    lr                      ; 3
+        call    __udivmodhi4_mul        ; 5
         mov     r0, r1                  ; 1   the remainder, pinned
-        pop     lr                      ; 4
-        ret                             ; 4
+        pop     lr                      ; 3
+        ret                             ; 5
 
 __divhi3_mul:
-        push    lr, r2                  ; 6
+        push    lr, r2                  ; 4
         xor     r2, r0, r1              ; 1   bit 15 is the quotient's sign
-        br      ge, r0, #0, .a_pos      ; 3+1
+        br      ge, r0, #0, .a_pos      ; 1, taken 6
         rsb     r0, r0, #0              ; 1   |a|
 .a_pos:
-        br      ge, r1, #0, .b_pos      ; 3+1
+        br      ge, r1, #0, .b_pos      ; 1, taken 6
         rsb     r1, r1, #0              ; 1   |b|
 .b_pos:
-        call    __udivmodhi4_mul        ; 3
-        br      ge, r2, #0, .pos        ; 3+1
+        call    __udivmodhi4_mul        ; 5
+        br      ge, r2, #0, .pos        ; 1, taken 6
         rsb     r0, r0, #0              ; 1
 .pos:
-        pop     r2, lr                  ; 5
-        ret                             ; 4
+        pop     r2, lr                  ; 4
+        ret                             ; 5
 
 __modhi3_mul:
-        push    lr, r2                  ; 6
+        push    lr, r2                  ; 4
         mov     r2, r0                  ; 1   keep a, for its sign
-        br      ge, r0, #0, .a_pos      ; 3+1
+        br      ge, r0, #0, .a_pos      ; 1, taken 6
         rsb     r0, r0, #0              ; 1   |a|
 .a_pos:
-        br      ge, r1, #0, .b_pos      ; 3+1
+        br      ge, r1, #0, .b_pos      ; 1, taken 6
         rsb     r1, r1, #0              ; 1   |b|
 .b_pos:
-        call    __udivmodhi4_mul        ; 3
+        call    __udivmodhi4_mul        ; 5
         mov     r0, r1                  ; 1   the remainder, pinned
-        br      ge, r2, #0, .pos        ; 3+1
+        br      ge, r2, #0, .pos        ; 1, taken 6
         rsb     r0, r0, #0              ; 1
 .pos:
-        pop     r2, lr                  ; 5
-        ret                             ; 4
+        pop     r2, lr                  ; 4
+        ret                             ; 5
 
 ; ============================================================================
 ; __udivmodsi4_mul - 32 / 32 -> quotient and remainder, unsigned, with recip
@@ -872,7 +873,7 @@ __udivmodsi4_mul:
         br      ne, r3, #0, .wide       ; 1
         ; --- d < 65536 -------------------------------------------------------
         clz     r5, r2                  ; 2   s
-        push    r4, lr, r5              ; 7   s, for the remainder, at [sp]
+        push    r4, lr, r5              ; 5   s, for the remainder, at [sp]
         shl     r2, r2, r5              ; 1   d, normalised
         rsb     lr, r5, #15             ; 1   15 - s: a shift by 16 - s is
         lsr     r4, r1, #1              ; 1   two, since 16 would read as 0
@@ -904,17 +905,17 @@ __udivmodsi4_mul:
 .lk:
         br      hs, r4, r2, .lg         ; 1   rare
 .ld:
-        pop     r5                      ; 4   s
+        pop     r5                      ; 3   s
         lsr     r2, r4, r5              ; 1   the remainder
         mov     r3, #0                  ; 1
         mov     r0, r1                  ; 1   pinned
         mov     r1, lr                  ; 1
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 .lg:
         add     r1, r1, #1              ; 1
         rsb     r4, r2, r4              ; 1
-        jmpr    .ld                     ; 3
+        jmpr    .ld                     ; 5
 .hi:    ; (r4:r1) / r2  ->  quotient lr, remainder r4
         mulhu   lr, r3, r4              ; 2
         mul     r5, r3, r4              ; 2
@@ -933,20 +934,20 @@ __udivmodsi4_mul:
         br      lo, r4, r2, .lo         ; 1
         add     lr, lr, #1              ; 1
         rsb     r4, r2, r4              ; 1
-        jmpr    .lo                     ; 3
+        jmpr    .lo                     ; 4
 
 .less:
         mov     r2, r0                  ; 1
         mov     r3, r1                  ; 1
         mov     r0, #0                  ; 1   pinned
         mov     r1, r0                  ; 1   pinned
-        ret                             ; 4
+        ret                             ; 5
 
         ; --- d >= 65536: one quotient word -----------------------------------
 .wide:
         br      lo, r1, r3, .less       ; 1   n < d
         clz     r5, r3                  ; 2   s
-        push    r4, lr, r5              ; 7   s at [sp]
+        push    r4, lr, r5              ; 5   s at [sp]
         mov     r4, #0                  ; 1   u2, if d is normalised already
         br      eq, r5, #0, .go         ; 1
         rsb     lr, r5, #0              ; 1   16 - s, in the bits that count
@@ -960,7 +961,7 @@ __udivmodsi4_mul:
         or      r1, r1, lr              ; 1   u1
         shl     r0, r0, r5              ; 1   u0
 .go:    ; v, the 3/2 reciprocal: d1's, with d0 folded in - Algorithm 6
-        push    r0                      ; 5   u0, for a register
+        push    r0                      ; 3   u0, for a register
         recip   lr, r3                  ; 5   v from d1 alone
         mul     r5, r3, lr              ; 2   p = d1 * v + d0, mod 65536
         add     r5, r5, r2              ; 1
@@ -974,7 +975,7 @@ __udivmodsi4_mul:
         add     r5, r5, r0              ; 1   p += t1
         br      lo, r5, r0, .vf         ; 1   a carry, 29%
 .vc:
-        pop     r0                      ; 4
+        pop     r0                      ; 3
         mulhu   r5, lr, r4              ; 2
         mul     lr, lr, r4              ; 2
         add     lr, lr, r1              ; 1   q0
@@ -1009,7 +1010,7 @@ __udivmodsi4_mul:
         br      hs, r0, r2, .wg         ; 1
 .wd:
         mov     r4, r5                  ; 1   the quotient
-        pop     r5                      ; 4   s
+        pop     r5                      ; 3   s
         rsb     lr, r5, #15             ; 1   r1:r0 >> s, with r1 << (16 - s)
         lsr     r2, r0, r5              ; 1   in two shifts as above
         shl     r3, r1, #1              ; 1
@@ -1018,8 +1019,8 @@ __udivmodsi4_mul:
         lsr     r3, r1, r5              ; 1
         mov     r0, r4                  ; 1
         mov     r1, #0                  ; 1
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 .wg:
         add     r5, r5, #1              ; 1
         br      hs, r0, r2, .wg1        ; 1
@@ -1027,15 +1028,15 @@ __udivmodsi4_mul:
 .wg1:
         rsb     r0, r2, r0              ; 1
         rsb     r1, r3, r1              ; 1
-        jmpr    .wd                     ; 3
+        jmpr    .wd                     ; 4
 .ve:    ; the fold's rare cases: d0's carry with p >= d1 ...
         sub     lr, lr, #1              ; 1
         rsb     r5, r3, r5              ; 1
-        jmp     .vb                     ; 3
+        jmp     .vb                     ; 5
 .vf:   ; ... and t1's carry: v one less, or two if p:t0 >= d1:d0, t0 the
         sub     lr, lr, #1              ; 1   low half of the old v * d0
         br      hs, r5, r3, .vg         ; 1
-        jmp     .vc                     ; 3
+        jmp     .vc                     ; 4
 .vg:
         br      hi, r5, r3, .vg2        ; 1
         mul     r0, lr, r2              ; 2
@@ -1043,7 +1044,7 @@ __udivmodsi4_mul:
         br      lo, r0, r2, .vc         ; 1
 .vg2:
         sub     lr, lr, #1              ; 1
-        jmp     .vc                     ; 3
+        jmp     .vc                     ; 4
 
 
 ; ============================================================================
@@ -1054,67 +1055,67 @@ __udivmodsi4_mul:
 ; magnitudes divide and the signs go back on, as for 16 bits.
 
 __udivsi3_mul:
-        jmp     __udivmodsi4_mul        ; 3
+        jmp     __udivmodsi4_mul        ; 5
 
 __umodsi3_mul:
-        push    lr                      ; 5
-        call    __udivmodsi4_mul        ; 3
+        push    lr                      ; 3
+        call    __udivmodsi4_mul        ; 5
         mov     r0, r2                  ; 1
         mov     r1, r3                  ; 1
-        pop     lr                      ; 4
-        ret                             ; 4
+        pop     lr                      ; 3
+        ret                             ; 5
 
 __divsi3_mul:
-        push    r4, lr                  ; 6
+        push    r4, lr                  ; 4
         xor     r4, r1, r3              ; 1   bit 15 is the quotient's sign
-        br      ge, r1, #0, .a_pos      ; 3+1
+        br      ge, r1, #0, .a_pos      ; 1, taken 6
         rsb     r0, r0, #0              ; 1   |a|: the low word negated, and
         xor     r1, r1, #-1             ; 1   the high one inverted, plus a
         br      ne, r0, #0, .a_pos      ; 1   carry when the low word is 0
         add     r1, r1, #1              ; 1
 .a_pos:
-        br      ge, r3, #0, .b_pos      ; 3+1
+        br      ge, r3, #0, .b_pos      ; 1, taken 6
         rsb     r2, r2, #0              ; 1   |b|
         xor     r3, r3, #-1             ; 1
         br      ne, r2, #0, .b_pos      ; 1
         add     r3, r3, #1              ; 1
 .b_pos:
-        call    __udivmodsi4_mul        ; 3
-        br      ge, r4, #0, .pos        ; 3+1
+        call    __udivmodsi4_mul        ; 5
+        br      ge, r4, #0, .pos        ; 1, taken 6
         rsb     r0, r0, #0              ; 1
         xor     r1, r1, #-1             ; 1
         br      ne, r0, #0, .pos        ; 1
         add     r1, r1, #1              ; 1
 .pos:
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 
 __modsi3_mul:
-        push    r4, lr                  ; 6
+        push    r4, lr                  ; 4
         mov     r4, r1                  ; 1   keep a's high word, for its sign
-        br      ge, r1, #0, .a_pos      ; 3+1
+        br      ge, r1, #0, .a_pos      ; 1, taken 6
         rsb     r0, r0, #0              ; 1   |a|
         xor     r1, r1, #-1             ; 1
         br      ne, r0, #0, .a_pos      ; 1
         add     r1, r1, #1              ; 1
 .a_pos:
-        br      ge, r3, #0, .b_pos      ; 3+1
+        br      ge, r3, #0, .b_pos      ; 1, taken 6
         rsb     r2, r2, #0              ; 1   |b|
         xor     r3, r3, #-1             ; 1
         br      ne, r2, #0, .b_pos      ; 1
         add     r3, r3, #1              ; 1
 .b_pos:
-        call    __udivmodsi4_mul        ; 3
+        call    __udivmodsi4_mul        ; 5
         mov     r0, r2                  ; 1   the remainder
         mov     r1, r3                  ; 1
-        br      ge, r4, #0, .pos        ; 3+1
+        br      ge, r4, #0, .pos        ; 1, taken 6
         rsb     r0, r0, #0              ; 1
         xor     r1, r1, #-1             ; 1
         br      ne, r0, #0, .pos        ; 1
         add     r1, r1, #1              ; 1
 .pos:
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 
 ; ============================================================================
 ; 64-bit division
@@ -1160,7 +1161,7 @@ __modsi3_mul:
 ; ten, to print a number - and because then R < d fits one register too, and
 ; the whole division lives in seven: n and the quotient in r0-r3, a word at a
 ; time in r3 and rotated round after each, R in r4, d in r5, the count in lr.
-; About thirteen cycles a step.  The general loop keeps R in r0-r3, the
+; About twenty-one cycles a step.  The general loop keeps R in r0-r3, the
 ; dividend and quotient words in the frame, and d there too, compared and
 ; subtracted a word at a time.
 ;
@@ -1175,126 +1176,129 @@ __modsi3_mul:
 ; MEASURED, a full 64-bit dividend, mean cycles of __udivdi3
 ; ----------------------------------------------------------------------------
 ;       divisor bits        1-16       17-32      33-48      49-64
-;       here                1140-1200  2740-3120  1590-2010  690-990
-;       -mmul, below        275-280    370-375    605-610    420
+;       here                1395-1500  2780-3160  1625-2025  720-1010
+;       -mmul, below        260-270    365-375    575-580    395-400
 ;       libgcc2.c's         ~4100      ~3000      ~3300      1600-2600
 ;
 ; The range is over the widths in each column, 30 dividends a width.  561
 ; bytes for all six, and 928 for the six with recip below, where libgcc2.c's
 ; were 2.3K to 3.2K EACH, before the 32-bit division, multiply and clz table
-; they called.  A divisor of 17 to 32 bits is the slow case: 48 steps of the
+; they called.  libgcc2.c's row was measured on the core before the
+; instruction buffer, where the first row was 1140-1200, 2740-3120, 1590-2010
+; and 690-990: a narrow divisor's loop pays a taken branch or a jump on most
+; of its steps, and those cost a cycle or two more now.  A divisor of 17 to 32 bits is the slow case: 48 steps of the
 ; general loop, and a loop of its own with R in two registers would be about
 ; 80 bytes more.
 
 __udivmoddi4:
         mov     r5, sp                  ; 1   d, which becomes the remainder
-        push    lr                      ; 5
-        call    .core                   ; 3
-        ld      r5, [sp, #10]           ; 4   rp, past the pushed lr
+        push    lr                      ; 3
+        call    .core                   ; 4
+        ld      r5, [sp, #10]           ; 3   rp, past the pushed lr
         br      eq, r5, #0, .norp       ; 1
-        ld      lr, [sp, #2]            ; 4
-        st      lr, [r5, #0]            ; 5
-        ld      lr, [sp, #4]            ; 4
-        st      lr, [r5, #2]            ; 5
-        ld      lr, [sp, #6]            ; 4
-        st      lr, [r5, #4]            ; 5
-        ld      lr, [sp, #8]            ; 4
-        st      lr, [r5, #6]            ; 5
+        ld      lr, [sp, #2]            ; 3
+        st      lr, [r5, #0]            ; 3
+        ld      lr, [sp, #4]            ; 3
+        st      lr, [r5, #2]            ; 3
+        ld      lr, [sp, #6]            ; 3
+        st      lr, [r5, #4]            ; 3
+        ld      lr, [sp, #8]            ; 3
+        st      lr, [r5, #6]            ; 3
 .norp:
-        pop     lr                      ; 4
-        ret                             ; 4
+        pop     lr                      ; 3
+        ret                             ; 5
 
 ; --- the core -----------------------------------------------------------------
 ;       in:  r0:r1:r2:r3  n             r5  -> d, four words
 ;       out: r0:r1:r2:r3  n / d         [r5] n % d, over d          r4 kept
 .core:
-        push    r4, lr, r5              ; 7   [sp]: p, lr, r4
-        ld      r4, [r5, #2]            ; 4   d1 | d2 | d3: under 65536?
-        ld      lr, [r5, #4]            ; 4
+        push    r4, lr, r5              ; 5   [sp]: p, lr, r4
+        ld      r4, [r5, #2]            ; 3   d1 | d2 | d3: under 65536?
+        ld      lr, [r5, #4]            ; 3
         or      r4, r4, lr              ; 1
-        ld      lr, [r5, #6]            ; 4
+        ld      lr, [r5, #6]            ; 3
         or      r4, r4, lr              ; 1
         br      ne, r4, #0, .wide       ; 1
 
         ; --- d < 65536: R in r4 (zero already), d in r5 ------------------------
-        ld      r5, [r5, #0]            ; 4   d
-        push    r5                      ; 5   kept, for after each rotation
+        ld      r5, [r5, #0]            ; 3   d
+        push    r5                      ; 3   kept, for after each rotation
         mov     lr, #64                 ; 1
 .nword:
         br      ne, r4, #0, .nbits      ; 1   a zero word with nothing carried
         br      ne, r3, #0, .nbits      ; 1   in is a zero quotient word:
         add     lr, lr, #-16            ; 1   no steps
-        jmpr    .nrot                   ; 3
+        jmpr    .nrot                   ; 4
 .nbits:
         brset   r4, #0x8000, .nbig      ; 1   2R overflows: it is above d
         shl     r4, r4, #1              ; 1
-        brclr   r3, #0x8000, .n0        ; 3+1 the dividend's next bit
+        brclr   r3, #0x8000, .n0        ; 1, taken 6  the dividend's next bit
         add     r4, r4, #1              ; 1
 .n0:
         shl     r3, r3, #1              ; 1   ... and room for the quotient's
-        br      lo, r4, r5, .nnext      ; 3+1
+        br      lo, r4, r5, .nnext      ; 1, taken 5
 .nsub:
         rsb     r4, r5, r4              ; 1   R -= d
         add     r3, r3, #1              ; 1   quotient bit
 .nnext:
         add     lr, lr, #-1             ; 1
         brclr   lr, #0x000f, .nrot      ; 1   end of a word
-        jmpr    .nbits                  ; 3
+        jmpr    .nbits                  ; 5
 .nbig:
         shl     r4, r4, #1              ; 1   2R - 65536 ...
-        brclr   r3, #0x8000, .n1        ; 3+1
+        brclr   r3, #0x8000, .n1        ; 1, taken 5
         add     r4, r4, #1              ; 1
 .n1:
         shl     r3, r3, #1              ; 1
-        jmpr    .nsub                   ; 3   ... less d is exact mod 65536
+        jmpr    .nsub                   ; 4   ... less d is exact mod 65536
 .nrot:
         mov     r5, r3                  ; 1   the next word down into r3,
         mov     r3, r2                  ; 1   and the quotient word just made
         mov     r2, r1                  ; 1   round to r0: four rotations
         mov     r1, r0                  ; 1   put every word back in place
         mov     r0, r5                  ; 1
-        ld      r5, [sp, #0]            ; 4   d again
-        br      ne, lr, #0, .nword      ; 3+1
-        ld      r5, [sp, #2]            ; 4   p: the remainder is R, and d's
-        st      r4, [r5, #0]            ; 5   other words are zero already
+        ld      r5, [sp, #0]            ; 3   d again
+        br      ne, lr, #0, .nword      ; 1, taken 6
+        ld      r5, [sp, #2]            ; 3   p: the remainder is R, and d's
+        st      r4, [r5, #0]            ; 3   other words are zero already
         add     sp, sp, #4              ; 1
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 
         ; --- the general case: R in r0-r3, the rest in the frame -------------
 .wide:
-        ld      r4, [r5, #6]            ; 4
-        ld      lr, [r5, #4]            ; 4
-        push    r4, lr                  ; 6   d3 d2
-        ld      r4, [r5, #2]            ; 4
-        ld      lr, [r5, #0]            ; 4
-        push    r4, lr                  ; 6   d1 d0
-        push    r3, r2, r1              ; 7
-        push    r0                      ; 5
+        ld      r4, [r5, #6]            ; 3
+        ld      lr, [r5, #4]            ; 3
+        push    r4, lr                  ; 4   d3 d2
+        ld      r4, [r5, #2]            ; 3
+        ld      lr, [r5, #0]            ; 3
+        push    r4, lr                  ; 4   d1 d0
+        push    r3, r2, r1              ; 5
+        push    r0                      ; 3
         ;      n0(0) n1(2) n2(4) n3(6) d0(8) d1(10) d2(12) d3(14) p(16)
 
         ; j = (m - 1) + leading zero words of n: the words that go in whole
         mov     r5, #3                  ; 1
-        ld      r4, [sp, #14]           ; 4   d3
-        br      ne, r4, #0, .m          ; 3+1
+        ld      r4, [sp, #14]           ; 3   d3
+        br      ne, r4, #0, .m          ; 1, taken 6
         mov     r5, #2                  ; 1
-        ld      r4, [sp, #12]           ; 4   d2
-        br      ne, r4, #0, .m          ; 3+1
+        ld      r4, [sp, #12]           ; 3   d2
+        br      ne, r4, #0, .m          ; 1, taken 6
         mov     r5, #1                  ; 1   then d1, which is not zero
 .m:
-        br      ne, r3, #0, .z          ; 3+1
+        br      ne, r3, #0, .z          ; 1, taken 5
         add     r5, r5, #1              ; 1
-        br      ne, r2, #0, .z          ; 3+1
+        br      ne, r2, #0, .z          ; 1, taken 5
         add     r5, r5, #1              ; 1
-        br      ne, r1, #0, .z          ; 3+1
+        br      ne, r1, #0, .z          ; 1, taken 5
         add     r5, r5, #1              ; 1
 .z:
         shl     r5, r5, #4              ; 1
         rsb     r5, r5, #64             ; 1   T = 64 - 16j: the step count
-        br      ge, r5, #0, .t          ; 3+1 below which words go bit by bit
+        br      ge, r5, #0, .t          ; 1, taken 5  below which words go bit by bit
         mov     r5, #0                  ; 1   n < d: every word goes in whole
 .t:
-        push    r5                      ; 5
+        push    r5                      ; 3
         ;      T(0) n0(2) n1(4) n2(6) n3(8) d0(10) d1(12) d2(14) d3(16)
         ;      p(18) lr(20) r4(22)          word i at 2 + 2i, which is lr / 8
         mov     r0, #0                  ; 1   R
@@ -1303,21 +1307,21 @@ __udivmoddi4:
         mov     r3, r0                  ; 1
         mov     lr, #64                 ; 1
 .word:
-        ld      r4, [sp, #0]            ; 4   T
+        ld      r4, [sp, #0]            ; 3   T
         br      ls, lr, r4, .wbits      ; 1
         lsr     r5, lr, #3              ; 1   this word goes into R whole
         mov     r3, r2                  ; 1
         mov     r2, r1                  ; 1
         mov     r1, r0                  ; 1
-        ld      r0, [sp, r5]            ; 4
+        ld      r0, [sp, r5]            ; 3
         mov     r4, #0                  ; 1   and its quotient word is zero
-        st      r4, [sp, r5]            ; 5
+        st      r4, [sp, r5]            ; 3
         add     lr, lr, #-16            ; 1
-        br      ne, lr, #0, .word       ; 3+1
-        jmp     .wend                   ; 3
+        br      ne, lr, #0, .word       ; 1, taken 5
+        jmp     .wend                   ; 5
 .wbits:
         lsr     r5, lr, #3              ; 1
-        ld      r4, [sp, r5]            ; 4   the word to feed in, in r4
+        ld      r4, [sp, r5]            ; 3   the word to feed in, in r4
 .bits:
         ; R:w <<= 1.  Unlike the narrow loop's, 2R cannot overflow: R is
         ; what is left of the dividend's bits above w's next, which are at
@@ -1335,25 +1339,25 @@ __udivmoddi4:
         lsr     r5, r4, #15             ; 1
         or      r0, r0, r5              ; 1
         shl     r4, r4, #1              ; 1
-        ld      r5, [sp, #16]           ; 4   R >= d, from the top word down
-        br      hi, r3, r5, .sub        ; 3+1
-        br      lo, r3, r5, .next       ; 3+1
-        ld      r5, [sp, #14]           ; 4
-        br      hi, r2, r5, .sub        ; 3+1
-        br      lo, r2, r5, .next       ; 3+1
-        ld      r5, [sp, #12]           ; 4
-        br      hi, r1, r5, .sub        ; 3+1
-        br      lo, r1, r5, .next       ; 3+1
-        ld      r5, [sp, #10]           ; 4
-        br      lo, r0, r5, .next       ; 3+1
+        ld      r5, [sp, #16]           ; 3   R >= d, from the top word down
+        br      hi, r3, r5, .sub        ; 1, taken 6
+        br      lo, r3, r5, .next       ; 1, taken 6
+        ld      r5, [sp, #14]           ; 3
+        br      hi, r2, r5, .sub        ; 1, taken 6
+        br      lo, r2, r5, .next       ; 1, taken 6
+        ld      r5, [sp, #12]           ; 3
+        br      hi, r1, r5, .sub        ; 1, taken 6
+        br      lo, r1, r5, .next       ; 1, taken 6
+        ld      r5, [sp, #10]           ; 3
+        br      lo, r0, r5, .next       ; 1, taken 6
 .sub:
         ; R -= d.  A borrow decrements the words above it, and a word that
         ; was zero passes it on - it becomes 0xffff, which is then never below
         ; its own word of d, so no word ever borrows twice.
-        ld      r5, [sp, #10]           ; 4
-        br      hs, r0, r5, .s0         ; 3+1
-        br      ne, r1, #0, .t1         ; 3+1
-        br      ne, r2, #0, .t2         ; 3+1
+        ld      r5, [sp, #10]           ; 3
+        br      hs, r0, r5, .s0         ; 1, taken 6
+        br      ne, r1, #0, .t1         ; 1, taken 6
+        br      ne, r2, #0, .t2         ; 1, taken 6
         sub     r3, r3, #1              ; 1
 .t2:
         sub     r2, r2, #1              ; 1
@@ -1361,41 +1365,41 @@ __udivmoddi4:
         sub     r1, r1, #1              ; 1
 .s0:
         rsb     r0, r5, r0              ; 1
-        ld      r5, [sp, #12]           ; 4
-        br      hs, r1, r5, .s1         ; 3+1
-        br      ne, r2, #0, .u2         ; 3+1
+        ld      r5, [sp, #12]           ; 3
+        br      hs, r1, r5, .s1         ; 1, taken 5
+        br      ne, r2, #0, .u2         ; 1, taken 5
         sub     r3, r3, #1              ; 1
 .u2:
         sub     r2, r2, #1              ; 1
 .s1:
         rsb     r1, r5, r1              ; 1
-        ld      r5, [sp, #14]           ; 4
-        br      hs, r2, r5, .s2         ; 3+1
+        ld      r5, [sp, #14]           ; 3
+        br      hs, r2, r5, .s2         ; 1, taken 5
         sub     r3, r3, #1              ; 1
 .s2:
         rsb     r2, r5, r2              ; 1
-        ld      r5, [sp, #16]           ; 4
+        ld      r5, [sp, #16]           ; 3
         rsb     r3, r5, r3              ; 1
         add     r4, r4, #1              ; 1   quotient bit
 .next:
         add     lr, lr, #-1             ; 1
         brclr   lr, #0x000f, .wdone     ; 1
-        jmpr    .bits                   ; 3
+        jmpr    .bits                   ; 4
 .wdone:
         lsr     r5, lr, #3              ; 1   the word just finished is
         add     r5, r5, #2              ; 1   one above lr / 8 now
-        st      r4, [sp, r5]            ; 5   its quotient word
-        br      eq, lr, #0, .wend       ; 3+1 the loop is longer than a
-        jmp     .word                   ; 3   branch reaches
+        st      r4, [sp, r5]            ; 3   its quotient word
+        br      eq, lr, #0, .wend       ; 1, taken 6  the loop is longer than a
+        jmp     .word                   ; 4   branch reaches
 .wend:
-        ld      r5, [sp, #18]           ; 4   p: R is the remainder, stored
-        stm     r0, r1                  ; 6   through it
-        stm     r2, r3                  ; 6
-        pop     r0, r0, r1              ; 6   and the quotient, popped: T goes
-        pop     r2, r3                  ; 5   into r0 and is overwritten
+        ld      r5, [sp, #18]           ; 3   p: R is the remainder, stored
+        stm     r0, r1                  ; 4   through it
+        stm     r2, r3                  ; 4
+        pop     r0, r0, r1              ; 5   and the quotient, popped: T goes
+        pop     r2, r3                  ; 4   into r0 and is overwritten
         add     sp, sp, #10             ; 1   d and p
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 
 ; ============================================================================
 ; __udivdi3 and __umoddi3 - into the core, and out again
@@ -1405,18 +1409,18 @@ __udivmoddi4:
 
 __udivdi3:
         mov     r5, sp                  ; 1
-        jmp     __udivmoddi4.core       ; 3
+        jmp     __udivmoddi4.core       ; 4
 
 __umoddi3:
         mov     r5, sp                  ; 1
-        push    lr                      ; 5
-        call    __udivmoddi4.core       ; 3
-        pop     lr                      ; 4
+        push    lr                      ; 3
+        call    __udivmoddi4.core       ; 4
+        pop     lr                      ; 3
         mov     r1, sp                  ; 1   ldm loads through r1, so its
-        ldm     r0, r5                  ; 5   own word goes to r5 first:
-        ldm     r2, r3                  ; 5   r5 is free at the return
+        ldm     r0, r5                  ; 4   own word goes to r5 first:
+        ldm     r2, r3                  ; 4   r5 is free at the return
         mov     r1, r5                  ; 1
-        ret                             ; 4
+        ret                             ; 5
 
 ; ============================================================================
 ; __divmoddi4, __divdi3 and __moddi3 - the magnitudes divide
@@ -1434,68 +1438,68 @@ __umoddi3:
 
 __divmoddi4:
         mov     r5, sp                  ; 1
-        push    lr                      ; 5
-        call    .signed                 ; 3
-        ld      r5, [sp, #10]           ; 4   rp
+        push    lr                      ; 3
+        call    .signed                 ; 5
+        ld      r5, [sp, #10]           ; 3   rp
         br      eq, r5, #0, .norp       ; 1
-        ld      lr, [sp, #2]            ; 4
-        st      lr, [r5, #0]            ; 5
-        ld      lr, [sp, #4]            ; 4
-        st      lr, [r5, #2]            ; 5
-        ld      lr, [sp, #6]            ; 4
-        st      lr, [r5, #4]            ; 5
-        ld      lr, [sp, #8]            ; 4
-        st      lr, [r5, #6]            ; 5
+        ld      lr, [sp, #2]            ; 3
+        st      lr, [r5, #0]            ; 3
+        ld      lr, [sp, #4]            ; 3
+        st      lr, [r5, #2]            ; 3
+        ld      lr, [sp, #6]            ; 3
+        st      lr, [r5, #4]            ; 3
+        ld      lr, [sp, #8]            ; 3
+        st      lr, [r5, #6]            ; 3
 .norp:
-        pop     lr                      ; 4
-        ret                             ; 4
+        pop     lr                      ; 3
+        ret                             ; 5
 
 .signed:
-        push    r4, lr, r5              ; 7   [sp]: p, lr, r4
-        ld      lr, [r5, #6]            ; 4   d3
+        push    r4, lr, r5              ; 5   [sp]: p, lr, r4
+        ld      lr, [r5, #6]            ; 3   d3
         xor     lr, lr, r3              ; 1   the quotient's sign ...
         lsr     lr, lr, #1              ; 1   ... to bit 14
         mov     r4, r3                  ; 1
         and     r4, r4, #0x8000         ; 1   n's in bit 15
         or      r4, r4, lr              ; 1
-        brclr   r3, #0x8000, .npos      ; 3+1
-        call    .neg                    ; 3   |n|
+        brclr   r3, #0x8000, .npos      ; 1, taken 6
+        call    .neg                    ; 5   |n|
 .npos:
-        push    r3, r2, r1              ; 7   |n|, while d is fetched
-        push    r0                      ; 5
+        push    r3, r2, r1              ; 5   |n|, while d is fetched
+        push    r0                      ; 3
         mov     r1, r5                  ; 1   d, through ldm's r1, whose own
-        ldm     r0, lr                  ; 5   word goes by lr: free here
-        ldm     r2, r3                  ; 5
+        ldm     r0, lr                  ; 4   word goes by lr: free here
+        ldm     r2, r3                  ; 4
         mov     r1, lr                  ; 1
-        brclr   r3, #0x8000, .dpos      ; 3+1
-        call    .neg                    ; 3   |d|
+        brclr   r3, #0x8000, .dpos      ; 1, taken 6
+        call    .neg                    ; 5   |d|
 .dpos:
-        push    r3, r2, r1              ; 7   |d| below |n|, where the core
-        push    r0                      ; 5   can have it
+        push    r3, r2, r1              ; 5   |d| below |n|, where the core
+        push    r0                      ; 3   can have it
         add     r1, sp, #8              ; 1   |n| back, the same way
-        ldm     r0, lr                  ; 5
-        ldm     r2, r3                  ; 5
+        ldm     r0, lr                  ; 4
+        ldm     r2, r3                  ; 4
         mov     r1, lr                  ; 1
         mov     r5, sp                  ; 1
-        call    __udivmoddi4.core       ; 3
-        brclr   r4, #0x4000, .qpos      ; 3+1
-        call    .neg                    ; 3
+        call    __udivmoddi4.core       ; 4
+        brclr   r4, #0x4000, .qpos      ; 1, taken 5
+        call    .neg                    ; 5
 .qpos:
         add     r5, sp, #8              ; 1   the quotient over |n|
-        stm     r0, r1                  ; 6
-        stm     r2, r3                  ; 6
-        pop     r0, r1, r2              ; 6   and the remainder popped out of
-        pop     r3                      ; 4   |d|'s slots
-        brclr   r4, #0x8000, .rpos      ; 3+1
-        call    .neg                    ; 3
+        stm     r0, r1                  ; 4
+        stm     r2, r3                  ; 4
+        pop     r0, r1, r2              ; 5   and the remainder popped out of
+        pop     r3                      ; 3   |d|'s slots
+        brclr   r4, #0x8000, .rpos      ; 1, taken 5
+        call    .neg                    ; 5
 .rpos:
-        ld      r5, [sp, #8]            ; 4   p
-        stm     r0, r1                  ; 6
-        stm     r2, r3                  ; 6
-        pop     r0, r1, r2              ; 6   the quotient, with p into r5 to
-        pop     r3, r5                  ; 5   step over it
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        ld      r5, [sp, #8]            ; 3   p
+        stm     r0, r1                  ; 4
+        stm     r2, r3                  ; 4
+        pop     r0, r1, r2              ; 5   the quotient, with p into r5 to
+        pop     r3, r5                  ; 4   step over it
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 
 ; r0:r1:r2:r3 = -(r0:r1:r2:r3): every bit inverted, and one added, carried
 ; up only as far as a word that did not wrap to zero.
@@ -1505,29 +1509,29 @@ __divmoddi4:
         xor     r2, r2, #-1             ; 1
         xor     r3, r3, #-1             ; 1
         add     r0, r0, #1              ; 1
-        br      ne, r0, #0, .negd       ; 3+1
+        br      ne, r0, #0, .negd       ; 1, taken 5
         add     r1, r1, #1              ; 1
-        br      ne, r1, #0, .negd       ; 3+1
+        br      ne, r1, #0, .negd       ; 1, taken 5
         add     r2, r2, #1              ; 1
-        br      ne, r2, #0, .negd       ; 3+1
+        br      ne, r2, #0, .negd       ; 1, taken 5
         add     r3, r3, #1              ; 1
 .negd:
-        ret                             ; 4
+        ret                             ; 5
 
 __divdi3:
         mov     r5, sp                  ; 1
-        jmp     __divmoddi4.signed      ; 3
+        jmp     __divmoddi4.signed      ; 5
 
 __moddi3:
         mov     r5, sp                  ; 1
-        push    lr                      ; 5
-        call    __divmoddi4.signed      ; 3
-        pop     lr                      ; 4
+        push    lr                      ; 3
+        call    __divmoddi4.signed      ; 5
+        pop     lr                      ; 3
         mov     r1, sp                  ; 1   ldm loads through r1, so its
-        ldm     r0, r5                  ; 5   own word goes to r5 first:
-        ldm     r2, r3                  ; 5   r5 is free at the return
+        ldm     r0, r5                  ; 4   own word goes to r5 first:
+        ldm     r2, r3                  ; 4   r5 is free at the return
         mov     r1, r5                  ; 1
-        ret                             ; 4
+        ret                             ; 5
 
 ; ============================================================================
 ; 64-bit division with recip, for -mmul
@@ -1569,58 +1573,58 @@ __moddi3:
 
 __udivmoddi4_mul:
         mov     r5, sp                  ; 1   d, which becomes the remainder
-        push    lr                      ; 5
-        call    .core                   ; 3
-        ld      r5, [sp, #10]           ; 4   rp, past the pushed lr
+        push    lr                      ; 3
+        call    .core                   ; 4
+        ld      r5, [sp, #10]           ; 3   rp, past the pushed lr
         br      eq, r5, #0, .norp       ; 1
-        push    r0, r1                  ; 6   r0 and r1 free for the copy
+        push    r0, r1                  ; 4   r0 and r1 free for the copy
         add     r1, sp, #6              ; 1   the remainder, past them and lr
-        ldm     r0, lr                  ; 5
-        stm     r0, lr                  ; 6   through rp in r5
-        ldm     r0, lr                  ; 5
-        stm     r0, lr                  ; 6
-        pop     r1, r0, lr              ; 6   lr's pop comes free with them
-        ret                             ; 4
+        ldm     r0, lr                  ; 4
+        stm     r0, lr                  ; 4   through rp in r5
+        ldm     r0, lr                  ; 4
+        stm     r0, lr                  ; 4
+        pop     r1, r0, lr              ; 5   lr's pop comes free with them
+        ret                             ; 5
 .norp:
-        pop     lr                      ; 4
-        ret                             ; 4
+        pop     lr                      ; 3
+        ret                             ; 5
 
 ; --- the core -----------------------------------------------------------------
 ;       in:  r0:r1:r2:r3  n             r5  -> d, four words
 ;       out: r0:r1:r2:r3  n / d         [r5] n % d, over d          r4 kept
 .core:
-        push    r4, lr, r5              ; 7   [sp]: p, lr, r4
-        ld      r4, [r5, #6]            ; 4   d3
-        ld      lr, [r5, #4]            ; 4   d2
+        push    r4, lr, r5              ; 5   [sp]: p, lr, r4
+        ld      r4, [r5, #6]            ; 3   d3
+        ld      lr, [r5, #4]            ; 3   d2
         or      lr, r4, lr              ; 1
         br      eq, lr, #0, .small      ; 1
-        jmp     .big                    ; 3   m = 3 or 4
+        jmp     .big                    ; 5   m = 3 or 4
 .small:
-        ld      lr, [r5, #2]            ; 4   d1
+        ld      lr, [r5, #2]            ; 3   d1
         br      eq, lr, #0, .m1         ; 1
-        jmp     .m2                     ; 3
+        jmp     .m2                     ; 4
 
         ; --- m = 1: d < 65536 ------------------------------------------------
 .m1:
-        ld      r4, [r5, #0]            ; 4   d
+        ld      r4, [r5, #0]            ; 3   d
         clz     r4, r4                  ; 2   s
-        call    .shift                  ; 3   n << s, five words u4..u0
-        push    r0                      ; 5
+        call    .shift                  ; 5   n << s, five words u4..u0
+        push    r0                      ; 3
         ;      u0(0) u1(2) u2(4) u3(6) u4(8) p(10) lr(12) r4(14)
-        ld      r5, [sp, #10]           ; 4   p
-        ld      r1, [r5, #0]            ; 4   d
+        ld      r5, [sp, #10]           ; 3   p
+        ld      r1, [r5, #0]            ; 3   d
         clz     r5, r1                  ; 2
         shl     r1, r1, r5              ; 1   D, normalised
         recip   r2, r1                  ; 5   v
-        ld      r0, [sp, #8]            ; 4   R = u4, which is below D
+        ld      r0, [sp, #8]            ; 3   R = u4, which is below D
         mov     lr, #6                  ; 1   u3's offset: the count too
 .nloop:
-        ld      r3, [sp, lr]            ; 4   u_j
+        ld      r3, [sp, lr]            ; 3   u_j
         br      ne, r0, #0, .ndiv       ; 1
         br      hs, r3, r1, .ndiv       ; 1
-        st      r0, [sp, lr]            ; 5   R = 0 and u_j < D: q_j = 0,
+        st      r0, [sp, lr]            ; 3   R = 0 and u_j < D: q_j = 0,
         mov     r0, r3                  ; 1   and R = u_j
-        jmpr    .nnext                  ; 3
+        jmpr    .nnext                  ; 4
 .ndiv:  ; R:u_j / D  ->  quotient r4, remainder R
         mulhu   r4, r2, r0              ; 2
         mul     r5, r2, r0              ; 2
@@ -1638,24 +1642,24 @@ __udivmoddi4_mul:
 .nk:
         br      hs, r0, r1, .ng         ; 1   rare
 .nst:
-        st      r4, [sp, lr]            ; 5   q_j over u_j
+        st      r4, [sp, lr]            ; 3   q_j over u_j
 .nnext:
         add     lr, lr, #-2             ; 1
-        br      ge, lr, #0, .nloop      ; 3+1
-        ld      r5, [sp, #10]           ; 4   p
-        ld      r1, [r5, #0]            ; 4
+        br      ge, lr, #0, .nloop      ; 1, taken 5
+        ld      r5, [sp, #10]           ; 3   p
+        ld      r1, [r5, #0]            ; 3
         clz     r1, r1                  ; 2   s again
         lsr     r0, r0, r1              ; 1   the remainder; d's other
-        st      r0, [r5, #0]            ; 5   words are zero already
-        pop     r0                      ; 4   and the quotient
-        pop     r1, r2, r3              ; 6
+        st      r0, [r5, #0]            ; 3   words are zero already
+        pop     r0                      ; 3   and the quotient
+        pop     r1, r2, r3              ; 5
         add     sp, sp, #4              ; 1   u4 and p
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 .ng:
         add     r4, r4, #1              ; 1
         rsb     r0, r1, r0              ; 1
-        jmpr    .nst                    ; 3
+        jmpr    .nst                    ; 4
 
 ; n << s, for all four cases: five words, of which the top four are pushed
 ; and the bottom one is left in r0.  A shift by s is a mul by 2^s for each
@@ -1672,7 +1676,7 @@ __udivmoddi4_mul:
         mov     r5, #1                  ; 1
         shl     r4, r5, r4              ; 1   2^s
         mulhu   r5, r3, r4              ; 2   u4
-        push    r5                      ; 5
+        push    r5                      ; 3
         mul     r3, r3, r4              ; 2
         mulhu   r5, r2, r4              ; 2
         or      r3, r3, r5              ; 1   u3
@@ -1683,16 +1687,16 @@ __udivmoddi4_mul:
         mulhu   r5, r0, r4              ; 2
         or      r1, r1, r5              ; 1   u1
         mul     r0, r0, r4              ; 2   u0
-        push    r3, r2, r1              ; 7
-        ret                             ; 4
+        push    r3, r2, r1              ; 5
+        ret                             ; 5
 
 ; The 3/2 step, for m = 2 and for the estimate at m = 3 and 4.
 ;       in:  r4:r1:r0 = u2:u1:u0, below D * 65536    r3:r2 = D, normalised
 ;            v at the caller's [sp]
 ;       out: r5 the quotient, r1:r0 the remainder   r2, r3 kept, r4 not
 .step:
-        push    lr                      ; 5
-        ld      lr, [sp, #2]            ; 4   v
+        push    lr                      ; 3
+        ld      lr, [sp, #2]            ; 3   v
         mulhu   r5, lr, r4              ; 2
         mul     lr, lr, r4              ; 2
         add     lr, lr, r1              ; 1   q0
@@ -1726,8 +1730,8 @@ __udivmoddi4_mul:
         br      hi, r1, r3, .sg         ; 1
         br      hs, r0, r2, .sg         ; 1
 .sd:
-        pop     lr                      ; 4
-        ret                             ; 4
+        pop     lr                      ; 3
+        ret                             ; 5
 .sg:
         add     r5, r5, #1              ; 1
         br      hs, r0, r2, .sg1        ; 1
@@ -1735,20 +1739,20 @@ __udivmoddi4_mul:
 .sg1:
         rsb     r0, r2, r0              ; 1
         rsb     r1, r3, r1              ; 1
-        jmpr    .sd                     ; 3
+        jmpr    .sd                     ; 4
 
         ; --- m = 2: d1 is not zero, and in lr ---------------------------------
 .m2:
         clz     r4, lr                  ; 2   s
-        call    .shift                  ; 3   n << s, as for m = 1
-        push    r0                      ; 5
+        call    .shift                  ; 5   n << s, as for m = 1
+        push    r0                      ; 3
         add     sp, sp, #-2             ; 1   and a slot for v
         ;      v(0) u0(2) u1(4) u2(6) u3(8) u4(10) p(12) lr(14) r4(16)
-        ld      r5, [sp, #12]           ; 4   p
-        ld      r1, [sp, #10]           ; 4   the remainder so far, u4:u3
+        ld      r5, [sp, #12]           ; 3   p
+        ld      r1, [sp, #10]           ; 3   the remainder so far, u4:u3
         mov     r0, r3                  ; 1
-        ld      r2, [r5, #0]            ; 4   d << s
-        ld      r3, [r5, #2]            ; 4
+        ld      r2, [r5, #0]            ; 3   d << s
+        ld      r3, [r5, #2]            ; 3
         mulhu   lr, r2, r4              ; 2
         mul     r2, r2, r4              ; 2   D0
         mul     r3, r3, r4              ; 2
@@ -1766,24 +1770,24 @@ __udivmoddi4_mul:
         add     lr, lr, r4              ; 1   p += t1
         br      lo, lr, r4, .if         ; 1   a carry, 29%
 .ic:
-        st      r5, [sp, #0]            ; 5
+        st      r5, [sp, #0]            ; 3
         mov     r4, r1                  ; 1   q2 ...
         mov     r1, r0                  ; 1
-        ld      r0, [sp, #6]            ; 4
-        call    .step                   ; 3
-        st      r5, [sp, #6]            ; 5
+        ld      r0, [sp, #6]            ; 3
+        call    .step                   ; 4
+        st      r5, [sp, #6]            ; 3
         mov     r4, r1                  ; 1   q1 ...
         mov     r1, r0                  ; 1
-        ld      r0, [sp, #4]            ; 4
-        call    .step                   ; 3
-        st      r5, [sp, #4]            ; 5
+        ld      r0, [sp, #4]            ; 3
+        call    .step                   ; 4
+        st      r5, [sp, #4]            ; 3
         mov     r4, r1                  ; 1   q0
         mov     r1, r0                  ; 1
-        ld      r0, [sp, #2]            ; 4
-        call    .step                   ; 3
-        st      r5, [sp, #2]            ; 5
-        ld      r5, [sp, #12]           ; 4   p
-        ld      r4, [r5, #2]            ; 4
+        ld      r0, [sp, #2]            ; 3
+        call    .step                   ; 4
+        st      r5, [sp, #2]            ; 3
+        ld      r5, [sp, #12]           ; 3   p
+        ld      r4, [r5, #2]            ; 3
         clz     r4, r4                  ; 2   s again
         rsb     r3, r4, #15             ; 1   r1:r0 >> s; r1 << (16 - s) is
         lsr     r0, r0, r4              ; 1   two shifts, since 16 would
@@ -1791,24 +1795,24 @@ __udivmoddi4_mul:
         shl     r2, r2, r3              ; 1
         or      r0, r0, r2              ; 1
         lsr     r1, r1, r4              ; 1
-        stm     r0, r1                  ; 6   the remainder, through p; d's
+        stm     r0, r1                  ; 4   the remainder, through p; d's
                                         ;     top words are zero already
         add     sp, sp, #2              ; 1   v
-        pop     r0                      ; 4   the quotient
-        pop     r1, r2                  ; 5
+        pop     r0                      ; 3   the quotient
+        pop     r1, r2                  ; 4
         mov     r3, #0                  ; 1
         add     sp, sp, #6              ; 1   u3, u4 and p
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 
 .ie:    ; the fold's rare cases: d0's carry with p >= d1 ...
         sub     r5, r5, #1              ; 1
         rsb     lr, r3, lr              ; 1
-        jmpr    .ib                     ; 3
+        jmpr    .ib                     ; 5
 .if:   ; ... and t1's carry: v one less, or two if p:t0 >= d1:d0, t0 the
         sub     r5, r5, #1              ; 1   low half of the old v * d0
         br      hs, lr, r3, .ig         ; 1
-        jmpr    .ic                     ; 3
+        jmpr    .ic                     ; 4
 .ig:
         br      hi, lr, r3, .ig2        ; 1
         mul     r4, r5, r2              ; 2
@@ -1816,7 +1820,7 @@ __udivmoddi4_mul:
         br      lo, r4, r2, .ic         ; 1
 .ig2:
         sub     r5, r5, #1              ; 1
-        jmpr    .ic                     ; 3
+        jmpr    .ic                     ; 4
 
         ; --- m = 3 or 4: d3 in r4 ---------------------------------------------
         ; The frame, once built, with R the six words of n shifted, j the
@@ -1828,28 +1832,28 @@ __udivmoddi4_mul:
         br      eq, r4, #0, .w1         ; 1
         clz     r4, r4                  ; 2   m = 4: c, with n and d where
         mov     r5, #0                  ; 1   they are
-        push    r5                      ; 5   R5 = 0
-        call    .shift                  ; 3   R4 R3 R2 R1
-        push    r0                      ; 5   R0
-        ld      r1, [sp, #12]           ; 4   p, for ldm; its own word goes
-        ldm     r0, lr                  ; 5   by lr, free until j
-        ldm     r2, r3                  ; 5
+        push    r5                      ; 3   R5 = 0
+        call    .shift                  ; 5   R4 R3 R2 R1
+        push    r0                      ; 3   R0
+        ld      r1, [sp, #12]           ; 3   p, for ldm; its own word goes
+        ldm     r0, lr                  ; 4   by lr, free until j
+        ldm     r2, r3                  ; 4
         mov     r1, lr                  ; 1
         mov     lr, #0                  ; 1   one quotient word, j = 0
-        jmpr    .bd                     ; 3
+        jmpr    .bd                     ; 4
 .w1:
-        ld      r4, [r5, #4]            ; 4   m = 3: c from d2, and n and d
+        ld      r4, [r5, #4]            ; 3   m = 3: c from d2, and n and d
         clz     r4, r4                  ; 2   a word up
-        call    .shift                  ; 3   R5 R4 R3 R2
+        call    .shift                  ; 5   R5 R4 R3 R2
         mov     r5, #0                  ; 1
-        push    r0, r5                  ; 6   R1, and R0 = 0
-        ld      r1, [sp, #12]           ; 4   p, for ldm: d0 goes by lr
-        ldm     lr, r2, r3              ; 6
+        push    r0, r5                  ; 4   R1, and R0 = 0
+        ld      r1, [sp, #12]           ; 3   p, for ldm: d0 goes by lr
+        ldm     lr, r2, r3              ; 5
         mov     r1, lr                  ; 1
         mov     r0, #0                  ; 1
         mov     lr, #2                  ; 1   two quotient words, j = 1
 .bd:
-        push    lr                      ; 5   2j
+        push    lr                      ; 3   2j
         mulhu   r5, r2, r4              ; 2   d << c, top word first, by
         mul     r3, r3, r4              ; 2   .shift's 2^c
         or      r3, r3, r5              ; 1   D3
@@ -1860,8 +1864,8 @@ __udivmoddi4_mul:
         mul     r1, r1, r4              ; 2
         or      r1, r1, r5              ; 1   D1
         mul     r0, r0, r4              ; 2   D0
-        push    r3, r2, r1              ; 7
-        push    r0                      ; 5
+        push    r3, r2, r1              ; 5
+        push    r0                      ; 3
         recip   r5, r3                  ; 5   v from D3, then D2 in, as in
         mul     lr, r3, r5              ; 2   __udivmodsi4_mul
         add     lr, lr, r2              ; 1
@@ -1875,16 +1879,16 @@ __udivmoddi4_mul:
         add     lr, lr, r4              ; 1   p += t1
         br      lo, lr, r4, .jf         ; 1   a carry, 29%
 .jc:
-        push    r5                      ; 5
-        jmpr    .bloop                  ; 3
+        push    r5                      ; 3
+        jmpr    .bloop                  ; 5
 .je:    ; the fold's rare cases: d0's carry with p >= d1 ...
         sub     r5, r5, #1              ; 1
         rsb     lr, r3, lr              ; 1
-        jmpr    .jb                     ; 3
+        jmpr    .jb                     ; 4
 .jf:   ; ... and t1's carry: v one less, or two if p:t0 >= d1:d0, t0 the
         sub     r5, r5, #1              ; 1   low half of the old v * d0
         br      hs, lr, r3, .jg         ; 1
-        jmpr    .jc                     ; 3
+        jmpr    .jc                     ; 5
 .jg:
         br      hi, lr, r3, .jg2        ; 1
         mul     r4, r5, r2              ; 2
@@ -1892,7 +1896,7 @@ __udivmoddi4_mul:
         br      lo, r4, r2, .jc         ; 1
 .jg2:
         sub     r5, r5, #1              ; 1
-        jmpr    .jc                     ; 3
+        jmpr    .jc                     ; 5
 ; R's top two words are D's.  The 3/2 step cannot take that - its quotient
 ; would not fit a word - but the remainder so far is below D, so its next
 ; two words are below D1:D0, and that makes q_j exactly 0xffff: R is at
@@ -1902,45 +1906,45 @@ __udivmoddi4_mul:
 ; negative, and 0xffff as the old r1 keeps the test for that from firing.
 .top:
         mov     r5, #-1                 ; 1   q_j
-        st      r5, [lr, #20]           ; 5
-        st      r5, [lr, #18]           ; 5
+        st      r5, [lr, #20]           ; 3
+        st      r5, [lr, #18]           ; 3
         add     r0, r0, r2              ; 1   D3:D2 + R[j+2]
         mov     r1, r3                  ; 1
         br      hs, r0, r2, .lower      ; 1
         add     r1, r1, #1              ; 1
-        jmpr    .lower                  ; 3
+        jmpr    .lower                  ; 5
 .bloop:
-        ld      lr, [sp, #10]           ; 4   2j, and from it the address
+        ld      lr, [sp, #10]           ; 3   2j, and from it the address
         add     lr, lr, sp              ; 1   of R[j] less 12
-        ld      r4, [lr, #20]           ; 4   R[j+4]
-        ld      r1, [lr, #18]           ; 4   R[j+3]
-        ld      r0, [lr, #16]           ; 4   R[j+2]
-        ld      r2, [sp, #6]            ; 4   D2
-        ld      r3, [sp, #8]            ; 4   D3
+        ld      r4, [lr, #20]           ; 3   R[j+4]
+        ld      r1, [lr, #18]           ; 3   R[j+3]
+        ld      r0, [lr, #16]           ; 3   R[j+2]
+        ld      r2, [sp, #6]            ; 3   D2
+        ld      r3, [sp, #8]            ; 3   D3
         br      ne, r4, r3, .est        ; 1
         br      eq, r1, r2, .top        ; 1
 .est:
-        call    .step                   ; 3   the estimate, and the remainder
-        ld      lr, [sp, #10]           ; 4   of the top three words by D's
+        call    .step                   ; 4   the estimate, and the remainder
+        ld      lr, [sp, #10]           ; 3   of the top three words by D's
         add     lr, lr, sp              ; 1   top two in r1:r0
-        st      r5, [lr, #20]           ; 5   q_j over R[j+4], which is done
-        st      r1, [lr, #18]           ; 5   r1 kept, to tell the sign by
+        st      r5, [lr, #20]           ; 3   q_j over R[j+4], which is done
+        st      r1, [lr, #18]           ; 3   r1 kept, to tell the sign by
 .lower:
         ; --- R[j+3..j] -= q_j * D1:D0, with r1:r0 as R[j+3]:R[j+2] ---------
-        ld      r4, [sp, #2]            ; 4   D0
+        ld      r4, [sp, #2]            ; 3   D0
         mulhu   r3, r5, r4              ; 2
         mul     r4, r5, r4              ; 2   p0
-        ld      r2, [sp, #4]            ; 4   D1
+        ld      r2, [sp, #4]            ; 3   D1
         mul     lr, r5, r2              ; 2
         mulhu   r5, r5, r2              ; 2   p2
         add     r3, r3, lr              ; 1   p1
         br      hs, r3, lr, .bc         ; 1
         add     r5, r5, #1              ; 1
 .bc:
-        ld      lr, [sp, #10]           ; 4
+        ld      lr, [sp, #10]           ; 3
         add     lr, lr, sp              ; 1
-        ld      r2, [lr, #12]           ; 4   R[j]
-        ld      lr, [lr, #14]           ; 4   R[j+1]
+        ld      r2, [lr, #12]           ; 3   R[j]
+        ld      lr, [lr, #14]           ; 3   R[j+1]
         ; r1:r0:lr:r2 -= 0:r5:r3:r4.  A borrow decrements the words above,
         ; and passes through a word that was 0, which becomes 0xffff and so
         ; never borrows again - as in the core above.
@@ -1968,38 +1972,38 @@ __udivmoddi4_mul:
         ; A borrow out of the top word went negative.  At most one reaches
         ; it, so it went negative exactly when r1 came out above where it
         ; started.
-        ld      r4, [sp, #10]           ; 4
+        ld      r4, [sp, #10]           ; 3
         add     r4, r4, sp              ; 1
-        ld      r3, [r4, #18]           ; 4   r1 as it was
+        ld      r3, [r4, #18]           ; 3   r1 as it was
         br      hi, r1, r3, .back       ; 1   rare
 .bst:
         add     r5, r4, #12             ; 1   the remainder so far, through
-        stm     r2, lr                  ; 6   r5, free until the next q_j
-        stm     r0, r1                  ; 6
-        ld      r4, [sp, #10]           ; 4
+        stm     r2, lr                  ; 4   r5, free until the next q_j
+        stm     r0, r1                  ; 4
+        ld      r4, [sp, #10]           ; 3
         add     r4, r4, #-2             ; 1   the next word down
-        st      r4, [sp, #10]           ; 5
+        st      r4, [sp, #10]           ; 3
         br      lt, r4, #0, .bend       ; 1   the loop is longer than a
-        jmp     .bloop                  ; 3   branch reaches
+        jmp     .bloop                  ; 5   branch reaches
 .bend:
         ; The remainder is R3..R0 shifted back down, by c for m = 4, and by
         ; a word and c for m = 3.  The quotient is R5:R4 for both: R5 is
         ; q1 for m = 3, and for m = 4 it was 0 and never written.
-        ld      r5, [sp, #24]           ; 4   p
-        ld      r4, [r5, #6]            ; 4   d3
-        ld      r3, [sp, #18]           ; 4   R3
-        ld      r2, [sp, #16]           ; 4   R2
-        ld      r1, [sp, #14]           ; 4   R1
+        ld      r5, [sp, #24]           ; 3   p
+        ld      r4, [r5, #6]            ; 3   d3
+        ld      r3, [sp, #18]           ; 3   R3
+        ld      r2, [sp, #16]           ; 3   R2
+        ld      r1, [sp, #14]           ; 3   R1
         br      eq, r4, #0, .e1         ; 1
-        ld      r0, [sp, #12]           ; 4   R0
+        ld      r0, [sp, #12]           ; 3   R0
         clz     r4, r4                  ; 2   c
-        jmpr    .e                      ; 3
+        jmpr    .e                      ; 5
 .e1:
         mov     r0, r1                  ; 1   down a word: R0 is 0
         mov     r1, r2                  ; 1
         mov     r2, r3                  ; 1
         mov     r3, #0                  ; 1
-        ld      r4, [r5, #4]            ; 4   d2
+        ld      r4, [r5, #4]            ; 3   d2
         clz     r4, r4                  ; 2   c
 .e:
         rsb     lr, r4, #15             ; 1   each word >> c, with the bits
@@ -2016,23 +2020,23 @@ __udivmoddi4_mul:
         shl     r5, r5, lr              ; 1
         or      r2, r2, r5              ; 1
         lsr     r3, r3, r4              ; 1
-        ld      r5, [sp, #24]           ; 4   p, stm's pointer
-        stm     r0, r1                  ; 6
-        stm     r2, r3                  ; 6
+        ld      r5, [sp, #24]           ; 3   p, stm's pointer
+        stm     r0, r1                  ; 4
+        stm     r2, r3                  ; 4
         add     sp, sp, #20             ; 1   the quotient, R5:R4, popped
-        pop     r0, r1, r5              ; 6   with p into r5 to step over it
+        pop     r0, r1, r5              ; 5   with p into r5 to step over it
         mov     r2, #0                  ; 1
         mov     r3, r2                  ; 1
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 ; The estimate was one too big: one less, and D back on.  A carry passes up
 ; through a word that was 0xffff, which becomes 0 and so never carries
 ; again; the carry out of the top cancels the borrow that brought us here.
 .back:
-        ld      r3, [r4, #20]           ; 4
+        ld      r3, [r4, #20]           ; 3
         sub     r3, r3, #1              ; 1
-        st      r3, [r4, #20]           ; 5   q_j - 1
-        ld      r3, [sp, #2]            ; 4   D0
+        st      r3, [r4, #20]           ; 3   q_j - 1
+        ld      r3, [sp, #2]            ; 3   D0
         add     r2, r2, r3              ; 1
         br      hs, r2, r3, .a0         ; 1
         add     lr, lr, #1              ; 1
@@ -2041,36 +2045,36 @@ __udivmoddi4_mul:
         br      ne, r0, #0, .a0         ; 1
         add     r1, r1, #1              ; 1
 .a0:
-        ld      r3, [sp, #4]            ; 4   D1
+        ld      r3, [sp, #4]            ; 3   D1
         add     lr, lr, r3              ; 1
         br      hs, lr, r3, .a1         ; 1
         add     r0, r0, #1              ; 1
         br      ne, r0, #0, .a1         ; 1
         add     r1, r1, #1              ; 1
 .a1:
-        ld      r3, [sp, #6]            ; 4   D2
+        ld      r3, [sp, #6]            ; 3   D2
         add     r0, r0, r3              ; 1
         br      hs, r0, r3, .a2         ; 1
         add     r1, r1, #1              ; 1
 .a2:
-        ld      r3, [sp, #8]            ; 4   D3
+        ld      r3, [sp, #8]            ; 3   D3
         add     r1, r1, r3              ; 1
-        jmp     .bst                    ; 3
+        jmp     .bst                    ; 5
 
 __udivdi3_mul:
         mov     r5, sp                  ; 1
-        jmp     __udivmoddi4_mul.core   ; 3
+        jmp     __udivmoddi4_mul.core   ; 4
 
 __umoddi3_mul:
         mov     r5, sp                  ; 1
-        push    lr                      ; 5
-        call    __udivmoddi4_mul.core   ; 3
-        pop     lr                      ; 4
+        push    lr                      ; 3
+        call    __udivmoddi4_mul.core   ; 4
+        pop     lr                      ; 3
         mov     r1, sp                  ; 1   ldm loads through r1, so its
-        ldm     r0, r5                  ; 5   own word goes to r5 first:
-        ldm     r2, r3                  ; 5   r5 is free at the return
+        ldm     r0, r5                  ; 4   own word goes to r5 first:
+        ldm     r2, r3                  ; 4   r5 is free at the return
         mov     r1, r5                  ; 1
-        ret                             ; 4
+        ret                             ; 5
 
 ; The signed three: __divmoddi4's wrapper word for word, around the core
 ; above.  A copy, and not that one with the core passed in, because there is
@@ -2079,68 +2083,68 @@ __umoddi3_mul:
 
 __divmoddi4_mul:
         mov     r5, sp                  ; 1
-        push    lr                      ; 5
-        call    .signed                 ; 3
-        ld      r5, [sp, #10]           ; 4   rp
+        push    lr                      ; 3
+        call    .signed                 ; 5
+        ld      r5, [sp, #10]           ; 3   rp
         br      eq, r5, #0, .norp       ; 1
-        ld      lr, [sp, #2]            ; 4
-        st      lr, [r5, #0]            ; 5
-        ld      lr, [sp, #4]            ; 4
-        st      lr, [r5, #2]            ; 5
-        ld      lr, [sp, #6]            ; 4
-        st      lr, [r5, #4]            ; 5
-        ld      lr, [sp, #8]            ; 4
-        st      lr, [r5, #6]            ; 5
+        ld      lr, [sp, #2]            ; 3
+        st      lr, [r5, #0]            ; 3
+        ld      lr, [sp, #4]            ; 3
+        st      lr, [r5, #2]            ; 3
+        ld      lr, [sp, #6]            ; 3
+        st      lr, [r5, #4]            ; 3
+        ld      lr, [sp, #8]            ; 3
+        st      lr, [r5, #6]            ; 3
 .norp:
-        pop     lr                      ; 4
-        ret                             ; 4
+        pop     lr                      ; 3
+        ret                             ; 5
 
 .signed:
-        push    r4, lr, r5              ; 7   [sp]: p, lr, r4
-        ld      lr, [r5, #6]            ; 4   d3
+        push    r4, lr, r5              ; 5   [sp]: p, lr, r4
+        ld      lr, [r5, #6]            ; 3   d3
         xor     lr, lr, r3              ; 1   the quotient's sign ...
         lsr     lr, lr, #1              ; 1   ... to bit 14
         mov     r4, r3                  ; 1
         and     r4, r4, #0x8000         ; 1   n's in bit 15
         or      r4, r4, lr              ; 1
-        brclr   r3, #0x8000, .npos      ; 3+1
-        call    .neg                    ; 3   |n|
+        brclr   r3, #0x8000, .npos      ; 1, taken 6
+        call    .neg                    ; 5   |n|
 .npos:
-        push    r3, r2, r1              ; 7   |n|, while d is fetched
-        push    r0                      ; 5
+        push    r3, r2, r1              ; 5   |n|, while d is fetched
+        push    r0                      ; 3
         mov     r1, r5                  ; 1   d, through ldm's r1, whose own
-        ldm     r0, lr                  ; 5   word goes by lr: free here
-        ldm     r2, r3                  ; 5
+        ldm     r0, lr                  ; 4   word goes by lr: free here
+        ldm     r2, r3                  ; 4
         mov     r1, lr                  ; 1
-        brclr   r3, #0x8000, .dpos      ; 3+1
-        call    .neg                    ; 3   |d|
+        brclr   r3, #0x8000, .dpos      ; 1, taken 6
+        call    .neg                    ; 5   |d|
 .dpos:
-        push    r3, r2, r1              ; 7   |d| below |n|, where the core
-        push    r0                      ; 5   can have it
+        push    r3, r2, r1              ; 5   |d| below |n|, where the core
+        push    r0                      ; 3   can have it
         add     r1, sp, #8              ; 1   |n| back, the same way
-        ldm     r0, lr                  ; 5
-        ldm     r2, r3                  ; 5
+        ldm     r0, lr                  ; 4
+        ldm     r2, r3                  ; 4
         mov     r1, lr                  ; 1
         mov     r5, sp                  ; 1
-        call    __udivmoddi4_mul.core   ; 3
-        brclr   r4, #0x4000, .qpos      ; 3+1
-        call    .neg                    ; 3
+        call    __udivmoddi4_mul.core   ; 4
+        brclr   r4, #0x4000, .qpos      ; 1, taken 5
+        call    .neg                    ; 5
 .qpos:
         add     r5, sp, #8              ; 1   the quotient over |n|
-        stm     r0, r1                  ; 6
-        stm     r2, r3                  ; 6
-        pop     r0, r1, r2              ; 6   and the remainder popped out of
-        pop     r3                      ; 4   |d|'s slots
-        brclr   r4, #0x8000, .rpos      ; 3+1
-        call    .neg                    ; 3
+        stm     r0, r1                  ; 4
+        stm     r2, r3                  ; 4
+        pop     r0, r1, r2              ; 5   and the remainder popped out of
+        pop     r3                      ; 3   |d|'s slots
+        brclr   r4, #0x8000, .rpos      ; 1, taken 5
+        call    .neg                    ; 5
 .rpos:
-        ld      r5, [sp, #8]            ; 4   p
-        stm     r0, r1                  ; 6
-        stm     r2, r3                  ; 6
-        pop     r0, r1, r2              ; 6   the quotient, with p into r5 to
-        pop     r3, r5                  ; 5   step over it
-        pop     lr, r4                  ; 5
-        ret                             ; 4
+        ld      r5, [sp, #8]            ; 3   p
+        stm     r0, r1                  ; 4
+        stm     r2, r3                  ; 4
+        pop     r0, r1, r2              ; 5   the quotient, with p into r5 to
+        pop     r3, r5                  ; 4   step over it
+        pop     lr, r4                  ; 4
+        ret                             ; 5
 
 .neg:
         xor     r0, r0, #-1             ; 1
@@ -2148,29 +2152,29 @@ __divmoddi4_mul:
         xor     r2, r2, #-1             ; 1
         xor     r3, r3, #-1             ; 1
         add     r0, r0, #1              ; 1
-        br      ne, r0, #0, .negd       ; 3+1
+        br      ne, r0, #0, .negd       ; 1, taken 5
         add     r1, r1, #1              ; 1
-        br      ne, r1, #0, .negd       ; 3+1
+        br      ne, r1, #0, .negd       ; 1, taken 5
         add     r2, r2, #1              ; 1
-        br      ne, r2, #0, .negd       ; 3+1
+        br      ne, r2, #0, .negd       ; 1, taken 5
         add     r3, r3, #1              ; 1
 .negd:
-        ret                             ; 4
+        ret                             ; 5
 
 __divdi3_mul:
         mov     r5, sp                  ; 1
-        jmp     __divmoddi4_mul.signed  ; 3
+        jmp     __divmoddi4_mul.signed  ; 5
 
 __moddi3_mul:
         mov     r5, sp                  ; 1
-        push    lr                      ; 5
-        call    __divmoddi4_mul.signed  ; 3
-        pop     lr                      ; 4
+        push    lr                      ; 3
+        call    __divmoddi4_mul.signed  ; 5
+        pop     lr                      ; 3
         mov     r1, sp                  ; 1   ldm loads through r1, so its
-        ldm     r0, r5                  ; 5   own word goes to r5 first:
-        ldm     r2, r3                  ; 5   r5 is free at the return
+        ldm     r0, r5                  ; 4   own word goes to r5 first:
+        ldm     r2, r3                  ; 4   r5 is free at the return
         mov     r1, r5                  ; 1
-        ret                             ; 4
+        ret                             ; 5
 
 ; ============================================================================
 ; The shifts by a variable count
@@ -2208,46 +2212,46 @@ __ashlsi3:
         mov     r1, r0                  ; 1   pinned
         mov     r0, #0                  ; 1   pinned
 .lt16:
-        brclr   r2, #0x000f, .done      ; 2   a whole number of words
+        brclr   r2, #0x000f, .done      ; 1   a whole number of words
         rsb     r5, r2, #0              ; 1   16 - n, in the bits that count
         lsr     r5, r0, r5              ; 1   the bits crossing into the high
         shl     r1, r1, r2              ; 1
         or      r1, r1, r5              ; 1
         shl     r0, r0, r2              ; 1
 .done:
-        ret                             ; 4
+        ret                             ; 5
 
 __lshrsi3:
-        brclr   r2, #0x0010, .lt16      ; 2
+        brclr   r2, #0x0010, .lt16      ; 1
         mov     r0, r1                  ; 1   pinned
         mov     r1, #0                  ; 1
 .lt16:
-        brclr   r2, #0x000f, .done      ; 2
+        brclr   r2, #0x000f, .done      ; 1
         rsb     r5, r2, #0              ; 1   16 - n
         shl     r5, r1, r5              ; 1   the bits crossing into the low
         lsr     r0, r0, r2              ; 1
         or      r0, r0, r5              ; 1
         lsr     r1, r1, r2              ; 1
 .done:
-        ret                             ; 4
+        ret                             ; 5
 
 __ashrsi3:
-        brclr   r2, #0x0010, .lt16      ; 2
+        brclr   r2, #0x0010, .lt16      ; 1
         mov     r0, r1                  ; 1   pinned
         asr     r1, r1, #15             ; 1   the sign, in every bit
 .lt16:
-        brclr   r2, #0x000f, .done      ; 2
+        brclr   r2, #0x000f, .done      ; 1
         rsb     r5, r2, #0              ; 1   16 - n
         shl     r5, r1, r5              ; 1
         lsr     r0, r0, r2              ; 1   LOGICAL: the low word has no sign
         or      r0, r0, r5              ; 1
         asr     r1, r1, r2              ; 1
 .done:
-        ret                             ; 4
+        ret                             ; 5
 
 __ashldi3:
-        ld      r5, [sp, #0]            ; 4   the count
-        brclr   r5, #0x0020, .lt32      ; 2   whole words, two at a time ...
+        ld      r5, [sp, #0]            ; 3   the count
+        brclr   r5, #0x0020, .lt32      ; 1   whole words, two at a time ...
         mov     r3, r1                  ; 1
         mov     r2, r0                  ; 1
         mov     r0, #0                  ; 1   pinned
@@ -2259,8 +2263,8 @@ __ashldi3:
         mov     r1, r0                  ; 1   pinned
         mov     r0, #0                  ; 1   pinned
 .lt16:
-        brclr   r5, #0x000f, .done      ; 2
-        push    r4, lr                  ; 6
+        brclr   r5, #0x000f, .done      ; 1
+        push    r4, lr                  ; 4
         rsb     r4, r5, #0              ; 1   16 - n
         shl     r3, r3, r5              ; 1   top word first, while the word
         lsr     lr, r2, r4              ; 1   below it is still unshifted
@@ -2272,13 +2276,13 @@ __ashldi3:
         lsr     lr, r0, r4              ; 1
         or      r1, r1, lr              ; 1
         shl     r0, r0, r5              ; 1
-        pop     lr, r4                  ; 5
+        pop     lr, r4                  ; 4
 .done:
-        ret                             ; 4
+        ret                             ; 5
 
 __lshrdi3:
-        ld      r5, [sp, #0]            ; 4
-        brclr   r5, #0x0020, .lt32      ; 2
+        ld      r5, [sp, #0]            ; 3
+        brclr   r5, #0x0020, .lt32      ; 1
         mov     r0, r2                  ; 1
         mov     r1, r3                  ; 1
         mov     r2, #0                  ; 1
@@ -2291,7 +2295,7 @@ __lshrdi3:
         mov     r3, #0                  ; 1
 .lt16:
         brclr   r5, #0x000f, .done      ; 1
-        push    r4, lr                  ; 6
+        push    r4, lr                  ; 4
         rsb     r4, r5, #0              ; 1   16 - n
         lsr     r0, r0, r5              ; 1   bottom word first, while the
         shl     lr, r1, r4              ; 1   word above it is unshifted
@@ -2303,26 +2307,26 @@ __lshrdi3:
         shl     lr, r3, r4              ; 1
         or      r2, r2, lr              ; 1
         lsr     r3, r3, r5              ; 1
-        pop     lr, r4                  ; 5
+        pop     lr, r4                  ; 4
 .done:
-        ret                             ; 4
+        ret                             ; 5
 
 __ashrdi3:
-        ld      r5, [sp, #0]            ; 4
+        ld      r5, [sp, #0]            ; 3
         brclr   r5, #0x0020, .lt32      ; 1
         mov     r0, r2                  ; 1
         mov     r1, r3                  ; 1
         asr     r3, r3, #15             ; 1   the sign, in every bit ...
         mov     r2, r3                  ; 1   ... of both top words
 .lt32:
-        brclr   r5, #0x0010, .lt16      ; 2
+        brclr   r5, #0x0010, .lt16      ; 1
         mov     r0, r1                  ; 1   pinned
         mov     r1, r2                  ; 1
         mov     r2, r3                  ; 1
         asr     r3, r3, #15             ; 1
 .lt16:
-        brclr   r5, #0x000f, .done      ; 2
-        push    r4, lr                  ; 6
+        brclr   r5, #0x000f, .done      ; 1
+        push    r4, lr                  ; 4
         rsb     r4, r5, #0              ; 1   16 - n
         lsr     r0, r0, r5              ; 1
         shl     lr, r1, r4              ; 1
@@ -2334,6 +2338,6 @@ __ashrdi3:
         shl     lr, r3, r4              ; 1
         or      r2, r2, lr              ; 1
         asr     r3, r3, r5              ; 1   only the top word is signed
-        pop     lr, r4                  ; 5
+        pop     lr, r4                  ; 4
 .done:
-        ret                             ; 4
+        ret                             ; 5

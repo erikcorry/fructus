@@ -13,7 +13,7 @@
 // the assembler does not produce.
 //
 // The cycle counts come from tools/sim.js's own reading of the semantics,
-// Machine.classify, turned into text with the rules of Machine.cost.  A
+// Machine.classify, turned into text with the rules of Machine.timing.  A
 // change to the cost model has to be made in both places; the cost model in
 // the spec says which rule each class follows.
 // =============================================================================
@@ -214,8 +214,10 @@ function constraints(insn, form, info) {
 
 // --- cycles ------------------------------------------------------------------
 //
-// tools/sim.js's Machine.cost, as the text of its cases.  Which case is
-// Machine.classify's to say.
+// tools/sim.js's Machine.timing, as the text of its cases, with the fetcher
+// keeping up.  Which case is Machine.classify's to say.  A redirect's target
+// is read the cycle after the redirect and dispatches the cycle after that,
+// one later if its instruction reaches into a second word.
 
 function cycles(insn, info) {
   const k = machine.classify(insn);
@@ -223,13 +225,12 @@ function cycles(insn, info) {
   if (k.fixed) return String(k.fixed);
   if (k.memory) {
     const m8 = (sem.match(/M8\[/g) ?? []).length, m16 = (sem.match(/M16\[/g) ?? []).length;
-    const base = k.stores ? 4 : 3;
-    return m16 ? `${m8 + m16 + base}, odd ${m8 + 2 * m16 + base}` : String(m8 + base);
+    return m16 ? `${m8 + m16 + 2}, odd ${m8 + 2 * m16 + 2}` : String(m8 + 2);
   }
   if (k.extra) return String(1 + k.extra);
-  if (k.branch) return `1, taken ${1 + spec.cpu.taken_branch_penalty}`;
-  if (/(^|;\s*)pc = /.test(sem)) return k.callA ? '4 (lr: 3)' : k.viaReg ? '4' : '3';
-  return info.nbytes === 3 ? '1, odd 2' : '1';
+  if (k.branch) return `1, taken ${spec.cpu.taken_branch_penalty + 2}`;
+  if (/(^|;\s*)pc = /.test(sem)) return k.callA ? '5 (lr: 4)' : k.viaReg ? '5' : '4';
+  return '1';
 }
 
 // --- layout ------------------------------------------------------------------
@@ -756,9 +757,18 @@ function instructionPages(g) {
 const LEGEND = [
   ['Opcode', 'The instruction\'s bytes in hex, byte 0 first.  A range such as 3E–3F means the low bits of that byte belong to an operand field, so any value in the range is this instruction; xx is a byte made entirely of operand fields.  The first byte alone decides the length of an instruction.'],
   ['Instruction', 'The assembly syntax for that encoding.  rd, ra, rb, rs and rc are any of r0–r7 (sp is r6 and lr is r7); a name such as r0 is a register the encoding pins.  imm5, imm10, off8 and similar are signed fields of that many bits, sign-extended to 16 bits; immbit5, immask5, imm3 and shift3 are table fields whose values are listed on the page.'],
-  ['Bytes, Cycles', 'Length, and the cycles from this instruction\'s dispatch to the next one\'s.  "odd" is the cost when a three-byte instruction, or a word in memory, is at an odd address; "taken" is a conditional branch that branches.'],
+  ['Bytes, Cycles', 'Length, and the cycles from this instruction\'s dispatch to the next one\'s, when the fetcher keeps up - see The cost model.  "odd" is the cost when a word in memory is at an odd address; "taken" is a conditional branch that branches.  A taken branch, a jump, a call, a return, brk and rti cost one more when the instruction at their target reaches into a second word: two bytes at an odd address, or three at any.'],
   ['Form', 'The form\'s name in isa/fructus.toml, which also labels its diagram under Encodings.  The assembler picks the shortest form that can hold the operands written.'],
   ['Operation', 'The spec\'s semantics, which tools/sim.js executes.  pc is already the address of the next instruction; R[n] is a register, M8[] and M16[] are memory (16-bit values little-endian); everything is truncated to 16 bits when stored.'],
+];
+
+// What the counts on the instruction pages mean - isa/fructus.toml's cost
+// model, in short.
+const CYCLES = [
+  'The processor reads instructions ahead of itself: a fetcher brings in a word, two bytes, in every cycle the bus is free, into a buffer of three words, and an instruction dispatches once all its bytes are there.  The count on each page is the instruction\'s own, from its dispatch to the next one\'s, when the next one\'s bytes are already in the buffer.',
+  'Usually they are.  An ALU instruction of one or two bytes takes no more than the fetcher brings, and an instruction of two cycles or more - mul, a load, a store - lets it gain.  The fetcher falls behind in a run of three-byte instructions, which take more than two bytes a cycle, and after a run of loads and stores, which take the bus.  A taken branch, a jump, a call, a return, brk and rti empty the buffer and read their target, and their count includes that, the target arriving with nothing to spare.  On the benchmark kernels in tests/bench, 6% of all cycles are spent waiting for the fetcher; tools/sim.js models it, and its counts are exact.',
+  'Built in blit mode, for a system whose data can be at the far side of the chip, ld, ld8 and ldm take a cycle more.',
+  'Code may not write just ahead of itself.  A store to the six bytes after the instruction being dispatched reaches memory but not the fetcher\'s copy.  Code that writes instructions must reach them through a taken branch, a jump, a call, a return or rti, each of which empties the buffer and reads memory afresh.',
 ];
 
 // The version is the date and hash of the commit the spec is at.  A spec with
@@ -843,6 +853,9 @@ function frontMatter(entries, offset) {
 
   flow.heading('Reading an Instruction Page');
   flow.table([{ title: 'Section', w: 80 }, { title: 'Meaning', w: W - 80 }], LEGEND, { size: 8.5 });
+
+  flow.heading('Cycle Counts');
+  for (const text of CYCLES) flow.para(text, { size: 8.5 });
 
   flow.heading('Contents');
   const lead = 12.5;
