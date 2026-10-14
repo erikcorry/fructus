@@ -60,6 +60,19 @@ if (typeof io.cycles !== 'number' || io.cycles & 3 || (io.cycles & ~0xff) !== io
     || (io.cycles & 0xf0) === 0 || (io.cycles & 0xf0) === 0xf0
     || shadowWords.some((a) => (a & ~3) === io.cycles))
   fail(`[cpu.io]: cycles must be four aligned bytes in the page, clear of the guards and shadows`);
+// And the UART's three words, decoded by tools/fpga-system.sv from bits 15:1:
+// even, in the processor's half - which rtl/cpu.sv reads ahead of memory only
+// at the shadows and the counter - and clear of those.
+const uartWords = ['console', 'uart_status', 'uart_divisor'].map((n) => io[n]);
+if (uartWords.some((a) => typeof a !== 'number' || a & 1 || a < io.page + 0x10 || a >= io.page + 0x80
+                          || shadowWords.includes(a) || (a & ~3) === io.cycles)
+    || new Set(uartWords).size !== 3)
+  fail(`[cpu.io]: console, uart_status and uart_divisor must be distinct even words in 0x${(io.page + 0x10).toString(16)} - 0x${(io.page + 0x7f).toString(16)}, clear of the shadows and cycles`);
+// tools/fpga-system.sv picks the UART's word to read by bits 7 and 1 alone:
+// the data and the status are the four bytes at a multiple of four, below
+// 0x80 in the page, where the GPU's are above.
+if (io.console & 3 || io.uart_status !== io.console + 2 || io.console & 0x80)
+  fail('[cpu.io]: uart_status must follow console, at a multiple of four with bit 7 clear');
 const ioGuard = spec.cpu.vectors.io_guard;
 if (typeof ioGuard !== 'number') fail('[cpu.vectors] has no io_guard');
 const divZero = spec.cpu.vectors.divide_by_zero;
@@ -123,6 +136,11 @@ process.stdout.write(`// =======================================================
 
 // [cpu.io]: the cycle counter, two read-only words, low first.
 \`define FRUCTUS_IO_CYCLES 16'h${hex(io.cycles, 4)}
+
+// [cpu.io]: the UART's words - tools/fpga-system.sv's, with FRUCTUS_UART.
+\`define FRUCTUS_IO_CONSOLE      16'h${hex(io.console, 4)}
+\`define FRUCTUS_IO_UART_STATUS  16'h${hex(io.uart_status, 4)}
+\`define FRUCTUS_IO_UART_DIVISOR 16'h${hex(io.uart_divisor, 4)}
 
 // The registers the exception routines and the block moves name.
 \`define FRUCTUS_REG_SP 3'd${sp}

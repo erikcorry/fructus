@@ -125,6 +125,7 @@ done
 if node tests/rtl-check.mjs; then :; else fail=1; fi
 if node tests/cpu-check.mjs; then :; else fail=1; fi
 if node tests/blit-check.mjs; then :; else fail=1; fi
+if node tests/uart-check.mjs; then :; else fail=1; fi
 if node tests/boot-check.mjs; then :; else fail=1; fi
 # The same three with rtl/'s don't-cares filled - zeros, ones, random bits - as
 # synthesis may fill them: an x that something reads after all passes as x.
@@ -362,6 +363,20 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
         fi
     done
     rm -f build/_sj build/_sj.bin
+
+    # --- the UART, as tools/fcc-run.mjs has it ------------------------------
+    # tests/uart.c echoes --input in upper case through fructus/uart.h and
+    # putchar, and counts it; the receive side is the runner's.
+    printf 'hello, serial line\n' > build/_uin.txt
+    if tools/fcc -O2 tests/uart.c -o build/_uart 2>build/_err \
+       && node tools/fcc-run.mjs build/_uart.bin --input build/_uin.txt > build/_uout.txt \
+       && printf 'HELLO, SERIAL LINE\n19\n' | cmp -s - build/_uout.txt; then
+        printf 'ok    the UART on the simulator: input echoed, every byte taken\n'
+    else
+        printf 'FAIL  the UART on the simulator (check %s)\n' "$?"
+        head -10 build/_err build/_uout.txt; fail=1
+    fi
+    rm -f build/_uart build/_uart.bin build/_uin.txt build/_uout.txt
 
     # --- a tail call through a pointer keeps its target ---------------------
     # The epilogue runs between loading the target and the jump, and pops the

@@ -4,7 +4,8 @@
    already have in assembly.  memcpy, memmove, memset and bzero come from
    libc/, and exit and abort from crt0.s.
 
-   Output goes to __console, a byte-wide port the simulator's runner prints.
+   Output goes to __console, a byte-wide port the simulator's runner prints
+   and the system's UART sends, once its `busy' bit clears: fructus/uart.h.
    malloc and its family are in crt/malloc.c.  */
 
 #include <stddef.h>
@@ -14,6 +15,7 @@
 #include <stdio.h>
 
 extern volatile unsigned char __console;
+extern volatile unsigned short __uart_status;
 
 /* ---- memory and strings ------------------------------------------------ */
 
@@ -201,6 +203,10 @@ FILE *stdin, *stdout, *stderr;
 int
 putchar (int c)
 {
+  /* Bit 0 of the UART's status is `busy': zero, and never waited on, on the
+     simulator and on a machine without the UART.  */
+  while (__uart_status & 1)
+    ;
   __console = c;
   return (unsigned char) c;
 }

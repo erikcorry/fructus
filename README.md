@@ -606,7 +606,9 @@ script's default gives way to. The console is at 0x0420. The `jmp` also keeps ev
 ```
 0x0400 - 0x040f  guard
 0x0410 - 0x047f  the CPU's   0x0410 shadow_sp, 0x0412 shadow_lr, 0x0414 shadow_isp,
-                             0x0424 cycles (two words, low first)
+                             0x0424 cycles (two words, low first);
+                             the system's UART: 0x0420 data (the console),
+                             0x0422 status, 0x0428 divisor
 0x0480 - 0x04ef  the GPU's   docs/vga.md, "Registers"
 0x04f0 - 0x04ff  guard
 ```
@@ -642,6 +644,25 @@ go round once more if the high word changed. `fructus_cycles()` in
 `crt/include/fructus/cycles.h` does that. The simulator gives the same count
 as `rtl/cpu.sv` at every load, which `tests/cpu-check.mjs` holds it to, so a
 difference of two readings there is what the hardware takes.
+
+**The UART** is an option of the system's, `tools/fpga-system.sv` built with
+`FRUCTUS_UART` and `rtl/uart.sv`, for the serial line most boards take to a
+USB converter: ports `uart_rx` and `uart_tx`. Eight data bits, no parity, one
+stop bit, at 115200 baud from reset; the divisor at 0x0428 is clocks to a bit
+less one, 12 bits, so 9600 baud and up.
+Its data register is the console, so `putchar` reaches the host on the
+hardware as it does on the simulator: a byte stored is sent, and a load takes
+the byte received. The status word at 0x0422 has bit 0 `busy`, bit 1
+`received`, bit 2 `overrun`, bit 4 the enable of an interrupt on `received`
+and bit 5 of one while not `busy`, for a handler feeding a buffer out; both
+are ORed with the interrupt pin. A status of zero is idle, so
+on a machine without the UART, where the word is plain memory, `putchar`'s
+wait for `busy` to clear never waits. `crt/include/fructus/uart.h` has
+`fructus_uart_getc()` and the rest; `tools/fcc-run.mjs --input FILE` is what
+its UART receives. Built without the option the system's netlist is the same
+as before. With it the system is 4385 logic cells of the UP5K's 5280,
+against 4229, and places at 28.13 MHz against 28.31 (medians of sixteen); two
+pins, and no block RAM, DSP or SPRAM.
 
 `tools/sim.js` implements all of this for a machine made with `io`, which is
 `tools/fcc-run.mjs`'s. A program that touches a guard there exits 124, naming

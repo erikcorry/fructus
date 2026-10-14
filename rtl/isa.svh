@@ -31,6 +31,11 @@
 // [cpu.io]: the cycle counter, two read-only words, low first.
 `define FRUCTUS_IO_CYCLES 16'h0424
 
+// [cpu.io]: the UART's words - tools/fpga-system.sv's, with FRUCTUS_UART.
+`define FRUCTUS_IO_CONSOLE      16'h0420
+`define FRUCTUS_IO_UART_STATUS  16'h0422
+`define FRUCTUS_IO_UART_DIVISOR 16'h0428
+
 // The registers the exception routines and the block moves name.
 `define FRUCTUS_REG_SP 3'd6
 `define FRUCTUS_REG_LR 3'd7

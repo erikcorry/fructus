@@ -442,6 +442,31 @@ divide_by_zero = 0xffc8
 # registers - nothing in the register file reaches them.  tools/sim.js and
 # rtl/cpu.sv both map them, and a store writes the memory beneath as well,
 # which no load can see.
+#
+# THE UART, an option of the system's (FRUCTUS_UART, tools/fpga-system.sv and
+# rtl/uart.sv), for the serial line most boards take to a USB converter.  Its
+# data register IS the console, so a program's putchar reaches the host on
+# the hardware as it does on tools/fcc-run.mjs:
+#
+#     console        a byte stored is sent; a load takes the byte received,
+#                    and with it clears `received' and `overrun'
+#     uart_status    bit 0  busy: a byte is being sent, and one stored now
+#                           is dropped
+#                    bit 1  received: a byte is waiting at console
+#                    bit 2  overrun: one arrived while it waited, and was lost
+#                    bit 4  interrupt on `received'
+#                    bit 5  interrupt while not `busy', for a handler that
+#                           feeds a buffer out and clears it when done
+#                    bits 4 and 5 are read and written; the line is ORed
+#                    with the irq pin's
+#     uart_divisor   clocks to a bit LESS ONE, 12 bits, written: 217 from
+#                    reset, 115200 baud at the system's 25.125 MHz; 2616 is
+#                    9600.  Reads as the value last written
+#
+# A STATUS OF ZERO IS IDLE, so that on a machine without the UART - its words
+# plain memory, zero unless written - a program waiting for `busy' to clear
+# never waits.  Eight data bits, no parity, one stop bit; a byte whose stop
+# bit is low is dropped.
 [cpu.io]
 page        = 0x0400
 guard_bytes = 16       # at each end of the page
@@ -450,9 +475,12 @@ gpu         = 0x0480   # 0x0480 - 0x04ef
 shadow_sp   = 0x0410
 shadow_lr   = 0x0412
 shadow_isp  = 0x0414
-console     = 0x0420   # tools/fcc-run.mjs's only: a byte stored here is printed
+console     = 0x0420   # a byte stored here is printed by tools/fcc-run.mjs, and
+                       # sent by the UART; a load takes the byte received
+uart_status = 0x0422   # the UART's, above
 cycles      = 0x0424   # 32-bit count of clocks since reset, read-only, low word
                        # first; read hi, lo, hi and retry if hi moved
+uart_divisor = 0x0428  # the UART's, above
 
 
 # =============================================================================

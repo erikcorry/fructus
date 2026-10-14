@@ -3,7 +3,7 @@
 // speed.mjs - how fast rtl/ runs on an iCE40 UP5K
 // =============================================================================
 //
-//   node tools/speed.mjs [seeds] [--floorplan | --system] [--jobs N]
+//   node tools/speed.mjs [seeds] [--floorplan | --system [--uart]] [--jobs N]
 //                                   (or: just speed, just speed-system)
 //
 // Synthesises rtl/ with tools/fpga-top.sv - the processor behind one real
@@ -14,7 +14,8 @@
 // --system measures tools/fpga-system.sv instead: the processor built with
 // FRUCTUS_BLIT, its 64 KB, the display and its frame buffers, floorplanned by
 // tools/fpga-system.py.  Its floor is the pixel clock, 25.175 MHz, which is
-// also the processor's clock in that system.
+// also the processor's clock in that system.  --uart builds it with
+// FRUCTUS_UART as well: rtl/uart.sv, its serial line.
 //
 // --jobs N places N seeds at a time, rather than one a core.  A placement of
 // the system takes the better part of a gigabyte, so one a core fits only
@@ -40,11 +41,13 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 const args = process.argv.slice(2);
 const SYSTEM = args.includes('--system');
+const UART = SYSTEM && args.includes('--uart');
 const PLAN = SYSTEM ? 'tools/fpga-system.py' : args.includes('--floorplan') ? 'tools/fpga-top.py' : null;
 const JOBS = args.includes('--jobs') ? Number(args[args.indexOf('--jobs') + 1]) : Infinity;
 const SEEDS = Number(args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--jobs') ?? 16);
-const OUT = SYSTEM ? 'build/speed-system' : 'build/speed';
+const OUT = UART ? 'build/speed-uart' : SYSTEM ? 'build/speed-system' : 'build/speed';
 const MODULES = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare', 'recip',
+  ...(UART ? ['uart'] : []),
   ...(SYSTEM ? ['spiboot', 'video/video', 'video/timing', 'video/background', 'video/foreground', 'video/sprites'] : [])];
 
 const have = async (cmd) => {
@@ -62,7 +65,7 @@ const files = [...MODULES.map((m) => `rtl/${m}.sv`), SYSTEM ? 'tools/fpga-system
 // --- synthesise once; every seed places the same netlist -----------------------
 process.stdout.write('synthesising ... ');
 await run('yosys', ['-q', '-p',
-  `read_verilog -sv ${SYSTEM ? '-DFRUCTUS_BLIT ' : ''}${files.join(' ')}; synth_ice40 -top top -json ${OUT}/top.json; `
+  `read_verilog -sv ${SYSTEM ? '-DFRUCTUS_BLIT ' : ''}${UART ? '-DFRUCTUS_UART ' : ''}${files.join(' ')}; synth_ice40 -top top -json ${OUT}/top.json; `
   + `tee -o ${OUT}/top.stat stat`]);
 const stat = readFileSync(`${OUT}/top.stat`, 'utf8');
 // A design with a kept hierarchy has a section per module and then the

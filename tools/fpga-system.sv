@@ -107,12 +107,21 @@
 //
 // THE TIMING COMES UP AS 640x480 at 60 Hz, so the display runs sensibly
 // before software has written it.
+//
+// WITH FRUCTUS_UART, A SERIAL LINE: rtl/uart.sv, on ports uart_rx and
+// uart_tx, its words at 0x0420 - 0x0429 in the processor's half of the I/O
+// page, [cpu.io] in isa/fructus.toml.  Written and read like the GPU's
+// registers; without the define, this file's netlist is what it was.
 // =============================================================================
 
 module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests do
            (input logic clk, input logic din, input logic irq, output wire dout,
             output logic hsync_n, vsync_n, output logic [2:0] red, green, blue,
-            output wire flash_sck, flash_cs_n, flash_mosi, input logic flash_miso);
+            output wire flash_sck, flash_cs_n, flash_mosi, input logic flash_miso
+`ifdef FRUCTUS_UART
+            , input logic uart_rx, output logic uart_tx
+`endif
+           );
 
     // THE PROCESSOR'S MEMORY IS FILLED FROM THE FLASH AT POWER-UP, and again
     // whenever din is held: rtl/spiboot.sv.  While `boot` is set the
@@ -134,7 +143,15 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
                                              .D_OUT_0(1'b0), .D_OUT_1(spi_on));
     assign flash_cs_n = ~spi_on;
     logic irq_q, irq_s;
+`ifndef FRUCTUS_UART
     always_ff @(posedge clk) begin irq_q <= irq; irq_s <= irq_q; end
+`else
+    // The UART's request joins the pin's in the second flop, so that the
+    // processor's dispatch still sees a flop and nothing in front of it: as a
+    // LUT after the flop, ie and rx_full were most seeds' critical path.
+    wire uart_irq;                       // a byte received, if enabled: rtl/uart.sv
+    always_ff @(posedge clk) begin irq_q <= irq; irq_s <= irq_q | uart_irq; end
+`endif
 
     wire [15:0] addr; wire [15:0] wdata; wire [1:0] lanes;
     wire we = |lanes;
@@ -191,7 +208,8 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     (* keep_hierarchy *)
     cpu u (.clk(clk), .rst(rst), .boot(boot), .mem_addr(addr), .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(lanes), .blit(blit), .mem_late(late), .mem_data(dword),
-                .irq(irq_s), .halted(halted), .trapped(trapped), .result(result),
+                .irq(irq_s),
+                .halted(halted), .trapped(trapped), .result(result),
                 .retire(), .retire_pc());
     logic [15:0] so;
     always_ff @(posedge clk) so <= rst ? result : {so[14:0], 1'b0};
@@ -292,17 +310,55 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
 
     wire [9:0] line; wire vblank;
 
+    // --- the UART, with FRUCTUS_UART: rtl/uart.sv ---------------------------------
+    // Its three words, [cpu.io] in isa/fructus.toml, written like the GPU's
+    // registers, a cycle late; the data register takes st8 as well as st.
+    // `u_rd': a load of the data register, decoded with io_q from the
+    // processor's address and not a store's, takes the received byte.  A load
+    // puts its address out once; nothing else the processor does puts out an
+    // I/O page address without a store, since no code runs from the page.
+`ifdef FRUCTUS_UART
+    localparam [15:0] U_DATA = `FRUCTUS_IO_CONSOLE, U_STAT = `FRUCTUS_IO_UART_STATUS,
+                      U_DIV  = `FRUCTUS_IO_UART_DIVISOR;
+    wire uw = we_w && mask_w[0];
+    wire [7:0] u_byte; wire [15:0] u_status;
+    logic u_rd = 1'b0;
+    always_ff @(posedge clk) u_rd <= addr[15:1] == U_DATA[15:1] && !we && !boot;
+    uart ser (.clk, .rst, .wr_data(uw && addr_w[15:1] == U_DATA[15:1]),
+              .wr_status(uw && addr_w[15:1] == U_STAT[15:1]),
+              .wr_div(uw && addr_w[15:1] == U_DIV[15:1]), .wword(wword_w),
+              .rd_data(u_rd), .rx_byte(u_byte), .status(u_status), .irq(uart_irq),
+              .rx_pin(uart_rx), .tx_pin(uart_tx));
+`endif
+
     // --- the registers the hardware changes, read -------------------------------
     // 0x0484 status: bit 15 vertical blank, bits 9:0 the line.  0x04a0, 0x04a4
     // and 0x04a8 the palette's, the patterns' and the attributes' addresses.
     // Either byte of each word; the processor picks its own.
+    // With FRUCTUS_UART, the received byte at the data register and the
+    // UART's status too.
     wire [15:0] status = {vblank, 5'd0, line};
+`ifndef FRUCTUS_UART
     always_ff @(posedge clk) begin
         io_q    <= addr[15:7] == 9'h009 && (addr[6:1] == 6'h02 || addr[6:1] == 6'h10
                                          || addr[6:1] == 6'h12 || addr[6:1] == 6'h14);
         io_word <= !addr[5] ? status : addr[3] ? {10'd0, attr_i}
                  : addr[2] ? {6'd0, pat_i} : {11'd0, pal_i};
     end
+`else
+    // The UART's two words are the four bytes at U_DATA, and bit 7 of the
+    // address - 0 there, 1 for the GPU's - and bit 1 choose the word, so only
+    // io_q's one bit waits for the whole address.  Chosen by the compares
+    // themselves, the word was every seed's critical path: 25.14 MHz.
+    always_ff @(posedge clk) begin
+        io_q    <= addr[15:7] == 9'h009 && (addr[6:1] == 6'h02 || addr[6:1] == 6'h10
+                                         || addr[6:1] == 6'h12 || addr[6:1] == 6'h14)
+                   || addr[15:2] == U_DATA[15:2];
+        io_word <= !addr[7] ? (addr[1] ? u_status : {8'd0, u_byte})
+                 : !addr[5] ? status : addr[3] ? {10'd0, attr_i}
+                 : addr[2] ? {6'd0, pat_i} : {11'd0, pal_i};
+    end
+`endif
     video vid (.clk, .h_len, .v_len, .font,
                .pal_we, .pal_addr(pal_i), .pal_data(wword_w[7:0]),
                .spr_pat_we(pat_we), .spr_pat_addr(pat_i), .spr_pat_data(wword_w),

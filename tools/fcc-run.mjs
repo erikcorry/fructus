@@ -3,7 +3,7 @@
 // fcc-run.mjs - run a compiled C program on the simulator
 // =============================================================================
 //
-//   node tools/fcc-run.mjs prog.bin [--max N] [--stats] [--frames DIR] [--x11 [--scale N]]
+//   node tools/fcc-run.mjs prog.bin [--max N] [--stats] [--input FILE] [--frames DIR] [--x11 [--scale N]]
 //
 // prog.bin is the flat image tools/fcc writes: ld/fructus-sim.ld linked at 0,
 // objcopied to binary.  The program starts at 0, where crt/crt0.s has put a
@@ -18,6 +18,13 @@
 // trap to [cpu.vectors] io_guard, and the shadows have a word each.  A byte
 // stored to its console, 0x0420 (`__console' in the linker script), is
 // printed: that is this runner intercepting the store, not tools/sim.js.
+//
+// THAT IS THE UART'S DATA REGISTER, [cpu.io] in isa/fructus.toml and
+// rtl/uart.sv, and the rest of the UART is here too, as far as a program
+// polling it can tell: its status at 0x0422 is never busy, and says a byte
+// was received while --input FILE has bytes left; a load of 0x0420 takes the
+// next.  Sending takes no time, and the receive interrupt is not modelled,
+// as the interrupt pin is not.
 //
 // The cycle counter at 0x0424 (`__cycles') is the I/O page's own, in
 // tools/sim.js and rtl/cpu.sv alike; crt/include/fructus/cycles.h reads it.
@@ -39,17 +46,18 @@ import { png } from './png.js';
 import { openWindow } from './x11.js';
 
 const args = process.argv.slice(2);
-let file = null, max = 5e7, stats = false, frames = null, x11 = false, scale = 1;
+let file = null, max = 5e7, stats = false, frames = null, x11 = false, scale = 1, input = null;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--max') max = Number(args[++i]);
   else if (args[i] === '--stats') stats = true;
+  else if (args[i] === '--input') input = readFileSync(args[++i]);
   else if (args[i] === '--frames') frames = args[++i];
   else if (args[i] === '--x11') x11 = true;
   else if (args[i] === '--scale') scale = Number(args[++i]);
   else file = args[i];
 }
 if (!file) {
-  console.error('usage: node tools/fcc-run.mjs prog.bin [--max N] [--stats] [--frames DIR] [--x11 [--scale N]]');
+  console.error('usage: node tools/fcc-run.mjs prog.bin [--max N] [--stats] [--input FILE] [--frames DIR] [--x11 [--scale N]]');
   process.exit(2);
 }
 
@@ -64,6 +72,20 @@ const wr8 = m.wr8.bind(m);
 m.wr8 = (a, v) => {
   if ((a & 0xffff) === CONSOLE) { m.bus += 1; process.stdout.write(String.fromCharCode(v & 0xff)); }
   else wr8(a, v);
+};
+// The UART's receiving side: `received' while input is left, and a load of
+// the data register's even byte takes it.  The status's bits 4 and 5, the
+// interrupts' enables, are memory's, written through as the hardware's are.
+const STATUS = spec.cpu.io.uart_status;
+let taken = 0;
+const peek = m.peek.bind(m);
+m.peek = (a) => {
+  a &= 0xffff;
+  if (a === STATUS) return (peek(a) & 0x30) | (input && taken < input.length ? 2 : 0);
+  if (a === STATUS + 1) return 0;
+  if (a === CONSOLE) return input && taken < input.length ? input[taken++] : 0;
+  if (a === CONSOLE + 1) return 0;
+  return peek(a);
 };
 
 const win = x11 ? await openWindow({ title: file, scale }) : null;
