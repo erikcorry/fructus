@@ -160,6 +160,9 @@ export const ALU_OPS = [
   // And so is the reciprocal, whose answer rtl/recip.sv ORs into the product
   // with all three halves zeroed.
   { code: 17, name: 'recip', does: 'floor((2^32 - 1) / (lhs | 0x8000)) - 2^16, from rtl/recip.sv' },
+  // rsb's borrow, lhs > rhs unsigned: op 1 to the ALU too, gen-classify.js
+  // folding it in with an `lsel` that picks the borrow over the difference.
+  { code: 18, name: 'ishi',  does: 'lhs > rhs, unsigned, as 0 or 1: the borrow out of rhs - lhs' },
 ];
 
 // The operations whose result is registered, so that an instruction using one
@@ -190,6 +193,7 @@ export const ALU_RULES = [
   [/^R\[d\] = (mulhu|mulhs)\(R\[a\], R\[b\]\)$/,             (m) => m[1]],
   [/^R\[d\] = recip\(R\[a\], (R\[b\]|imm)\)$/,              'recip'],
   [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
+  [/^R\[d\] = R\[a\] > R\[b\]$/,                         'ishi'],
   [/^R\[d\] = \(\((R\[b\]|imm) & 0xff\) << 8\) \| \(R\[a\] & 0xff\)$/, 'movhi'],
   [/^R\[d\] = \(R\[a\] & mask\) != 0$/,                    'isset'],
   // A call's return address is not computed by the ALU: the byte-serial core's rhs.sv hands it the

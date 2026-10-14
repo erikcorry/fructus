@@ -127,8 +127,13 @@ const LSEL = { 4: 0, 5: 1, 6: 2, 7: 3, 10: 4, 13: 5, 2: 6, 3: 7 };
 // register with zero, so the one 0 is the half kept.  recip, 17, zeroes all
 // three, and rtl/cpu.sv ORs in rtl/recip.sv's answer.
 const MSEL = { 14: 0b110, 15: 0b101, 16: 0b011, 17: 0b111 };
-const aluOf = (a) => (a !== X && a in LSEL ? 4 : a !== X && a in MSEL ? 14 : a);
-const lselOf = (a) => (a !== X && a in LSEL ? LSEL[a] : a !== X && a in MSEL ? MSEL[a] : X);
+// THE SUBTRACTOR: rsb and ishi - 1 and 18 - reach it as 1, and lsel[0] picks
+// the borrow, ishi's answer, over the difference.  An arm of its own for the
+// borrow, at the top of the carry chain, put the chain on every seed's
+// critical path; behind a flop's select it is on none.
+const RSEL = { 1: 0b000, 18: 0b001 };
+const aluOf = (a) => (a === X ? X : a in LSEL ? 4 : a in MSEL ? 14 : a in RSEL ? 1 : a);
+const lselOf = (a) => (a === X ? X : a in LSEL ? LSEL[a] : a in MSEL ? MSEL[a] : a in RSEL ? RSEL[a] : X);
 const memOf = (r) => {
   const sem = r.insns[0].semantics ?? '';
   let m;

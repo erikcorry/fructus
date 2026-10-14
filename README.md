@@ -66,7 +66,7 @@ The non-interactive SVG opcode map above and the interactive HTML form with per-
 `npm run map`.
 
 The ALU is strictly two-input, single output. Comparator operations (conditional
-branch and the "? 1 : 0" instructions iseq, isset) have a fourth 3-bit
+branch and the "? 1 : 0" instructions iseq, isset, ishi) have a fourth 3-bit
 input which selects the condition. Unary operations will be implemented as
 binary operations where the second (immediate) input selects the operation.
 
@@ -261,7 +261,7 @@ benchmark kernels. A conditional branch flows through all three stages and is
 decided in the ALU stage, beside the ALU: not taken it costs nothing extra,
 taken it costs five cycles, six if the instruction at its target spans two
 words. Jumps and calls take four, or five through a register, with the same
-extra cycle. Measured behind a real SPRAM, the processor runs at 30.2 MHz
+extra cycle. Measured behind a real SPRAM, the processor runs at 30.1 MHz
 (medians of sixteen placements); [experiments/ib](experiments/ib/README.md)
 has how the buffer was chosen.
 `tools/sim.js` counts the same cycles, and `tests/cpu-check.mjs` holds the two
@@ -330,7 +330,11 @@ field for `mov rd, #imm16`. Codes 8 and 9 mean the same as in `lhs.sv`.
 `rtl/alu.sv` is the ALU. The operation is a four-bit field from the classifier —
 the spec forbids decoding it from the opcode — and every instruction is given
 an operation from its `semantics`, failing on any that cannot be placed. `iseq`
-and `isset` are ALU operations, and neither needs a carry. The fast unary
+and `isset` are ALU operations, and neither needs a carry. `ishi` is the
+borrow out of `rsb`'s subtractor, chosen over the difference by a select flop
+set at dispatch, so it adds no arm to the result mux; with `islo`, its alias
+with the sources swapped, a 32-bit add's carry is one instruction rather than
+a branch. The fast unary
 operations — `sxt8` and `bitrev` — are chosen by bits of the right-hand
 immediate the ALU already has. `clz` and `popcount` are computed beside it with a flop in the
 middle, and taken a cycle later — `extra_cycles` in the spec, which the
@@ -657,10 +661,10 @@ time, and the known CRCs for both the performance and validation seeds.
 
 | Build | Bytes | Cycles/iteration | CoreMark/MHz | CoreMark at 30 MHz | at 25.175 MHz |
 |---|---:|---:|---:|---:|---:|
-| `-Os` | 8998 | 2,200,622 | 0.454 | 13.63 | 11.44 |
-| `-Os -mmul` | 8591 | 1,107,099 | 0.903 | 27.10 | 22.74 |
-| `-O2` | 12695 | 2,047,476 | 0.488 | 14.65 | 12.30 |
-| `-O2 -mmul` | 12403 | 924,144 | 1.082 | 32.46 | 27.24 |
+| `-Os` | 8552 | 2,137,577 | 0.468 | 14.03 | 11.78 |
+| `-Os -mmul` | 8162 | 1,071,029 | 0.934 | 28.01 | 23.51 |
+| `-O2` | 12019 | 1,985,820 | 0.504 | 15.11 | 12.68 |
+| `-O2 -mmul` | 11742 | 888,125 | 1.126 | 33.78 | 28.35 |
 
 30 MHz is the processor alone on the iCE40; with the VGA frame buffers it
 runs at the 25.175 MHz pixel clock. Bytes are the whole image — `.text`,

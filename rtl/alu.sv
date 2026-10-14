@@ -53,7 +53,9 @@ module alu (
     // below, over 32 seeds: 31.29 MHz against 30.12 for one adder, and the ALU
     // loop left the critical paths altogether.  A load's first address is add.
     wire [15:0] addv = lhs + rhs;
-    wire [15:0] rsbv = rhs - lhs;
+    // rsb's subtractor is a bit wider for ishi, whose answer is its borrow.
+    wire [16:0] rsbw = {1'b0, rhs} - {1'b0, lhs};
+    wire [15:0] rsbv = rsbw[15:0];
     assign      sum  = addv;
     wire [15:0] xorv = lhs ^ rhs;
     wire [15:0] andv = lhs & rhs;
@@ -106,7 +108,11 @@ module alu (
 
     always_comb case (op)
         4'd0:       y = addv;
-        4'd1:       y = rsbv;
+        // ishi IS op 1 WITH lsel[0] SET: the borrow, lhs > rhs, as 0 or 1.
+        // lsel is a flop, so the select is settled before the carry chain
+        // is.  An arm of its own, at the top of that chain, made the chain
+        // every seed's critical path: 29.05 MHz against 30.07 like this.
+        4'd1:       y = lsel[0] ? {15'd0, rsbw[16]} : rsbv;
         4'd4:       y = logv;
         4'd8:       y = lhs << amt;
         4'd9:       y = lhs >> amt;

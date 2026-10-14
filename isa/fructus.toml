@@ -1373,7 +1373,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1011_0011                jmpr    target             2 bytes, SHORT form
 #   1011_0100                brset   ra, #immbit5, target
 #   1011_0101                brset   ra, #immask5, target
-#   1011_0110 .. 1011_0111   -- free
+#   1011_011b                ishi    rd, ra, rb         TWO opcodes: an ALU row
 #   1011_1000                mul   rd, rd, #imm5       2 bytes
 #   1011_1001                mul   rd, ra, #imm10      3 bytes
 #   1011_1010 .. 1011_1101   -- free
@@ -3056,6 +3056,47 @@ semantics = "R[d] = (R[a] & mask) != 0"
   fields   = { i = "mask:immask5" }
   tie      = { a = "d" }
 
+# --- ishi / islo ------------------------------------------------------------
+# AN UNSIGNED COMPARE AS A VALUE, for the carry out of a multi-word add:
+#
+#     add    lo, lo, x
+#     islo   c, lo, x        the sum is below an addend exactly when it wrapped
+#     add    hi, hi, c
+#
+# where without it a carry was a store-flag built from a branch - mov #1, br lo,
+# mov #0, seven bytes and three or six cycles - or a branch around an add.
+#
+# THE HARDWARE COMPUTES ra > rb, the borrow out of rsb's `rb - ra`, so that is
+# the instruction, and `islo rd, a, b' is an alias with its sources swapped,
+# as `sub' is to `rsb'.  Both are named as `br' names the condition.
+#
+# IT COSTS NO ARM OF THE RESULT MUX.  rtl/alu.sv's rsb subtractor is 17 bits
+# and op 1 picks its borrow or its difference by lsel[0], a flop set at
+# dispatch, so the select is settled long before the carry chain is.  A new
+# arm fed from the top of that chain made it every seed's critical path.
+# Measured over 32 seeds: 30.13 MHz against 29.98 without it, 39 LUT4 more,
+# all of them the select; the two opcodes cost nothing.
+#
+# 1011_011b, THE +6/+7 COLUMNS OF THE CONTROL ROW, so the rd, ra, rb pair keeps
+# the shape every other three-register form has, and nothing above 0xb8 - the
+# optional instructions' row - is touched.
+
+[[insn]]
+mnemonic = "ishi"
+summary  = "rd = 1 if ra is higher than rb, unsigned, else 0"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+semantics = "R[d] = R[a] > R[b]"
+
+  [[insn.form]]
+  name     = "three_reg"
+  encoding = "1011_011b  ccaa_addd"
+  fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
+
 # --- push / pop -------------------------------------------------------------
 # Push and pop are separate microcode state machines and the first opcode
 # selects which, so nothing here is shared between them.
@@ -3722,6 +3763,22 @@ operands = [
 ]
 syntax   = "{d}, {a}, {b}"
 expand   = { mnemonic = "rsb", args = { d = "d", a = "b", b = "a" } }
+
+# --- islo -------------------------------------------------------------------
+# `ishi' with its sources swapped: `islo c, sum, x' is the carry out of
+# `add sum, sum, x'.  Not `prefer': the opcode map takes a preferred spelling
+# only for a one-byte abbreviation, so the cell and every listing read `ishi'.
+
+[[alias]]
+mnemonic = "islo"
+summary  = "rd = 1 if ra is lower than rb, unsigned, else 0"
+operands = [
+  { name = "d", type = "reg" },
+  { name = "a", type = "reg" },
+  { name = "b", type = "reg" },
+]
+syntax   = "{d}, {a}, {b}"
+expand   = { mnemonic = "ishi", args = { d = "d", a = "b", b = "a" } }
 
 # --- mov (register to register) ---------------------------------------------
 # There is no register-to-register move opcode.  `or rd, rs, #0` is a copy, and

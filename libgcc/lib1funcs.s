@@ -131,7 +131,7 @@ __mulhi3:
 
 
 ; ============================================================================
-; __umulhisi3 - 16 x 16 -> 32, unsigned                              67 bytes
+; __umulhisi3 - 16 x 16 -> 32, unsigned                              66 bytes
 ; ============================================================================
 ;       r0  a, then the product LOW         r2  multiplicand high
 ;       r1  b, then the product HIGH        r3  accumulator high
@@ -174,8 +174,8 @@ __umulhisi3:
 .set:
         add     r0, r0, lr              ; 1
         add     r3, r3, r2              ; 1
-        br      hs, r0, lr, .clear      ; 1   sum >= addend means no carry
-        add     r3, r3, #1              ; 1
+        islo    r5, r0, lr              ; 1   the carry: the sum is below
+        add     r3, r3, r5              ; 1   the addend exactly when it wrapped
 .clear:
         lsr     r5, lr, #15             ; 1   the bit leaving the low half
         shl     r2, r2, #1              ; 1
@@ -338,9 +338,12 @@ __mulsi3:
 ;   that one is tested.
 ;
 ;   cx and the carries above it never exceed 2 before P3.hi arrives, so
-;   `add r4, r4, #1` there is always safe.
+;   adding them into r4 there is always safe.
 ;
-; The one test that guards a carry-of-a-carry is reached by almost no operands:
+; EVERY CARRY IS AN islo: the sum is below an addend exactly when it wrapped,
+; and the 0 or 1 that says so is added in, with no branch.
+;
+; The one islo that guards a carry-of-a-carry matters for almost no operands:
 ; deleting it leaves 3700 random 32-bit products all correct.  It takes a sweep
 ; of halves near 0xffff to find, which tests/libgcc-check.mjs does deliberately.
 
@@ -363,15 +366,11 @@ __umulsidi3:
         ld      r0, [sp, #8]            ; 3
         ld      r1, [sp, #2]            ; 3
         call    __umulhisi3             ; 5
-        mov     r4, #0                  ; 1   cx
         add     r3, r3, r0              ; 1   X.lo
-        br      hs, r3, r0, .nc1        ; 1
-        add     r1, r1, #1              ; 1   into P2.hi; it cannot wrap
-.nc1:
+        islo    r0, r3, r0              ; 1
+        add     r1, r1, r0              ; 1   into P2.hi; it cannot wrap
         add     r2, r2, r1              ; 1   X.hi
-        br      hs, r2, r1, .nc2        ; 1
-        add     r4, r4, #1              ; 1
-.nc2:
+        islo    r4, r2, r1              ; 1   cx
 
         ; --- P0 = al * bl ---------------------------------------------------
         ld      r0, [sp, #6]            ; 3
@@ -379,20 +378,18 @@ __umulsidi3:
         call    __umulhisi3             ; 5
         st      r0, [sp, #0]            ; 3   w0 is finished
         add     r3, r3, r1              ; 1   w1 = X.lo + P0.hi
-        br      hs, r3, r1, .nc3        ; 1
-        add     r2, r2, #1              ; 1   k1 into X.hi ...
-        br      ne, r2, #0, .nc3        ; 1   ... which CAN wrap
-        add     r4, r4, #1              ; 1
-.nc3:
+        islo    r1, r3, r1              ; 1   k1
+        add     r2, r2, r1              ; 1   into X.hi ...
+        islo    r1, r2, r1              ; 1   ... which CAN wrap: below k1
+        add     r4, r4, r1              ; 1   only if it did
 
         ; --- P3 = ah * bh ---------------------------------------------------
         ld      r0, [sp, #8]            ; 3
         ld      r1, [sp, #4]            ; 3
         call    __umulhisi3             ; 5
         add     r2, r2, r0              ; 1   w2 = X.hi + k1 + P3.lo
-        br      hs, r2, r0, .nc4        ; 1
-        add     r4, r4, #1              ; 1
-.nc4:
+        islo    r0, r2, r0              ; 1
+        add     r4, r4, r0              ; 1
         add     r4, r4, r1              ; 1   w3 = P3.hi + cx + k2
 
         ; --- place the four words and unwind --------------------------------
@@ -424,7 +421,7 @@ __umulsidi3:
 ; one.  A program built with -mmul calls these; --gc-sections drops the rest.
 ;
 ;       __mulsi3_mul        32 x 32 -> 32            13 bytes  15 cycles
-;       __umulsidi3_mul     32 x 32 -> 64 unsigned   83 bytes  18, or 55 on average
+;       __umulsidi3_mul     32 x 32 -> 64 unsigned   75 bytes  18, or 46 on average
 ;
 ; and __muldi3_mul, in C on top of them, in the GCC tree's
 ; libgcc/config/fructus/lib2mul.c.  The cycles are from entry to the return.
@@ -454,7 +451,7 @@ __mulsi3_mul:
 
 
 ; ============================================================================
-; __umulsidi3_mul - 32 x 32 -> 64, unsigned, with mul                83 bytes
+; __umulsidi3_mul - 32 x 32 -> 64, unsigned, with mul                75 bytes
 ; ============================================================================
 ;       a in r0:r1 as low:high          b in r2:r3 as low:high
 ;       result w0..w3 in r0..r3, lowest first
@@ -467,13 +464,14 @@ __mulsi3_mul:
 ;       w2 = P1.hi + P2.hi + P3.lo + carries      carry into w3
 ;       w3 = P3.hi + carries                      which cannot overflow
 ;
-; A CARRY IS A COMPARE AND A BRANCH: the sum is below an addend exactly when
-; it wrapped.  The branch goes to the carry, out of line, so that no carry
-; is a branch not taken - one cycle against five or six.  Between random
-; 32-bit operands a carry is about as likely as not, and this is 55 cycles on
-; average; the other way round was two more, measured on the core before the
-; instruction buffer, whose taken branch cost a cycle less.  Between operands
-; whose high words are small, a carry is rare and the difference larger.
+; A CARRY IS AN islo AND AN add: the sum is below an addend exactly when it
+; wrapped, and islo makes that a 0 or a 1, two cycles whether or not it did.
+; A carry into w2 can wrap w2 in turn, and only that rare case branches, out
+; of line.  This is 46 cycles on average between random 32-bit operands.  It
+; was 54 when every carry was a branch out of line - one cycle with no carry,
+; ten with one - and a carry in the four places here comes a quarter to a half
+; of the time.  Between operands whose high words are small the first two
+; seldom carry, and there the branches were a cycle each cheaper.
 ;
 ; Each of a and b is read by two products and dies after its second, and the
 ; products are ordered so that seven registers suffice - r4 and lr, saved,
@@ -488,42 +486,38 @@ __umulsidi3_mul:
         mul     lr, r1, r3              ; 2   P3.lo
         mulhu   r3, r1, r3              ; 2   w3 = P3.hi; bh is dead
         add     r4, r4, lr              ; 1   w2 += P3.lo
-        br      lo, r4, lr, .k1         ; 1   a carry: out of line
-.r1:
+        islo    lr, r4, lr              ; 1
+        add     r3, r3, lr              ; 1   its carry into w3
         mulhu   lr, r1, r2              ; 2   P2.hi
         mul     r1, r1, r2              ; 2   P2.lo; ah is dead
         add     r4, r4, lr              ; 1   w2 += P2.hi
-        br      lo, r4, lr, .k2         ; 1
-.r2:
+        islo    lr, r4, lr              ; 1
+        add     r3, r3, lr              ; 1
         add     r5, r5, r1              ; 1   w1 += P2.lo
-        br      lo, r5, r1, .k3         ; 1
+        islo    r1, r5, r1              ; 1
+        add     r4, r4, r1              ; 1   its carry into w2 ...
+        br      eq, r4, #0, .k3         ; 1   ... which can wrap: out of line
 .r3:
         mulhu   r1, r0, r2              ; 2   P0.hi
         mul     r0, r0, r2              ; 2   w0 = P0.lo
         add     r1, r5, r1              ; 1   w1 += P0.hi
-        br      lo, r1, r5, .k4         ; 1
+        islo    r5, r1, r5              ; 1
+        add     r4, r4, r5              ; 1
+        br      eq, r4, #0, .k4         ; 1
 .r4:
         mov     r2, r4                  ; 1   w2
         pop     lr, r4                  ; 4
         ret                             ; 5
 
-; The carries.  One into w2 can wrap w2 in turn, and then it carries on into
-; w3, which itself cannot overflow: the product fits in 64 bits.
-.k1:
-        add     r3, r3, #1
-        jmpr    .r1
-.k2:
-        add     r3, r3, #1
-        jmpr    .r2
+; A carry into w2 that wraps it carries on into w3, which itself cannot
+; overflow: the product fits in 64 bits.  w2 is 0 after adding the carry k
+; either because it wrapped, k = 1, or because it was 0 and k = 0; either
+; way w3 takes k.
 .k3:
-        add     r4, r4, #1
-        br      ne, r4, #0, .r3
-        add     r3, r3, #1
+        add     r3, r3, r1
         jmpr    .r3
 .k4:
-        add     r4, r4, #1
-        br      ne, r4, #0, .r4
-        add     r3, r3, #1
+        add     r3, r3, r5
         jmpr    .r4
 
 .narrow:
@@ -894,9 +888,8 @@ __udivmodsi4_mul:
         add     r5, r5, r0              ; 1   q0
         add     r1, r1, r4              ; 1
         add     r1, r1, #1              ; 1   q1 + 1
-        br      hs, r5, r0, .lc         ; 1   no carry out of q0
-        add     r1, r1, #1              ; 1
-.lc:
+        islo    r4, r5, r0              ; 1   q0's carry; u2 is dead
+        add     r1, r1, r4              ; 1
         mul     r4, r1, r2              ; 2
         rsb     r4, r4, r0              ; 1   r = u0 - q1 * d
         br      ls, r4, r5, .lk         ; 1   r <= q0: q1 stands
@@ -922,9 +915,8 @@ __udivmodsi4_mul:
         add     r5, r5, r1              ; 1
         add     lr, lr, r4              ; 1
         add     lr, lr, #1              ; 1
-        br      hs, r5, r1, .hc         ; 1
-        add     lr, lr, #1              ; 1
-.hc:
+        islo    r4, r5, r1              ; 1
+        add     lr, lr, r4              ; 1
         mul     r4, lr, r2              ; 2
         rsb     r4, r4, r1              ; 1
         br      ls, r4, r5, .hk         ; 1
@@ -980,30 +972,30 @@ __udivmodsi4_mul:
         mul     lr, lr, r4              ; 2
         add     lr, lr, r1              ; 1   q0
         add     r5, r5, r4              ; 1   q1; u2 is dead
-        br      hs, lr, r1, .wc         ; 1
-        add     r5, r5, #1              ; 1
-.wc:
+        islo    r4, lr, r1              ; 1
+        add     r5, r5, r4              ; 1
         mul     r4, r5, r3              ; 2
         rsb     r1, r4, r1              ; 1   r1 = u1 - q1 * d1
         mulhu   r4, r5, r2              ; 2
         rsb     r1, r4, r1              ; 1   r1:r0 = r1:u0 - q1 * d0 ...
         mul     r4, r5, r2              ; 2
-        br      hs, r0, r4, .wb0        ; 1
-        sub     r1, r1, #1              ; 1
-.wb0:
-        rsb     r0, r4, r0              ; 1
-        br      hs, r0, r2, .wb1        ; 1   ... - d
-        sub     r1, r1, #1              ; 1
-.wb1:
-        rsb     r0, r2, r0              ; 1
+        ; A BORROW IS THE DIFFERENCE ABOVE WHERE IT STARTED.  lr holds q0 for
+        ; below, so no register is free for the borrow before the subtract:
+        ; it goes after, over the word that is finished with.
+        rsb     r4, r4, r0              ; 1
+        ishi    r0, r4, r0              ; 1   the borrow
+        rsb     r1, r0, r1              ; 1
+        rsb     r0, r2, r4              ; 1   ... - d
+        ishi    r4, r0, r4              ; 1
+        rsb     r1, r4, r1              ; 1
         rsb     r1, r3, r1              ; 1
         add     r5, r5, #1              ; 1   q1 + 1
         br      lo, r1, lr, .wk         ; 1   r1 < q0: q1 stands
         sub     r5, r5, #1              ; 1
         add     r0, r0, r2              ; 1   r += d
         add     r1, r1, r3              ; 1
-        br      hs, r0, r2, .wk         ; 1
-        add     r1, r1, #1              ; 1
+        islo    r4, r0, r2              ; 1
+        add     r1, r1, r4              ; 1
 .wk:
         br      lo, r1, r3, .wd         ; 1   r >= d is rare
         br      hi, r1, r3, .wg         ; 1
@@ -1023,9 +1015,8 @@ __udivmodsi4_mul:
         ret                             ; 5
 .wg:
         add     r5, r5, #1              ; 1
-        br      hs, r0, r2, .wg1        ; 1
-        sub     r1, r1, #1              ; 1
-.wg1:
+        islo    r4, r0, r2              ; 1
+        rsb     r1, r4, r1              ; 1
         rsb     r0, r2, r0              ; 1
         rsb     r1, r3, r1              ; 1
         jmpr    .wd                     ; 4
@@ -1631,9 +1622,8 @@ __udivmoddi4_mul:
         add     r5, r5, r3              ; 1   q0
         add     r4, r4, r0              ; 1
         add     r4, r4, #1              ; 1   q1 + 1
-        br      hs, r5, r3, .nc         ; 1
-        add     r4, r4, #1              ; 1
-.nc:
+        islo    r0, r5, r3              ; 1   R is dead
+        add     r4, r4, r0              ; 1
         mul     r0, r4, r1              ; 2
         rsb     r0, r0, r3              ; 1   r = u_j - q1 * D
         br      ls, r0, r5, .nk         ; 1   r <= q0: q1 stands
@@ -1701,30 +1691,27 @@ __udivmoddi4_mul:
         mul     lr, lr, r4              ; 2
         add     lr, lr, r1              ; 1   q0
         add     r5, r5, r4              ; 1   q1
-        br      hs, lr, r1, .sc         ; 1
-        add     r5, r5, #1              ; 1
-.sc:
+        islo    r4, lr, r1              ; 1
+        add     r5, r5, r4              ; 1
         mul     r4, r5, r3              ; 2
         rsb     r1, r4, r1              ; 1   r1 = u1 - q1 * d1
         mulhu   r4, r5, r2              ; 2
         rsb     r1, r4, r1              ; 1   r1:r0 = r1:u0 - q1 * d0 ...
         mul     r4, r5, r2              ; 2
-        br      hs, r0, r4, .sb0        ; 1
-        sub     r1, r1, #1              ; 1
-.sb0:
-        rsb     r0, r4, r0              ; 1
-        br      hs, r0, r2, .sb1        ; 1   ... - D
-        sub     r1, r1, #1              ; 1
-.sb1:
-        rsb     r0, r2, r0              ; 1
+        rsb     r4, r4, r0              ; 1   the borrow after the subtract,
+        ishi    r0, r4, r0              ; 1   as in __udivmodsi4_mul
+        rsb     r1, r0, r1              ; 1
+        rsb     r0, r2, r4              ; 1   ... - D
+        ishi    r4, r0, r4              ; 1
+        rsb     r1, r4, r1              ; 1
         rsb     r1, r3, r1              ; 1
         add     r5, r5, #1              ; 1   q1 + 1
         br      lo, r1, lr, .sk         ; 1   r1 < q0: q1 stands
         sub     r5, r5, #1              ; 1
         add     r0, r0, r2              ; 1   r += D
         add     r1, r1, r3              ; 1
-        br      hs, r0, r2, .sk         ; 1
-        add     r1, r1, #1              ; 1
+        islo    r4, r0, r2              ; 1
+        add     r1, r1, r4              ; 1
 .sk:
         br      lo, r1, r3, .sd         ; 1   r >= D is rare
         br      hi, r1, r3, .sg         ; 1
@@ -1734,9 +1721,8 @@ __udivmoddi4_mul:
         ret                             ; 5
 .sg:
         add     r5, r5, #1              ; 1
-        br      hs, r0, r2, .sg1        ; 1
-        sub     r1, r1, #1              ; 1
-.sg1:
+        islo    r4, r0, r2              ; 1
+        rsb     r1, r4, r1              ; 1
         rsb     r0, r2, r0              ; 1
         rsb     r1, r3, r1              ; 1
         jmpr    .sd                     ; 4
@@ -1909,9 +1895,8 @@ __udivmoddi4_mul:
         st      r5, [lr, #20]           ; 3
         st      r5, [lr, #18]           ; 3
         add     r0, r0, r2              ; 1   D3:D2 + R[j+2]
-        mov     r1, r3                  ; 1
-        br      hs, r0, r2, .lower      ; 1
-        add     r1, r1, #1              ; 1
+        islo    r1, r0, r2              ; 1
+        add     r1, r1, r3              ; 1
         jmpr    .lower                  ; 5
 .bloop:
         ld      lr, [sp, #10]           ; 3   2j, and from it the address
@@ -1938,9 +1923,8 @@ __udivmoddi4_mul:
         mul     lr, r5, r2              ; 2
         mulhu   r5, r5, r2              ; 2   p2
         add     r3, r3, lr              ; 1   p1
-        br      hs, r3, lr, .bc         ; 1
-        add     r5, r5, #1              ; 1
-.bc:
+        islo    lr, r3, lr              ; 1
+        add     r5, r5, lr              ; 1
         ld      lr, [sp, #10]           ; 3
         add     lr, lr, sp              ; 1
         ld      r2, [lr, #12]           ; 3   R[j]
@@ -1958,17 +1942,16 @@ __udivmoddi4_mul:
         sub     lr, lr, #1              ; 1
 .b0:
         rsb     r2, r4, r2              ; 1
-        br      hs, lr, r3, .b1         ; 1
-        br      ne, r0, #0, .b1y        ; 1
-        sub     r1, r1, #1              ; 1
-.b1y:
-        sub     r0, r0, #1              ; 1
-.b1:
+        ; From here a word of the subtrahend is free as soon as it is
+        ; subtracted, and the borrows need no branch: r1:r0 -= r5 + b1.
+        islo    r4, lr, r3              ; 1   b1
         rsb     lr, r3, lr              ; 1
-        br      hs, r0, r5, .b2         ; 1
-        sub     r1, r1, #1              ; 1
-.b2:
+        islo    r3, r0, r4              ; 1   r0 - b1 borrows ...
+        rsb     r0, r4, r0              ; 1
+        rsb     r1, r3, r1              ; 1
+        islo    r3, r0, r5              ; 1   ... or r0 - r5 does: not both
         rsb     r0, r5, r0              ; 1
+        rsb     r1, r3, r1              ; 1
         ; A borrow out of the top word went negative.  At most one reaches
         ; it, so it went negative exactly when r1 came out above where it
         ; started.
