@@ -463,6 +463,33 @@ divide_by_zero = 0xffc8
 #                    reset, 115200 baud at the system's 25.125 MHz; 2616 is
 #                    9600.  Reads as the value last written
 #
+# THE USB PORT, an option of the system's (FRUCTUS_USB, tools/fpga-system.sv
+# and rtl/usb.sv): a low-speed host for a keyboard or a mouse, the bits in
+# hardware and the protocol in software, a byte an interrupt.  rtl/usb.sv's
+# header has the whole of it:
+#
+#     usb_data       a byte stored is sent - with `st', bit 8 says it is the
+#                    packet's last; `st8' never is.  A load takes the byte
+#                    received and clears `received'
+#     usb_status     bit 0  busy: a packet is going out
+#                    bit 1  a byte waits to go
+#                    bit 2  received: a byte waits at usb_data
+#                    bit 3  eop: a packet has ended         } 1s written
+#                    bit 4  crc_ok: and its CRC16 was good  } to 3, 5, 6
+#                    bit 5  timeout: nothing answered       } and 7 clear
+#                    bit 6  frame: 1 ms has passed          } them
+#                    bit 7  error: a byte lost, or a packet cut short
+#                    bits 8, 9  the line: D+, D-
+#                    bit 10 armed
+#     usb_ctrl       bits 0 - 4  interrupts: nothing waiting to go,
+#                    received, eop, timeout, frame
+#                    bit 5  keep-alive, every frame
+#                    bit 6  hold the line at SE0: a bus reset
+#                    bit 7  arm: 1 holds the byte waiting until the next
+#                           packet's end, and drops it if its CRC was bad
+#                    bit 8  flush: drop the byte waiting and disarm
+#                    Reads as the value last written
+#
 # A STATUS OF ZERO IS IDLE, so that on a machine without the UART - its words
 # plain memory, zero unless written - a program waiting for `busy' to clear
 # never waits.  Eight data bits, no parity, one stop bit; a byte whose stop
@@ -481,6 +508,9 @@ uart_status = 0x0422   # the UART's, above
 cycles      = 0x0424   # 32-bit count of clocks since reset, read-only, low word
                        # first; read hi, lo, hi and retry if hi moved
 uart_divisor = 0x0428  # the UART's, above
+usb_data    = 0x0430   # the USB port's, below
+usb_status  = 0x0432
+usb_ctrl    = 0x0434
 
 
 # =============================================================================

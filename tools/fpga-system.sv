@@ -112,6 +112,10 @@
 // uart_tx, its words at 0x0420 - 0x0429 in the processor's half of the I/O
 // page, [cpu.io] in isa/fructus.toml.  Written and read like the GPU's
 // registers; without the define, this file's netlist is what it was.
+//
+// WITH FRUCTUS_USB, A LOW-SPEED USB HOST PORT: rtl/usb.sv, on ports usb_dp and
+// usb_dm, which want 22 ohms in series and 15k to ground each; its words at
+// 0x0430 - 0x0435.  With either option or both.
 // =============================================================================
 
 module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests do
@@ -120,6 +124,9 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
             output wire flash_sck, flash_cs_n, flash_mosi, input logic flash_miso
 `ifdef FRUCTUS_UART
             , input logic uart_rx, output logic uart_tx
+`endif
+`ifdef FRUCTUS_USB
+            , inout wire usb_dp, usb_dm
 `endif
            );
 
@@ -143,14 +150,23 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
                                              .D_OUT_0(1'b0), .D_OUT_1(spi_on));
     assign flash_cs_n = ~spi_on;
     logic irq_q, irq_s;
-`ifndef FRUCTUS_UART
-    always_ff @(posedge clk) begin irq_q <= irq; irq_s <= irq_q; end
-`else
+`ifdef FRUCTUS_USB
+    // The USB port's request joins the others in the same flop.  (Its own
+    // text, so that the builds without it are what they were: abc maps the
+    // same logic differently written.)
+    wire uart_irq, usb_irq;
+    `ifndef FRUCTUS_UART
+    assign uart_irq = 1'b0;
+    `endif
+    always_ff @(posedge clk) begin irq_q <= irq; irq_s <= irq_q | uart_irq | usb_irq; end
+`elsif FRUCTUS_UART
     // The UART's request joins the pin's in the second flop, so that the
     // processor's dispatch still sees a flop and nothing in front of it: as a
     // LUT after the flop, ie and rx_full were most seeds' critical path.
     wire uart_irq;                       // a byte received, if enabled: rtl/uart.sv
     always_ff @(posedge clk) begin irq_q <= irq; irq_s <= irq_q | uart_irq; end
+`else
+    always_ff @(posedge clk) begin irq_q <= irq; irq_s <= irq_q; end
 `endif
 
     wire [15:0] addr; wire [15:0] wdata; wire [1:0] lanes;
@@ -331,6 +347,29 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
               .rx_pin(uart_rx), .tx_pin(uart_tx));
 `endif
 
+    // --- the USB port, with FRUCTUS_USB: rtl/usb.sv --------------------------------
+    // Its data register's bit 8, the last byte, comes only with a whole word:
+    // st8 puts its byte in both lanes, and must not set it.
+`ifdef FRUCTUS_USB
+    localparam [15:0] B_DATA = `FRUCTUS_IO_USB_DATA, B_STAT = `FRUCTUS_IO_USB_STATUS,
+                      B_CTRL = `FRUCTUS_IO_USB_CTRL;
+    wire bw = we_w && mask_w[0];
+    wire [7:0] b_byte; wire [15:0] b_status;
+    wire b_dp_in, b_dm_in, b_dp_out, b_dm_out, b_oe;
+    logic b_rd = 1'b0;
+    always_ff @(posedge clk) b_rd <= addr[15:1] == B_DATA[15:1] && !we && !boot;
+    usb port (.clk, .rst, .wr_data(bw && addr_w[15:1] == B_DATA[15:1]),
+              .wr_status(bw && addr_w[15:1] == B_STAT[15:1]),
+              .wr_ctrl(bw && addr_w[15:1] == B_CTRL[15:1]),
+              .wword({wword_w[15:9], wword_w[8] & mask_w[2], wword_w[7:0]}),
+              .rd_data(b_rd), .rx_byte(b_byte), .status(b_status), .irq(usb_irq),
+              .dp_in(b_dp_in), .dm_in(b_dm_in), .dp_out(b_dp_out), .dm_out(b_dm_out), .oe(b_oe));
+    SB_IO #(.PIN_TYPE(6'b1010_01)) dp_pad (.PACKAGE_PIN(usb_dp), .OUTPUT_ENABLE(b_oe),
+                                           .D_OUT_0(b_dp_out), .D_IN_0(b_dp_in));
+    SB_IO #(.PIN_TYPE(6'b1010_01)) dm_pad (.PACKAGE_PIN(usb_dm), .OUTPUT_ENABLE(b_oe),
+                                           .D_OUT_0(b_dm_out), .D_IN_0(b_dm_in));
+`endif
+
     // --- the registers the hardware changes, read -------------------------------
     // 0x0484 status: bit 15 vertical blank, bits 9:0 the line.  0x04a0, 0x04a4
     // and 0x04a8 the palette's, the patterns' and the attributes' addresses.
@@ -338,14 +377,28 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     // With FRUCTUS_UART, the received byte at the data register and the
     // UART's status too.
     wire [15:0] status = {vblank, 5'd0, line};
-`ifndef FRUCTUS_UART
+`ifdef FRUCTUS_USB
+    // The USB port's are the four bytes at B_DATA, the UART's with bit 4
+    // set, so bit 4 picks between the two.
+    wire [15:0] usb_word = addr[1] ? b_status : {8'd0, b_byte};
+    // One compare for both, bit 4 either way: two of 14 bits each made
+    // mal -> io_q a third of the seeds' critical path, 13 cells.
+    `ifdef FRUCTUS_UART
+    wire [15:0] cpu_word = addr[4] ? usb_word : addr[1] ? u_status : {8'd0, u_byte};
+    wire        dev_hit  = addr[15:5] == B_DATA[15:5] && addr[3:2] == B_DATA[3:2];
+    `else
+    wire [15:0] cpu_word = usb_word;
+    wire        dev_hit  = addr[15:2] == B_DATA[15:2];
+    `endif
     always_ff @(posedge clk) begin
         io_q    <= addr[15:7] == 9'h009 && (addr[6:1] == 6'h02 || addr[6:1] == 6'h10
-                                         || addr[6:1] == 6'h12 || addr[6:1] == 6'h14);
-        io_word <= !addr[5] ? status : addr[3] ? {10'd0, attr_i}
+                                         || addr[6:1] == 6'h12 || addr[6:1] == 6'h14)
+                   || dev_hit;
+        io_word <= !addr[7] ? cpu_word
+                 : !addr[5] ? status : addr[3] ? {10'd0, attr_i}
                  : addr[2] ? {6'd0, pat_i} : {11'd0, pal_i};
     end
-`else
+`elsif FRUCTUS_UART
     // The UART's two words are the four bytes at U_DATA, and bit 7 of the
     // address - 0 there, 1 for the GPU's - and bit 1 choose the word, so only
     // io_q's one bit waits for the whole address.  Chosen by the compares
@@ -356,6 +409,13 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
                    || addr[15:2] == U_DATA[15:2];
         io_word <= !addr[7] ? (addr[1] ? u_status : {8'd0, u_byte})
                  : !addr[5] ? status : addr[3] ? {10'd0, attr_i}
+                 : addr[2] ? {6'd0, pat_i} : {11'd0, pal_i};
+    end
+`else
+    always_ff @(posedge clk) begin
+        io_q    <= addr[15:7] == 9'h009 && (addr[6:1] == 6'h02 || addr[6:1] == 6'h10
+                                         || addr[6:1] == 6'h12 || addr[6:1] == 6'h14);
+        io_word <= !addr[5] ? status : addr[3] ? {10'd0, attr_i}
                  : addr[2] ? {6'd0, pat_i} : {11'd0, pal_i};
     end
 `endif

@@ -36,6 +36,11 @@
 `define FRUCTUS_IO_UART_STATUS  16'h0422
 `define FRUCTUS_IO_UART_DIVISOR 16'h0428
 
+// [cpu.io]: the USB port's - tools/fpga-system.sv's, with FRUCTUS_USB.
+`define FRUCTUS_IO_USB_DATA    16'h0430
+`define FRUCTUS_IO_USB_STATUS  16'h0432
+`define FRUCTUS_IO_USB_CTRL    16'h0434
+
 // The registers the exception routines and the block moves name.
 `define FRUCTUS_REG_SP 3'd6
 `define FRUCTUS_REG_LR 3'd7

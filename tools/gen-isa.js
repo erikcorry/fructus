@@ -73,6 +73,15 @@ if (uartWords.some((a) => typeof a !== 'number' || a & 1 || a < io.page + 0x10 |
 // 0x80 in the page, where the GPU's are above.
 if (io.console & 3 || io.uart_status !== io.console + 2 || io.console & 0x80)
   fail('[cpu.io]: uart_status must follow console, at a multiple of four with bit 7 clear');
+// The USB port's three words, the same way; its data and status are the four
+// bytes that differ from the UART's in bit 4 alone, which picks between them.
+const usbWords = ['usb_data', 'usb_status', 'usb_ctrl'].map((n) => io[n]);
+if (usbWords.some((a) => typeof a !== 'number' || a & 1 || a < io.page + 0x10 || a >= io.page + 0x80
+                         || shadowWords.includes(a) || (a & ~3) === io.cycles || uartWords.includes(a))
+    || new Set(usbWords).size !== 3)
+  fail('[cpu.io]: usb_data, usb_status and usb_ctrl must be distinct even words beside the UART\'s');
+if (io.usb_status !== io.usb_data + 2 || (io.usb_data ^ io.console) !== 0x10)
+  fail('[cpu.io]: usb_status must follow usb_data, which must be console with bit 4 flipped');
 const ioGuard = spec.cpu.vectors.io_guard;
 if (typeof ioGuard !== 'number') fail('[cpu.vectors] has no io_guard');
 const divZero = spec.cpu.vectors.divide_by_zero;
@@ -141,6 +150,11 @@ process.stdout.write(`// =======================================================
 \`define FRUCTUS_IO_CONSOLE      16'h${hex(io.console, 4)}
 \`define FRUCTUS_IO_UART_STATUS  16'h${hex(io.uart_status, 4)}
 \`define FRUCTUS_IO_UART_DIVISOR 16'h${hex(io.uart_divisor, 4)}
+
+// [cpu.io]: the USB port's - tools/fpga-system.sv's, with FRUCTUS_USB.
+\`define FRUCTUS_IO_USB_DATA    16'h${hex(io.usb_data, 4)}
+\`define FRUCTUS_IO_USB_STATUS  16'h${hex(io.usb_status, 4)}
+\`define FRUCTUS_IO_USB_CTRL    16'h${hex(io.usb_ctrl, 4)}
 
 // The registers the exception routines and the block moves name.
 \`define FRUCTUS_REG_SP 3'd${sp}

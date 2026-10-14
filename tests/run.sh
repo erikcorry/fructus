@@ -126,6 +126,7 @@ if node tests/rtl-check.mjs; then :; else fail=1; fi
 if node tests/cpu-check.mjs; then :; else fail=1; fi
 if node tests/blit-check.mjs; then :; else fail=1; fi
 if node tests/uart-check.mjs; then :; else fail=1; fi
+if node tests/usb-check.mjs; then :; else fail=1; fi
 if node tests/boot-check.mjs; then :; else fail=1; fi
 # The same three with rtl/'s don't-cares filled - zeros, ones, random bits - as
 # synthesis may fill them: an x that something reads after all passes as x.
