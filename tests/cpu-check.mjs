@@ -141,7 +141,8 @@ const EXC_CYCLES = { brk: 7, rti: 7, sei: 4, cli: 4 };
 // `mov rX, #target` and then the jump through rX - so the jump always reads
 // the register the instruction just ahead of it wrote, through the bypass.
 // X is drawn at random, so `call r7`, which goes to the new lr and not the
-// target, comes up too.  ret is a mov into lr and then ret.
+// target, comes up too.  ret is a mov into lr and then ret, and a one-byte
+// jump or call through a pinned register - `jmp r5' - is a mov into that one.
 const JUMP_SEM = /^(lr = pc; )?pc = (target|pc \+ target|R\[a\]|lr)$/;
 const find = (want) => {
   for (let op = 0; op < 256; op++)
@@ -159,7 +160,7 @@ for (let op = 0; op < 256; op++) {
   const m = d && JUMP_SEM.exec(d.insn.semantics ?? '');
   if (!m) continue;
   const how = m[2] === 'target' ? 'abs' : m[2] === 'pc + target' ? 'rel' : m[2] === 'lr' ? 'ret' : 'reg';
-  jumps.push({ op, jump: how });
+  jumps.push({ op, jump: how, pinned: d.nbytes === 1 && how === 'reg' ? d.ops.a : undefined });
 }
 
 // Lay a list of forms out as bytes, pointing each branch forward at a random
@@ -188,7 +189,10 @@ const draw = (f) => {
     case 'abs': return [f.op, 0, 0];
     case 'rel': return [f.op, 0];
     case 'ret': return [MOV_TO[7], 0, 0, f.op];
-    case 'reg': { const x = rnd() & 7; return [MOV_TO[x], 0, 0, f.op, x]; }
+    case 'reg': {
+      if (f.pinned !== undefined) return [MOV_TO[f.pinned], 0, 0, f.op];
+      const x = rnd() & 7; return [MOV_TO[x], 0, 0, f.op, x];
+    }
   }
   if (f.nbytes === 1) return [f.op];
   const bytes = [f.op, f.b1s[rnd() % f.b1s.length]];

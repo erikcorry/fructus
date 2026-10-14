@@ -78,7 +78,7 @@ if (brk !== 0)
 // right-hand operand - `sel`, the imm3 value the encoding names - tells them
 // apart.
 const u = unaryLayout();
-const FAST = ['bitrev', 'clmul', 'sxt8'], SLOW = ['clz', 'popcount'];
+const FAST = ['bitrev', 'sxt8'], SLOW = ['clz', 'popcount'];
 const fastHas = [...u.fast, u.fastThird?.mnemonic].filter(Boolean).sort();
 const slowHas = [...u.slow, u.slowThird?.mnemonic].filter(Boolean).sort();
 if (fastHas.join() !== FAST.join() || slowHas.join() !== SLOW.join())
@@ -131,7 +131,7 @@ process.stdout.write(`// =======================================================
 
 // The fast unary operations, by sel - the right-hand operand's bits 2:1, which
 // for a unary instruction is the imm3 value its encoding names.
-\`define FRUCTUS_UNARY_FAST(sel, bitrev, clmul, sxt8) (${fast})
+\`define FRUCTUS_UNARY_FAST(sel, bitrev, sxt8) (${fast})
 
 // The slow pair, clz and popcount: popcount when this is 1.
 \`define FRUCTUS_UNARY_POP(sel) (${pop})

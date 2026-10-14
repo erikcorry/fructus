@@ -42,18 +42,12 @@ const konCode = (v) => {
 const rhsCode = (d) => {
   const { insn, form } = d, sem = insn.semantics ?? '', fix = form.fix ?? {};
   if (ALU_LATER.has(insn.mnemonic)) return X;
-  if (d.nbytes === 1) {
-    if ('imm' in fix) return konCode(fix.imm);
-    if ('off' in fix) return konCode(fix.off);
-    if ('b' in fix) return fix.b;
-    if (/^pc = lr$/.test(sem)) return regIndex('lr');
-    if (/^pc = R\[a\]$/.test(sem) && 'a' in fix) return fix.a;
-    return X;
-  }
   // A call's right-hand side is the pc adder's sum, which the byte-serial
   // core forced to pc + 2 while this code was selected; rtl/cpu.sv reads it
   // as the next pc.  It is checked first because a call
   // names a register on the left of the pc as well, and that is port A's.
+  // Both of these come before the one-byte forms because they hold whatever
+  // the length: `call r5' and `push lr' are one byte.
   if (WRITES_LR.test(sem)) return RHS_PCSUM;
   // AN INSTRUCTION THAT WALKS A POINTER WRITES IT BACK AS A RIGHT-HAND OPERAND:
   // the byte-serial core read its address unit before the flop, exactly as a
@@ -62,6 +56,14 @@ const rhsCode = (d) => {
   // push, `r5 = r5 + 2` for stm - and the digit is what keeps `pc = pc + off`
   // out, since a branch's displacement is not a constant here.
   if (/\b[a-z][a-z0-9]* = base [-+] \d/.test(sem)) return RHS_ADR;
+  if (d.nbytes === 1) {
+    if ('imm' in fix) return konCode(fix.imm);
+    if ('off' in fix) return konCode(fix.off);
+    if ('b' in fix) return fix.b;
+    if (/^pc = lr$/.test(sem)) return regIndex('lr');
+    if (/^pc = R\[a\]$/.test(sem) && 'a' in fix) return fix.a;
+    return X;
+  }
   if (Object.values(form.fields ?? {}).some((v) => /^[a-z]:reg\[0\]$/.test(v))) return modeCode('port B, from the bytes');
   if ((insn.operands ?? []).some((o) => o.type === 'condimm5')) return modeCode('immgen, as condimm5');
   if (/^R\[[a-z]\] = imm$/.test(sem) && d.nbytes === 3) return RHS_IMM16;
@@ -92,7 +94,9 @@ const lhsCode = (d, op) => {
   const l = lhsOf(d.insn, d.form);
   if (!l) return X;
   if (l.kind === 'microcode') return l.reg;
-  if (d.nbytes === 1) return l.kind === 'pc' ? X : d.ops[l.operand];
+  // A one-byte form names its register outright - `jmp r5' as much as `ld r0,
+  // [sp, #0]': rtl/cpu.sv takes a jump's target from port A.
+  if (d.nbytes === 1) return d.ops[l.operand];
   return Number(follows(op, d.form, l.operand, lhsFields));
 };
 
@@ -150,7 +154,8 @@ for (let op = 0; op < 256; op++) {
         throw new Error(`0x${op.toString(16)} ${d.insn.mnemonic}: a relative target cannot also take the pc adder's sum as its right-hand side`);
       if (v.rhs === X) v.rhs = modeCode('immgen, normal');
     }
-    seen.set(d.form, { who: `${d.insn.mnemonic}/${d.form.name}`, v, insn: d.insn, nbytes: d.nbytes });
+    seen.set(d.form, { who: `${d.insn.mnemonic}/${d.form.name}`, v, insn: d.insn, nbytes: d.nbytes,
+                      fix: d.form.fix ?? {} });
   }
   if (!seen.size) continue;
   const all = [...seen.values()];
@@ -158,5 +163,5 @@ for (let op = 0; op < 256; op++) {
     if (new Set(all.map((x) => x.v[f])).size > 1)
       throw new Error(`0x${op.toString(16)}: ${all.map((x) => `${x.who} wants ${f} ${x.v[f]}`).join(', ')}`);
   rows.push({ op, who: [...new Set(all.map((x) => x.who.split('/')[0]))].join(' '), v: all[0].v,
-              nbytes: all[0].nbytes, insns: [...new Set(all.map((x) => x.insn))] });
+              nbytes: all[0].nbytes, fix: all[0].fix, insns: [...new Set(all.map((x) => x.insn))] });
 }

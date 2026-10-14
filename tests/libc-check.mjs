@@ -379,12 +379,12 @@ function dispatch(name, r, dest, src, n) {
   const cost = (n, odd = 0) => shot(memset, { 0: BUF + AT + odd, 1: 0xff, 2: n }).cycles;
   const loop = (odd) => (cost(64 + 32 * 32, odd) - cost(64, odd)) / (32 * 32);
   const bulk = loop(0);
-  check('memset fill loop', Math.abs(bulk - 1.3125) < 0.0005,
-        `${bulk.toFixed(4)} cycles/byte, the file says 1.3125`);
+  check('memset fill loop', Math.abs(bulk - 1.25) < 0.0005,
+        `${bulk.toFixed(4)} cycles/byte, the file says 1.25`);
   // The tail is straight-line code, a step for each bit of what is left;
   // measured over an even length so it is the 8, 4 and 2 steps alone.
   const tail = (cost(14) - cost(0)) / 14;
-  check('memset tail', Math.abs(tail - 8 / 14) < 0.0005, `${tail.toFixed(4)} cycles/byte`);
+  check('memset tail', Math.abs(tail - 9 / 14) < 0.0005, `${tail.toFixed(4)} cycles/byte`);
 
   // THE ALIGNMENT BYTE, which no byte comparison can see.  Without it an odd
   // buffer fills correctly a byte at a time, at 2.06 cycles a byte; with it

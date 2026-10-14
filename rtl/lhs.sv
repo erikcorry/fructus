@@ -29,17 +29,16 @@
 // from the instruction:
 //
 //   rd field  insn[10:8]
-//             ld ld8 add rsb xor or and shl asr lsr iseq isset br jmp brclr
-//             call brset mul
+//             ld ld8 add rsb xor or and shl asr lsr iseq isset br brclr call
+//             jmp brset mul
 //   ra field  insn[13:11]
-//             st st8 ld ld8 movhi clmul bitrev sxt8 clz popcount add rsb xor
-//             or and shl asr lsr iseq br mul recip mulhu mulhs
+//             st st8 ld ld8 movhi bitrev sxt8 clz popcount add rsb xor or and
+//             shl asr lsr iseq br mul recip mulhu mulhs
 //
 // THE COLUMN NEARLY DECIDES IT - +0, +4 and +5 are rd, the rest ra - and the
 // exceptions, computed rather than remembered, are:
 //
-//     0xa2  jmp/reg, column +2, rd field - a pc transfer, not an ALU operation
-//     0xaa  call/reg, column +2, rd field - a pc transfer, not an ALU operation
+//     0xb2  jmp/reg, column +2, rd field - a pc transfer, not an ALU operation
 //
 // So the choice is a microcode bit rather than a decode of opcode[2:0].  That
 // is also the cheaper place for it on its own merits: a registered microcode
@@ -50,10 +49,11 @@
 // sides and the stack pointer:
 //
 //     r0        ld/implicit, ld8/implicit, add/inc_r0, add/dec_r0,
-//               add/inc2_r0, or/mov_r1_r0, xor/r0_not, add/r0_r0_r1
+//               add/inc2_r0, or/mov_r1_r0, xor/r0_not, add/r0_r0_r1,
+//               or/mov_r2_r0, shl/r0_dbl
 //     r1        add/r1_r1_r0, or/mov_r0_r1, ldm
 //     r5        stm
-//     sp (r6)   push, pop
+//     sp (r6)   push, pop, ld/r0_sp, st/r0_sp
 //     lr (r7)   rti, ret
 //
 // `ret` and `jmp r5` are not here: they take their target on port B, through

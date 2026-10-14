@@ -258,13 +258,14 @@
 ; while it moves its words, one a cycle with sp even, and for two cycles
 ; more:
 ;
-;       push    lr                      2 bytes     3 cycles   pop 3
+;       push    lr                      1 byte      3 cycles   pop 3
 ;       push    lr, r4                  2 bytes     4 cycles   pop 4
 ;       push    lr, r4, r3              2 bytes     5 cycles   pop 5
 ;
-; THE SECOND AND THIRD REGISTERS OF A PUSH ARE FREE IN SPACE AND NOT IN TIME,
-; though they are cheap in time: a cycle each, where the push itself is
-; three.  That matters for reasoning about the save convention, because it is
+; THE SECOND AND THIRD REGISTERS OF A PUSH ARE NEARLY FREE IN SPACE AND NOT IN
+; TIME, though they are cheap in time: a cycle each, where the push itself is
+; three.  In space the second costs the byte that `push lr' alone saves, and
+; the third costs nothing.  That matters for reasoning about the save convention, because it is
 ; easy to look at the byte counts alone and conclude that preserving three
 ; registers is as cheap as preserving one.
 ;
@@ -571,25 +572,26 @@ byte_example:
 
 
 ; ============================================================================
-; A non-leaf function                                   5 bytes of overhead
+; A non-leaf function                                   3 bytes of overhead
 ; ============================================================================
 ; Save lr, call, restore, return.  `ret` does not pop: it is `pc = lr` and
 ; nothing more, so lr has to be back in place before it runs.
 ;
-; Two bytes of prologue, two of epilogue and the ret - five bytes that a leaf
-; function does not pay.
+; A byte of prologue, a byte of epilogue and the ret - three bytes that a leaf
+; function does not pay.  `push lr' and `pop lr' are pinned one-byte forms.
 
 nonleaf_example:
-        push    lr                      ;                                2
+        push    lr                      ;                                1
         call    leaf_example            ;                                3
-        pop     lr                      ;                                2
+        pop     lr                      ;                                1
         ret                             ;                                1
 
 
 ; ============================================================================
 ; A non-leaf that uses its callee-saved registers       5 bytes of overhead
 ; ============================================================================
-; The SAME five bytes, whether it preserves one register or three.  A function
+; The SAME five bytes, whether it preserves one register or three - two more
+; than lr alone, whose push and pop have one-byte forms.  A function
 ; with two arguments has r2, r3 and r4 callee saved, and lr plus any two of them
 ; fit in a single push - so the whole callee-save prologue is one instruction
 ; however the convention slid.
@@ -603,7 +605,8 @@ full_example:
         ret                             ;                                1
 
 ; THE THIRD REGISTER IS FREE IN BYTES AND NOT IN CYCLES.  This push is the same
-; two bytes as `push lr` and moves three times the data: 5 cycles against 3,
+; two bytes as `push lr, r4` and moves three times the data of `push lr`: 5
+; cycles against 3,
 ; and the same on the pop.  Naming a register you do not use costs no space
 ; and two cycles to execute, one each way, so the prologue should still name
 ; only what the body actually touches.

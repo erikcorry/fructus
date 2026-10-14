@@ -185,7 +185,7 @@ export const ALU_RULES = [
   [/^R\[d\] = (shl|asr|lsr)\(R\[a\], (R\[b\]|imm) & 15\)$/, (m) => m[1]],
   // EVERY UNARY OPERATION IS THE ONE CODE.  clz and popcount, which declare an
   // extra cycle, finish in the ALU's second cycle on them - rtl/alu.sv.
-  [/^R\[d\] = (sxt8|clz|bitrev|popcount|clmul)\(R\[a\]\)$/, 'unary'],
+  [/^R\[d\] = (sxt8|clz|bitrev|popcount)\(R\[a\]\)$/, 'unary'],
   [/^R\[d\] = R\[a\] \* (R\[b\]|imm)$/,                    'mul'],
   [/^R\[d\] = (mulhu|mulhs)\(R\[a\], R\[b\]\)$/,             (m) => m[1]],
   [/^R\[d\] = recip\(R\[a\], (R\[b\]|imm)\)$/,              'recip'],

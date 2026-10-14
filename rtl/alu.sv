@@ -60,21 +60,14 @@ module alu (
     wire [15:0] hiv  = {rhs[7:0], lhs[7:0]};
     wire [3:0]  amt  = rhs[3:0];
 
-    // --- the fast unary three, as the byte-serial core had them ------------------
+    // --- the fast unary pair, as the byte-serial core had them -------------------
     wire [15:0] a   = lhs;
     wire [15:0] sxt = {{8{a[7]}}, a[7:0]};
     wire [15:0] rev = { a[0],  a[1],  a[2],  a[3],  a[4],  a[5],  a[6],  a[7],
                         a[8],  a[9],  a[10], a[11], a[12], a[13], a[14], a[15] };
-    logic [14:0] cm;
-    always_comb begin
-        cm = 15'd0;
-        for (int i = 0; i < 8; i++)
-            for (int j = 0; j < 8; j++)
-                cm[i + j] = cm[i + j] ^ (a[i] & a[8 + j]);
-    end
     // Which of rhs[2:1] chooses which is the spec's: tools/gen-isa.js.
     wire [1:0]  sel = rhs[2:1];
-    wire [15:0] unf = `FRUCTUS_UNARY_FAST(sel, rev, {1'b0, cm}, sxt);
+    wire [15:0] unf = `FRUCTUS_UNARY_FAST(sel, rev, sxt);
 
     // --- clz and popcount, a half a cycle ---------------------------------------
     function automatic [3:0] cnt4(input [3:0] n);

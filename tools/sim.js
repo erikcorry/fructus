@@ -200,7 +200,6 @@ export const BUILTIN = {
   // Moller and Granlund's 2/1 v for the divisor x, its top bit set.  y is
   // the instruction's immediate, which only #0 is defined for.
   recip:    (x, y) => Math.floor(0xffffffff / ((x & MASK) | HALF)) - 0x10000,
-  clmul:    (x) => { let r = 0; for (let i = 0; i < 8; i++) if ((x >>> i) & 1) r ^= ((x >>> 8) & 0xff) << i; return r; },
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };
 

@@ -100,7 +100,9 @@ const kindOf = (r) => {
 //
 // Its destination field names the FIRST DATA REGISTER - a load's rd, a store's
 // rs, a block's first register - rather than anything written by the
-// ordinary write port, which a memory instruction does not use.
+// ordinary write port, which a memory instruction does not use.  Byte 1's rd
+// field holds it, but for a one-byte form, which has no byte 1 and pins it:
+// `push lr', `st r0, [sp, #0]'.
 //
 // AN EXCEPTION INSTRUCTION - brk, rti, sei, cli - RUNS A ROUTINE TOO, entered
 // the same way, and its ALU cycle does nothing.  So does mul.  `useq` marks
@@ -133,11 +135,11 @@ const memOf = (r) => {
   if ((m = /^R\[d\] = M(8|16)\[R\[a\] \+ (off|R\[b\])\]$/.exec(sem)))
     return { st: 0, w2: m[1] === '16' ? 1 : 0, n: 1, blk: 0, push: 0, dest: r.v.dest, late: 1 };
   if ((m = /^M(8|16)\[R\[a\] \+ (off|R\[b\])\] = R\[s\]$/.exec(sem)))
-    return { st: 1, w2: m[1] === '16' ? 1 : 0, n: 1, blk: 0, push: 0, dest: 8, late: 0 };
+    return { st: 1, w2: m[1] === '16' ? 1 : 0, n: 1, blk: 0, push: 0, dest: r.nbytes === 1 ? r.fix.s : 8, late: 0 };
   if ((m = /^base = (sp|r[0-7]); /.exec(sem))) {
     const n = (sem.match(/M16\[/g) ?? []).length;
     const st = /M16\[base[^\]]*\] = R/.test(sem) ? 1 : 0;
-    return { st, w2: 1, n, blk: 1, push: /base - /.test(sem) ? 1 : 0, dest: 8,
+    return { st, w2: 1, n, blk: 1, push: /base - /.test(sem) ? 1 : 0, dest: r.nbytes === 1 ? r.fix.a : 8,
              late: !st && m[1] !== 'sp' ? 1 : 0 };
   }
   return null;

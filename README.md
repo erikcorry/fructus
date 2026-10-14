@@ -43,9 +43,8 @@ But we don't want to pay the typical code density penalty of RISC on a 64k machi
 - One-byte encodings for very popular ALU operations that hard code all three arguments.
 - The length of the instructions is 1-3 bytes and the first byte determines the length.
 - Still many free opcodes for experimentation eg. instructions for garbage collectors (we already have popcount and clz).
-- Byte packing for carry-less multiply: `clmul rd, ra` multiplies ra's two bytes, and `movhi rd, ra, rb`
-  or `movhi rd, ra, #imm` replaces ra's high byte, which packs its operands without a spare register.
-  With a page-aligned table, `movhi` is also the 6502's page-indexed addressing.
+- Byte packing: `movhi rd, ra, rb` or `movhi rd, ra, #imm` replaces ra's high byte without a spare
+  register. With a page-aligned table, `movhi` is also the 6502's page-indexed addressing.
 - The intention is that the assembler programmer can code as if all three-register and two-register-imm16
   forms were available, but the tooling selects the shortest possible encoding. For C code, gcc is aware
   of the encoding tradeoffs and selects instructions to match.
@@ -332,21 +331,20 @@ field for `mov rd, #imm16`. Codes 8 and 9 mean the same as in `lhs.sv`.
 the spec forbids decoding it from the opcode — and every instruction is given
 an operation from its `semantics`, failing on any that cannot be placed. `iseq`
 and `isset` are ALU operations, and neither needs a carry. The fast unary
-operations — `sxt8`, `bitrev` and `clmul`, the carry-less product of a
-register's two bytes — are chosen by bits of the right-hand immediate the ALU
-already has. `clz` and `popcount` are computed beside it with a flop in the
+operations — `sxt8` and `bitrev` — are chosen by bits of the right-hand
+immediate the ALU already has. `clz` and `popcount` are computed beside it with a flop in the
 middle, and taken a cycle later — `extra_cycles` in the spec, which the
 simulator counts.
 
 The instructions that need the DSPs — `mul`, `recip`, `mulhu` and `mulhs`, all
-optional and emitted by gcc only with `-mmul` — are one block, 0xb0 to 0xc7,
+optional and emitted by gcc only with `-mmul` — are one block, 0xb8 to 0xcf,
 above 0x80 and away from the base instruction set.
-`mul` takes the low half of a 16×16 product from an `SB_MAC16`, at 0xb0
-(`rd, rd, #imm5`), 0xb1 (`rd, ra, #imm10`) and 0xb6/0xb7 (`rd, ra, rb`), in the
+`mul` takes the low half of a 16×16 product from an `SB_MAC16`, at 0xb8
+(`rd, rd, #imm5`), 0xb9 (`rd, ra, #imm10`) and 0xbe/0xbf (`rd, ra, rb`), in the
 ALU groups' shapes. Like `clz` and `popcount`
 it takes two cycles: the ALU stage holds it while the DSP's registered product
 arrives. `mulhu` and `mulhs` take the high half, unsigned and signed, at
-0xbe/0xbf and 0xc6/0xc7, three registers only. To everything but the DSPs the
+0xc6/0xc7 and 0xce/0xcf, three registers only. To everything but the DSPs the
 three are one ALU operation; the classifier's `lsel` column, which the
 operation had no use for, drives the DSPs' synchronous `OLOAD` pins, so each
 half not wanted loads zero into its output register and the result is the
@@ -356,7 +354,7 @@ since a part without a multiplier has none of them; without it a product is a
 call to libgcc's `__mulhi3`. With it a 16×16→32 product is `mul` and `mulhu`
 or `mulhs` inline, a 32×32→32 is four products inline at `-O2`, and a
 division by a constant is a `mulhu` or `mulhs` by its reciprocal.
-`recip rd, ra`, at 0xbb, is Möller and Granlund's 2/1 reciprocal of a
+`recip rd, ra`, at 0xc3, is Möller and Granlund's 2/1 reciprocal of a
 normalised divisor, `floor((2³²−1)/d) − 2¹⁶` for `d = ra | 0x8000`, in five
 cycles. Its byte 1 is the imm3 column's with the immediate pinned at `#0`,
 which the assembler does not write. A 32-bit divisor's 3/2 reciprocal, with
@@ -473,8 +471,7 @@ time, a cycle a byte.  The first address decides for a whole `push`, `pop`,
 **The exception instructions are the lowest opcodes** — `brk` at `0x00`, `halt`
 at `0x01`, `rti` at `0x02` — so erased memory, an unwritten ROM and a wild jump
 into a zeroed page all trap to the handler with the faulting address in `lr`,
-where a monitor can print it. `nop` is at `0x87`, as far from them as the
-one-byte region reaches.
+where a monitor can print it. `nop` is at `0x87`, well away from them.
 
 **The cost model is the pipeline's**, and it is under `[cpu]` in the spec,
 with the fetcher keeping up: an ALU instruction or an untaken branch is one
@@ -516,11 +513,13 @@ The other three free `+4` slots — `shl`, `asr` and `lsr` at 0x64, 0x6c and 0x7
 four bits, so `1<<4` and everything above it reads as a shift of zero. immbit5
 is meaningless there.
 
-### One unused one-byte encoding
+### The one-byte region
 
-0x86. The one-byte region is sixteen slots: `brk`, `halt` and `rti` at the
-bottom, `nop` at 0x87, and eleven pinned abbreviations — `add r0, r0, #1`,
-`mov r0, r1`, `mov r0, #0` and their neighbours at one byte instead of two.
+Thirty-two slots, `x000_xxxx`, and every one-byte instruction is in it:
+`brk`, `halt` and `rti` at the bottom, `nop` at 0x87, `ret`, `sei` and `cli`,
+`jmp r5` and `call r5`, and pinned abbreviations — `add r0, r0, #1`,
+`mov r0, r1`, `mov r0, #0`, `push lr`, `ld r0, [sp, #0]` and their neighbours
+at one byte instead of two.
 
 `mov r0, #0` (0x83) is there for the 65C02's reason: `STZ` was one of that
 part's most valuable additions because clearing a location is the commonest
@@ -529,10 +528,13 @@ is the same observation one level in — loop counters, accumulators, null
 pointers, cleared flags — and `r0` is where a return value and a first argument
 live.
 
-**The last slot should not be spent on a guess.** It is worth exactly the
-frequency of the operand pattern it pins, and that is a question about real
-code rather than about the instruction set. Now that gcc works, the way to spend
-it is to compile a corpus, count, and pin the winner.
+**The second sixteen were spent by count**, not by guess: the fully pinned
+instructions that occur most in SOM++'s DeltaBlue and in CoreMark at `-Os` and
+`-O2` with `malloc` linked in, taken across all three so that no one program's
+habits — an interpreter's dispatch, say — decide it. `jmp r5` and `call r5` are
+the exception: r5 carries no argument, so an indirect target with its
+arguments in r0-r3 can wait there, and gcc stages an indirect tail call in it
+already.
 
 ## The zero page
 
@@ -674,7 +676,7 @@ CoreMark® is a trademark of EEMBC.
 The instruction set is settled enough to write real code against, and the
 C programs compiled by gcc run on it, CoreMark among them. Open:
 
-- `clmul` and `bitrev` are marked TENTATIVE in the spec.
+- `bitrev` is marked TENTATIVE in the spec.
 - Nothing checks that a call site and its callee agree about arity. The fix is
   a `.args` declaration the assembler and linker verify; `isa/abi.s` describes
   it and why it is not written yet.

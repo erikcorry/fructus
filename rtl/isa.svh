@@ -38,7 +38,7 @@
 
 // The fast unary operations, by sel - the right-hand operand's bits 2:1, which
 // for a unary instruction is the imm3 value its encoding names.
-`define FRUCTUS_UNARY_FAST(sel, bitrev, clmul, sxt8) (~sel[0] ? clmul : sel[1] ? sxt8 : bitrev)
+`define FRUCTUS_UNARY_FAST(sel, bitrev, sxt8) (sel[1] ? sxt8 : bitrev)
 
 // The slow pair, clz and popcount: popcount when this is 1.
 `define FRUCTUS_UNARY_POP(sel) (sel[1])
