@@ -379,6 +379,18 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     fi
     rm -f build/_uart build/_uart.bin build/_uin.txt build/_uout.txt
 
+    # --- the USB port's header, on a simulator without the port -------------
+    # tests/usb.c checks the CRCs fructus/usb.h makes against packets as
+    # analysers show them, and the words its helpers store.
+    if tools/fcc -O2 tests/usb.c -o build/_usb 2>build/_err \
+       && node tools/fcc-run.mjs build/_usb.bin; then
+        printf 'ok    fructus/usb.h: tokens, CRC16 and what the helpers store\n'
+    else
+        printf 'FAIL  fructus/usb.h (check %s)\n' "$?"
+        head -10 build/_err; fail=1
+    fi
+    rm -f build/_usb build/_usb.bin
+
     # --- a tail call through a pointer keeps its target ---------------------
     # The epilogue runs between loading the target and the jump, and pops the
     # callee-saved registers, so the target has to be staged in r5 - which a

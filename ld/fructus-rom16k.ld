@@ -51,6 +51,9 @@ __console    = 0x0420;     /* the UART's data, crt/include/fructus/uart.h */
 __uart_status  = 0x0422;
 __cycles     = 0x0424;     /* crt/include/fructus/cycles.h */
 __uart_divisor = 0x0428;
+__usb_data     = 0x0430;   /* the USB port's, crt/include/fructus/usb.h */
+__usb_status   = 0x0432;
+__usb_ctrl     = 0x0434;
 __display   = 0x0480;     /* the GPU's registers, crt/include/fructus/display.h */
 __stack_top = DEFINED(__stack_top) ? __stack_top : 0x1000;
 

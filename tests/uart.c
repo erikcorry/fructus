@@ -7,6 +7,16 @@
 #include <stdio.h>
 #include <fructus/uart.h>
 
+/* The divisors fructus/uart.h names, at the system's 25.125 MHz.  */
+_Static_assert (FRUCTUS_UART_DIV_9600 == 2616, "9600");
+_Static_assert (FRUCTUS_UART_DIV_19200 == 1308, "19200");
+_Static_assert (FRUCTUS_UART_DIV_38400 == 653, "38400");
+_Static_assert (FRUCTUS_UART_DIV_57600 == 435, "57600");
+_Static_assert (FRUCTUS_UART_DIV_115200 == 217, "115200: the reset value");
+_Static_assert (FRUCTUS_UART_DIV_230400 == 108, "230400");
+_Static_assert (FRUCTUS_UART_DIV_460800 == 54, "460800");
+_Static_assert (FRUCTUS_UART_DIV_921600 == 26, "921600");
+
 int
 main (void)
 {
