@@ -198,3 +198,31 @@ Sim against static: CoreMark -Os -3.53%, -O2 -2.67%, DeltaBlue -2.51%.
 
 Costs quoted in the .s files are estimates now: a loop's cost depends on
 what ran before it.  tests/harness.mjs's `near` holds them to a tenth.
+
+## Path bits (2026-10-16)
+
+Every jump, call and return puts bits 3 and 5 of its own address, XORed,
+into gh; nothing is learned from it.  In an interpreter the history after a
+dispatch otherwise describes the bytecode just finished, so every handler's
+branches shared the same few patterns.  Replayed (build/dynbp/bp6*.mjs):
+DeltaBlue's misses 17.2% -> 10.9%, CoreMark -Os 6.8% -> 5.4%; the target's
+bits did as well (11.5%, 5.3%), and register jumps and ret alone half as
+much.  The per-pc bimodal reference (12.5%, 9.0%) is now behind everywhere.
+
+Recognised at dispatch the jump cost the system 1 - 1.5 MHz however it was
+spelled: the classifier's is_jump put the boot logic in front of gh (27.41),
+an opcode list on the buffer's flops was folded by abc into the address
+mux's jmp/call decode (26.84, with `keep` 26.48).  So the bit goes in from
+decode, where d_jump | d_pj already say a jump is there; no branch can
+dispatch in that cycle, and the sim counts the same cycles either way.
+
+|                              | cells | LUT4 | MHz (16 seeds)       |
+| ---------------------------- | ----- | ---- | -------------------- |
+| core, 358e37f                | 2876  | 2486 | 30.23 (29.3 .. 31.4) |
+| core, path bits              | 2964  | 2572 | 28.87 (26.5 .. 31.2) |
+| system, 358e37f, split 15    | 4574  | 3648 | 28.38 (27.6 .. 29.3) |
+| system, path bits, split 15  | 4530  | 3608 | 28.84 (27.5 .. 30.5) |
+
+The core's critical paths are the ALU's carry chain and pcl -> the SPRAM's
+address, none through the predictor: abc's mapping.  Sim against 358e37f:
+DeltaBlue -0.59%, CoreMark -Os -0.10%, -O2 +0.02%.

@@ -594,6 +594,17 @@ module cpu (
     // `rr`, the three in turn, its counter weak.  Each write is one way's
     // five bits; a guess from a stale word teaches nothing.  tools/sim.js's
     // predict() is the same machine, cycle for cycle.
+    //
+    // A JUMP'S ADDRESS GOES INTO gh TOO: bits 3 and 5 of every jump, call and
+    // return, XORed, as it dispatches, so the history says where the program
+    // went as well as which way its branches did.  In an interpreter that is
+    // the bytecode just finished.  Nothing is learned from it.  It goes in from
+    // decode, a cycle after the jump dispatched, where d_jump and d_pj already
+    // say a jump is there: recognising one at dispatch, from the classifier
+    // or from the buffer's flops, cost the system 1 - 1.5 MHz.  No branch can
+    // dispatch in that cycle - a jump stops dispatch, and a predicted jmp's
+    // target has had one word arrive, and a branch is three bytes - so the
+    // order in gh is the program's.
     function automatic logic isbr(input logic [7:0] b);
         isbr = b == 8'ha8 | b == 8'hac | b == 8'had | b == 8'hae | b == 8'haf
              | b == 8'hb4 | b == 8'hb5;
@@ -641,6 +652,7 @@ module cpu (
     wire pj      = pjok & slot & (nw >= 3'd2);
     wire pbd     = go & ~take & pbok;
     wire [15:0] padd = pc + {{8{ib2[7]}}, ib2} + 16'd3;
+    wire        pjb  = pc[3] ^ pc[5];               // a jump's bit for gh
     // mul, clz AND popcount TAKE TWO CYCLES IN THE ALU STAGE, and leave a
     // cycle with no dispatch after them, `skip`: see the ALU stage.
     // MORE THAN ONE EXTRA CYCLE - recip's four - STOPS DISPATCH, as a jump
@@ -757,6 +769,7 @@ module cpu (
     // =========================================================================
     logic        d_valid, d_ucode, d_halt, d_wen, d_cbr, d_jump, d_pj, d_bp;
     logic        d_bfr, d_bhit;         // the predictor's look, carried to the ALU stage
+    logic        d_jb;                  // a jump's bit for the history
     logic [1:0]  d_bway, d_bctr;
     logic        d_mem, d_mst, d_mw2, d_mblk, d_mpush;
     logic [1:0]  d_mn;
@@ -775,6 +788,7 @@ module cpu (
         d_pj    <= pjok;
         d_bp    <= pbok;
         {d_bfr, d_bhit, d_bway, d_bctr} <= {~gch, bhit, bway, bctr};
+        d_jb    <= pjb;
         {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
         d_uent  <= c_uent;
         d_useq  <= c_useq;
@@ -907,12 +921,13 @@ module cpu (
     // Everything decode hands on is dropped in a cycle that squashes: the
     // instruction in decode then is one of the three behind a taken branch.
     wire keep = d_valid & ~taken_q;
+    wire djp  = keep & (d_jump | d_pj);   // a jump in decode: its bit goes into gh
     wire mhold;                        // the sequencer holds the ALU on its word
 
     logic [3:0]  e_op;
     logic [15:0] aq, bq;
     logic        e_neg, e_mask, e_ucode, e_halt, e_jump, e_jreg, e_pj;
-    logic        e_bp, e_bfr, e_bhit;
+    logic        e_bp, e_bfr, e_bhit, e_jp, e_jb;
     logic [1:0]  e_bway, e_bctr;
     logic [2:0]  e_code;
     logic [15:0] e_tgt;
@@ -951,6 +966,7 @@ module cpu (
         if (!e_keep) e_lsel <= mhold ? 3'd5 : d_lsel;
         e_cbr   <= keep & d_cbr;
         {e_bp, e_bfr, e_bhit, e_bway, e_bctr} <= {d_bp, d_bfr, d_bhit, d_bway, d_bctr};
+        {e_jp, e_jb} <= {djp, d_jb};
         e_jump  <= keep & d_jump;
         e_pj    <= d_pj;
         e_jreg  <= jreg & ~calllr;
@@ -1023,14 +1039,17 @@ module cpu (
     // THE PREDICTOR LEARNS, a cycle after the branch's ALU stage, when taken_q
     // says whether it was mispredicted - and a misprediction puts gh right:
     // the branch's own history and its verdict, everything after it squashed.
-    // The branch's own history is `ch`, the verdicts of the branches that got
-    // this far: every branch on the right path does, in order, and none on a
-    // wrong one - so ch is what gh was when this one dispatched.
+    // The branch's own history is `ch`, the verdicts of the branches and the
+    // bits of the jumps that got this far: every one on the right path does,
+    // in order, and none on a wrong one - so ch is what gh was when this one
+    // dispatched.
     logic [10:0] ch;
-    logic        u_b, u_bp, u_bfr, u_bhit;
+    logic        u_b, u_bp, u_bfr, u_bhit, u_jp, u_jb;
     logic [1:0]  u_bway, u_bctr, rr;
     always_ff @(posedge clk) begin
         u_b <= ~rst & e_cbr & ~taken_q;
+        u_jp <= ~rst & e_jp & ~taken_q;
+        u_jb <= e_jb;
         {u_bp, u_bfr, u_bhit, u_bway, u_bctr} <= {e_bp, e_bfr, e_bhit, e_bway, e_bctr};
     end
     wire        uvd = u_bp ^ taken_q;                  // the verdict
@@ -1045,7 +1064,7 @@ module cpu (
         if (uwe & bpwy == 2'd2) bpm[ch[10:3]][14:10] <= bpv;
         bpw <= bpm[gh[10:3]];
         if (rst) ch <= 11'd0;
-        else if (u_b) ch <= {ch[9:0], uvd};
+        else if (u_b | u_jp) ch <= {ch[9:0], u_b ? uvd : u_jb};
         if (rst) rr <= 2'd0;
         else if (uwe & ~u_bhit) rr <= (rr == 2'd2) ? 2'd0 : rr + 2'd1;
         if (rst) begin
@@ -1054,6 +1073,8 @@ module cpu (
             gh <= {ch[9:0], uvd}; gch <= 1'b1;
         end else if (gon & pbr) begin
             gh <= {gh[9:0], pbok}; gch <= 1'b1;
+        end else if (djp) begin
+            gh <= {gh[9:0], d_jb}; gch <= 1'b1;
         end else gch <= 1'b0;
     end
     initial for (int i = 0; i < 256; i++) bpm[i] = 15'd0;

@@ -607,7 +607,11 @@ export class Machine {
         return { hold: 1 + this.penalty, redirect: this.penalty };
       }
       if (this.wrotePc) return { hold: 1 + this.penalty, redirect: this.penalty };
-    } else if (this.wrotePc && k.predict) {
+    }
+    // Every jump, call and return puts a bit of its own address in the
+    // predictor's history: see path().
+    if (this.wrotePc && !k.branch) this.path(this.fe.t, at);
+    if (this.wrotePc && k.predict) {
       // jmp AND call TO AN ABSOLUTE ADDRESS read their target's word as they
       // dispatch.  jmp moves the pc there too, so the target dispatches once
       // its word has arrived; call moves it in its ALU cycle.  Unless a
@@ -662,6 +666,16 @@ export class Machine {
     this.gh = (gh << 1 | (verdict ? 1 : 0)) & 0x7ff;
     this.ghAt = guess === verdict ? t : t + 3;
     return guess;
+  }
+
+  // A JUMP'S BIT: the history knows where the program went as well as which
+  // way its branches went.  Bits 3 and 5 of the jump's address, XORed, go
+  // into gh from decode, the cycle after it dispatches; nothing is learned.
+  // In an interpreter that is the bytecode just finished, and so the one now
+  // running is told apart from the others that ran the same branches before.
+  path(t, at) {
+    this.gh = (this.gh << 1 | ((at >> 3 ^ at >> 5) & 1)) & 0x7ff;
+    this.ghAt = t + 1;
   }
 
   // THE FETCHER, as rtl/cpu.sv's: a buffer of three words, whole words in,
