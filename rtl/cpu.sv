@@ -552,17 +552,21 @@ module cpu (
     classify cl0 (.op(iw[0][7:0]), .len(lb0));
     classify cl1 (.op(iw[0][15:8]), .len(lb1));
     assign lenr = pcl[0] ? lb1 : lb0;
-    // jmp AND call TO AN ABSOLUTE ADDRESS, 0xa9 and 0xaa, REDIRECT AS THEY
-    // DISPATCH: the target is ib1 and ib2, already in the buffer, so the
+    // jmp AND call TO AN ABSOLUTE ADDRESS, 0xa9 and 0xaa, FETCH THEIR TARGET
+    // AS THEY DISPATCH: it is ib1 and ib2, already in the buffer, so the
     // fetch reads its word at once and the buffer is emptied, as a taken
     // branch empties it.  Recognised from the flops, both bytes that could be
-    // the opcode, as the length is.  If the sequencer has the bus that cycle -
-    // a store's last access - the buffer is emptied with nothing on its way
-    // and fp left on the target's word, which the fetcher reads next cycle.
+    // the opcode, as the length is.  jmp moves the pc there too: two cycles.
+    // call leaves the pc on the next instruction, which is its return
+    // address, and stops dispatch; its ALU cycle moves the pc, as an
+    // unpredicted jump's does, without touching the bus: three cycles.  If
+    // the sequencer has the bus - a store's last access - neither is
+    // predicted, and both go as they did: four.
     wire pjb0 = (iw[0][7:0]  == 8'ha9) | (iw[0][7:0]  == 8'haa);
     wire pjb1 = (iw[0][15:8] == 8'ha9) | (iw[0][15:8] == 8'haa);
     wire pjr  = pcl[0] ? pjb1 : pjb0;
     wire [15:0] ptgt = {ib2, ib1};
+    wire        pjcall = ib0[1];      // 0xaa, given pjr; 0xa9 has bit 1 clear
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
     // down the fall-through path behind it, which costs nothing if the branch
@@ -584,14 +588,14 @@ module cpu (
     // hardware gives: three bytes are any instruction, none is none.
     wire ready   = take | (nw >= 3'd2) | (nw == 3'd1 && (pcl[0] ? lenr == 2'd1 : lenr != 2'd3));
     assign go    = slot & ready;
-    // A predicted jump dispatches, `pjd`, and it reads its target now, `pj`,
-    // when the bus is free.  pj is spelled from flops: three bytes are there
-    // when two words are, so neither the classifier's length nor `go` is in
-    // front of the address pins.  An interrupt taken in its place lets it
-    // fire anyway: the pc stays, and the brk's own redirect empties the
-    // buffer again.
-    wire pjd     = go & ~take & pjr;
-    wire pj      = pjr & slot & ~aphase & (nw >= 3'd2);
+    // A predicted jump dispatches, `pjd`, and reads its target now, `pj`.
+    // pj is spelled from flops: three bytes are there when two words are, so
+    // neither the classifier's length nor `go` is in front of the address
+    // pins.  An interrupt taken in its place lets it fire anyway: the pc
+    // stays, and the brk's own redirect empties the buffer again.
+    wire pjok    = pjr & ~aphase;
+    wire pjd     = go & ~take & pjok;
+    wire pj      = pjok & slot & (nw >= 3'd2);
     // mul, clz AND popcount TAKE TWO CYCLES IN THE ALU STAGE, and leave a
     // cycle with no dispatch after them, `skip`: see the ALU stage.
     // MORE THAN ONE EXTRA CYCLE - recip's four - STOPS DISPATCH, as a jump
@@ -616,9 +620,10 @@ module cpu (
     wire [15:0] rjaddr;
     wire        wake;                      // an interrupt ends a halt
     wire        xrel;                      // a long hold releases dispatch: the ALU stage
-    wire        fetch = ~taken_q & ~jnow & ~ldnow & ~aphase & ~pj;   // the bus is the fetcher's
+    wire        jfetch;                    // jnow, unless a predicted call fetched already
+    wire        fetch = ~taken_q & ~jfetch & ~ldnow & ~aphase & ~pj;   // the bus is the fetcher's
     assign mem_addr = taken_q ? {tgt_q[15:1], 1'b0}
-                    : jnow    ? {jaddr[15:1], 1'b0}
+                    : jfetch  ? {jaddr[15:1], 1'b0}
                     : ldnow   ? asum
                     : aphase  ? maddr
                     : pj      ? {ptgt[15:1], 1'b0}
@@ -657,14 +662,11 @@ module cpu (
     always_ff @(posedge clk) begin
         if (rst) begin
             nw <= 3'd0; finq <= 1'b0; fp <= 15'd0;
-        end else if (taken_q | jnow) begin
+        end else if (taken_q | jfetch) begin
             // The redirect's own read is the target's word.
             nw <= 3'd0; finq <= 1'b1; fp <= raddr[15:1] + 15'd1;
         end else if (pj) begin
             nw <= 3'd0; finq <= 1'b1; fp <= ptgt[15:1] + 15'd1;
-        end else if (pjd) begin
-            // The sequencer had the bus: the target's word is the next read.
-            nw <= 3'd0; finq <= 1'b0; fp <= ptgt[15:1];
         end else begin
             nw <= nw + {2'b0, finq} - {1'b0, sel};
             finq <= keepw;
@@ -689,9 +691,9 @@ module cpu (
             // The sequencer's last address is on the bus now; the buffer has
             // the next instruction, which dispatches next cycle.
             stop <= 1'b0;
-        end else if (pjd) begin
-            // The jump goes down the pipeline as an ALU instruction - call
-            // writing lr - and dispatch carries on at its target.
+        end else if (pjd & ~pjcall) begin
+            // jmp goes down the pipeline as an ALU instruction that writes
+            // nothing, and dispatch carries on at its target.
             {pcb, pcl, pcc} <= {ptgt, 1'b0}; stop <= 1'b0; skip <= 1'b0;
         end else if (go) begin
             pcb     <= pch;
@@ -721,8 +723,8 @@ module cpu (
         d_valid <= ~rst & ~taken_q & go & piped;
         d_ucode <= ~rst & ~taken_q & go & ~piped;
         d_cbr   <= is_cbr;
-        d_jump  <= is_jump & ~pjr;     // a predicted jump has gone already
-        d_pj    <= pjr & ~take;
+        d_jump  <= is_jump & ~(pjok & ~pjcall);   // a predicted jmp has gone already
+        d_pj    <= pjok;
         {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
         d_uent  <= c_uent;
         d_useq  <= c_useq;
@@ -747,9 +749,6 @@ module cpu (
     // A flop of its own, loaded from the same sum, was measured on dispatch's
     // critical path at 32.67 MHz.
     wire [15:0] d_next = pc;
-    // A PREDICTED call's RETURN ADDRESS is not the pc, which went to the
-    // target as it dispatched: it is the call's own address and its length.
-    wire [15:0] d_ret = d_pj ? d_pc + 16'd3 : d_next;
 
     // The instruction, whole, from the buffer.
     wire [7:0]  b1 = d_b1;
@@ -776,7 +775,7 @@ module cpu (
     // first address, as it adds a load's or store's offset.
     wire [15:0] moff_d;
     wire [15:0] bval  = use_imm ? imm : rk ? konst
-                      : (rc == 3'd2) ? d_ret : (rc == 3'd3) ? moff_d : ins[23:8];
+                      : (rc == 3'd2) ? d_next : (rc == 3'd3) ? moff_d : ins[23:8];
 
     // --- a branch's condition, and a transfer's target -----------------------------
     // A displacement is always byte 2, since every relative transfer is a
@@ -862,7 +861,7 @@ module cpu (
 
     logic [3:0]  e_op;
     logic [15:0] aq, bq;
-    logic        e_cbr, e_neg, e_mask, e_ucode, e_halt, e_jump, e_jreg;
+    logic        e_cbr, e_neg, e_mask, e_ucode, e_halt, e_jump, e_jreg, e_pj;
     logic [2:0]  e_code;
     logic [15:0] e_tgt;
     logic        e_mem, e_mst, e_mw2, e_mblk;
@@ -900,6 +899,7 @@ module cpu (
         if (!e_keep) e_lsel <= mhold ? 3'd5 : d_lsel;
         e_cbr   <= keep & d_cbr;
         e_jump  <= keep & d_jump;
+        e_pj    <= d_pj;
         e_jreg  <= jreg & ~calllr;
         {e_code, e_neg, e_mask} <= {ccode, cneg, cmask};
         e_tgt   <= tgt;
@@ -947,6 +947,7 @@ module cpu (
     wire jreg_now = e_jump & e_jreg & ~taken_q;
     assign jnow  = e_jump & ~e_jreg & ~taken_q;
     assign jaddr = e_tgt;
+    assign jfetch = jnow & ~e_pj;       // a predicted call's target is in already
 
     wire taken;
     compare cp (.lhs(aq), .rhs(bq), .cond(e_code), .neg(e_neg), .mask(e_mask), .taken(taken));

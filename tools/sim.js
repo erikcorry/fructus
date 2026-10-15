@@ -548,6 +548,7 @@ export class Machine {
       viaReg: /\bpc = (lr|R\[[a-z]\])$/.test(sem),
       callA:  /^lr = pc; pc = R\[a\]$/.test(sem),
       predict: /(^|; )pc = target$/.test(sem),
+      calls:  /^lr = pc; /.test(sem),
     };
   }
 
@@ -590,11 +591,11 @@ export class Machine {
     if (k.branch) {
       if (this.wrotePc) return { hold: 1 + this.penalty, redirect: this.penalty };
     } else if (this.wrotePc && k.predict) {
-      // jmp AND call TO AN ABSOLUTE ADDRESS redirect as they dispatch: the
-      // fetch reads the target's word in the same cycle - or the next, if a
-      // store's last access has the bus - and dispatch goes on there once it
-      // has arrived.
-      return { hold: 1, redirect: 0 };
+      // jmp AND call TO AN ABSOLUTE ADDRESS read their target's word as they
+      // dispatch.  jmp moves the pc there too, so the target dispatches once
+      // its word has arrived; call moves it in its ALU cycle.  Unless a
+      // store's last access has the bus: then neither is predicted.
+      return { hold: k.calls ? 3 : 1, redirect: 0, unpredicted: { hold: 3, redirect: 2 } };
     } else if (this.wrotePc) {
       // A JUMP OR CALL stops dispatch behind it and reads its target in its
       // ALU cycle.  Through a register - jmp ra, call ra, ret - the target
@@ -617,8 +618,10 @@ export class Machine {
   //
   // advance() runs it from this instruction's dispatch, cycle by cycle,
   // until the next one dispatches, and returns the cycles between.
-  advance(at, len, { hold, busy = [], redirect = -1 }) {
+  advance(at, len, timing) {
     const fe = this.fe;
+    const { hold, busy = [], redirect = -1 } =
+      timing.unpredicted && fe.busy.includes(fe.t) ? timing.unpredicted : timing;
     for (const b of busy) fe.busy.push(fe.t + b);
     let { nw, finq } = fe;
     for (let c = 0; ; c++) {
@@ -631,9 +634,7 @@ export class Machine {
         this.starve += c - Math.max(hold, redirect + 2);
         return c;
       }
-      // A predicted jump that dispatches while a store's last access has the
-      // bus empties the buffer and reads its target the next cycle.
-      if (c === redirect) { nw = 0; finq = fe.busy.includes(t) ? 0 : 1; continue; }
+      if (c === redirect) { nw = 0; finq = 1; continue; }
       const stay = nw + finq - (c === 0 ? ((at & 1) + len) >> 1 : 0);
       finq = stay <= 2 && !fe.busy.includes(t) ? 1 : 0;
       nw = stay;
