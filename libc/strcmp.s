@@ -11,11 +11,11 @@
 ; against the C that crt/libc.c had
 ; ----------------------------------------------------------------------------
 ;                       here        s2 odd      C       faster by
-;       strlen          2.00                   15.00      7.50x  optimistic path
+;       strlen          2.65                   15.00      5.66x  optimistic path
 ;       strlen          5.00                   15.00      3.00x  every block a
 ;                                                                false alarm
 ;       strcmp          5.25        5.75       20.00      3.81x
-;       strncmp         6.50        7.00       26.00      4.00x
+;       strncmp         6.25        6.75       26.00      4.16x
 ;
 ; Cycles per byte of string, differenced across two lengths so the call and the
 ; setup cancel.  The C is the obvious byte loops, compiled noinline at -Os by
@@ -182,7 +182,7 @@ strncmp:
 ; failure of this assumption is probably a space character just before or after
 ; a capital letter, but the slower fallback is still pretty fast.
 ;
-; About 2.00 cycles/byte when the optimism holds: the loop is unrolled once, eight
+; About 2.65 cycles/byte when the optimism holds: the loop is unrolled once, eight
 ; bytes a trip, so one taken branch serves two blocks.  A false alarm costs a
 ; second trip round the byte tests, and there are TWO ways in, at two prices:
 ; the low bytes AND to zero (5.00), or the high bytes do (4.50).  The second is
