@@ -259,6 +259,13 @@ export class Machine {
     this.penalty = spec.cpu.taken_branch_penalty ?? 0;
     this.blit    = blit;
     this.fe      = null;   // the fetcher at the next dispatch: see advance()
+    // THE BRANCH PREDICTOR, rtl/cpu.sv's: see predict().  Its table is not
+    // reset, as the RAM is not; a reset clears the history.
+    this.bpm     = new Uint16Array(256);
+    this.bpq     = [];     // writes still to land: { at, ix, way, v }
+    this.rr      = 0;      // the way the next new entry goes in
+    this.gh      = 0;      // the last eleven verdicts, the newest lowest
+    this.ghAt    = undefined;   // the cycle whose closing edge last wrote gh
 
     // WHICH INSTRUCTIONS PAY IT COMES FROM THE SEMANTICS, not from a list here
     // that would have to be kept in step.  An instruction is a relative branch
@@ -589,14 +596,13 @@ export class Machine {
     // branch to the very next instruction still pays, which
     // tests/branch-cost.s pins.
     //
-    // A BRANCH BACKWARD IS PREDICTED TAKEN: its target, an add away, is read
-    // the cycle after its dispatch, and it goes on with its condition
+    // A BRANCH PREDICTED TAKEN - see predict() - has its target, an add away,
+    // read the cycle after its dispatch, and goes on with its condition
     // inverted, so a wrong guess - not taken - costs what a taken branch does.
-    // Not while a branch dispatched two cycles before is in the ALU stage.
     if (k.branch) {
       const t = this.fe.t, prior = this.cbrAt;
       this.cbrAt = t;
-      if (this.mem[(at + 2) & 0xffff] & 0x80 && prior !== t - 2) {
+      if (this.predict(t, !!(this.mem[(at + 2) & 0xffff] & 0x80), prior !== t - 2)) {
         if (this.wrotePc) return { hold: 3, redirect: 1 };
         return { hold: 1 + this.penalty, redirect: this.penalty };
       }
@@ -616,6 +622,46 @@ export class Machine {
       return viaReg ? { hold: 4, redirect: 3 } : { hold: 3, redirect: 2 };
     }
     return { hold: 1 };
+  }
+
+  // A CONDITIONAL BRANCH'S GUESS, dispatched in cycle t: whether it is
+  // predicted taken.  rtl/cpu.sv's table is 256 words of three ways, each a
+  // three-bit tag and a two-bit counter, way k at bits 5k + 4 .. 5k.  The
+  // history `gh` holds the last eleven verdicts: bits 10 .. 3 are the word's
+  // address, read every cycle, and bits 2 .. 0 are matched against the tags.
+  // A hit's counter guesses taken from 2 up; no hit, or a word read before
+  // gh last changed - a branch dispatched the cycle before - and the sign
+  // bit guesses, backward taken.  None while a branch is in the ALU stage
+  // (`free` false), as before.
+  //
+  // The guess goes into gh as the branch dispatches, and a wrong one is put
+  // right in the redirect, three cycles on.  The table learns a cycle after
+  // the ALU stage, t + 3, which a read can see from t + 5: a hit counts its
+  // counter towards the verdict, and a wrong guess without one puts the
+  // pattern in way rr, the ways in turn, its counter weak.  A guess from a
+  // stale word teaches nothing.
+  predict(t, back, free) {
+    const q = this.bpq;
+    while (q.length && q[0].at <= t - 2) {
+      const { ix, way, v } = q.shift();
+      const w = way < 0 ? this.rr : way;
+      if (way < 0) this.rr = (this.rr + 1) % 3;
+      this.bpm[ix] = (this.bpm[ix] & ~(31 << 5 * w)) | (v << 5 * w);
+    }
+    const gh = this.gh, fresh = this.ghAt !== t - 1;
+    const ix = gh >> 3, tag = gh & 7, word = this.bpm[ix];
+    let way = -1;
+    if (fresh) for (let w = 0; w < 3 && way < 0; w++) if ((word >> 5 * w + 2 & 7) === tag) way = w;
+    const ctr = way < 0 ? 0 : word >> 5 * way & 3;
+    const guess = free && (way < 0 ? back : ctr >= 2);
+    const verdict = this.wrotePc;
+    if (fresh && way >= 0)
+      q.push({ at: t + 3, ix, way, v: tag << 2 | (verdict ? Math.min(3, ctr + 1) : Math.max(0, ctr - 1)) });
+    else if (fresh && guess !== verdict)
+      q.push({ at: t + 3, ix, way: -1, v: tag << 2 | (verdict ? 2 : 1) });
+    this.gh = (gh << 1 | (verdict ? 1 : 0)) & 0x7ff;
+    this.ghAt = guess === verdict ? t : t + 3;
+    return guess;
   }
 
   // THE FETCHER, as rtl/cpu.sv's: a buffer of three words, whole words in,
@@ -678,6 +724,14 @@ export class Machine {
     const starve = this.starve;
     this.fe = { nw: 0, finq: 0, t: 0, pc: at, busy: [] };
     this.cbrAt = undefined;
+    // As from reset: the history cleared, the table's writes landed.
+    for (const { ix, way, v } of this.bpq.splice(0)) {
+      const w = way < 0 ? this.rr : way;
+      if (way < 0) this.rr = (this.rr + 1) % 3;
+      this.bpm[ix] = (this.bpm[ix] & ~(31 << 5 * w)) | (v << 5 * w);
+    }
+    this.gh = this.rr = 0;
+    this.ghAt = undefined;
     this.advance(at, 0, { hold: 0 });
     this.starve = starve;
   }

@@ -22,9 +22,13 @@
 # 4229 cells for the system, no longer placed in its region at any seed.  The
 # core before it measured the same at 14 as at 13, 26.68 MHz against 26.65,
 # medians of sixteen, so the column is room and not speed.
+#
+# AND FROM 14 TO 15 with the dynamic branch predictor: 4574 cells, and at 14
+# nextpnr found no legal placement (seed 3, where the run stopped).  At 15 it measures 28.38 MHz (27.6 .. 29.3),
+# medians of sixteen, against 28.31 for main's 4229 at 14.
 # =============================================================================
 
-SPLIT = 14
+SPLIT = 15
 ctx.createRectangularRegion("cpu", 0, 0, SPLIT, 31)
 ctx.createRectangularRegion("vid", SPLIT - 2, 0, 25, 31)
 

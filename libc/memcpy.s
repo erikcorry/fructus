@@ -133,8 +133,8 @@ memmove:
 ; DOWNWARDS, WITH THE SAME ldm AND stm AS memcpy.  They only step up, so each
 ; chunk is copied upwards inside itself and the pointers are pulled back down
 ; between chunks - one `add` a pointer a chunk, six an iteration where memcpy
-; has none.  That is all it costs: 40 cycles for 16 bytes against 35, or
-; 2.50 a byte against 2.19.
+; has none.  That is all it costs: about 2.39 cycles a byte against 2.06,
+; estimates that tests/libc-check.mjs holds to within a tenth.
 ;
 ; A CHUNK IS SAFE WHEREVER dest IS.  Every word of it is loaded before any is
 ; stored, and a store lands dest - src above the word it came from, so the only

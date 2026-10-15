@@ -674,6 +674,8 @@ ${BLIT_WIRING}
             for (k = 0; k < 8; k = k + 1) u.R[k] = regs[k];
             // The shadows are not reset; tools/sim.js starts them at zero.
             u.shadow_sp = 0; u.shadow_lr = 0; u.shadow_isp = 0;
+            // Nor is the predictor's table, which a new Machine starts empty.
+            for (h = 0; h < 256; h = h + 1) u.bpm[h] = 0;
             mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
             mem[${GVECTOR}] = 8'h${HALT.toString(16).padStart(2, '0')};
             mem[${DVECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
@@ -754,7 +756,7 @@ function check(out, blit, what) {
       const want = blit ? prev.cycb : prev.cyc;
       const floor = prev.exc ? prev.exc
                   : prev.mem ? prev.acc + 2 + (blit && prev.late ? 1 : 0)
-                  : prev.jump ? prev.jump : prev.taken ? (prev.back ? 3 : 5) : 1;
+                  : prev.jump ? prev.jump : prev.taken ? 3 : 1;
       if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) say(` dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
       if (ds[i].cyc - ds[i - 1].cyc !== want)
         say(` dispatch ${i}: ${ds[i].cyc - ds[i - 1].cyc} cycles after the one at 0x${prev.pc.toString(16)}, tools/sim.js charges ${want}`);

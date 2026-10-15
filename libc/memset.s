@@ -13,10 +13,10 @@
 ; in the middle of a fill is harmless.
 ;
 ; ----------------------------------------------------------------------------
-; MEASURED, by tests/libc-check.mjs
+; ESTIMATED, by tests/libc-check.mjs, which holds them to within a tenth
 ; ----------------------------------------------------------------------------
-;       fill loop       1.2500 cycles/byte  16 bytes an iteration, even or odd
-;       tail            0.6429 cycles/byte  up to 15 bytes, straight-line
+;       fill loop       1.13 cycles/byte    16 bytes an iteration, even or odd
+;       tail            0.50 cycles/byte    up to 15 bytes, straight-line
 ;
 ;       sizes           bzero 11 bytes, memset 59, 70 together
 ;
@@ -25,12 +25,11 @@
 ; about 1.8 cycles a byte.  The floor is 0.50 - one cycle to write each
 ; aligned word.  A stm stops the pipeline for two cycles beyond its
 ; accesses - 0.375 a byte over three of them and 16 bytes - and the add and
-; the taken branch are the other 0.375.  The branch is five cycles because
-; .loop is at an even address.  Assembled a byte later the stm there would
-; reach into a second word, which its target's read does not bring: a six-cycle
-; branch and 21 cycles, 1.3125 a byte - which is what it was until bzero's
-; `mov r1, #0' became one byte.  The tail went the other way, a cycle slower
-; over 14 bytes at this parity.
+; the branch, predicted taken, are the other 0.25: 18 cycles an iteration,
+; and the misprediction at the exit makes it a little more.  The predicted
+; branch is three cycles because .loop is at an even address: assembled a
+; byte later the stm there would reach into a second word, which its
+; target's read does not bring, and cost one more.
 ; ============================================================================
 
 

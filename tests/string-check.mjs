@@ -19,7 +19,7 @@
 // and the setup cancel, which is what the file's header quotes.
 // =============================================================================
 
-import { assemble, machine } from './harness.mjs';
+import { assemble, machine, near } from './harness.mjs';
 
 let fails = 0, checks = 0;
 const check = (name, ok, detail) => {
@@ -129,14 +129,14 @@ const per = (name, oa, ob) => {
 };
 const COSTS = {
   // name        even    s2 odd
-  strcmp:  [5.7500, 6.2500],
-  strncmp: [6.7500, 7.2500],
-  strlen:  [2.6250, 2.6250],
+  strcmp:  [5.25, 5.75],
+  strncmp: [6.50, 7.00],
+  strlen:  [2.00, 2.00],
 };
 for (const [name, [even, odd]] of Object.entries(COSTS)) {
   const e = per(name, 0, 0), o = per(name, 0, 1);
-  check(`${name} cost`, Math.abs(e - even) < 0.0001, `${e.toFixed(4)} cycles/byte with both even, the file says ${even.toFixed(4)}`);
-  check(`${name} cost, s2 odd`, Math.abs(o - odd) < 0.0001, `${o.toFixed(4)} cycles/byte with s2 odd, the file says ${odd.toFixed(4)}`);
+  check(`${name} cost`, near(e, even), `${e.toFixed(4)} cycles/byte with both even, the file says about ${even.toFixed(2)}`);
+  check(`${name} cost, s2 odd`, near(o, odd), `${o.toFixed(4)} cycles/byte with s2 odd, the file says about ${odd.toFixed(2)}`);
   if (process.env.COSTS) console.log(name, e.toFixed(4), o.toFixed(4));
 }
 console.log(`${checks} checks, ${fails} failures`);

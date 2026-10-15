@@ -167,3 +167,34 @@ while dispatch already excluded the case - cost 55 LUT4 by itself.
    separate experiment, and possibly the biggest lever seen here.
 7. **-device u.**  speed.mjs (and the board build) never tells abc9 it is
    an UP5K; its delay model is the HX's.  Cheap to try, judged by seeds.
+
+## Dynamic prediction (2026-10-15)
+
+Traces of every conditional branch in CoreMark and DeltaBlue, replayed
+against candidate predictors (build/dynbp/), chose: 11 bits of global
+history, the old 8 bits (h[10:3]) addressing one SB_RAM40_4K, the newest 3
+the tag; three ways a word, each a 3-bit tag and a 2-bit counter.  No hit,
+or a word read before gh last changed, and the sign bit guesses as before.
+
+- The address from the OLD bits is both better (in a loop the newest bits
+  are all ones, so every loop piles onto a few sets) and what hides the
+  RAM's registered read: only the tag compare is in front of `pbok`.
+- Writes only on a misprediction (1-bit entries) and LRU were tried: LRU
+  buys nothing over insertion order, and round-robin is as good as either.
+  Counters beat 1-bit entries once writes are seen to be free - a write
+  port of its own - and they tolerate late writes better.
+- No valid bit: a zeroed table predicts as well.
+- `ch`, the verdicts of the branches that reached the stage after the ALU,
+  is gh as each one dispatched, so nothing carries the history down the
+  pipeline: -94 cells.
+
+|                         | cells | LUT4 | RAMs | MHz (16 seeds)      |
+| ----------------------- | ----- | ---- | ---- | ------------------- |
+| core, static (9a866f6)  | 2728  | 2378 | 3    | 29.11 (27.3 .. 30.1) |
+| core, dynamic           | 2876  | 2486 | 4    | 30.23 (29.3 .. 31.4) |
+| system, dynamic, split 15 | 4574 | 3648 | 12  | 28.38 (27.6 .. 29.3) |
+
+Sim against static: CoreMark -Os -3.53%, -O2 -2.67%, DeltaBlue -2.51%.
+
+Costs quoted in the .s files are estimates now: a loop's cost depends on
+what ran before it.  tests/harness.mjs's `near` holds them to a tenth.

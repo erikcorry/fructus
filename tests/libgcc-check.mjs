@@ -148,13 +148,14 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
 
 // --- the shortcut ------------------------------------------------------------
 // Both operands under 256 means the product is under 65536, so the whole thing
-// is one narrow multiply.  It is worth roughly four times the general case.
+// is one narrow multiply.  It is worth about three times the general case;
+// more than twice is enough to say the path is being taken.
 {
   const small = () => run('__umulhisi3', { 0: r16() & 0xff, 1: r16() & 0xff }).cycles;
   const big = () => run('__umulhisi3', { 0: 0x8000 | r16(), 1: 0x8000 | r16() }).cycles;
   let s = 0, b = 0;
   for (let i = 0; i < 200; i++) { s += small(); b += big(); }
-  check('__umulhisi3 shortcut', s / 200 < b / 200 / 3,
+  check('__umulhisi3 shortcut', s / 200 < b / 200 / 2,
         `small operands cost ${(s / 200).toFixed(0)} against ${(b / 200).toFixed(0)}, ` +
         `so the under-256 path is not being taken`);
   console.log(`ok    the under-256 shortcut: ${(s / 200).toFixed(0)} cycles against ${(b / 200).toFixed(0)}`);

@@ -40,3 +40,12 @@ export function callRoutine(m, code, entry, stopAt, regs, max = 10000) {
 }
 
 export const machine = () => new Machine(spec);
+
+// A COST A SOURCE FILE QUOTES IS AN ESTIMATE, and is checked as one: within
+// a tenth of what it says.  The branch predictor makes a loop's cost depend
+// on what ran before it and on where its branches fall in the table, so the
+// exact figure moves with every change to the predictor, and pinning it
+// would make each such change an afternoon of editing comments.  A tenth
+// still catches what the checks are for - a loop that lost its alignment
+// byte, or a path that is not being taken, costs far more than that.
+export const near = (got, want) => Math.abs(got - want) <= 0.1 * Math.abs(want);

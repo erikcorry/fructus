@@ -567,25 +567,48 @@ module cpu (
     wire pjr  = pcl[0] ? pjb1 : pjb0;
     wire [15:0] ptgt = {ib2, ib1};
     wire        pjcall = ib0[1];      // 0xaa, given pjr; 0xa9 has bit 1 clear
-    // A CONDITIONAL BRANCH BACKWARD IS PREDICTED TAKEN.  All seven are three
-    // bytes with the displacement last, so ib2[7] says backward.  Its target
-    // needs an add, so it goes into tgt_q, and `pbq` reads it the cycle after
-    // as taken_q would, without the squash: the branch itself is in decode
-    // then, and goes on with its condition inverted and the fall-through as
-    // its target.  So the ALU stage's `taken` now means MISPREDICTED, in both
-    // directions: a forward branch's own condition, guessed false, or a
-    // backward one's inverted, guessed true - and taken_q squashes the wrong
-    // path and fetches the right one.  No guess while a branch is in the ALU
-    // stage, whose verdict owns tgt_q that cycle: in DeltaBlue and CoreMark
-    // that costs nothing - a flop of its own for the guess, 78 LUT4 more,
-    // measured the same cycles.
+    // A CONDITIONAL BRANCH PREDICTED TAKEN has its target read the cycle
+    // after it dispatches.  All seven are three bytes with the displacement
+    // last, so the target is an add away; it goes into tgt_q, and `pbq` reads
+    // it the cycle after as taken_q would, without the squash: the branch
+    // itself is in decode then, and goes on with its condition inverted and
+    // the fall-through as its target.  So the ALU stage's `taken` now means
+    // MISPREDICTED, in both directions, and taken_q squashes the wrong path
+    // and fetches the right one.  No guess while a branch is in the ALU
+    // stage, whose verdict owns tgt_q that cycle.
+    //
+    // THE GUESS IS THE TABLE'S, OR THE SIGN BIT'S.  `gh` is the last eleven
+    // guesses, the newest lowest - put right by a misprediction, so the last
+    // eleven verdicts by the time anything reads it.  bpm is 256 words of
+    // three ways, each a three-bit tag and a two-bit counter, way k at bits
+    // 5k + 4 .. 5k: one SB_RAM40_4K, read every cycle at gh[10:3], so the
+    // word is the RAM's output flops by the time a branch looks, and only
+    // the tags' compare with gh[2:0] is in front of `pbok`.  A hit's counter
+    // guesses taken from 2 up.  No hit, or a word read before gh last
+    // changed - a branch dispatched the cycle before - and backward guesses
+    // taken, as it did before there was a table.
+    //
+    // THE TABLE LEARNS A CYCLE AFTER THE ALU STAGE, from what the branch
+    // carried down the pipeline: a hit counts its counter towards the
+    // verdict, and a wrong guess without one writes the pattern into way
+    // `rr`, the three in turn, its counter weak.  Each write is one way's
+    // five bits; a guess from a stale word teaches nothing.  tools/sim.js's
+    // predict() is the same machine, cycle for cycle.
     function automatic logic isbr(input logic [7:0] b);
         isbr = b == 8'ha8 | b == 8'hac | b == 8'had | b == 8'hae | b == 8'haf
              | b == 8'hb4 | b == 8'hb5;
     endfunction
     wire        pbr = pcl[0] ? isbr(iw[0][15:8]) : isbr(iw[0][7:0]);
     logic       e_cbr;
-    wire        pbok = pbr & ib2[7] & ~e_cbr;
+    logic [10:0] gh;                  // the last eleven verdicts, the newest lowest
+    logic        gch;                 // gh was written at the last edge: bpw is stale
+    logic [14:0] bpm [0:255];
+    logic [14:0] bpw;                 // bpm[gh[10:3]], read at the last edge
+    wire [2:0]  bh   = {bpw[14:12] == gh[2:0], bpw[9:7] == gh[2:0], bpw[4:2] == gh[2:0]};
+    wire        bhit = ~gch & |bh;
+    wire [1:0]  bway = bh[0] ? 2'd0 : bh[1] ? 2'd1 : 2'd2;
+    wire [1:0]  bctr = bh[0] ? bpw[1:0] : bh[1] ? bpw[6:5] : bpw[11:10];
+    wire        pbok = pbr & (bhit ? bctr[1] : ib2[7]) & ~e_cbr;
     logic       pbq;                  // a predicted branch's target is in tgt_q
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
@@ -617,7 +640,7 @@ module cpu (
     wire pjd     = go & ~take & pjok;
     wire pj      = pjok & slot & (nw >= 3'd2);
     wire pbd     = go & ~take & pbok;
-    wire [15:0] padd = pc + {8'hff, ib2} + 16'd3;   // backward: the sign is set
+    wire [15:0] padd = pc + {{8{ib2[7]}}, ib2} + 16'd3;
     // mul, clz AND popcount TAKE TWO CYCLES IN THE ALU STAGE, and leave a
     // cycle with no dispatch after them, `skip`: see the ALU stage.
     // MORE THAN ONE EXTRA CYCLE - recip's four - STOPS DISPATCH, as a jump
@@ -733,6 +756,8 @@ module cpu (
     // DECODE
     // =========================================================================
     logic        d_valid, d_ucode, d_halt, d_wen, d_cbr, d_jump, d_pj, d_bp;
+    logic        d_bfr, d_bhit;         // the predictor's look, carried to the ALU stage
+    logic [1:0]  d_bway, d_bctr;
     logic        d_mem, d_mst, d_mw2, d_mblk, d_mpush;
     logic [1:0]  d_mn;
     logic [4:0]  d_uent;
@@ -749,6 +774,7 @@ module cpu (
         d_jump  <= is_jump & ~(pjok & ~pjcall);   // a predicted jmp has gone already
         d_pj    <= pjok;
         d_bp    <= pbok;
+        {d_bfr, d_bhit, d_bway, d_bctr} <= {~gch, bhit, bway, bctr};
         {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
         d_uent  <= c_uent;
         d_useq  <= c_useq;
@@ -886,6 +912,8 @@ module cpu (
     logic [3:0]  e_op;
     logic [15:0] aq, bq;
     logic        e_neg, e_mask, e_ucode, e_halt, e_jump, e_jreg, e_pj;
+    logic        e_bp, e_bfr, e_bhit;
+    logic [1:0]  e_bway, e_bctr;
     logic [2:0]  e_code;
     logic [15:0] e_tgt;
     logic        e_mem, e_mst, e_mw2, e_mblk;
@@ -922,6 +950,7 @@ module cpu (
         if (!e_keep) e_op <= mhold ? 4'd4 : d_alu;
         if (!e_keep) e_lsel <= mhold ? 3'd5 : d_lsel;
         e_cbr   <= keep & d_cbr;
+        {e_bp, e_bfr, e_bhit, e_bway, e_bctr} <= {d_bp, d_bfr, d_bhit, d_bway, d_bctr};
         e_jump  <= keep & d_jump;
         e_pj    <= d_pj;
         e_jreg  <= jreg & ~calllr;
@@ -990,6 +1019,44 @@ module cpu (
         for (int k = 0; k < 8; k++) if ((e_we[k] & ~taken_q) | mwe[k]) R[k] <= y;
     end
     assign result = y;
+
+    // THE PREDICTOR LEARNS, a cycle after the branch's ALU stage, when taken_q
+    // says whether it was mispredicted - and a misprediction puts gh right:
+    // the branch's own history and its verdict, everything after it squashed.
+    // The branch's own history is `ch`, the verdicts of the branches that got
+    // this far: every branch on the right path does, in order, and none on a
+    // wrong one - so ch is what gh was when this one dispatched.
+    logic [10:0] ch;
+    logic        u_b, u_bp, u_bfr, u_bhit;
+    logic [1:0]  u_bway, u_bctr, rr;
+    always_ff @(posedge clk) begin
+        u_b <= ~rst & e_cbr & ~taken_q;
+        {u_bp, u_bfr, u_bhit, u_bway, u_bctr} <= {e_bp, e_bfr, e_bhit, e_bway, e_bctr};
+    end
+    wire        uvd = u_bp ^ taken_q;                  // the verdict
+    wire [1:0]  unc = uvd ? (u_bctr == 2'd3 ? 2'd3 : u_bctr + 2'd1)
+                          : (u_bctr == 2'd0 ? 2'd0 : u_bctr - 2'd1);
+    wire        uwe = u_b & u_bfr & (u_bhit | taken_q);
+    wire [1:0]  bpwy = u_bhit ? u_bway : rr;
+    wire [4:0]  bpv = {ch[2:0], u_bhit ? unc : {uvd, ~uvd}};
+    always_ff @(posedge clk) begin
+        if (uwe & bpwy == 2'd0) bpm[ch[10:3]][4:0]   <= bpv;
+        if (uwe & bpwy == 2'd1) bpm[ch[10:3]][9:5]   <= bpv;
+        if (uwe & bpwy == 2'd2) bpm[ch[10:3]][14:10] <= bpv;
+        bpw <= bpm[gh[10:3]];
+        if (rst) ch <= 11'd0;
+        else if (u_b) ch <= {ch[9:0], uvd};
+        if (rst) rr <= 2'd0;
+        else if (uwe & ~u_bhit) rr <= (rr == 2'd2) ? 2'd0 : rr + 2'd1;
+        if (rst) begin
+            gh <= 11'd0; gch <= 1'b0;
+        end else if (u_b & taken_q) begin
+            gh <= {ch[9:0], uvd}; gch <= 1'b1;
+        end else if (gon & pbr) begin
+            gh <= {gh[9:0], pbok}; gch <= 1'b1;
+        end else gch <= 1'b0;
+    end
+    initial for (int i = 0; i < 256; i++) bpm[i] = 15'd0;
 
     // =========================================================================
     // THE MEMORY SEQUENCER

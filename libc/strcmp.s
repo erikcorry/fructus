@@ -7,19 +7,21 @@
 ;       size_t strlen (const char *s);
 ;
 ; ----------------------------------------------------------------------------
-; MEASURED, by tests/string-check.mjs, against the C that crt/libc.c had
+; ESTIMATED, by tests/string-check.mjs, which holds them to within a tenth,
+; against the C that crt/libc.c had
 ; ----------------------------------------------------------------------------
 ;                       here        s2 odd      C       faster by
-;       strlen          2.6250                 15.00      5.71x  optimistic path
-;       strlen          5.0000                 15.00      3.00x  every block a
+;       strlen          2.00                   15.00      7.50x  optimistic path
+;       strlen          5.00                   15.00      3.00x  every block a
 ;                                                                false alarm
-;       strcmp          5.7500     6.2500      20.00      3.48x
-;       strncmp         6.7500     7.2500      26.00      3.85x
+;       strcmp          5.25        5.75       20.00      3.81x
+;       strncmp         6.50        7.00       26.00      4.00x
 ;
 ; Cycles per byte of string, differenced across two lengths so the call and the
 ; setup cancel.  The C is the obvious byte loops, compiled noinline at -Os by
-; the gcc in vendor/gcc; every byte of it pays a taken branch, five or six
-; cycles on this core.  `s2 odd' is s2 at the other parity from s1, whose
+; the gcc in vendor/gcc; every byte of it paid a taken branch, five or six
+; cycles on the core before branch prediction, when the C and the false-alarm
+; row were measured.  `s2 odd' is s2 at the other parity from s1, whose
 ; words then go a byte at a time.
 ;
 ; A RUN OF THREE-BYTE BRANCHES OUTRUNS THE FETCHER, which brings two bytes a
@@ -180,7 +182,7 @@ strncmp:
 ; failure of this assumption is probably a space character just before or after
 ; a capital letter, but the slower fallback is still pretty fast.
 ;
-; 2.625 cycles/byte when the optimism holds: the loop is unrolled once, eight
+; About 2.00 cycles/byte when the optimism holds: the loop is unrolled once, eight
 ; bytes a trip, so one taken branch serves two blocks.  A false alarm costs a
 ; second trip round the byte tests, and there are TWO ways in, at two prices:
 ; the low bytes AND to zero (5.00), or the high bytes do (4.50).  The second is
