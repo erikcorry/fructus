@@ -682,10 +682,10 @@ time, and the known CRCs for both the performance and validation seeds.
 
 | Build | Bytes | Cycles/iteration | CoreMark/MHz | CoreMark at 30 MHz | at 25.175 MHz |
 |---|---:|---:|---:|---:|---:|
-| `-Os` | 8552 | 2,137,577 | 0.468 | 14.03 | 11.78 |
-| `-Os -mmul` | 8162 | 1,071,029 | 0.934 | 28.01 | 23.51 |
-| `-O2` | 12019 | 1,985,820 | 0.504 | 15.11 | 12.68 |
-| `-O2 -mmul` | 11742 | 888,125 | 1.126 | 33.78 | 28.35 |
+| `-Os` | 8631 | 2,164,027 | 0.462 | 13.86 | 11.63 |
+| `-Os -mmul` | 8240 | 1,069,948 | 0.935 | 28.04 | 23.53 |
+| `-O2` | 12150 | 1,947,715 | 0.513 | 15.40 | 12.93 |
+| `-O2 -mmul` | 11873 | 879,272 | 1.137 | 34.12 | 28.63 |
 
 30 MHz is the processor alone on the iCE40; with the VGA frame buffers it
 runs at the 25.175 MHz pixel clock. Bytes are the whole image — `.text`,

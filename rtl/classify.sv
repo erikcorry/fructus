@@ -8,14 +8,14 @@
 // rtl/cpu.sv decides from kind, length and `two` whether the next dispatch
 // can follow at once, and latches the rest for the decode stage.
 //
-// 171 opcodes: 107 ALU, 49 microcoded - 44 of them memory instructions and
-// 4 exception instructions or mul - 7 conditional branches, 8 jumps.
+// 170 opcodes: 107 ALU, 49 microcoded - 44 of them memory instructions and
+// 4 exception instructions or mul - 7 conditional branches, 7 jumps.
 // AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
 // MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
 // pc was worked out behind it, so the length is never used.  Pinned at one, as
 // it was, it measured 32.96 MHz against 33.59, and the length's lookup was on
 // the critical path in some seeds; free, it is on none.  The empty cells -
-// 85 of them - let synthesis carry the pattern of the rows and columns
+// 86 of them - let synthesis carry the pattern of the rows and columns
 // across them.
 // Rearranging the opcodes that ARE used, with the empties still pinned, made
 // it worse: 31.08.
@@ -228,7 +228,6 @@ module classify (
         8'haf: t = 45'b10_11_0_xxxx_1001_1101_xxxx_00_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // br
         8'hb0: t = 45'b11_10_1_0100_1000_0010_0111_xx_11_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // call
         8'hb2: t = 45'b11_10_0_xxxx_1000_xxxx_xxxx_xx_11_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // jmp
-        8'hb3: t = 45'b11_10_0_xxxx_xxxx_1011_xxxx_xx_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // jmpr
         8'hb4: t = 45'b10_11_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // brset
         8'hb5: t = 45'b10_11_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // brset
         8'hb6: t = 45'b00_10_1_0001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // ishi

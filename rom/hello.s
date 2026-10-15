@@ -15,7 +15,7 @@ _start:
 	brclr r0, #0x00ff, .Ldone	; the string ends at a zero byte
 	st8	r0, [r1, #0]
 	add	r2, r2, #1
-	jmpr	.Lcopy
+	jmp	.Lcopy
 .Ldone:
 	halt
 

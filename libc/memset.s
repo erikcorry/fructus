@@ -43,7 +43,7 @@
 ; to find r2 intact.  memset takes three, so r2 is an argument to memset and is
 ; caller saved there, and memset duly destroys it.
 ;
-; So the obvious tail call is wrong: `mov r2, r1; mov r1, #0; jmpr memset` would
+; So the obvious tail call is wrong: `mov r2, r1; mov r1, #0; jmp memset` would
 ; return with r2 clobbered and break bzero's own contract.  Four bytes of save
 ; and restore are the price of the arity difference, and no cheaper arrangement
 ; exists - r2 has to survive a call that is entitled to destroy it.

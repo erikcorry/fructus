@@ -20,10 +20,7 @@
 //   - st and st8 into it, each read back by the very next instruction;
 //   - ldm, reading the back buffer, and push and pop with the stack below
 //     0x8000;
-//   - a frame pushed and popped in blit mode just below 0x8000, which is
-//     allowed; and, in two programs of their own, a pop from 0xf000 and a
-//     push that would store at 0x8000, each of which must stop the processor
-//     with `trapped` before it moves a byte;
+//   - a frame pushed and popped in blit mode just below 0x8000;
 //   - a copy loop inside the back buffer, and the sum of what it copied;
 //   - brk, and then the interrupt line, both in blit mode.  The vector at
 //     0xfff8 is a jump the processor fetches, so it comes from ram_hi however
@@ -367,10 +364,6 @@ ${words.map(([mem, w], k) => {
   return `        $display("W ${k} %h", dut.${inst}.mem[${w}]);`;
 }).join('\n')}
         for (k = 0; k < ${WORDS}; k = k + 1) $display("AB %0d %h %h", k, dut.fba.mem[k], dut.fbb.mem[k]);
-        // For the programs that fault: the marker, and the words a push at
-        // 0x8000 would have written.
-        $display("F %h %h %h %h %h", dut.ram_lo.mem[${RESULT >> 1}],
-                 dut.fba.mem[0], dut.fba.mem[1], dut.ram_hi.mem[0], dut.ram_hi.mem[1]);
         $finish;
     end
 endmodule
@@ -385,50 +378,10 @@ execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', '-DNO_ICE40_DEFAULT_ASSIGN
   ...RTL, ...VIDEO, `${DIR}/spiboot.sv`, CELLS, 'tools/fpga-system.sv', 'build/blit-tb.sv'], { stdio: ['ignore', 'ignore', 'inherit'] });
 const out = execFileSync('vvp', ['-n', 'build/blit-tb.vvp'], { encoding: 'utf8' });
 
-// --- a stack above 0x8000 in blit mode: a fault --------------------------------------
-// Each program stores a marker, sets blit mode and then pushes or pops where
-// it may not.  The processor must stop there, trapped: the marker's second
-// value never stored, nothing written above 0x8000 in ram_hi or A - which is
-// where a push at 0x8000 would land in blit mode - and, for the pop, no
-// register changed that the marker would show.
-const faults = [
-  ['a pop from 0xf000', `mov sp, #0xf000`, `pop r3, r0`],
-  ['a push that would store at 0x8000', `mov sp, #0x8004`, `push r0, r3`],
-].map(([what, setsp, insn]) => {
-  writeFileSync('build/blit-fault.s', `
-        ${setsp}
-        mov  r4, #${RESULT}
-        mov  r1, #0x480
-        mov  r0, #2
-        st8  r0, [r1]
-        mov  r0, #1
-        st   r0, [r4]
-        ${insn}
-        mov  r0, #2
-        st   r0, [r4]
-        halt
-`.split('\n').map((l) => l.trim()).join('\n'));
-  const { code: fc } = assemble('build/blit-fault.s');
-  rmSync('build/blit-fault.s', { force: true });
-  writeFileSync('build/blit-lo.hex', hex((w) => (fc[2 * w] ?? 0) | ((fc[2 * w + 1] ?? 0) << 8)));
-  return [what, execFileSync('vvp', ['-n', 'build/blit-tb.vvp'], { encoding: 'utf8' })];
-});
 for (const f of ['blit-lo.hex', 'blit-hi.hex', 'blit-fba.hex', 'blit-fbb.hex', 'blit-tb.sv', 'blit-tb.vvp'])
   rmSync(`build/${f}`, { force: true });
 
 let bad = 0;
-for (const [what, fout] of faults) {
-  const e = fout.match(/^END (\d) (\d) (\d+)/m), f = fout.match(/^F (\S+) (\S+) (\S+) (\S+) (\S+)/m);
-  const got = f ? f.slice(1).map((x) => parseInt(x, 16)) : [];
-  const want = [1, fbA(0), fbA(1), hiC(0), hiC(1)];
-  if (!e || e[2] !== '1' || e[1] !== '0') {
-    console.log(`  MISMATCH ${what} in blit mode ${e ? (e[1] === '1' ? 'halted' : 'did not stop') : 'printed nothing'}, not trapped`);
-    bad++;
-  } else if (want.some((v, k) => got[k] !== v)) {
-    console.log(`  MISMATCH ${what} in blit mode: marker, A's words 0 and 1, ram_hi's 0 and 1 are ${got.map((v) => v?.toString(16)).join(' ')}, want ${want.map((v) => v.toString(16)).join(' ')}`);
-    bad++;
-  }
-}
 const end = out.match(/^END (\d) (\d) (\d+)/m);
 if (!end || end[1] !== '1' || end[2] !== '0') {
   console.log(`  the program ${end ? (end[2] === '1' ? 'trapped' : 'did not halt') : 'printed nothing'} after ${end?.[3]} cycles`);
@@ -458,5 +411,4 @@ for (let n = 0; n < LINES; n++)
     if (B[t + n] !== A[t + n] && bad++ < 8)
       console.log(`  MISMATCH line ${n}'s table word ${(t + n).toString(16)} was not copied into B`);
 if (bad) { console.log(`FAIL  tests/blit-check.mjs: ${bad} wrong`); process.exit(1); }
-console.log(`ok    tests/blit-check.mjs: tools/fpga-system.sv's modes, ${results.length} results, ${words.length - results.length} memory words and ${copied} words copied into B, in ${end[3]} cycles; `
-          + `${faults.length} stacks above 0x8000 in blit mode trapped`);
+console.log(`ok    tests/blit-check.mjs: tools/fpga-system.sv's modes, ${results.length} results, ${words.length - results.length} memory words and ${copied} words copied into B, in ${end[3]} cycles`);

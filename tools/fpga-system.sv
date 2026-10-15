@@ -64,9 +64,7 @@
 // constants and its stack below 0x8000 - the stack because compiled code
 // reaches its frame with ordinary loads and stores.  pop keeps its ordinary
 // routine, and so would read the processor's own memory at any address,
-// while a push's stores above 0x8000 would go to the buffer - so a push or
-// pop that reaches 0x8000 or above in blit mode stops the processor with
-// `trapped`, before it moves a byte, as an unimplemented opcode does.
+// while a push's stores above 0x8000 would go to the buffer.  Nothing checks.
 //
 // THE REGISTERS ARE WRITTEN THROUGH INTO ram_lo, so a register reads back as
 // what was last written to it from the memory itself, which is what keeps its

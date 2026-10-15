@@ -41,7 +41,7 @@ const ENTRY = /^([A-Za-z_][A-Za-z0-9_]*):/;
 
 // The ways control leaves a routine for good.  A conditional branch is not
 // one of them: it can fall through, which is exactly what this is looking for.
-const LEAVES = /^(ret|jmpr?|halt)\b/;
+const LEAVES = /^(ret|jmp|halt)\b/;
 
 const lines = readFileSync(join(root, SRC), 'utf8').split('\n');
 

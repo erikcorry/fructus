@@ -10,11 +10,11 @@
 ; MEASURED, by tests/string-check.mjs, against the C that crt/libc.c had
 ; ----------------------------------------------------------------------------
 ;                       here        s2 odd      C       faster by
-;       strlen          2.2500                 15.00      6.67x  optimistic path
+;       strlen          2.6250                 15.00      5.71x  optimistic path
 ;       strlen          5.0000                 15.00      3.00x  every block a
 ;                                                                false alarm
 ;       strcmp          5.7500     6.2500      20.00      3.48x
-;       strncmp         6.5000     7.0000      26.00      4.00x
+;       strncmp         6.7500     7.2500      26.00      3.85x
 ;
 ; Cycles per byte of string, differenced across two lengths so the call and the
 ; setup cancel.  The C is the obvious byte loops, compiled noinline at -Os by
@@ -85,7 +85,7 @@ strcmp:
         brset   r4, #0xff00, .top       ; taken                         5
 .zero:
         mov     r0, #0
-        jmpr    .out
+        jmp     .out
 .w1:
         mov     r3, r4                  ; the second word is the one
         mov     r5, lr
@@ -148,10 +148,10 @@ strncmp:
         add     r1, r1, #1
         add     r0, r0, #1
         add     r2, r2, #-1
-        jmpr    .tail
+        jmp     .tail
 .zero:
         mov     r0, #0
-        jmpr    .out
+        jmp     .out
 .w1:
         mov     r3, r4                  ; the second word is the one
         mov     r5, lr
@@ -180,7 +180,7 @@ strncmp:
 ; failure of this assumption is probably a space character just before or after
 ; a capital letter, but the slower fallback is still pretty fast.
 ;
-; 2.25 cycles/byte when the optimism holds: the loop is unrolled once, eight
+; 2.625 cycles/byte when the optimism holds: the loop is unrolled once, eight
 ; bytes a trip, so one taken branch serves two blocks.  A false alarm costs a
 ; second trip round the byte tests, and there are TWO ways in, at two prices:
 ; the low bytes AND to zero (5.00), or the high bytes do (4.50).  The second is
@@ -229,13 +229,13 @@ strlen:
 ; Slow case, but the low bytes are known not zero.
   brclr   r2, #0xff00, .minus3                ; 1
   brset r3, #0xff00, .top    ; no zero byte here after all: keep scanning
-  jmpr .minus1
+  jmp  .minus1
 .slow_block:
   brclr   r2, #0xff, .minus4                  ; 1
   brclr   r2, #0xff00, .minus3                ; 2, the fetcher behind
   brclr   r3, #0xff, .minus2                  ; 1
   brset r3, #0xff00, .top    ; no zero byte here after all: keep scanning
-  jmpr .minus1               ; r3's high byte is the zero
+  jmp  .minus1               ; r3's high byte is the zero
 .minus4:
   add r1, r1, #-1
 .minus3:

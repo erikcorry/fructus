@@ -129,12 +129,11 @@
 // Only captures read it, so the system's choice is in front of ldq and not
 // of decode; in front of decode it cost a LUT level, 27.35 MHz to 25.58.
 //
-// SO A STACK ABOVE 0x8000 IS A FAULT IN BLIT MODE: a push's bytes there are
+// SO A STACK ABOVE 0x8000 IS WRONG IN BLIT MODE: a push's bytes there are
 // stores, which the system sends to the buffer, while pop's are read from
-// the processor's own memory.  A push or pop that would touch 0x8000 or above
-// sets `trapped` in its ALU cycle, as an unimplemented opcode does, and its
-// routine never starts.  When isa/fructus.toml's reserved vectors are
-// implemented this is one to enter.
+// the processor's own memory.  Nothing checks it.  A check once trapped such
+// a push or pop, but it was one of many ways to get blit mode wrong, and it
+// cost two carry chains on aq.
 //
 // WITHOUT THE DEFINE THE NETLIST IS THE SAME, bit for bit, as before blit
 // mode existed - write_verilog of the synthesised design compared equal - so
@@ -686,7 +685,7 @@ module cpu (
     logic [2:0]  d_ext;
     logic [7:0]  d_op, d_b1, d_b2;
     logic [3:0]  d_alu, d_lhs, d_rhs, d_dest;
-    logic [1:0]  d_cond, d_pcsrc, d_len;
+    logic [1:0]  d_cond, d_pcsrc;
     logic [15:0] d_pc;
     always_ff @(posedge clk) begin
         d_valid <= ~rst & ~taken_q & go & piped;
@@ -702,7 +701,6 @@ module cpu (
         d_ulate <= c_ulate;
 `endif
         d_pcsrc <= c_pcsrc;
-        d_len   <= len;
         d_halt  <= c_halt;
         d_op    <= op;
         d_b1    <= ib1;
@@ -747,9 +745,10 @@ module cpu (
                       : (rc == 3'd2) ? d_next : (rc == 3'd3) ? moff_d : ins[23:8];
 
     // --- a branch's condition, and a transfer's target -----------------------------
-    // A displacement is always the last byte, and counts from the instruction
-    // after - which dispatch had already, as the pc it moved on to.  An
-    // absolute target is bytes 1 and 2; a register's is the left operand.
+    // A displacement is always byte 2, since every relative transfer is a
+    // three-byte branch, and counts from the instruction after - which
+    // dispatch had already, as the pc it moved on to.  An absolute target is
+    // bytes 1 and 2; a register's is the left operand.
     //
     // `call lr` IS THE EXCEPTION: its semantics are `lr = pc; pc = R[a]`, in
     // that order, so it goes to the NEW lr - the next instruction - and not the
@@ -757,12 +756,11 @@ module cpu (
     wire [2:0] ccode;
     wire       cneg, cmask;
     cond cu (.insn(ins), .src(d_cond), .code(ccode), .neg(cneg), .mask(cmask));
-    wire [7:0]  last    = (d_len == 2'd2) ? b1 : b2;
     wire        jreg    = (d_pcsrc == 2'd3);
     wire        calllr  = d_jump & d_wen & jreg & (an == `FRUCTUS_REG_LR);
     wire [15:0] tgt     = (d_pcsrc == 2'd2) ? ins[23:8]
                         : calllr            ? d_next
-                        :                     d_next + {{8{last[7]}}, last};
+                        :                     d_next + {{8{b2[7]}}, b2};
 
     // =========================================================================
     // ALU
@@ -784,13 +782,15 @@ module cpu (
     // --- a memory instruction's registers, in the order of their addresses ------
     // The first is the destination field: a load's rd, a store's rs, a block
     // move's first register.  A push stores downward, so its registers lie in
-    // memory the other way round, the last one lowest.
-    wire [2:0] rb_ = ins[13:11], rc_ = {ins[15:14], ins[0]};
-    wire [2:0] ml0_d = !d_mpush ? wn : (d_mn == 2'd3) ? rc_ : (d_mn == 2'd2) ? rb_ : wn;
-    wire [2:0] ml1_d = !d_mpush ? rb_ : (d_mn == 2'd3) ? rb_ : wn;
-    wire [2:0] ml2_d = !d_mpush ? rc_ : wn;
+    // memory the other way round, the last one lowest - and its encoding
+    // turns them round to match, the last named in the destination field, so
+    // the fields are in address order here for every block move.
+    wire [2:0] ml0_d = wn, ml1_d = ins[13:11], ml2_d = {ins[15:14], ins[0]};
     wire [2:0] mN_d  = d_mw2 ? {d_mn, 1'b0} : {1'b0, d_mn};   // bytes: 1, 2, 4 or 6
     assign moff_d = d_mpush ? -{13'd0, mN_d} : 16'd0;         // a push starts 2n down
+    // and its pointer ends there, where any other block move's ends 2n up -
+    // chosen here, so the ALU stage needs no mux after its adder.
+    wire [3:0] mstep_d = d_mpush ? -{1'b0, mN_d} : {1'b0, mN_d};
 
     (* ram_style = "logic" *)
     logic [15:0] R [0:7];
@@ -831,8 +831,9 @@ module cpu (
     logic        e_cbr, e_neg, e_mask, e_ucode, e_halt, e_jump, e_jreg;
     logic [2:0]  e_code;
     logic [15:0] e_tgt;
-    logic        e_mem, e_mst, e_mw2, e_mblk, e_mpush;
-    logic [2:0]  e_mN, e_l0, e_l1, e_l2, e_ptr;
+    logic        e_mem, e_mst, e_mw2, e_mblk;
+    logic [3:0]  e_mstep;
+    logic [2:0]  e_l0, e_l1, e_l2, e_ptr;
     logic [4:0]  e_uent;               // where the microcode routine starts
     logic        e_useq;               // it runs one
     logic        e_urs;                // released at once
@@ -870,8 +871,8 @@ module cpu (
         e_tgt   <= tgt;
         e_ucode <= d_ucode & ~taken_q;
         e_mem   <= keep & d_mem;
-        {e_mst, e_mw2, e_mblk, e_mpush} <= {d_mst, d_mw2, d_mblk, d_mpush};
-        {e_mN, e_l0, e_l1, e_l2, e_ptr} <= {mN_d, ml0_d, ml1_d, ml2_d, an};
+        {e_mst, e_mw2, e_mblk} <= {d_mst, d_mw2, d_mblk};
+        {e_mstep, e_l0, e_l1, e_l2, e_ptr} <= {mstep_d, ml0_d, ml1_d, ml2_d, an};
 `ifdef FRUCTUS_BLIT
         // BLIT MODE CHOOSES THE LATE COPY HERE, flops into flops: the entry's
         // top bit, and no release in the ALU cycle.  The mode is sampled in
@@ -991,36 +992,10 @@ module cpu (
     // MHz against 30.28 before it, spread 30.0 .. 32.5 against 29.4 .. 31.4;
     // the whole system, with rtl/spiboot.sv, 35 LUT4s and 27.19 against
     // 26.74, spread 26.5 .. 28.0 against 25.4 .. 27.5 - noise, both.
-`ifdef FRUCTUS_BLIT
-    // A STACK ABOVE 0x8000 IS A FAULT IN BLIT MODE.  There a push's bytes are
-    // stores, and go to the frame buffer, while pop keeps its ordinary routine
-    // and reads the processor's own memory - so a frame pushed and popped
-    // there would come back as something else.  A push or pop any of whose
-    // bytes is at 0x8000 or above stops the machine with `trapped`, as an
-    // unimplemented opcode does: it writes no byte and no register, and never
-    // releases dispatch.  Sampled in the ALU cycle, where `blit` has settled
-    // from any store before it.
-    //
-    // THE FAULT IS A FLOP, AND THE ROUTINE STARTS ANYWAY.  Worked out in the
-    // ALU cycle and used there - holding back mstart - it put a carry chain
-    // in front of the store port's register choice and the register file's
-    // read: 22 cells from aq to aq, and the whole system placed at 24.13 MHz,
-    // below the pixel clock.  So `sfq` is registered, and from step 1 it
-    // masks what the routine would do - the memory write, the register and
-    // pointer writes, the release - which is everything, since nothing a
-    // routine does happens in its ALU cycle but a load's first address, and a
-    // read changes nothing.
-    wire [15:0] sfirst = e_mpush ? aq - {13'd0, e_mN} : aq;
-    wire [15:0] slast  = e_mpush ? aq - 16'd1 : aq + {13'd0, e_mN} - 16'd1;
-    wire        sfault = e_useq & ~taken_q & blit & e_mblk & (e_ptr == `FRUCTUS_REG_SP)
-                       & (sfirst[15] | slast[15]);
-    logic       sfq;                       // stays set: the machine has stopped
-    always_ff @(posedge clk) sfq <= ~rst & (sfq | sfault);
-`endif
     wire mstart = e_useq & ~taken_q;
     wire [15:0] ea   = asum;
     wire        al   = e_mw2 & ~ea[0];     // a word instruction, aligned: bit 3
-    wire [15:0] ptrv = e_mpush ? ea : aq + {13'd0, e_mN};   // where the pointer ends
+    wire [15:0] ptrv = aq + {{12{e_mstep[3]}}, e_mstep};   // where the pointer ends
 
     logic       mact, mst, mw2, mblk, mlane, weq, mal, wsel;
     logic [2:0] mu;                        // the step, less one
@@ -1048,11 +1023,7 @@ module cpu (
     // releases dispatch in its ALU cycle, before any word: predecode says so
     // for ld8, and for ld, pop and ldm of one register if they are aligned.
     wire   rs_now   = mstart & e_urs & ~(e_mw2 & ea[0]);
-`ifdef FRUCTUS_BLIT
-    assign mrestart = (uw[2] & ~sfq) | rs_now;   // a stack fault never releases
-`else
     assign mrestart = uw[2] | rs_now;
-`endif
     wire   [1:0] uW  = uw[5:4];
     wire         uP  = uw[6];
     wire         uWE = uw[7];
@@ -1156,17 +1127,9 @@ module cpu (
     // value is the one the semantics end with.
     wire [2:0] wreg = (uW == 2'd1) ? ml0 : (uW == 2'd2) ? ml1 : ml2;
     wire       wdat = (uW != 2'd0) & ~(mblk & wreg == mpr);
-`ifdef FRUCTUS_BLIT
-    // A stack fault writes nothing: sfq is only ever set under a push or pop,
-    // whose routines write no sp or lr, so the data and pointer are all.
-    wire [7:0] mwe  = (wdat & ~sfq ? 8'd1 << wreg : 8'd0) | (uP & ~sfq ? 8'd1 << mpr : 8'd0)
-                    | (uWX == 2'd1 ? 8'd1 << `FRUCTUS_REG_SP : 8'd0)
-                    | (uWX == 2'd2 ? 8'd1 << `FRUCTUS_REG_LR : 8'd0);
-`else
     wire [7:0] mwe  = (wdat ? 8'd1 << wreg : 8'd0) | (uP ? 8'd1 << mpr : 8'd0)
                     | (uWX == 2'd1 ? 8'd1 << `FRUCTUS_REG_SP : 8'd0)
                     | (uWX == 2'd2 ? 8'd1 << `FRUCTUS_REG_LR : 8'd0);
-`endif
 
     assign mhold = mstart | (mact & ~mdone);
 
@@ -1292,14 +1255,8 @@ module cpu (
     // is written.
     assign mem_wdata = {(mal | wsel) ? wq[15:8] : wq[7:0], (~mal & wsel) ? wq[15:8] : wq[7:0]};
     wire [1:0] wlanes = {mal | mar[0], mal | ~mar[0]};
-`ifdef FRUCTUS_BLIT
-    assign mem_we    = {2{weq & aphase & ~sfq}} & wlanes;
-    assign retire    = (e_valid & ~taken_q & ~e_useq) | (mdone & ~sfq);
-`else
     assign mem_we    = {2{weq & aphase}} & wlanes;
-
     assign retire    = (e_valid & ~taken_q & ~e_useq) | mdone;
-`endif
     assign retire_pc = mdone ? mpc : e_pc;
 
     // --- the one microcoded instruction there is --------------------------------
@@ -1308,9 +1265,6 @@ module cpu (
     always_ff @(posedge clk)
         if (rst) begin halted <= 1'b0; trapped <= 1'b0; end
         else if (e_ucode & ~taken_q) begin halted <= e_halt; trapped <= ~e_halt; end
-`ifdef FRUCTUS_BLIT
-        else if (sfq) trapped <= 1'b1;
-`endif
         else if (wake) halted <= 1'b0;
 
 endmodule

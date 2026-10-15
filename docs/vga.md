@@ -458,16 +458,15 @@ direction would cost 45 logic cells.
   memory at all. A handler does inherit the mode, though, so its own loads and
   stores above 0x8000 go to the buffer. `ld`, `ld8` and `ldm` cost a cycle
   more, and the CPU has separate microcode routines for them. Code running in
-  this mode keeps its data, constants and stack below 0x8000: a `push` or
-  `pop` that reaches 0x8000 or above stops the CPU with `trapped`, because
-  `pop` reads the CPU's own memory there while `push` would write the buffer.
+  this mode keeps its data, constants and stack below 0x8000: a `pop` there
+  reads the CPU's own memory while a `push` writes the buffer, and nothing
+  checks.
   Without `` `define FRUCTUS_BLIT `` the CPU is built exactly as before.
 - **WRITETHRU** suits drawing that never reads back. Stores above 0x8000 go
   to the buffer not shown and nowhere else; loads there still read the CPU's
   own RAM at full speed. So that half of the CPU's memory is read-only: code
   and constants may live there, but data and the stack belong below 0x8000.
-  Unlike BLIT, a `push` or `pop` above 0x8000 does not trap, and pops what
-  was there before.
+  A `pop` above 0x8000 pops what was there before.
 
 **No RAM pays for read-during-write.** A read and a write of one word in
 the same cycle give the block RAM undefined data. Written plainly, the RTL

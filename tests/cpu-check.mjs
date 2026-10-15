@@ -315,7 +315,7 @@ const SOURCES = [
   again:  call bump
           add  r0, r0, #-1
           br   ne, r0, #0, again
-          jmpr over
+          br   eq, r0, r0, over
           mov  r2, #0xbad
   over:   mov  r2, #there
           jmp  r2
@@ -565,7 +565,6 @@ for (let p = 0; p < PROGRAMS; p++) {
     return c.pc === ((pc + len + 1) & 0xffff);
   };
   const trace = [];
-  let fault = null;                    // blit mode's first stack fault: where, and memory then
   for (let guard = 0; !m.halted && guard < 5000; guard++) {
     const pc = m.pc;
     // A guard trap is a brk dispatched where the next instruction would be,
@@ -586,10 +585,6 @@ for (let p = 0; p < PROGRAMS; p++) {
     const memst = mem && /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(d.insn.semantics);
     // Blit mode makes every load but pop a cycle slower.
     const late = mem && !memst && !/^base = sp; /.test(d.insn.semantics);
-    // And stops at a push or pop any of whose bytes is at 0x8000 or above.
-    const sp = m.R[6], first = (memst ? sp - mem : sp) & 0xffff, last = (first + mem - 1) & 0xffff;
-    const sfault = /^base = sp; /.test(d.insn.semantics ?? '') && ((first | last) & 0x8000) !== 0;
-    if (sfault && !fault) fault = { at: trace.length, hash: fold(m.mem) };
     const before = m.cycles(), xfer0 = m.xfer, beforeb = mb.cycles();
     m.step();
     mb.step();
@@ -597,9 +592,9 @@ for (let p = 0; p < PROGRAMS; p++) {
     const cycb = mb.cycles() - beforeb; // and in blit mode
     // A memory instruction's accesses: an aligned word is one, a byte one.
     const acc = mem ? m.xfer - xfer0 : 0;
-    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, acc, memst, late, sfault, exc, cyc, cycb, R: Array.from(m.R) });
+    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, acc, memst, late, exc, cyc, cycb, R: Array.from(m.R) });
   }
-  programs.push({ bytes, reg, trace, hash: fold(m.mem), fault, io, gtrap: m.pc === ((GVECTOR + 1) & 0xffff) });
+  programs.push({ bytes, reg, trace, hash: fold(m.mem), io, gtrap: m.pc === ((GVECTOR + 1) & 0xffff) });
   writeFileSync(`build/cpu-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
   writeFileSync(`build/cpu-reg-${p}.hex`, reg.map(hex4).join('\n') + '\n');
 }
@@ -686,12 +681,11 @@ if (trace(outCells) !== trace(out)) {
   process.exit(1);
 }
 
-let bad = 0, instructions = 0, cycles = 0, faults = 0;
+let bad = 0, instructions = 0, cycles = 0;
 const complain = (msg) => { if (bad++ < 8) console.log(`  MISMATCH ${msg}`); };
 
 // One run's output against the simulator.  In blit mode ld, ld8 and ldm cost
-// a cycle more, and the first push or pop that reaches 0x8000 or above stops
-// the machine, trapped, with everything before it done and nothing of it.
+// a cycle more.
 function check(out, blit, what) {
   const rets = programs.map(() => []), disps = programs.map(() => []), squashes = programs.map(() => []), ends = [];
   for (const line of out.split('\n')) {
@@ -701,11 +695,7 @@ function check(out, blit, what) {
     if (f[0] === 'SQUASH') squashes[+f[1]].push(+f[2]);
     if (f[0] === 'END')  ends[+f[1]] = { halted: f[2] === '1', trapped: f[3] === '1', cyc: +f[4], hash: +f[5] };
   }
-  programs.forEach(({ trace: whole, hash: hashAll, fault }, p) => {
-    const stop = blit && fault ? fault : null;
-    const trace = stop ? whole.slice(0, stop.at) : whole;
-    const hash = stop ? stop.hash : hashAll;
-    if (stop) faults++;
+  programs.forEach(({ trace, hash }, p) => {
     const say = (msg) => complain(`${what}program ${p}${msg}`);
     if (ends[p] && ends[p].hash !== hash)
       say(`: memory folds to ${ends[p].hash} on the RTL and ${hash} on the simulator`);
@@ -713,8 +703,8 @@ function check(out, blit, what) {
     // three instructions behind the branch.
     const got = rets[p];
     const ds = disps[p].filter((d) => !squashes[p].some((t) => d.cyc >= t - 2 && d.cyc <= t));
-    if (stop ? !ends[p]?.trapped : !ends[p]?.halted || ends[p]?.trapped)
-      say(`: ended ${ends[p]?.trapped ? 'trapped' : ends[p]?.halted ? 'halted' : 'without halting'}${stop ? `, not trapped at 0x${whole[stop.at].pc.toString(16)}` : ''}`);
+    if (!ends[p]?.halted || ends[p]?.trapped)
+      say(`: ended ${ends[p]?.trapped ? 'trapped' : 'without halting'}`);
     if (got.length !== trace.length) say(`: ${got.length} retired, the simulator ran ${trace.length}`);
     for (let i = 0; i < Math.min(got.length, trace.length); i++) {
       const g = got[i], t = trace[i];
@@ -724,7 +714,7 @@ function check(out, blit, what) {
       if (!blit) instructions++;
     }
     // The dispatch cadence: the halt is dispatched too, so there is one more
-    // dispatch than retirement - and so is a faulting push or pop.
+    // dispatch than retirement.
     // tools/sim.js's cost model, which every cycle count in the repo comes
     // from, must charge what the processor takes - and that depends on what
     // the fetcher has, so it is the simulator's own model of the fetcher
@@ -737,7 +727,7 @@ function check(out, blit, what) {
       const floor = prev.exc ? prev.exc
                   : prev.mem ? prev.acc + 2 + (blit && prev.late ? 1 : 0)
                   : prev.jump ? prev.jump : prev.taken ? 5 : 1;
-      if (ds[i].pc !== (whole[i]?.pc ?? ds[i].pc)) say(` dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
+      if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) say(` dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
       if (ds[i].cyc - ds[i - 1].cyc !== want)
         say(` dispatch ${i}: ${ds[i].cyc - ds[i - 1].cyc} cycles after the one at 0x${prev.pc.toString(16)}, tools/sim.js charges ${want}`);
       if (want < floor)
@@ -884,7 +874,7 @@ ${BLIT_WIRING}
     end
 endmodule
 `);
-// And in blit mode, where a program that faults must still just trap.
+// And in blit mode.
 let irqTakes = 0;
 for (const blit of [false, true]) {
   const what = blit ? ' in blit mode' : '';
@@ -899,10 +889,6 @@ for (const blit of [false, true]) {
     const fin = +f[5] === exacts[p].hash && R.every((v, k) => v === exacts[p].R[k]) ? exacts[p] : finals[p];
     irqSeen.add(p);
     if (!blit) irqTakes += +f[4];
-    if (blit && programs[p].fault) {
-      if (f[3] !== '1') complain(`program ${p}: ${f[2] === '1' ? 'halted' : 'did not stop'} under interrupts${what}, not trapped at its stack fault`);
-      continue;
-    }
     if (f[2] !== '1' || f[3] !== '0') complain(`program ${p}: ${f[3] === '1' ? 'trapped' : 'did not halt'} under interrupts${what}`);
     if (!fin.cli && +f[4] < 1) complain(`program ${p}: no interrupt taken${what}`);
     if (+f[5] !== fin.hash) complain(`program ${p}: memory folds to ${f[5]} under interrupts${what} and ${fin.hash} without`);
@@ -939,10 +925,9 @@ if (bad === 0) {
             + `${dtraps} divide-by-zero traps`);
   console.log(`ok    rtl/cpu.sv, interrupted: ${PROGRAMS} programs under ${irqTakes} interrupts, `
             + `the last at each halt, end as tools/sim.js does without them`);
-  const lateLoads = programs.reduce((n, { trace, fault }) => n + trace.slice(0, fault?.at).filter((t) => t.late).length, 0);
+  const lateLoads = programs.reduce((n, { trace }) => n + trace.filter((t) => t.late).length, 0);
   console.log(`ok    rtl/cpu.sv, built for blit mode: the same machine with it off; with it on, `
-            + `${lateLoads} loads a cycle late and ${faults} programs trapped at a stack above 0x8000, `
-            + `interrupted and not, as predicted`);
+            + `${lateLoads} loads a cycle late, interrupted and not, as predicted`);
 } else {
   console.log(`FAIL  rtl/cpu.sv: ${bad} disagreements with tools/sim.js`);
   process.exit(1);

@@ -559,7 +559,7 @@ name   = "BFD_RELOC_8_PCREL"
 bits   = 8
 pcrel  = true
 signed = true
-used_by = "br, brclr, brset, jmpr rel8 - the off8 displacement"
+used_by = "br, brclr, brset - the off8 displacement"
 
 [[reloc]]
 name   = "BFD_RELOC_16_PCREL"
@@ -810,8 +810,8 @@ values = [
 # permits the exchange says so with `swap_operands`.
 #
 # THERE IS NO `al`.  An unconditional branch is a register compared for
-# equality with itself, which is why the two-byte jmpr pins `eq, r0,
-# r0` rather than spending a condition slot on "always".  `nv` is not encoded
+# equality with itself, which the assembler can spell as `br eq, r0, r0'
+# rather than spending a condition slot on "always".  `nv` is not encoded
 # either - a branch that never happens is a nop the assembler can just not
 # emit.  Both slots go to the overflow conditions instead.
 #
@@ -1428,7 +1428,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1011_0000                call    ra                 2 bytes, INDIRECT
 #   1011_0001                -- free, for three bytes: the imm10 column
 #   1011_0010                jmp     ra                 2 bytes, INDIRECT
-#   1011_0011                jmpr    target             2 bytes, SHORT form
+#   1011_0011                -- free: once jmpr, the short relative jump
 #   1011_0100                brset   ra, #immbit5, target
 #   1011_0101                brset   ra, #immask5, target
 #   1011_011b                ishi    rd, ra, rb         TWO opcodes: an ALU row
@@ -3207,6 +3207,12 @@ semantics = "R[d] = R[a] > R[b]"
 # So a 32-bit value in r0:r1, low half in r0, is pushed as `push r1, r0` - the
 # high half named first lands higher, which is little endian.  See isa/abi.s.
 #
+# AND A PUSH ENCODES ITS REGISTERS THE OTHER WAY ROUND: the LAST named is in
+# byte 1's low field, where stm and every load keep their first.  So the
+# fields go in address order for every block move, lowest address in the
+# low field, and the processor reads them in one order with no push of its
+# own to turn round.  The syntax is unchanged; only the bits moved.
+#
 # THE POINTER IS UPDATED AFTER THE TRANSFER, and that settles what it means to
 # name the pointer in its own register list - the question that has bitten both
 # ARM and x86.  It is defined here rather than forbidden:
@@ -3258,7 +3264,7 @@ semantics = "base = sp; M16[base - 2] = R[a]; M16[base - 4] = R[b]; sp = base - 
 
   [[insn.form]]
   name     = "double"
-  encoding = "1001_1010  00bb_baaa"
+  encoding = "1001_1010  00aa_abbb"
 
 [[insn]]
 mnemonic = "push"
@@ -3270,8 +3276,8 @@ semantics = "base = sp; M16[base - 2] = R[a]; M16[base - 4] = R[b]; M16[base - 6
 
   [[insn.form]]
   name     = "triple"
-  encoding = "1001_111z  ccbb_baaa"
-  fields   = { z = "c:reg[0]", c = "c:reg[2:1]" }
+  encoding = "1001_111z  aabb_bccc"
+  fields   = { z = "a:reg[0]", a = "a:reg[2:1]" }
 
 
 # --- pop --------------------------------------------------------------------
@@ -3424,8 +3430,7 @@ semantics = "base = r1; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 #
 # Relative and absolute both take a full 16 bits and both reach the whole
 # address space, so the choice between them is not about range - it is whether
-# the code is position independent.  Short relative jumps are already covered
-# by the two-byte `jmpr` form at 0xb3, +/-127.
+# the code is position independent, and nothing here is.
 #
 # THE WIDE RELATIVE FORMS ARE GONE, and what they cost is why.  `jmpr target'
 # and `callr target' were three bytes reaching the whole address space
@@ -3437,40 +3442,16 @@ semantics = "base = r1; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 # position independence that a machine with a linker and no address-space
 # randomisation never asked for.
 #
-# So jmp and call sit side by side at 0xa9 and 0xaa, with the same byte 1.  What is lost with them is real and worth writing down:
-# code that must run at an address it was not linked for can no longer jump
-# further than a byte's displacement without a register.  The short `jmpr' at
-# 0xb3 stays, because two bytes for a local jump is worth having and its reach
-# is exactly a loop's.
+# So jmp and call sit side by side at 0xa9 and 0xaa, with the same byte 1.
+# Code that must run at an address it was not linked for can jump only
+# through a register.
 #
-# MNEMONICS.  `jmp` and `call` are absolute; `jmpr` is the two-byte relative
-# form and the only relative transfer left.  An assembler that wanted one
-# mnemonic could relax `jmpr` into `jmp` when the displacement does not fit -
-# a byte longer and no slower - which is what gcc's jump pattern does
-# for itself.
-[[insn]]
-mnemonic = "jmpr"
-summary  = "pc += displacement"
-operands = [{ name = "target", type = "int16", pcrel = true }]
-syntax   = "{target}"
-semantics = "pc = pc + target"
-
-  # THE SHORT FORM IS A BRANCH WEARING A JUMP'S NAME, and the encoding says so:
-  # 0xb3 is the compare-and-branch datapath with its condition pinned to
-  # `eq, r0, r0`.  A register compared for equality with itself is always true,
-  # so the condition field costs nothing and the whole instruction is an opcode
-  # and a displacement byte.
-  #
-  # It used to be spelled `br` and it is not a branch to a programmer: it takes
-  # no condition and no registers, it is exactly `jmpr` with a shorter reach.
-  # So it is a FORM rather than an instruction, and the assembler picks between
-  # two and three bytes by how far the target is - which is what it does for
-  # every other operand that has more than one width.
-  [[insn.form]]
-  name     = "rel8"
-  encoding = "1011_0011  tttt_tttt"
-  fields   = { t = "target:off8" }
-
+# THE SHORT RELATIVE JUMP IS GONE TOO.  `jmpr' was two bytes at 0xb3, the
+# compare-and-branch datapath with its condition pinned to `eq, r0, r0', and
+# the only two-byte relative transfer: so decode chose a displacement from
+# byte 1 or byte 2 for it alone, gas relaxed it and nothing else, and a
+# predictor had one more shape to recognise.  What it saved was a byte on a
+# local jump; gcc now emits `jmp', a byte longer and as fast.
 [[insn]]
 mnemonic = "jmp"
 summary  = "pc = imm16"

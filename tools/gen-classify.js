@@ -16,7 +16,7 @@
 //     kind   0 ALU     one result into one register, every stage single-cycle
 //            1 UCODE   anything else, and every opcode the spec leaves empty
 //            2 CBR     a conditional branch
-//            3 JUMP    an unconditional transfer: jmp, jmpr, call, ret
+//            3 JUMP    an unconditional transfer: jmp, call, ret
 //
 // and with the length it names the seven classes: ONE_BYTE_ALU is kind 0 and
 // length 1, THREE_BYTE_CONDITIONAL_BRANCH kind 2 and length 3, and so on.

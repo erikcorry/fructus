@@ -63,7 +63,6 @@ const m = machine();
     ['b_taken', 6, 'a 3-byte branch, taken, to an odd 3-byte instruction: two words'],
     ['b_odd',   2, 'a 3-byte branch at an odd address, not taken, before an even 3-byte one: five bytes are not six'],
     ['b_even',  1, 'a 3-byte branch at an even address, not taken'],
-    ['j_rel',   5, 'a 2-byte relative jump, to an odd 3-byte instruction'],
     ['j_abs',   5, 'a 3-byte absolute jump, to an even 3-byte instruction'],
     ['c_abs',   5, 'a 3-byte absolute call, to an odd 2-byte instruction'],
     ['c_lr',    5, '`call lr`, to the next instruction, odd and 2 bytes'],

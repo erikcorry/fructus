@@ -102,7 +102,7 @@
 __mulhi3:
         br      ls, r1, r0, .sorted     ; 1   b <= a: b is the multiplier
         mov     r5, r0                  ; 1   otherwise a is, and b stays put
-        jmpr    .go                     ; 4
+        jmp     .go                     ; 4
 .sorted:                                ;     ENTRY: r1 already the smaller
         mov     r5, r1                  ; 1   the multiplier
         mov     r1, r0                  ; 1   the multiplicand, pinned
@@ -151,7 +151,7 @@ __mulhi3:
 ;
 ; IT IS A CALL AND NOT A TAIL CALL.  __mulhi3 returns the product in r0, which
 ; is already the low half, but r1 has to be zeroed after the multiply, which
-; `jmpr` cannot do.  A tail call would need __mulhi3 to zero r1 itself, and
+; `jmp` cannot do.  A tail call would need __mulhi3 to zero r1 itself, and
 ; every int multiply would pay for that.
 
 __umulhisi3:
@@ -170,7 +170,7 @@ __umulhisi3:
         mov     r3, #0                  ; 1   accumulator high
         brset   r1, #1, .entry          ; 1   bit 0 set: r0 is already the sum
         mov     r0, #0                  ; 1
-        jmpr    .entry                  ; 5
+        jmp     .entry                  ; 5
 .set:
         add     r0, r0, lr              ; 1
         add     r3, r3, r2              ; 1
@@ -515,10 +515,10 @@ __umulsidi3_mul:
 ; way w3 takes k.
 .k3:
         add     r3, r3, r1
-        jmpr    .r3
+        jmp     .r3
 .k4:
         add     r3, r3, r5
-        jmpr    .r4
+        jmp     .r4
 
 .narrow:
         mulhu   r1, r0, r2              ; 2   al*bl, high
@@ -908,7 +908,7 @@ __udivmodsi4_mul:
 .lg:
         add     r1, r1, #1              ; 1
         rsb     r4, r2, r4              ; 1
-        jmpr    .ld                     ; 5
+        jmp     .ld                     ; 5
 .hi:    ; (r4:r1) / r2  ->  quotient lr, remainder r4
         mulhu   lr, r3, r4              ; 2
         mul     r5, r3, r4              ; 2
@@ -926,7 +926,7 @@ __udivmodsi4_mul:
         br      lo, r4, r2, .lo         ; 1
         add     lr, lr, #1              ; 1
         rsb     r4, r2, r4              ; 1
-        jmpr    .lo                     ; 4
+        jmp     .lo                     ; 4
 
 .less:
         mov     r2, r0                  ; 1
@@ -1019,7 +1019,7 @@ __udivmodsi4_mul:
         rsb     r1, r4, r1              ; 1
         rsb     r0, r2, r0              ; 1
         rsb     r1, r3, r1              ; 1
-        jmpr    .wd                     ; 4
+        jmp     .wd                     ; 4
 .ve:    ; the fold's rare cases: d0's carry with p >= d1 ...
         sub     lr, lr, #1              ; 1
         rsb     r5, r3, r5              ; 1
@@ -1219,7 +1219,7 @@ __udivmoddi4:
         br      ne, r4, #0, .nbits      ; 1   a zero word with nothing carried
         br      ne, r3, #0, .nbits      ; 1   in is a zero quotient word:
         add     lr, lr, #-16            ; 1   no steps
-        jmpr    .nrot                   ; 4
+        jmp     .nrot                   ; 4
 .nbits:
         brset   r4, #0x8000, .nbig      ; 1   2R overflows: it is above d
         shl     r4, r4, #1              ; 1
@@ -1234,14 +1234,14 @@ __udivmoddi4:
 .nnext:
         add     lr, lr, #-1             ; 1
         brclr   lr, #0x000f, .nrot      ; 1   end of a word
-        jmpr    .nbits                  ; 5
+        jmp     .nbits                  ; 5
 .nbig:
         shl     r4, r4, #1              ; 1   2R - 65536 ...
         brclr   r3, #0x8000, .n1        ; 1, taken 5
         add     r4, r4, #1              ; 1
 .n1:
         shl     r3, r3, #1              ; 1
-        jmpr    .nsub                   ; 4   ... less d is exact mod 65536
+        jmp     .nsub                   ; 4   ... less d is exact mod 65536
 .nrot:
         mov     r5, r3                  ; 1   the next word down into r3,
         mov     r3, r2                  ; 1   and the quotient word just made
@@ -1375,7 +1375,7 @@ __udivmoddi4:
 .next:
         add     lr, lr, #-1             ; 1
         brclr   lr, #0x000f, .wdone     ; 1
-        jmpr    .bits                   ; 4
+        jmp     .bits                   ; 4
 .wdone:
         lsr     r5, lr, #3              ; 1   the word just finished is
         add     r5, r5, #2              ; 1   one above lr / 8 now
@@ -1615,7 +1615,7 @@ __udivmoddi4_mul:
         br      hs, r3, r1, .ndiv       ; 1
         st      r0, [sp, lr]            ; 3   R = 0 and u_j < D: q_j = 0,
         mov     r0, r3                  ; 1   and R = u_j
-        jmpr    .nnext                  ; 4
+        jmp     .nnext                  ; 4
 .ndiv:  ; R:u_j / D  ->  quotient r4, remainder R
         mulhu   r4, r2, r0              ; 2
         mul     r5, r2, r0              ; 2
@@ -1649,7 +1649,7 @@ __udivmoddi4_mul:
 .ng:
         add     r4, r4, #1              ; 1
         rsb     r0, r1, r0              ; 1
-        jmpr    .nst                    ; 4
+        jmp     .nst                    ; 4
 
 ; n << s, for all four cases: five words, of which the top four are pushed
 ; and the bottom one is left in r0.  A shift by s is a mul by 2^s for each
@@ -1725,7 +1725,7 @@ __udivmoddi4_mul:
         rsb     r1, r4, r1              ; 1
         rsb     r0, r2, r0              ; 1
         rsb     r1, r3, r1              ; 1
-        jmpr    .sd                     ; 4
+        jmp     .sd                     ; 4
 
         ; --- m = 2: d1 is not zero, and in lr ---------------------------------
 .m2:
@@ -1794,11 +1794,11 @@ __udivmoddi4_mul:
 .ie:    ; the fold's rare cases: d0's carry with p >= d1 ...
         sub     r5, r5, #1              ; 1
         rsb     lr, r3, lr              ; 1
-        jmpr    .ib                     ; 5
+        jmp     .ib                     ; 5
 .if:   ; ... and t1's carry: v one less, or two if p:t0 >= d1:d0, t0 the
         sub     r5, r5, #1              ; 1   low half of the old v * d0
         br      hs, lr, r3, .ig         ; 1
-        jmpr    .ic                     ; 4
+        jmp     .ic                     ; 4
 .ig:
         br      hi, lr, r3, .ig2        ; 1
         mul     r4, r5, r2              ; 2
@@ -1806,7 +1806,7 @@ __udivmoddi4_mul:
         br      lo, r4, r2, .ic         ; 1
 .ig2:
         sub     r5, r5, #1              ; 1
-        jmpr    .ic                     ; 4
+        jmp     .ic                     ; 4
 
         ; --- m = 3 or 4: d3 in r4 ---------------------------------------------
         ; The frame, once built, with R the six words of n shifted, j the
@@ -1826,7 +1826,7 @@ __udivmoddi4_mul:
         ldm     r2, r3                  ; 4
         mov     r1, lr                  ; 1
         mov     lr, #0                  ; 1   one quotient word, j = 0
-        jmpr    .bd                     ; 4
+        jmp     .bd                     ; 4
 .w1:
         ld      r4, [r5, #4]            ; 3   m = 3: c from d2, and n and d
         clz     r4, r4                  ; 2   a word up
@@ -1866,15 +1866,15 @@ __udivmoddi4_mul:
         br      lo, lr, r4, .jf         ; 1   a carry, 29%
 .jc:
         push    r5                      ; 3
-        jmpr    .bloop                  ; 5
+        jmp     .bloop                  ; 5
 .je:    ; the fold's rare cases: d0's carry with p >= d1 ...
         sub     r5, r5, #1              ; 1
         rsb     lr, r3, lr              ; 1
-        jmpr    .jb                     ; 4
+        jmp     .jb                     ; 4
 .jf:   ; ... and t1's carry: v one less, or two if p:t0 >= d1:d0, t0 the
         sub     r5, r5, #1              ; 1   low half of the old v * d0
         br      hs, lr, r3, .jg         ; 1
-        jmpr    .jc                     ; 5
+        jmp     .jc                     ; 5
 .jg:
         br      hi, lr, r3, .jg2        ; 1
         mul     r4, r5, r2              ; 2
@@ -1882,7 +1882,7 @@ __udivmoddi4_mul:
         br      lo, r4, r2, .jc         ; 1
 .jg2:
         sub     r5, r5, #1              ; 1
-        jmpr    .jc                     ; 5
+        jmp     .jc                     ; 5
 ; R's top two words are D's.  The 3/2 step cannot take that - its quotient
 ; would not fit a word - but the remainder so far is below D, so its next
 ; two words are below D1:D0, and that makes q_j exactly 0xffff: R is at
@@ -1897,7 +1897,7 @@ __udivmoddi4_mul:
         add     r0, r0, r2              ; 1   D3:D2 + R[j+2]
         islo    r1, r0, r2              ; 1
         add     r1, r1, r3              ; 1
-        jmpr    .lower                  ; 5
+        jmp     .lower                  ; 5
 .bloop:
         ld      lr, [sp, #10]           ; 3   2j, and from it the address
         add     lr, lr, sp              ; 1   of R[j] less 12
@@ -1980,7 +1980,7 @@ __udivmoddi4_mul:
         br      eq, r4, #0, .e1         ; 1
         ld      r0, [sp, #12]           ; 3   R0
         clz     r4, r4                  ; 2   c
-        jmpr    .e                      ; 5
+        jmp     .e                      ; 5
 .e1:
         mov     r0, r1                  ; 1   down a word: R0 is 0
         mov     r1, r2                  ; 1

@@ -48,8 +48,7 @@ const MODES = [
   { id: 'ckt',     c: '#E4A2C4', label: 'Packed condition, register, target', bits: 'reg 3 + cond+const 5 + int 8', note: 'one five-bit field holds the condition AND the constant' },
   { id: 'rmt',     c: '#F2B5A5', label: 'Register, bit mask, target', bits: 'reg 3 + table 5 + int 8',    note: 'brset &middot; brclr, on one bit' },
   { id: 'rimt',    c: '#E09A98', label: 'Register, field mask, target', bits: 'reg 3 + table 5 + int 8',   note: 'the same three fields read through #immask5: brset &middot; brclr on a whole field' },
-  { id: 't8',      c: '#FAD4D4', label: 'Target only, 8-bit',    bits: 'int 8',                           note: 'the short jmpr' },
-  { id: 't16',     c: '#F0AEAE', label: 'Target only, 16-bit',   bits: 'int 16 (split)',                  note: 'jmp &middot; jmpr &middot; call &middot; callr' },
+  { id: 't16',     c: '#F0AEAE', label: 'Target only, 16-bit',   bits: 'int 16 (split)',                  note: 'jmp &middot; call' },
 ];
 const MODE = Object.fromEntries(MODES.map((m) => [m.id, m]));
 
@@ -76,7 +75,8 @@ function modeOf(c) {
       // bit layout is identical and the decoder's work is the same.
       return has('immbit5') ? 'rib5' : has('immask5') ? 'rim5' : 'ri5';
     }
-    return has('reg:3') ? 'r' : 't8';
+    if (!has('reg:3')) throw new Error(`no mode for a two-byte form of ${parts.join(', ')}`);
+    return 'r';
   }
   // three bytes
   if (n === 1) return 't16';
@@ -180,7 +180,7 @@ for (let b = 0; b < 256; b++) {
   // A one-byte abbreviation is only interesting for what it abbreviates, so
   // decode it and print the operands it has pinned.
   let sub = '';
-  if (forms[0].nbytes === 1 || mode === 't8') {
+  if (forms[0].nbytes === 1) {
     mem[0] = b;
     const d = decode(dec, mem, 0);
     if (d) {

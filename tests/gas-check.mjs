@@ -14,8 +14,8 @@
 // mnemonic does not determine an encoding - `and rd, rd, #4' fits imm5,
 // immbit5, imm3 and imm10 - and the two assemblers choose by different
 // mechanisms: customasm ranks rules by size and iterates to a fixpoint, gas
-// walks a table sorted shortest first and relaxes `jmpr'.  Landing on the same
-// bytes means those two mechanisms agree.
+// walks a table sorted shortest first.  Landing on the same bytes means those
+// two mechanisms agree.
 //
 // Files needing the assembler's scratch register are skipped: gas has no
 // long-immediate expansion, which is gas's `.set noat' mode and the one a

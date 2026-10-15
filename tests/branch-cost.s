@@ -41,14 +41,12 @@ b_odd:          br      ne, r0, #0, b_odd_x     ; 0x03, 3 bytes, odd, not taken 
 b_odd_x:
 b_even:         br      ne, r0, #0, b_even_x    ; 0x06, 3 bytes, even, not taken -> 1
 b_even_x:
-j_rel:          jmpr    j_rel_x                 ; 0x09, 2 bytes, relative  -> 5
-j_rel_x:
-j_abs:          jmp     j_abs_x                 ; 0x0b, 3 bytes, absolute  -> 5
+j_abs:          jmp     j_abs_x                 ; 0x09, 3 bytes, absolute  -> 5
 j_abs_x:
-c_abs:          call    c_abs_x                 ; 0x0e, 3 bytes, absolute  -> 5
+c_abs:          call    c_abs_x                 ; 0x0c, 3 bytes, absolute  -> 5
 c_abs_x:
-c_lr:           call    lr                      ; 0x11, 2 bytes, the new lr -> 5
+c_lr:           call    lr                      ; 0x0f, 2 bytes, the new lr -> 5
 c_lr_x:
-j_reg:          jmp     r0                      ; 0x13, 2 bytes, register  -> 6
+j_reg:          jmp     r0                      ; 0x11, 2 bytes, register  -> 6
 j_reg_x:
-i_ret:          ret                             ; 0x15, 1 byte,  register  -> 6
+i_ret:          ret                             ; 0x13, 1 byte,  register  -> 6
