@@ -567,6 +567,26 @@ module cpu (
     wire pjr  = pcl[0] ? pjb1 : pjb0;
     wire [15:0] ptgt = {ib2, ib1};
     wire        pjcall = ib0[1];      // 0xaa, given pjr; 0xa9 has bit 1 clear
+    // A CONDITIONAL BRANCH BACKWARD IS PREDICTED TAKEN.  All seven are three
+    // bytes with the displacement last, so ib2[7] says backward.  Its target
+    // needs an add, so it goes into tgt_q, and `pbq` reads it the cycle after
+    // as taken_q would, without the squash: the branch itself is in decode
+    // then, and goes on with its condition inverted and the fall-through as
+    // its target.  So the ALU stage's `taken` now means MISPREDICTED, in both
+    // directions: a forward branch's own condition, guessed false, or a
+    // backward one's inverted, guessed true - and taken_q squashes the wrong
+    // path and fetches the right one.  No guess while a branch is in the ALU
+    // stage, whose verdict owns tgt_q that cycle: in DeltaBlue and CoreMark
+    // that costs nothing - a flop of its own for the guess, 78 LUT4 more,
+    // measured the same cycles.
+    function automatic logic isbr(input logic [7:0] b);
+        isbr = b == 8'ha8 | b == 8'hac | b == 8'had | b == 8'hae | b == 8'haf
+             | b == 8'hb4 | b == 8'hb5;
+    endfunction
+    wire        pbr = pcl[0] ? isbr(iw[0][15:8]) : isbr(iw[0][7:0]);
+    logic       e_cbr;
+    wire        pbok = pbr & ib2[7] & ~e_cbr;
+    logic       pbq;                  // a predicted branch's target is in tgt_q
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
     // down the fall-through path behind it, which costs nothing if the branch
@@ -596,6 +616,8 @@ module cpu (
     wire pjok    = pjr & ~aphase;
     wire pjd     = go & ~take & pjok;
     wire pj      = pjok & slot & (nw >= 3'd2);
+    wire pbd     = go & ~take & pbok;
+    wire [15:0] padd = pc + {8'hff, ib2} + 16'd3;   // backward: the sign is set
     // mul, clz AND popcount TAKE TWO CYCLES IN THE ALU STAGE, and leave a
     // cycle with no dispatch after them, `skip`: see the ALU stage.
     // MORE THAN ONE EXTRA CYCLE - recip's four - STOPS DISPATCH, as a jump
@@ -621,8 +643,9 @@ module cpu (
     wire        wake;                      // an interrupt ends a halt
     wire        xrel;                      // a long hold releases dispatch: the ALU stage
     wire        jfetch;                    // jnow, unless a predicted call fetched already
-    wire        fetch = ~taken_q & ~jfetch & ~ldnow & ~aphase & ~pj;   // the bus is the fetcher's
-    assign mem_addr = taken_q ? {tgt_q[15:1], 1'b0}
+    wire        redir = taken_q | pbq;     // the fetch goes to tgt_q
+    wire        fetch = ~redir & ~jfetch & ~ldnow & ~aphase & ~pj;   // the bus is the fetcher's
+    assign mem_addr = redir   ? {tgt_q[15:1], 1'b0}
                     : jfetch  ? {jaddr[15:1], 1'b0}
                     : ldnow   ? asum
                     : aphase  ? maddr
@@ -644,7 +667,7 @@ module cpu (
         for (int s = 0; s < 4; s++) croom[s] = nw + {2'b0, finq} <= 3'(2 + s);
     wire [1:0]  sel   = gon ? sw[lenr] : 2'd0;
     wire        keepw = fetch & (gon ? croom[sw[lenr]] : croom[0]);
-    wire [15:0] raddr = taken_q ? tgt_q : jaddr;    // a redirect's target
+    wire [15:0] raddr = redir ? tgt_q : jaddr;      // a redirect's target
     // ONE LUT AFTER THE LATE SELECT.  A slot takes the word at position s,
     // and position p holds iw[p] if it is valid and the arriving word if
     // not - `e`, from flops and the port, settled early.  Holding is the
@@ -662,7 +685,7 @@ module cpu (
     always_ff @(posedge clk) begin
         if (rst) begin
             nw <= 3'd0; finq <= 1'b0; fp <= 15'd0;
-        end else if (taken_q | jfetch) begin
+        end else if (redir | jfetch) begin
             // The redirect's own read is the target's word.
             nw <= 3'd0; finq <= 1'b1; fp <= raddr[15:1] + 15'd1;
         end else if (pj) begin
@@ -677,7 +700,7 @@ module cpu (
     always_ff @(posedge clk) begin
         if (rst) begin
             {pcb, pcl, pcc} <= 17'd0; stop <= boot; skip <= 1'b0;
-        end else if (taken_q) begin
+        end else if (redir) begin
             {pcb, pcl, pcc} <= {tgt_q, 1'b0}; stop <= 1'b0; skip <= 1'b0;
         end else if (jnow) begin
             {pcb, pcl, pcc} <= {jaddr, 1'b0}; stop <= 1'b0; skip <= 1'b0;
@@ -699,7 +722,7 @@ module cpu (
             pcb     <= pch;
             {pcc, pcl} <= pcs;
             skip    <= flows & (c_ext != 3'd0) & ~c_long;
-            stop    <= ~flows | c_long;
+            stop    <= ~flows | c_long | pbok;   // a predicted branch: tgt_q next
         end else begin
             skip    <= 1'b0;
         end
@@ -709,7 +732,7 @@ module cpu (
     // =========================================================================
     // DECODE
     // =========================================================================
-    logic        d_valid, d_ucode, d_halt, d_wen, d_cbr, d_jump, d_pj;
+    logic        d_valid, d_ucode, d_halt, d_wen, d_cbr, d_jump, d_pj, d_bp;
     logic        d_mem, d_mst, d_mw2, d_mblk, d_mpush;
     logic [1:0]  d_mn;
     logic [4:0]  d_uent;
@@ -725,6 +748,7 @@ module cpu (
         d_cbr   <= is_cbr;
         d_jump  <= is_jump & ~(pjok & ~pjcall);   // a predicted jmp has gone already
         d_pj    <= pjok;
+        d_bp    <= pbok;
         {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
         d_uent  <= c_uent;
         d_useq  <= c_useq;
@@ -792,7 +816,7 @@ module cpu (
     wire        jreg    = (d_pcsrc == 2'd3);
     wire        calllr  = d_jump & d_wen & jreg & (an == `FRUCTUS_REG_LR);
     wire [15:0] tgt     = (d_pcsrc == 2'd2) ? ins[23:8]
-                        : calllr            ? d_next
+                        : calllr | d_bp     ? d_next     // a predicted branch's fall-through
                         :                     d_next + {{8{b2[7]}}, b2};
 
     // =========================================================================
@@ -861,7 +885,7 @@ module cpu (
 
     logic [3:0]  e_op;
     logic [15:0] aq, bq;
-    logic        e_cbr, e_neg, e_mask, e_ucode, e_halt, e_jump, e_jreg, e_pj;
+    logic        e_neg, e_mask, e_ucode, e_halt, e_jump, e_jreg, e_pj;
     logic [2:0]  e_code;
     logic [15:0] e_tgt;
     logic        e_mem, e_mst, e_mw2, e_mblk;
@@ -901,7 +925,7 @@ module cpu (
         e_jump  <= keep & d_jump;
         e_pj    <= d_pj;
         e_jreg  <= jreg & ~calllr;
-        {e_code, e_neg, e_mask} <= {ccode, cneg, cmask};
+        {e_code, e_neg, e_mask} <= {ccode, cneg ^ d_bp, cmask};
         e_tgt   <= tgt;
         e_ucode <= d_ucode & ~taken_q;
         e_mem   <= keep & d_mem;
@@ -961,7 +985,8 @@ module cpu (
         // The squash taken_q brings finds nothing to squash - dispatch is
         // stopped - and the routine's own writes are not taken_q's to stop.
         taken_q <= ~rst & ~taken_q & ((e_cbr & taken) | urj | jreg_now);
-        tgt_q   <= (urj | jreg_now) ? rjaddr : e_tgt;
+        tgt_q   <= (urj | jreg_now) ? rjaddr : pbd ? padd : e_tgt;
+        pbq     <= ~rst & pbd;
         for (int k = 0; k < 8; k++) if ((e_we[k] & ~taken_q) | mwe[k]) R[k] <= y;
     end
     assign result = y;

@@ -485,7 +485,7 @@ export class Machine {
     for (const s of e.body) this.exec(s, d.ops);
     if (this.guardHit) { this.guardHit = false; this.guardPending = true; }
     if (this.divHit) { this.divHit = false; this.divPending = true; }
-    this.cyc += this.advance(at, d.nbytes, this.timing(d, e.kind, this.xfer - xfer));
+    this.cyc += this.advance(at, d.nbytes, this.timing(d, e.kind, this.xfer - xfer, at));
     this.count++;
     return d;
   }
@@ -563,7 +563,7 @@ export class Machine {
   //
   // and advance() is the second.  `moved` is the data accesses it made: a
   // byte, or a word at an even address.  `k` is what classify() made of it.
-  timing(d, k, moved) {
+  timing(d, k, moved, at) {
     // brk AND rti are routines that redirect the fetch from their third step,
     // through taken_q; sei and cli release dispatch from their first.
     if (k.fixed === 7) return { hold: 6, redirect: 5 };
@@ -588,7 +588,18 @@ export class Machine {
     // means the assignment to pc RAN, not that pc ended up somewhere else - a
     // branch to the very next instruction still pays, which
     // tests/branch-cost.s pins.
+    //
+    // A BRANCH BACKWARD IS PREDICTED TAKEN: its target, an add away, is read
+    // the cycle after its dispatch, and it goes on with its condition
+    // inverted, so a wrong guess - not taken - costs what a taken branch does.
+    // Not while a branch dispatched two cycles before is in the ALU stage.
     if (k.branch) {
+      const t = this.fe.t, prior = this.cbrAt;
+      this.cbrAt = t;
+      if (this.mem[(at + 2) & 0xffff] & 0x80 && prior !== t - 2) {
+        if (this.wrotePc) return { hold: 3, redirect: 1 };
+        return { hold: 1 + this.penalty, redirect: this.penalty };
+      }
       if (this.wrotePc) return { hold: 1 + this.penalty, redirect: this.penalty };
     } else if (this.wrotePc && k.predict) {
       // jmp AND call TO AN ABSOLUTE ADDRESS read their target's word as they
@@ -666,6 +677,7 @@ export class Machine {
     if (this.fe?.pc === at) return;
     const starve = this.starve;
     this.fe = { nw: 0, finq: 0, t: 0, pc: at, busy: [] };
+    this.cbrAt = undefined;
     this.advance(at, 0, { hold: 0 });
     this.starve = starve;
   }

@@ -437,6 +437,30 @@ const SOURCES = [
       }
   SOURCES.push([...lines, 'halt'].map((l) => '          ' + l).join('\n'));
 }
+// BACKWARD BRANCHES, which dispatch predicts taken: a loop on each of the
+// seven, so each is taken and then not; one never taken; one with a branch
+// two ahead of it, whose verdict owns tgt_q, so it is not predicted; a push
+// just before one; a call in a loop; and loops nested, so that the inner
+// one's wrong guess at its exit is followed by the outer one's branch.
+SOURCES.push([
+  'mov  sp, #0x3100', 'mov  r3, #0', 'mov  r2, #0',
+  'mov  r1, #3', 'l1: add  r2, r2, #1', 'add  r1, r1, #-1', 'br   ne, r1, #0, l1',
+  'mov  r1, #3', 'l2: add  r2, r2, #3', 'add  r1, r1, #-1', 'br   ne, r1, r3, l2',
+  'mov  r4, #3', 'l3: add  r2, r2, r4', 'add  r4, r4, #-1', 'br   ne, r4, r3, l3',
+  'mov  r1, #0', 'l4: add  r1, r1, #1', 'brclr r1, #4, l4',
+  'mov  r1, #0', 'l5: add  r1, r1, #1', 'add  r2, r2, r1', 'brclr r1, #0xfff0, l5',
+  'mov  r1, #4', 'l6: add  r1, r1, #1', 'brset r1, #4, l6',
+  'mov  r1, #0xfff0', 'l7: add  r1, r1, #1', 'brset r1, #0xfff0, l7',
+  'l8: add  r2, r2, #1', 'br   ne, r3, r3, l8',
+  'mov  r1, #3', 'l9: br   ne, r3, #0, l9x', 'add  r1, r1, #-1', 'br   ne, r1, #0, l9', 'l9x: add  r2, r2, r1',
+  'mov  r1, #3', 'l10: push r2', 'add  r1, r1, #-1', 'br   ne, r1, #0, l10',
+  'mov  r1, #3', 'l11: call f11', 'add  r1, r1, #-1', 'br   ne, r1, #0, l11',
+  'mov  r4, #2', 'l12: mov  r1, #2', 'l13: add  r2, r2, r1', 'add  r1, r1, #-1', 'br   ne, r1, #0, l13',
+  'add  r4, r4, #-1', 'br   ne, r4, #0, l12',
+  'halt',
+  'f11: add  r2, r2, #2', 'ret',
+].map((l) => '          ' + l).join('\n'));
+
 // The second copy has its nop IN THE SOURCE, not put in front of the bytes:
 // a call or a jmp to a label is an absolute address, which the assembler
 // has to see move.
@@ -595,7 +619,8 @@ for (let p = 0; p < PROGRAMS; p++) {
     const cycb = mb.cycles() - beforeb; // and in blit mode
     // A memory instruction's accesses: an aligned word is one, a byte one.
     const acc = mem ? m.xfer - xfer0 : 0;
-    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, jump, mem, acc, memst, late, exc, cyc, cycb, R: Array.from(m.R) });
+    const back = !!(m.mem[(pc + 2) & 0xffff] & 0x80);
+    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, back, jump, mem, acc, memst, late, exc, cyc, cycb, R: Array.from(m.R) });
   }
   programs.push({ bytes, reg, trace, hash: fold(m.mem), io, gtrap: m.pc === ((GVECTOR + 1) & 0xffff) });
   writeFileSync(`build/cpu-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
@@ -729,7 +754,7 @@ function check(out, blit, what) {
       const want = blit ? prev.cycb : prev.cyc;
       const floor = prev.exc ? prev.exc
                   : prev.mem ? prev.acc + 2 + (blit && prev.late ? 1 : 0)
-                  : prev.jump ? prev.jump : prev.taken ? 5 : 1;
+                  : prev.jump ? prev.jump : prev.taken ? (prev.back ? 3 : 5) : 1;
       if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) say(` dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
       if (ds[i].cyc - ds[i - 1].cyc !== want)
         say(` dispatch ${i}: ${ds[i].cyc - ds[i - 1].cyc} cycles after the one at 0x${prev.pc.toString(16)}, tools/sim.js charges ${want}`);
