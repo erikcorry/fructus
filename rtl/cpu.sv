@@ -514,6 +514,7 @@ module cpu (
     // store touched a guard of the I/O page, and the next dispatch is its brk.
     // So is a divide by zero: `dq', a recip whose ra had bit 15 clear.
     wire       ie_q;                           // below, with the shadows
+    wire       aphase;                         // the sequencer has the bus: below
     logic      gq, dq;
     // A slot is a cycle that may dispatch; `take` needs only a byte in the
     // buffer, since brk has no bytes but its opcode, and it shifts nothing.
@@ -551,6 +552,17 @@ module cpu (
     classify cl0 (.op(iw[0][7:0]), .len(lb0));
     classify cl1 (.op(iw[0][15:8]), .len(lb1));
     assign lenr = pcl[0] ? lb1 : lb0;
+    // jmp AND call TO AN ABSOLUTE ADDRESS, 0xa9 and 0xaa, REDIRECT AS THEY
+    // DISPATCH: the target is ib1 and ib2, already in the buffer, so the
+    // fetch reads its word at once and the buffer is emptied, as a taken
+    // branch empties it.  Recognised from the flops, both bytes that could be
+    // the opcode, as the length is.  If the sequencer has the bus that cycle -
+    // a store's last access - the buffer is emptied with nothing on its way
+    // and fp left on the target's word, which the fetcher reads next cycle.
+    wire pjb0 = (iw[0][7:0]  == 8'ha9) | (iw[0][7:0]  == 8'haa);
+    wire pjb1 = (iw[0][15:8] == 8'ha9) | (iw[0][15:8] == 8'haa);
+    wire pjr  = pcl[0] ? pjb1 : pjb0;
+    wire [15:0] ptgt = {ib2, ib1};
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
     // down the fall-through path behind it, which costs nothing if the branch
@@ -572,6 +584,14 @@ module cpu (
     // hardware gives: three bytes are any instruction, none is none.
     wire ready   = take | (nw >= 3'd2) | (nw == 3'd1 && (pcl[0] ? lenr == 2'd1 : lenr != 2'd3));
     assign go    = slot & ready;
+    // A predicted jump dispatches, `pjd`, and it reads its target now, `pj`,
+    // when the bus is free.  pj is spelled from flops: three bytes are there
+    // when two words are, so neither the classifier's length nor `go` is in
+    // front of the address pins.  An interrupt taken in its place lets it
+    // fire anyway: the pc stays, and the brk's own redirect empties the
+    // buffer again.
+    wire pjd     = go & ~take & pjr;
+    wire pj      = pjr & slot & ~aphase & (nw >= 3'd2);
     // mul, clz AND popcount TAKE TWO CYCLES IN THE ALU STAGE, and leave a
     // cycle with no dispatch after them, `skip`: see the ALU stage.
     // MORE THAN ONE EXTRA CYCLE - recip's four - STOPS DISPATCH, as a jump
@@ -588,7 +608,7 @@ module cpu (
     // A jump in the ALU stage reads its target's word, chosen by flops alone.
     wire        jnow;
     wire [15:0] jaddr;
-    wire        aphase, mrestart;          // the memory sequencer, below
+    wire        mrestart;                  // the memory sequencer, below
     logic [15:0] mar;
     wire        ldnow;                     // a load's first address: the ALU's result
     wire [15:0] maddr;
@@ -596,11 +616,12 @@ module cpu (
     wire [15:0] rjaddr;
     wire        wake;                      // an interrupt ends a halt
     wire        xrel;                      // a long hold releases dispatch: the ALU stage
-    wire        fetch = ~taken_q & ~jnow & ~ldnow & ~aphase;   // the bus is the fetcher's
+    wire        fetch = ~taken_q & ~jnow & ~ldnow & ~aphase & ~pj;   // the bus is the fetcher's
     assign mem_addr = taken_q ? {tgt_q[15:1], 1'b0}
                     : jnow    ? {jaddr[15:1], 1'b0}
                     : ldnow   ? asum
                     : aphase  ? maddr
+                    : pj      ? {ptgt[15:1], 1'b0}
                     :           {fp, 1'b0};
 
     // --- the buffer --------------------------------------------------------------
@@ -639,6 +660,11 @@ module cpu (
         end else if (taken_q | jnow) begin
             // The redirect's own read is the target's word.
             nw <= 3'd0; finq <= 1'b1; fp <= raddr[15:1] + 15'd1;
+        end else if (pj) begin
+            nw <= 3'd0; finq <= 1'b1; fp <= ptgt[15:1] + 15'd1;
+        end else if (pjd) begin
+            // The sequencer had the bus: the target's word is the next read.
+            nw <= 3'd0; finq <= 1'b0; fp <= ptgt[15:1];
         end else begin
             nw <= nw + {2'b0, finq} - {1'b0, sel};
             finq <= keepw;
@@ -663,6 +689,10 @@ module cpu (
             // The sequencer's last address is on the bus now; the buffer has
             // the next instruction, which dispatches next cycle.
             stop <= 1'b0;
+        end else if (pjd) begin
+            // The jump goes down the pipeline as an ALU instruction - call
+            // writing lr - and dispatch carries on at its target.
+            {pcb, pcl, pcc} <= {ptgt, 1'b0}; stop <= 1'b0; skip <= 1'b0;
         end else if (go) begin
             pcb     <= pch;
             {pcc, pcl} <= pcs;
@@ -677,7 +707,7 @@ module cpu (
     // =========================================================================
     // DECODE
     // =========================================================================
-    logic        d_valid, d_ucode, d_halt, d_wen, d_cbr, d_jump;
+    logic        d_valid, d_ucode, d_halt, d_wen, d_cbr, d_jump, d_pj;
     logic        d_mem, d_mst, d_mw2, d_mblk, d_mpush;
     logic [1:0]  d_mn;
     logic [4:0]  d_uent;
@@ -691,7 +721,8 @@ module cpu (
         d_valid <= ~rst & ~taken_q & go & piped;
         d_ucode <= ~rst & ~taken_q & go & ~piped;
         d_cbr   <= is_cbr;
-        d_jump  <= is_jump;
+        d_jump  <= is_jump & ~pjr;     // a predicted jump has gone already
+        d_pj    <= pjr & ~take;
         {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
         d_uent  <= c_uent;
         d_useq  <= c_useq;
@@ -716,6 +747,9 @@ module cpu (
     // A flop of its own, loaded from the same sum, was measured on dispatch's
     // critical path at 32.67 MHz.
     wire [15:0] d_next = pc;
+    // A PREDICTED call's RETURN ADDRESS is not the pc, which went to the
+    // target as it dispatched: it is the call's own address and its length.
+    wire [15:0] d_ret = d_pj ? d_pc + 16'd3 : d_next;
 
     // The instruction, whole, from the buffer.
     wire [7:0]  b1 = d_b1;
@@ -742,7 +776,7 @@ module cpu (
     // first address, as it adds a load's or store's offset.
     wire [15:0] moff_d;
     wire [15:0] bval  = use_imm ? imm : rk ? konst
-                      : (rc == 3'd2) ? d_next : (rc == 3'd3) ? moff_d : ins[23:8];
+                      : (rc == 3'd2) ? d_ret : (rc == 3'd3) ? moff_d : ins[23:8];
 
     // --- a branch's condition, and a transfer's target -----------------------------
     // A displacement is always byte 2, since every relative transfer is a
