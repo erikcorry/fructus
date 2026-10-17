@@ -552,7 +552,7 @@ module cpu (
     classify cl0 (.op(iw[0][7:0]), .len(lb0));
     classify cl1 (.op(iw[0][15:8]), .len(lb1));
     assign lenr = pcl[0] ? lb1 : lb0;
-    // jmp AND call TO AN ABSOLUTE ADDRESS, 0xa9 and 0xaa, FETCH THEIR TARGET
+    // jmp AND call TO AN ABSOLUTE ADDRESS, 0xaa and 0xab, FETCH THEIR TARGET
     // AS THEY DISPATCH: it is ib1 and ib2, already in the buffer, so the
     // fetch reads its word at once and the buffer is emptied, as a taken
     // branch empties it.  Recognised from the flops, both bytes that could be
@@ -562,11 +562,11 @@ module cpu (
     // unpredicted jump's does, without touching the bus: three cycles.  If
     // the sequencer has the bus - a store's last access - neither is
     // predicted, and both go as they did: four.
-    wire pjb0 = (iw[0][7:0]  == 8'ha9) | (iw[0][7:0]  == 8'haa);
-    wire pjb1 = (iw[0][15:8] == 8'ha9) | (iw[0][15:8] == 8'haa);
+    wire pjb0 = (iw[0][7:0]  == 8'haa) | (iw[0][7:0]  == 8'hab);
+    wire pjb1 = (iw[0][15:8] == 8'haa) | (iw[0][15:8] == 8'hab);
     wire pjr  = pcl[0] ? pjb1 : pjb0;
     wire [15:0] ptgt = {ib2, ib1};
-    wire        pjcall = ib0[1];      // 0xaa, given pjr; 0xa9 has bit 1 clear
+    wire        pjcall = ib0[0];      // 0xab, given pjr; 0xaa has bit 0 clear
     // A CONDITIONAL BRANCH PREDICTED TAKEN has its target read the cycle
     // after it dispatches.  All seven are three bytes with the displacement
     // last, so the target is an add away; it goes into tgt_q, and `pbq` reads

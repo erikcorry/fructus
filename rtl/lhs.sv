@@ -29,8 +29,8 @@
 // from the instruction:
 //
 //   rd field  insn[10:8]
-//             ld ld8 add rsb xor or and shl asr lsr iseq isset br brclr call
-//             jmp brset mul
+//             ld ld8 add rsb xor or and shl asr lsr iseq isset br brclr jmp
+//             call brset mul
 //   ra field  insn[13:11]
 //             st st8 ld ld8 movhi bitrev sxt8 clz popcount add rsb xor or and
 //             shl asr lsr iseq br ishi mul recip mulhu mulhs
@@ -39,6 +39,7 @@
 // exceptions, computed rather than remembered, are:
 //
 //     0xb2  jmp/reg, column +2, rd field - a pc transfer, not an ALU operation
+//     0xb3  call/reg, column +3, rd field - a pc transfer, not an ALU operation
 //
 // So the choice is a microcode bit rather than a decode of opcode[2:0].  That
 // is also the cheaper place for it on its own merits: a registered microcode

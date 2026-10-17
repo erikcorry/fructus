@@ -1419,16 +1419,16 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   THE FIRST ROW IS ALL THREE BYTES, and the second two but for brset:
 #
 #   1010_1000                br      <cond,#imm5>, ra, target
-#   1010_1001                jmp     target             3 bytes, absolute
-#   1010_1010                call    target             3 bytes, absolute
-#   1010_1011                -- free, for three bytes
+#   1010_1001                -- free, for three bytes: the imm10 column
+#   1010_1010                jmp     target             3 bytes, absolute
+#   1010_1011                call    target             3 bytes, absolute
 #   1010_1100                brclr   ra, #immbit5, target
 #   1010_1101                brclr   ra, #immask5, target
 #   1010_111z                br      <cond>, ra, rb, target    TWO opcodes
-#   1011_0000                call    ra                 2 bytes, INDIRECT
+#   1011_0000                -- free, for three bytes
 #   1011_0001                -- free, for three bytes: the imm10 column
 #   1011_0010                jmp     ra                 2 bytes, INDIRECT
-#   1011_0011                -- free: once jmpr, the short relative jump
+#   1011_0011                call    ra                 2 bytes, INDIRECT
 #   1011_0100                brset   ra, #immbit5, target
 #   1011_0101                brset   ra, #immask5, target
 #   1011_011b                ishi    rd, ra, rb         TWO opcodes: an ALU row
@@ -1462,12 +1462,10 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   the map, but for the register transfers, which had to leave the three-byte
 #   row:
 #
-#     .0 .4 .5   aaa?_????   one register and a 5-bit field (call ra at 0xb0
-#                            is 0000_0aaa, as push ra is)
+#     .0 .4 .5   aaa?_????   one register and a 5-bit field
 #     .6 .7      cccb_bbee   two registers and a condition
-#     .1         iiii_iiii   a 16-bit target and no register at all
-#     .2         0000_0aaa   one register: jmp ra; call, beside it, the target
-#     .3         tttt_tttt   a displacement byte
+#     .2 .3      the jumps: jmp in .2 and call in .3, the target's
+#                iiii_iiii above and the register's 0000_0aaa below
 #
 #   .0, .4 AND .5 ARE THE ALU'S CONSTANT COLUMNS, and that is not an analogy.
 #   Byte 1 of `br cond, ra, #imm5` is `aaak_kkkk` and byte 1 of `brclr ra,
@@ -3442,16 +3440,17 @@ semantics = "base = r1; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 # position independence that a machine with a linker and no address-space
 # randomisation never asked for.
 #
-# So jmp and call sit side by side at 0xa9 and 0xaa, with the same byte 1.
+# So jmp and call sit side by side at 0xaa and 0xab, with the same byte 1,
+# each above its form through a register: jmp ra at 0xb2, call ra at 0xb3.
 # Code that must run at an address it was not linked for can jump only
 # through a register.
 #
-# THE SHORT RELATIVE JUMP IS GONE TOO.  `jmpr' was two bytes at 0xb3, the
-# compare-and-branch datapath with its condition pinned to `eq, r0, r0', and
-# the only two-byte relative transfer: so decode chose a displacement from
-# byte 1 or byte 2 for it alone, gas relaxed it and nothing else, and a
-# predictor had one more shape to recognise.  What it saved was a byte on a
-# local jump; gcc now emits `jmp', a byte longer and as fast.
+# THE SHORT RELATIVE JUMP IS GONE TOO.  `jmpr' was two bytes at 0xb3, where
+# call ra is now - the compare-and-branch datapath with its condition pinned
+# to `eq, r0, r0', and the only two-byte relative transfer: so decode chose a
+# displacement from byte 1 or byte 2 for it alone, gas relaxed it and nothing
+# else, and a predictor had one more shape to recognise.  What it saved was a
+# byte on a local jump; gcc now emits `jmp', a byte longer and as fast.
 [[insn]]
 mnemonic = "jmp"
 summary  = "pc = imm16"
@@ -3461,7 +3460,7 @@ semantics = "pc = target"
 
   [[insn.form]]
   name     = "abs16"
-  encoding = "1010_1001  iiii_iiii  jjjj_jjjj"
+  encoding = "1010_1010  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 # Return is just pc = lr, so it needs no operands and fits in one byte - and
@@ -3493,7 +3492,7 @@ semantics = "lr = pc; pc = target"
 
   [[insn.form]]
   name     = "abs16"
-  encoding = "1010_1010  iiii_iiii  jjjj_jjjj"
+  encoding = "1010_1011  iiii_iiii  jjjj_jjjj"
   fields   = { i = "target:int16[7:0]", j = "target:int16[15:8]" }
 
 # --- the indirect call ------------------------------------------------------
@@ -3521,7 +3520,7 @@ semantics = "lr = pc; pc = R[a]"
 
   [[insn.form]]
   name     = "reg"
-  encoding = "1011_0000  0000_0aaa"
+  encoding = "1011_0011  0000_0aaa"
 
   [[insn.form]]
   name     = "r5"

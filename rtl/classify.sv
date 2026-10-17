@@ -220,14 +220,14 @@ module classify (
         8'ha6: t = 45'b01_10_0_0000_0110_0011_1000_xx_xx_1_0_1_11_1_0_1_00100_000_0_xxx;    // pop
         8'ha7: t = 45'b01_10_0_0000_0110_0011_1000_xx_xx_1_0_1_11_1_0_1_00100_000_0_xxx;    // pop
         8'ha8: t = 45'b10_11_0_xxxx_1000_1100_xxxx_01_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // br
-        8'ha9: t = 45'b11_11_0_xxxx_xxxx_xxxx_xxxx_xx_10_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // jmp
-        8'haa: t = 45'b11_11_1_0100_xxxx_0010_0111_xx_10_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // call
+        8'haa: t = 45'b11_11_0_xxxx_xxxx_xxxx_xxxx_xx_10_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // jmp
+        8'hab: t = 45'b11_11_1_0100_xxxx_0010_0111_xx_10_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // call
         8'hac: t = 45'b10_11_0_xxxx_1000_1011_xxxx_10_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // brclr
         8'had: t = 45'b10_11_0_xxxx_1000_1011_xxxx_10_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // brclr
         8'hae: t = 45'b10_11_0_xxxx_1001_1101_xxxx_00_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // br
         8'haf: t = 45'b10_11_0_xxxx_1001_1101_xxxx_00_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // br
-        8'hb0: t = 45'b11_10_1_0100_1000_0010_0111_xx_11_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // call
         8'hb2: t = 45'b11_10_0_xxxx_1000_xxxx_xxxx_xx_11_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // jmp
+        8'hb3: t = 45'b11_10_1_0100_1000_0010_0111_xx_11_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // call
         8'hb4: t = 45'b10_11_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // brset
         8'hb5: t = 45'b10_11_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // brset
         8'hb6: t = 45'b00_10_1_0001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // ishi
