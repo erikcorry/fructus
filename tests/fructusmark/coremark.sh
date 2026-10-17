@@ -17,7 +17,6 @@
 set -e
 root=$(cd "$(dirname "$0")/../.." && pwd)
 src=$root/tests/coremark
-out=$root/build/fructusmark/coremark
 opt=-Os
 mflags=
 for a in "$@"; do
@@ -26,6 +25,7 @@ for a in "$@"; do
     *) mflags="$mflags $a" ;;
   esac
 done
+out=$root/build/fructusmark/coremark$opt
 mkdir -p "$out"
 (cd "$src" && md5sum --quiet -c coremark.md5) ||
   { echo "coremark.sh: the sources differ from CoreMark v1.01" >&2; echo "coremark 0 0 FAIL"; exit 0; }
