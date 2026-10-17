@@ -144,8 +144,9 @@ spec92 *args:
     @bash tests/spec92/run.sh {{args}}
 
 # FructusMark: CoreMark, SOM++'s DeltaBlue and Richards, and the SPEC
-# stand-ins, as one score against a baseline of 100 - `just fructusmark -O2'
-# for the -O2 score.  tests/fructusmark/README.md has the rules.
+# stand-ins, as one score against -Os -mmul's 100, eight at once - `just
+# fructusmark -O2', `--no-mul' or `-j 4' for the others, about a minute and
+# a half each.  tests/fructusmark/README.md has the rules.
 fructusmark *args:
     @bash tests/fructusmark/run.sh {{args}}
 

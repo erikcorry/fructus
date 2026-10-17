@@ -20,9 +20,8 @@
 # ahead of it, which gives it files over memory.  The harnesses and mio.c are
 # ours, and modern C.
 #
-# ESPRESSO IS ALWAYS -Os.  At -O2 its image is 60.7K, which leaves too
-# little of the 64K for its heap; the Flags column says what each one was
-# built at.  So -Os is the default for all of them.
+# THE DEFAULT LEVEL IS -Os, FructusMark's standard one.  Every benchmark also
+# fits at -O2, with and without -mmul.
 #
 # THE CYCLES are the simulator's total from --stats: the whole run, start-up
 # and printing included, as SPEC timed the whole process.
@@ -61,7 +60,7 @@ LIB="-std=gnu11 -Wall -DSPEC92 -I$here/common"
 # src alone), fflags (for src, Fructus alone), ldflags
 # (Fructus only: where the program starts, and so how much heap is left).
 config () {
-  src= harness= files= flags= oflags= fflags= ldflags= bopt=$opt
+  src= harness= files= flags= oflags= fflags= ldflags=
   case $1 in
     compress)
       src="$here/compress/compress.c"
@@ -72,9 +71,9 @@ config () {
     eqntott)
       src=$(ls "$here"/eqntott/*.c | grep -v harness.c)
       harness="$here/eqntott/harness.c"
-      mkdir -p "$out/eqntott"
-      node "$here/eqntott/gen-pri.mjs" "${PRI:-8}" > "$out/eqntott/pri.eqn"
-      files="pri.eqn=$out/eqntott/pri.eqn"
+      mkdir -p "$d"
+      node "$here/eqntott/gen-pri.mjs" "${PRI:-8}" > "$d/pri.eqn"
+      files="pri.eqn=$d/pri.eqn"
       oflags="-Dmain=eqntott_main"
       ldflags="-Wl,--defsym=__heap_end=0x7800" ;;
     espresso)
@@ -107,10 +106,10 @@ compile () {
 
 printf '%-10s %-10s %6s %12s  %s\n' Benchmark Flags Bytes Cycles Result
 for b in $names; do
-  config "$b"
-  # A directory for each build, so that -Os and -O2 can run at once.
+  # A directory for each build, so that every level and -m set can run at once.
   m=${mflags// /}
-  d=$out/$b$bopt$m
+  d=$out/$b$opt$m
+  config "$b"
   mkdir -p "$d/host" "$d/fructus"
   node "$here/embed.mjs" "$d/files.c" $files
 
@@ -124,11 +123,11 @@ for b in $names; do
   gcc $hobj "$d/host/libspec92.a" -Wl,--gc-sections -o "$d/host/prog" -lm
   "$d/host/prog" > "$d/expected" || true
 
-  fobj=$(compile "$root/tools/fcc" "$bopt $mflags $SECT $OLD -I$here/common/include $flags $oflags $fflags" "$d/fructus" $src
-         compile "$root/tools/fcc" "$bopt $mflags $SECT $NEW -I$here/common/include $flags $fflags" "$d/fructus" $harness
-         compile "$root/tools/fcc" "$bopt $mflags $SECT $LIB $flags" "$d/fructus" "$d/files.c")
+  fobj=$(compile "$root/tools/fcc" "$opt $mflags $SECT $OLD -I$here/common/include $flags $oflags $fflags" "$d/fructus" $src
+         compile "$root/tools/fcc" "$opt $mflags $SECT $NEW -I$here/common/include $flags $fflags" "$d/fructus" $harness
+         compile "$root/tools/fcc" "$opt $mflags $SECT $LIB $flags" "$d/fructus" "$d/files.c")
   [ -n "$fobj" ] || exit 1
-  flib=$(compile "$root/tools/fcc" "$bopt $mflags $SECT $LIB $flags" "$d/fructus" "$here/common/mio.c" "$here/common/qsort.c")
+  flib=$(compile "$root/tools/fcc" "$opt $mflags $SECT $LIB $flags" "$d/fructus" "$here/common/mio.c" "$here/common/qsort.c")
   rm -f "$d/fructus/libspec92.a"; "$root/build/binutils/binutils/ar" rcs "$d/fructus/libspec92.a" $flib
   "$root/tools/fcc" $fobj "$d/fructus/libspec92.a" -Wl,--gc-sections $ldflags -o "$d/prog"
   node "$root/tools/fcc-run.mjs" "$d/prog.bin" --max 4e9 --stats \
@@ -144,5 +143,5 @@ for b in $names; do
   done
   cycles=$(sed -n 's/.* \([0-9][0-9]*\) cycles.*/\1/p' "$d/stats")
   if cmp -s "$d/expected" "$d/output"; then ok=ok; else ok="FAIL (diff $d/expected $d/output)"; fi
-  printf '%-10s %-10s %6d %12s  %s\n' "$b" "$bopt$mflags" "$size" "${cycles:-?}" "$ok"
+  printf '%-10s %-10s %6d %12s  %s\n' "$b" "$opt$mflags" "$size" "${cycles:-?}" "$ok"
 done

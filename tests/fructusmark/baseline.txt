@@ -1,5 +1,5 @@
 # FructusMark baseline, -Os -mmul: name bytes cycles
-# 6413e52 2026-10-16 (modified)
+# 121a93f 2026-10-17 (modified)
 # SOMpp fructusmark 474af548
 coremark 8240 1069948
 deltablue 64258 3439706
@@ -7,4 +7,4 @@ richards 61020 107386905
 espresso 46837 52631835
 eqntott 14605 4990441
 compress 17726 26000953
-jpeg 33737 23423975
+jpeg 33737 23424279

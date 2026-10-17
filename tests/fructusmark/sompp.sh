@@ -84,15 +84,19 @@ for name in $names; do
     richards) prog=RunRichards.som want='Richards (CUT DOWN, NOT AWFY SIZE): ok' ;;
     *) echo "sompp.sh: no benchmark $name" >&2; exit 1 ;;
   esac
-  b=$out/$name$opt
+  b=$out/$name$opt${mflags// /}
   rm -rf "$b"
-  if ! { cmake -S "$src" -B "$b" -DCMAKE_TOOLCHAIN_FILE="$src/cmake/fructus.cmake" \
+  # One VM compiles at a time, whatever else runs: cc1plus on Interpreter.cpp
+  # is the hungriest thing FructusMark does, and two -j 8 builds at once can
+  # run a 6 GB machine out of memory.  The simulator runs aren't held to it.
+  if ! { flock 8
+         cmake -S "$src" -B "$b" -DCMAKE_TOOLCHAIN_FILE="$src/cmake/fructus.cmake" \
            -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_CXX_FLAGS_MINSIZEREL="$opt -DNDEBUG" \
            -DCMAKE_CXX_FLAGS="$mflags" \
            -DCMAKE_EXE_LINKER_FLAGS="$mflags -Wl,--defsym=__heap_size=$heap" \
            -DFRUCTUS_HOST_SOM="$host/SOM++" -DFRUCTUS_CLASSPATH="$cp" \
            -DFRUCTUS_PROGRAM="$ex/$prog 1" &&
-         cmake --build "$b" -j 8 --target SOM++; } >"$b.log" 2>&1; then
+         cmake --build "$b" -j 8 --target SOM++; } >"$b.log" 2>&1 8>"$out/.build-lock"; then
     tail -20 "$b.log" >&2
     echo "$name 0 0 FAIL"
     continue

@@ -25,7 +25,8 @@ for a in "$@"; do
     *) mflags="$mflags $a" ;;
   esac
 done
-out=$root/build/fructusmark/coremark$opt
+# A directory for each build, so that every level and -m set can run at once.
+out=$root/build/fructusmark/coremark$opt${mflags// /}
 mkdir -p "$out"
 (cd "$src" && md5sum --quiet -c coremark.md5) ||
   { echo "coremark.sh: the sources differ from CoreMark v1.01" >&2; echo "coremark 0 0 FAIL"; exit 0; }

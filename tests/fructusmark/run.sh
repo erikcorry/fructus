@@ -3,14 +3,22 @@
 # run.sh - FructusMark: one number for how fast Fructus runs real programs
 # =============================================================================
 #
-#   tests/fructusmark/run.sh             the score, -Os -mmul
-#   tests/fructusmark/run.sh -O2         the score with -O2 -mmul
+#   tests/fructusmark/run.sh             the score: -Os -mmul, the standard
+#   tests/fructusmark/run.sh -O2         the same programs at -O2
+#   tests/fructusmark/run.sh --no-mul    without the multiply and reciprocal
 #   tests/fructusmark/run.sh --baseline  ... and make this run the baseline
+#   tests/fructusmark/run.sh -j 4        four benchmarks at once, not eight
 #
-# THE SCORE IS 100 FOR THE BASELINE, main on 2026-10-16 (baseline-Os.txt says
+# THE SCORE IS 100 FOR THE BASELINE, -Os -mmul on main (baseline.txt says
 # which commit), and a geometric mean of how much faster each benchmark is than
-# its baseline: 110 is ten per cent faster on the mean.  Every benchmark has to
-# pass its own output check, or there is no score.
+# its baseline: 110 is ten per cent faster on the mean.  -O2 and --no-mul are
+# scored against the same baseline, so -O2 is above 100 and --no-mul below.
+# Every benchmark has to pass its own output check, or there is no score.
+#
+# THE BENCHMARKS RUN AT ONCE, -j of them, eight by default.  The score is
+# cycles counted by the simulator, not time, so they can't slow each other
+# down in it.  Each level and -m set builds in a directory of its own, so
+# two whole runs can go at once as well.
 #
 # THE ENTRIES, each weighing the same:
 #
@@ -34,28 +42,50 @@ root=$(cd "$here/../.." && pwd)
 opt=-Os
 arch=-mmul
 write=
-for a in "$@"; do
-  case $a in
-    -O*) opt=$a ;;
+jobs=8
+while [ $# -gt 0 ]; do
+  case $1 in
+    -O*) opt=$1 ;;
     --no-mul) arch="" ;;
     --baseline) write=1 ;;
-    *) echo "usage: tests/fructusmark/run.sh [-O2] [--no-mul] [--baseline]" >&2; exit 2 ;;
+    -j) jobs=$2; shift ;;
+    -j*) jobs=${1#-j} ;;
+    *) echo "usage: tests/fructusmark/run.sh [-O2] [--no-mul] [--baseline] [-j N]" >&2; exit 2 ;;
   esac
+  shift
 done
 base=$here/baseline.txt
 out=$root/build/fructusmark
-mkdir -p "$out"
-res=$out/results.txt
+run=$out/run$opt$arch
+rm -rf "$run"
+mkdir -p "$run"
+res=$run/results.txt
 
-# Each line: name bytes cycles ok|FAIL.  The spec92 table has a flags column
-# of its own, so its lines are taken from the end.
-{
-  "$here/coremark.sh" -O${opt#-O} $arch
-  "$here/sompp.sh" $opt $arch
-  names="espresso eqntott compress jpeg"
-  bash "$root/tests/spec92/run.sh" $opt $arch $names |
-    awk 'NR > 1 { print $1, $(NF-2), $(NF-1), $NF }'
-} > "$res"
+# bench NAME: its line, name bytes cycles ok|FAIL, in $run/NAME; the rest
+# of what it prints in $run/NAME.log.  The spec92 table has a flags column
+# of its own, and a failure's diff after FAIL, so its line is taken from the
+# end once the result is cut off.
+bench () {
+  case $1 in
+    coremark) "$here/coremark.sh" $opt $arch ;;
+    deltablue|richards) "$here/sompp.sh" $opt $arch $1 ;;
+    *) bash "$root/tests/spec92/run.sh" $opt $arch $1 |
+         awk 'NR > 1 { ok = $NF == "ok"; sub(/ +(ok|FAIL.*)$/, "")
+                       print $1, $(NF-1), $NF, ok ? "ok" : "FAIL" }' ;;
+  esac > "$run/$1" 2> "$run/$1.log" || true
+  grep -q "^$1 " "$run/$1" || echo "$1 0 0 FAIL" > "$run/$1"
+}
+
+# The longest first, so that -j 4 doesn't leave one running alone at the end.
+for b in coremark richards espresso compress jpeg deltablue eqntott; do
+  while [ "$(jobs -rp | wc -l)" -ge "$jobs" ]; do wait -n || true; done
+  bench $b &
+done
+wait
+for b in coremark deltablue richards espresso eqntott compress jpeg; do
+  cat "$run/$b"
+  [ -s "$run/$b.log" ] && grep -q ' FAIL$' "$run/$b" && cat "$run/$b.log" >&2
+done > "$res"
 
 if [ -n "$write" ]; then
   if grep -qv ' ok$' "$res"; then
@@ -70,7 +100,7 @@ fi
 
 # A first line that is not a result, so that an absent baseline is still a
 # first file for awk: FNR == NR would otherwise take the results for it.
-base_in=$out/base-in.txt
+base_in=$run/base-in.txt
 { echo "# baseline"; [ -f "$base" ] && cat "$base"; } > "$base_in"
 awk -v opt="$opt" -v arch="$arch" '
   FNR == NR { if ($1 !~ /^#/) base[$1] = $3; next }
@@ -99,6 +129,6 @@ awk -v opt="$opt" -v arch="$arch" '
       k++
     }
     if (k == 6) {
-      printf "\nFructusMark %s: %.1f  (%d entries)\n", opt, 100 * exp(logs / k), k
+      printf "\nFructusMark %s%s: %.1f  (%d entries)\n", opt, arch ? " " arch : "", 100 * exp(logs / k), k
     }
   }' "$base_in" "$res"
