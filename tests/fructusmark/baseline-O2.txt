@@ -1,0 +1,7 @@
+# FructusMark baseline, -O2 -mmul: name bytes cycles
+# 959053c 2026-10-16 
+# SOMpp fructusmark 9e8a3d1b
+coremark 11873 879272
+eqntott 16901 4050623
+compress 18151 24305446
+jpeg 36557 20588751
