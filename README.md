@@ -16,8 +16,8 @@ written, but never tested on hardware. Timing analysis puts it between about
 the VGA frame buffers beside it, 32K or 64K of memory — and every configuration
 is fast enough to share the VGA's 25 MHz clock as a single clock domain. Most
 instructions take one cycle, whatever their length, in a three-stage pipeline.
-Full barrel shifter and a 16×16 multiply, either half, in two of the iCE40's DSPs, but no
-cache or branch predictor.
+Full barrel shifter and a 16×16 multiply, either half, in two of the iCE40's DSPs,
+and a dynamic branch predictor in one block RAM, but no cache.
 
 ![The Fructus opcode map: 159 assigned first bytes in an eight-column grid, coloured by addressing mode, with a key](docs/opcodes.svg)
 
@@ -257,13 +257,18 @@ UP5K's SPRAM, read a word at a time — behind a fetcher:
 So an ALU instruction takes one cycle whatever its length, while the fetcher
 keeps up: it brings two bytes a cycle, and falls behind in a run of three-byte
 instructions or after a run of loads and stores - 6% of the cycles of the
-benchmark kernels. A conditional branch flows through all three stages and is
-decided in the ALU stage, beside the ALU: not taken it costs nothing extra,
-taken it costs five cycles, six if the instruction at its target spans two
-words. Jumps and calls take four, or five through a register, with the same
-extra cycle. Measured behind a real SPRAM, the processor runs at 30.1 MHz
+benchmark kernels. A conditional branch is guessed as it dispatches: by a
+table of two-bit counters indexed by the last eleven branch verdicts and
+bits of the jumps' addresses, or, on a miss, backward taken and forward not.
+A branch guessed right costs nothing extra if not taken, and three cycles
+if taken. A wrong guess is found in the ALU stage, beside the ALU, and costs
+five cycles, six if the instruction at the right target spans two words.
+`jmp` and `call` to an absolute address fetch their target as they dispatch
+and take two and three cycles; through a register, jumps and calls take
+five. Measured behind a real SPRAM, the processor runs at 30.0 MHz
 (medians of sixteen placements); [experiments/ib](experiments/ib/README.md)
-has how the buffer was chosen.
+has how the buffer was chosen, and
+[ideas/branch-prediction.md](ideas/branch-prediction.md) the predictor.
 `tools/sim.js` counts the same cycles, and `tests/cpu-check.mjs` holds the two
 together instruction by instruction on random programs. The header of
 `rtl/cpu.sv` has the reasons for each choice and what the alternatives measured.
@@ -682,10 +687,10 @@ time, and the known CRCs for both the performance and validation seeds.
 
 | Build | Bytes | Cycles/iteration | CoreMark/MHz | CoreMark at 30 MHz | at 25.175 MHz |
 |---|---:|---:|---:|---:|---:|
-| `-Os` | 8631 | 2,164,027 | 0.462 | 13.86 | 11.63 |
-| `-Os -mmul` | 8240 | 1,069,948 | 0.935 | 28.04 | 23.53 |
-| `-O2` | 12150 | 1,947,715 | 0.513 | 15.40 | 12.93 |
-| `-O2 -mmul` | 11873 | 879,272 | 1.137 | 34.12 | 28.63 |
+| `-Os` | 8622 | 2,023,742 | 0.494 | 14.82 | 12.44 |
+| `-Os -mmul` | 8240 | 970,087 | 1.031 | 30.93 | 25.95 |
+| `-O2` | 12141 | 1,841,792 | 0.543 | 16.29 | 13.67 |
+| `-O2 -mmul` | 11873 | 807,185 | 1.239 | 37.17 | 31.19 |
 
 30 MHz is the processor alone on the iCE40; with the VGA frame buffers it
 runs at the 25.175 MHz pixel clock. Bytes are the whole image — `.text`,
@@ -695,6 +700,19 @@ call. GCC 16.2.1, `MEM_METHOD` `MEM_STACK`. `just coremark` regenerates the
 table, in about seven minutes, and `just profile` shows where the cycles go —
 `tools/profile.mjs` has CoreMark at `-Os` against `-O2` as its example.
 CoreMark® is a trademark of EEMBC.
+
+[FructusMark](tests/fructusmark/README.md) puts CoreMark, SOM++'s DeltaBlue
+and Richards, and stand-ins for SPECint92's espresso, eqntott, compress and
+jpeg into one score. It is the geometric mean of the speedups over `-Os
+-mmul` at the baseline commit, which scores 100:
+
+| | `-mmul` | without |
+|-|------:|--------:|
+| `-Os` | **108.7** | 81.0 |
+| `-O2` | 120.3 | 99.2 |
+
+`just fructusmark` scores `-Os -mmul` in about a minute and a half, and
+`-O2` and `--no-mul` select the other builds.
 
 ## Status
 
