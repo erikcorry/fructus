@@ -1,5 +1,13 @@
 #include "mincov_int.h"
 
+#ifndef SPEC92
+typedef double real;
+#define R(x) x
+#else	/* float, not double: the soft-float routines are half the size */
+typedef float real;
+#define R(x) x##f
+#endif
+
 /*
  *  mincov.c
  */
@@ -31,7 +39,7 @@ sm_minimum_cover(sm_matrix *A, int *weight, int heuristic, int debug_level)
     sm_col *pcol;
     sm_matrix *dup_A;
     int nelem, bound;
-    double sparsity;
+    real sparsity;
 
     /* Avoid sillyness */
     if (A->nrows <= 0) {
@@ -54,7 +62,7 @@ sm_minimum_cover(sm_matrix *A, int *weight, int heuristic, int debug_level)
     sm_foreach_row(A, prow) {
 	nelem += prow->length;
     }
-    sparsity = (double) nelem / (double) (A->nrows * A->ncols);
+    sparsity = (real) nelem / (real) (A->nrows * A->ncols);
 
     /* Determine an upper bound on the solution */
     bound = 1;
@@ -75,7 +83,7 @@ sm_minimum_cover(sm_matrix *A, int *weight, int heuristic, int debug_level)
 	    (void) printf("lower bound = %d\n", stats.lower_bound);
 	}
 	(void) printf("matrix     = %d by %d with %d elements (%4.3f%%)\n",
-		A->nrows, A->ncols, nelem, sparsity * 100.0);
+		A->nrows, A->ncols, nelem, sparsity * R(100.0));
 	(void) printf("cover size = %d elements\n", best->row->length);
 	(void) printf("cover cost = %d\n", best->cost);
 	(void) printf("time       = %s\n", 
@@ -254,7 +262,7 @@ select_column(sm_matrix *A, int *weight, solution_t *indep)
     register sm_col *pcol;
     register sm_row *prow, *indep_cols;
     register sm_element *p, *p1;
-    double w, best;
+    real w, best;
     int best_col;
 
     indep_cols = sm_row_alloc();
@@ -282,14 +290,14 @@ select_column(sm_matrix *A, int *weight, solution_t *indep)
 	pcol = sm_get_col(A, p1->col_num);
 
 	/* Compute the total 'value' of all things covered by the column */
-	w = 0.0;
+	w = R(0.0);
 	for(p = pcol->first_row; p != 0; p = p->next_row) {
 	    prow = sm_get_row(A, p->row_num);
-	    w += 1.0 / ((double) prow->length - 1.0);
+	    w += R(1.0) / ((real) prow->length - R(1.0));
 	}
 
 	/* divide this by the relative cost of choosing this column */
-	w = w / (double) WEIGHT(weight, pcol->col_num);
+	w = w / (real) WEIGHT(weight, pcol->col_num);
 
 	/* maximize this ratio */
 	if (w  > best) {

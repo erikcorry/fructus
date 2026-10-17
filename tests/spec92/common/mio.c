@@ -348,35 +348,3 @@ unsigned mio_written (MFILE *f) { return f->wp - f->base; }
 char *index (const char *s, int c) { return strchr (s, c); }
 char *rindex (const char *s, int c) { return strrchr (s, c); }
 #endif
-
-#ifdef __fructus__
-/* atof, for readers that meet a decimal point.  Digit by digit, and in
-   float, which is li's FLOTYPE: double would bring libgcc's soft double, 4K
-   of it, for nothing.  Not correctly rounded; no benchmark prints a float.  */
-double
-atof (const char *s)
-{
-  float v = 0, scale = 1;
-  int neg = 0, e = 0, eneg = 0;
-  while (*s == ' ' || *s == '\t')
-    s++;
-  if (*s == '-' || *s == '+')
-    neg = *s++ == '-';
-  for (; *s >= '0' && *s <= '9'; s++)
-    v = v * 10 + (*s - '0');
-  if (*s == '.')
-    for (s++; *s >= '0' && *s <= '9'; s++)
-      v += (*s - '0') * (scale /= 10);
-  if (*s == 'e' || *s == 'E')
-    {
-      s++;
-      if (*s == '-' || *s == '+')
-	eneg = *s++ == '-';
-      for (; *s >= '0' && *s <= '9'; s++)
-	e = e * 10 + (*s - '0');
-    }
-  while (e--)
-    v = eneg ? v / 10 : v * 10;
-  return neg ? -v : v;
-}
-#endif

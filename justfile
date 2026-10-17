@@ -136,12 +136,18 @@ torture *args='-O2':
 coremark *args:
     @sh tests/coremark/run.sh {{args}}
 
-# The SPECint92 stand-ins on the simulator - espresso, li, eqntott and
-# compress, each checked against the host's output - in about a minute.
-# `just spec92 -mmul li' runs one with the multiplier; tests/spec92/README.md
-# says what they are.
+# The SPEC stand-ins on the simulator - espresso, eqntott, compress and jpeg,
+# each checked against the host's output - in about a minute.  `just spec92
+# -mmul jpeg' runs one with the multiplier; tests/spec92/README.md says what
+# they are.
 spec92 *args:
     @bash tests/spec92/run.sh {{args}}
+
+# FructusMark: CoreMark, SOM++'s DeltaBlue and Richards, and the SPEC
+# stand-ins, as one score against a baseline of 100 - `just fructusmark -O2'
+# for the -O2 score.  tests/fructusmark/README.md has the rules.
+fructusmark *args:
+    @bash tests/fructusmark/run.sh {{args}}
 
 # Where a program's cycles go, by function, kind of cost, mnemonic and - with
 # -g - source line; or two builds compared.  tools/profile.mjs's header has the

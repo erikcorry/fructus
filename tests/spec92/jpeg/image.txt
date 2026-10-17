@@ -1,0 +1,10 @@
+image.jpg is "Fruit Platter- Seasonal Fruits" by روتانا (Rotana),
+2 September 2024, own work:
+https://commons.wikimedia.org/wiki/File:Fruit_Platter-_Seasonal_Fruits.jpg
+
+Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0):
+https://creativecommons.org/licenses/by/4.0/
+
+Changed for this benchmark: decoded at 1/2 scale by IJG's djpeg (942x1092
+to 471x546), reduced to 78x91 by averaging 6x6 blocks, and re-encoded by
+IJG's cjpeg 6b at quality 75.  The original's EXIF data is not carried over.

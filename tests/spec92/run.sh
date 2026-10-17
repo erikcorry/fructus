@@ -20,9 +20,9 @@
 # ahead of it, which gives it files over memory.  The harnesses and mio.c are
 # ours, and modern C.
 #
-# ESPRESSO AND LI ARE ALWAYS -Os.  At -O2 their images are 60.7K and 51.6K,
-# which leave too little of the 64K for their heaps; the Opt column says
-# what each one was built at.  So -Os is the default for all of them.
+# ESPRESSO IS ALWAYS -Os.  At -O2 its image is 60.7K, which leaves too
+# little of the 64K for its heap; the Flags column says what each one was
+# built at.  So -Os is the default for all of them.
 #
 # THE CYCLES are the simulator's total from --stats: the whole run, start-up
 # and printing included, as SPEC timed the whole process.
@@ -42,13 +42,12 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
-all="espresso li eqntott compress"
+all="espresso eqntott compress jpeg"
 names=${*:-$all}
 
 # Every function and object in a section of its own, and --gc-sections at the
 # link, as an embedded build would: the linker keeps what the program reaches,
-# which is how espresso and li fit at all, and keeps mio.c's scanf out of
-# compress.
+# which is how espresso fits at all, and keeps mio.c's scanf out of compress.
 SECT="-ffunction-sections -fdata-sections"
 OLD="-std=gnu89 -w -DSPEC92 -I$here/common -include $here/common/spec92.h"
 NEW="-std=gnu11 -Wall -DSPEC92 -I$here/common -include $here/common/spec92.h"
@@ -69,14 +68,14 @@ config () {
       harness="$here/compress/harness.c"
       files="compress.c=$here/compress/input.txt"
       flags="-DBITS=12"
-      ldflags="-Wl,--defsym=__heap_end=0x1800" ;;
+      ldflags="-Wl,--defsym=__heap_end=0x1600" ;;
     eqntott)
       src=$(ls "$here"/eqntott/*.c | grep -v harness.c)
       harness="$here/eqntott/harness.c"
-      node "$here/eqntott/gen-pri.mjs" "${PRI:-9}" > "$out/eqntott/pri.eqn"
+      node "$here/eqntott/gen-pri.mjs" "${PRI:-8}" > "$out/eqntott/pri.eqn"
       files="pri.eqn=$out/eqntott/pri.eqn"
       oflags="-Dmain=eqntott_main"
-      ldflags="-Wl,--defsym=__heap_end=0x9000" ;;
+      ldflags="-Wl,--defsym=__heap_end=0x7800" ;;
     espresso)
       src=$(ls "$here"/espresso/*.c | grep -v harness.c)
       harness="$here/espresso/harness.c"
@@ -84,14 +83,13 @@ config () {
       for f in "$here"/espresso/pla/*.pla; do files="$files $(basename "$f")=$f"; done
       fflags="-DBPI=16"	# espresso's own setting for a 16-bit int
       bopt=-Os
-      ldflags="-Wl,--defsym=__stack_top=${ESP_STACK_TOP:-0x0d00} -Wl,--defsym=__heap_end=${ESP_HEAP_END:-0x2c00}" ;;
-    li)
-      src=$(ls "$here"/li/*.c | grep -v harness.c)
-      harness="$here/li/harness.c"
-      files="queens.lsp=$here/li/queens.lsp"
-      oflags="-Dmain=xlisp_main"
-      bopt=-Os
-      ldflags="-Wl,--defsym=__heap_end=0x5800" ;;
+      ldflags="-Wl,--defsym=__stack_top=${ESP_STACK_TOP:-0x0900} -Wl,--defsym=__heap_end=${ESP_HEAP_END:-0x2c00}" ;;
+    jpeg)
+      src=$(ls "$here"/jpeg/*.c | grep -v harness.c)
+      harness="$here/jpeg/harness.c"
+      files="image.jpg=$here/jpeg/image.jpg"
+      flags="-I$here/jpeg"
+      ldflags="-Wl,--defsym=__stack_top=${JPEG_STACK_TOP:-0x0d00} -Wl,--defsym=__heap_end=${JPEG_HEAP_END:-0x6a00}" ;;
     *) echo "run.sh: no benchmark $1" >&2; exit 1 ;;
   esac
 }
