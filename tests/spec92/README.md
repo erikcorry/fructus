@@ -89,7 +89,7 @@ size can change with any commit. So the room leans towards code:
 | espresso | 1K (648 bytes used) | 8.75K | 7.75K | 0x2c00 | 3.0K |
 | eqntott | 4K (878 used) | 24.75K | 16.75K | 0x7800 | 12.9K |
 | compress | 4K (118 used) | none: its tables are .bss | | 0x1600 | 3.8K |
-| jpeg | 2K (1,240 used) | 23.25K | 21.75K | 0x6a00 | 4.5K, 1.7K at -O2 |
+| jpeg | 2K (1,240 used) | 22.25K | 21.75K | 0x6600 | 5.5K; at -O2 2.8K, 0.9K without -mmul |
 
 Code room is how far the program could grow before it no longer fits
 above its `__heap_end`, measured at -Os -mmul. The heap minimums come from

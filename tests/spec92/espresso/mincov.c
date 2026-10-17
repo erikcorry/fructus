@@ -1,13 +1,5 @@
 #include "mincov_int.h"
 
-#ifndef SPEC92
-typedef double real;
-#define R(x) x
-#else	/* float, not double: the soft-float routines are half the size */
-typedef float real;
-#define R(x) x##f
-#endif
-
 /*
  *  mincov.c
  */
@@ -39,7 +31,11 @@ sm_minimum_cover(sm_matrix *A, int *weight, int heuristic, int debug_level)
     sm_col *pcol;
     sm_matrix *dup_A;
     int nelem, bound;
-    real sparsity;
+#ifndef SPEC92
+    double sparsity;
+#else	/* no floating point: see select_column */
+    long sparsity;
+#endif
 
     /* Avoid sillyness */
     if (A->nrows <= 0) {
@@ -62,7 +58,11 @@ sm_minimum_cover(sm_matrix *A, int *weight, int heuristic, int debug_level)
     sm_foreach_row(A, prow) {
 	nelem += prow->length;
     }
-    sparsity = (real) nelem / (real) (A->nrows * A->ncols);
+#ifndef SPEC92
+    sparsity = (double) nelem / (double) (A->nrows * A->ncols);
+#else
+    sparsity = (long) nelem * 100 / ((long) A->nrows * A->ncols);
+#endif
 
     /* Determine an upper bound on the solution */
     bound = 1;
@@ -82,8 +82,13 @@ sm_minimum_cover(sm_matrix *A, int *weight, int heuristic, int debug_level)
 	    (void) printf("**** heuristic covering ...\n");
 	    (void) printf("lower bound = %d\n", stats.lower_bound);
 	}
+#ifndef SPEC92
 	(void) printf("matrix     = %d by %d with %d elements (%4.3f%%)\n",
-		A->nrows, A->ncols, nelem, sparsity * R(100.0));
+		A->nrows, A->ncols, nelem, sparsity * 100.0);
+#else
+	(void) printf("matrix     = %d by %d with %d elements (%ld%%)\n",
+		A->nrows, A->ncols, nelem, sparsity);
+#endif
 	(void) printf("cover size = %d elements\n", best->row->length);
 	(void) printf("cover cost = %d\n", best->cost);
 	(void) printf("time       = %s\n", 
@@ -262,7 +267,23 @@ select_column(sm_matrix *A, int *weight, solution_t *indep)
     register sm_col *pcol;
     register sm_row *prow, *indep_cols;
     register sm_element *p, *p1;
-    real w, best;
+#ifndef SPEC92
+    double w, best;
+#else
+    /* FIXED POINT, so that no floating point is linked at all: a row's
+       1/(length - 1) is 2^24 / (length - 1), rounded to nearest, so that
+       sums that are equal as fractions, 1/3 + 1/6 and 1/2, come out equal,
+       as they do in double; truncated, they don't, and a tie goes the other
+       way.  A row of one is 1/0, which IEEE makes infinite, and infinite is
+       never greater than infinite: winf and best_inf keep exactly that.  The
+       sum is 64 bits: 32 overflowed on pdc, one of espresso's hard examples.
+       With it, espresso's output is upstream's, double and all, on 182 of
+       the 183 example PLAs it ships, and the other is too slow to finish.
+       Every caller in the subset (irred.c, sminterf.c) gives no weights, so
+       the division is by 1.  */
+    unsigned long long w, best;
+    int winf, best_inf = 0;
+#endif
     int best_col;
 
     indep_cols = sm_row_alloc();
@@ -290,20 +311,42 @@ select_column(sm_matrix *A, int *weight, solution_t *indep)
 	pcol = sm_get_col(A, p1->col_num);
 
 	/* Compute the total 'value' of all things covered by the column */
-	w = R(0.0);
+#ifndef SPEC92
+	w = 0.0;
 	for(p = pcol->first_row; p != 0; p = p->next_row) {
 	    prow = sm_get_row(A, p->row_num);
-	    w += R(1.0) / ((real) prow->length - R(1.0));
+	    w += 1.0 / ((double) prow->length - 1.0);
 	}
 
 	/* divide this by the relative cost of choosing this column */
-	w = w / (real) WEIGHT(weight, pcol->col_num);
+	w = w / (double) WEIGHT(weight, pcol->col_num);
 
 	/* maximize this ratio */
 	if (w  > best) {
 	    best_col = pcol->col_num;
 	    best = w;
 	}
+#else
+	w = 0;
+	winf = 0;
+	for(p = pcol->first_row; p != 0; p = p->next_row) {
+	    prow = sm_get_row(A, p->row_num);
+	    if (prow->length == 1)
+		winf = 1;
+	    else
+		w += ((1UL << 24) + (prow->length - 1) / 2) / (prow->length - 1);
+	}
+
+	/* divide this by the relative cost of choosing this column */
+	w = w / WEIGHT(weight, pcol->col_num);
+
+	/* maximize this ratio */
+	if (winf ? !best_inf : !best_inf && (best_col < 0 || w > best)) {
+	    best_col = pcol->col_num;
+	    best = w;
+	    best_inf = winf;
+	}
+#endif
     }
 
     sm_row_free(indep_cols);

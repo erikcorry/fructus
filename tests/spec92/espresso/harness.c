@@ -10,12 +10,21 @@
 
    SPEC's inputs were bca, cps, ti and tial, 22K to 89K of text each, which
    with espresso's working sets are more than a 64K machine has.  These are
-   smaller circuits from the same MCNC set that espresso ships with.  */
+   smaller circuits from the same MCNC set that espresso ships with, the ones
+   that fit in under 5K of heap, so that it fits at -O2 too: 5xp1 and sao2
+   want 7.75K, and 9sym 14.7 billion cycles.  ROUNDS times through them, as
+   espresso -Dmany would read the files one after another.  */
 
 #include "espresso.h"
 #include "strdup.h"
 
-static char *inputs[] = { "rd53.pla", "misex1.pla", "sao2.pla", "5xp1.pla", 0 };
+static char *inputs[] = {
+  "rd53.pla", "misex1.pla", "squar5.pla", "xor5.pla", "con1.pla", 0
+};
+
+#ifndef ROUNDS
+#define ROUNDS 3
+#endif
 
 int
 main (void)
@@ -38,6 +47,7 @@ main (void)
   echo_comments = TRUE;
   echo_unknown_commands = TRUE;
 
+  for (int round = 0; round < ROUNDS; round++)
   for (char **name = inputs; *name; name++)
     {
       FILE *fp = fopen (*name, "r");

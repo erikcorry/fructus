@@ -72,6 +72,7 @@ config () {
     eqntott)
       src=$(ls "$here"/eqntott/*.c | grep -v harness.c)
       harness="$here/eqntott/harness.c"
+      mkdir -p "$out/eqntott"
       node "$here/eqntott/gen-pri.mjs" "${PRI:-8}" > "$out/eqntott/pri.eqn"
       files="pri.eqn=$out/eqntott/pri.eqn"
       oflags="-Dmain=eqntott_main"
@@ -82,14 +83,13 @@ config () {
       files=
       for f in "$here"/espresso/pla/*.pla; do files="$files $(basename "$f")=$f"; done
       fflags="-DBPI=16"	# espresso's own setting for a 16-bit int
-      bopt=-Os
-      ldflags="-Wl,--defsym=__stack_top=${ESP_STACK_TOP:-0x0900} -Wl,--defsym=__heap_end=${ESP_HEAP_END:-0x2c00}" ;;
+      ldflags="-Wl,--defsym=__stack_top=${ESP_STACK_TOP:-0x0900} -Wl,--defsym=__heap_end=${ESP_HEAP_END:-0x2000}" ;;
     jpeg)
       src=$(ls "$here"/jpeg/*.c | grep -v harness.c)
       harness="$here/jpeg/harness.c"
       files="image.jpg=$here/jpeg/image.jpg"
       flags="-I$here/jpeg"
-      ldflags="-Wl,--defsym=__stack_top=${JPEG_STACK_TOP:-0x0d00} -Wl,--defsym=__heap_end=${JPEG_HEAP_END:-0x6a00}" ;;
+      ldflags="-Wl,--defsym=__stack_top=${JPEG_STACK_TOP:-0x0d00} -Wl,--defsym=__heap_end=${JPEG_HEAP_END:-0x6600}" ;;
     *) echo "run.sh: no benchmark $1" >&2; exit 1 ;;
   esac
 }
@@ -107,9 +107,11 @@ compile () {
 
 printf '%-10s %-10s %6s %12s  %s\n' Benchmark Flags Bytes Cycles Result
 for b in $names; do
-  d=$out/$b
-  mkdir -p "$d/host" "$d/fructus"
   config "$b"
+  # A directory for each build, so that -Os and -O2 can run at once.
+  m=${mflags// /}
+  d=$out/$b$bopt$m
+  mkdir -p "$d/host" "$d/fructus"
   node "$here/embed.mjs" "$d/files.c" $files
 
   # mio.c and qsort.c go in an archive, so a program links what it uses.
