@@ -94,7 +94,10 @@ if [ -n "$write" ]; then
   { echo "# FructusMark baseline, $opt $arch: name bytes cycles"
     echo "# $(git -C "$root" log -1 --format='%h %cs') $(git -C "$root" status --porcelain --untracked-files=no | grep -q . && echo '(modified)')"
     echo "# SOMpp fructusmark $(git -C "${SOMPP:-$HOME/github/SOMpp}" rev-parse --short fructusmark 2>/dev/null)"
-    awk '{ print $1, $2, $3 }' "$res"; } > "$base"
+    awk '{ print $1, $2, $3 }' "$res"; } > "$run/baseline.txt"
+  # Moved in afterwards: written in place, the file is already changed when
+  # git status looks, and every baseline would say it was modified.
+  mv "$run/baseline.txt" "$base"
   echo "wrote $base"
 fi
 
@@ -109,7 +112,7 @@ awk -v opt="$opt" -v arch="$arch" '
     if ($4 != "ok" || !base[$1]) bad = 1
   }
   END {
-    printf "FructusMark %s %s, 30 MHz\n\n", opt, arch
+    printf "FructusMark %s%s, 30 MHz\n\n", opt, arch ? " " arch : ""
     printf "%-10s %7s %13s %9s %8s  %s\n", "", "Bytes", "Cycles", "Seconds", "Ratio", ""
     for (i = 1; i <= n; i++) {
       b = name[i]
