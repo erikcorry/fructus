@@ -8,16 +8,16 @@ entries (`tests/fructusmark`), and they run on their own too:
 ```sh
 tests/spec92/run.sh                 # all four, at -Os
 tests/spec92/run.sh -mmul jpeg      # one, with the multiplier
-tests/spec92/run.sh -O2 compress    # -O2, for the three that fit
+tests/spec92/run.sh -O2 compress    # at -O2
 just spec92                         # the same as the first
 ```
 
 | Benchmark | SPEC | What runs here | Bytes | -Os -mmul | -O2 -mmul |
 |-----------|------|----------------|------:|----------:|----------:|
-| espresso | 008.espresso | Berkeley espresso 2.3 on four MCNC PLAs | 50,125 | 64,676,529 | doesn't fit |
+| espresso | 008.espresso | Berkeley espresso 2.3 on five MCNC PLAs, three times | 46,837 | 52,631,835 | 51,145,649 |
 | eqntott | 023.eqntott | eqntott 9.0 on an 8-line priority encoder | 14,605 | 4,990,441 | 4,050,623 |
 | compress | 026.compress | compress 4.0, 12-bit codes, 4 × 12K | 17,726 | 26,000,953 | 24,305,446 |
-| jpeg | 132.ijpeg | IJG libjpeg 6b decoding a 78×91 photograph, 5 times | 33,737 | 23,423,975 | 20,588,751 |
+| jpeg | 132.ijpeg | IJG libjpeg 6b decoding a 78×91 photograph, 5 times | 33,737 | 23,424,279 | 20,589,055 |
 
 Bytes is the image's .text, .rodata and .data at -Os -mmul, embedded inputs
 included. Cycles is the simulator's total for the whole run, from reset to
@@ -86,17 +86,17 @@ size can change with any commit. So the room leans towards code:
 
 | | stack | heap | needs at least | program from | code room |
 |-|------:|-----:|---------------:|-------------:|----------:|
-| espresso | 1K (648 bytes used) | 8.75K | 7.75K | 0x2c00 | 3.0K |
+| espresso | 1K (648 bytes used) | 5.75K | 4K | 0x2000 | 10.5K; at -O2 2.7K, 2.6K without -mmul |
 | eqntott | 4K (878 used) | 24.75K | 16.75K | 0x7800 | 12.9K |
 | compress | 4K (118 used) | none: its tables are .bss | | 0x1600 | 3.8K |
 | jpeg | 2K (1,240 used) | 22.25K | 21.75K | 0x6600 | 5.5K; at -O2 2.8K, 0.9K without -mmul |
 
 Code room is how far the program could grow before it no longer fits
-above its `__heap_end`, measured at -Os -mmul. The heap minimums come from
-sweeping `__heap_end` a page at a time. **Espresso is always -Os**: at -O2
-it is 59K, which leaves too little of the 64K for its heap and stack. A
-level given to `run.sh` applies to the other three, and `-m` options apply
-to all four.
+above its `__heap_end`, at -Os -mmul unless it says. The heap minimums come
+from sweeping `__heap_end` a page at a time. Every benchmark fits at both
+levels, with and without -mmul; the tightest are jpeg and espresso at -O2
+without the multiplier, where gcc writes constant multiplies out as shifts
+and adds.
 
 ## The programs
 
@@ -164,13 +164,23 @@ Two changes for a 16-bit machine:
   which a 16-bit `int` doesn't have. The host stays at 32, and the outputs
   agree.
 - `mincov.c`'s two heuristics, the column weights `select_column` maximises
-  and a sparsity it only reports, are `float` rather than `double`, on both
-  builds. libgcc's soft float is half the size of its soft double. That's
-  1.6K of the 64K, and the outputs still agree.
+  and a sparsity it only reports, are integers rather than `double`, on both
+  builds, so no soft float is linked at all. A weight is a sum of
+  1/(length - 1) over a column's rows; here each term is 2^24/(length - 1),
+  rounded to nearest, summed in 64 bits, and a row of length 1, an infinite
+  weight upstream, is a flag. Without soft double, and on smaller PLAs,
+  espresso fits at -O2. On each of espresso's example PLAs alone the
+  output is upstream's byte for byte, double and all, on 182 of the 183
+  (the other is too slow to finish).
 
 SPEC's inputs, bca, cps, ti and tial, are 22K to 89K of text each. These are
-rd53, misex1, sao2 and 5xp1 from espresso's own MCNC examples (`tlex/`),
-in `espresso/pla/`. 5xp1 and sao2 are most of the work, and the heap.
+rd53, misex1, squar5, xor5 and con1 from espresso's own MCNC examples
+(`tlex/`), in `espresso/pla/`: the ones that need under 5K of heap, so that
+espresso fits at -O2 too. `harness.c` reads them three times over, as
+`espresso -Dmany` reads PLAs one after another, and the whole output is
+unmodified upstream espresso's for the same fifteen through `-Dmany`, byte
+for byte. One process carries state from one PLA into the next, so squar5
+comes out differently there than on its own: upstream does the same.
 
 ### jpeg: IJG libjpeg 6b
 
