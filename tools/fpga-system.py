@@ -5,49 +5,25 @@
 #   nextpnr-ice40 --up5k --package sg48 --json top.json --pre-place tools/fpga-system.py
 #
 # The UP5K's four SPRAMs are two pairs at opposite bottom corners of the die.
-# The processor's pair goes on the left with the processor and the glue that
-# chooses between them; the frame buffers go on the right with the display.
+# The processor's pair goes on the left, and the frame buffers on the right;
+# the placer puts the processor and the display beside them.
 #
-# LEFT TO ITSELF THE PLACER SPLITS THEM BADLY.  It put the processor's read
-# mux and byte select halfway between the pairs, or the processor itself near
-# the frame buffers, and the processor's read-to-address path then crossed
-# the die twice a cycle: about 11 ns of logic and 32 of wire.  Pinned, the
-# whole system places at 27.82 MHz against 26.17 unpinned, medians of eight
-# seeds, and the slowest seed moves from 25.37 to 27.20.  An earlier version
-# of the system, unpinned, had a seed at 24.63, below the pixel clock.
-#
-# The regions overlap by two columns, so neither side is squeezed at the seam.
-#
-# THE SPLIT MOVED FROM 13 TO 14 with the instruction buffer: the processor,
-# 4229 cells for the system, no longer placed in its region at any seed.  The
-# core before it measured the same at 14 as at 13, 26.68 MHz against 26.65,
-# medians of sixteen, so the column is room and not speed.
-#
-# AND FROM 14 TO 15 with the dynamic branch predictor: 4574 cells, and at 14
-# nextpnr found no legal placement (seed 3, where the run stopped).  At 15 it measures 28.38 MHz (27.6 .. 29.3),
-# medians of sixteen, against 28.31 for main's 4229 at 14.
+# THERE WERE REGIONS TOO, one for the processor and its glue and one for the
+# display, because left to itself the placer split them badly: the
+# processor's read-to-address path crossed the die twice a cycle, and the
+# system placed at 26.17 MHz against 27.82 pinned.  The processor's region
+# had to widen twice as it grew, and at 4709 cells no longer placed.  What
+# pulled the processor across was the system's logic decoded from the
+# processor's address - its write enables and the I/O registers' read - which
+# nextpnr timed through the fetch's arms of the address mux.  Decoded from
+# the processor's flops instead, the regions buy nothing: with them 29.63 MHz
+# (28.0 .. 30.6), with the SPRAMs alone 29.47 (28.5 .. 30.7), with nothing
+# pinned 29.21 (27.7 .. 30.4), medians of sixteen.
 # =============================================================================
-
-SPLIT = 15
-ctx.createRectangularRegion("cpu", 0, 0, SPLIT, 31)
-ctx.createRectangularRegion("vid", SPLIT - 2, 0, 25, 31)
 
 BELS = {"ram_lo_RAM": "X0/Y0/spram_1", "ram_hi_RAM": "X0/Y0/spram_2",
         "fba_RAM": "X25/Y0/spram_3", "fbb_RAM": "X25/Y0/spram_4"}
 
-# The processor, and the top level's cells that sit between it and its own
-# two SPRAMs: the bank select, blit mode's late path, the write enables, and
-# the observation shift register.  The processor picks its own byte, so there
-# is no byte select.
-GLUE = ("u.", "src", "rdata", "ram_", "hi", "lo_", "late", "we", "wdata",
-        "so", "irq", "rst", "dout")
-
 for name, cell in ctx.cells:
     if name in BELS:
         cell.setAttr("BEL", BELS[name])
-    elif cell.type != "ICESTORM_LC":
-        continue
-    elif name.startswith("vid."):
-        ctx.constrainCellToRegion(name, "vid")
-    elif name.startswith(GLUE):
-        ctx.constrainCellToRegion(name, "cpu")

@@ -416,11 +416,14 @@ rules:
   So register and frame buffer writes land a cycle late, out of flops, and
   the CPU reads a frame buffer only in blit mode, a cycle late (see
   `rtl/cpu.sv`).
-- **The placement is pinned** by `tools/fpga-system.py`: the CPU's SPRAMs and
-  its read and bank selects on one side, the display's on the other. Left to
-  itself the placer put the CPU's read mux between the two pairs. Pinning is
-  worth about 1.7 MHz, and without it the slowest seed comes within a few
-  per cent of the pixel clock, or below it.
+- **The SPRAMs are pinned** by `tools/fpga-system.py`: the CPU's pair on one
+  side, the frame buffers on the other. The CPU and the display were pinned
+  into regions beside them too, once worth about 1.7 MHz: left to itself the
+  placer put the CPU's read mux between the two pairs. What pulled it there
+  was logic the system decoded from the CPU's address - the SPRAMs' write
+  enables and the I/O registers' read - which the placer timed through the
+  fetch's arms of the address mux. Decoded from the CPU's flops instead
+  (`mem_whi`, `mem_rmar`), the regions bought nothing, and they are gone.
 - **The display chooses its read address by schedule** (see
   [Text generator](#text-generator)). Before that change, its own address
   path sometimes set the clock of the whole system.
