@@ -123,6 +123,9 @@ for f in immgen.sv lhs.sv dest.sv cond.sv compare.sv classify.sv ucode.sv recip.
     rm -f "build/_$f"
 done
 if node tests/rtl-check.mjs; then :; else fail=1; fi
+# The decodes on the slowest paths, held to a LUT depth the opcode map gives
+# them, and to the spec.
+if node tests/depth-check.mjs; then :; else fail=1; fi
 if node tests/cpu-check.mjs; then :; else fail=1; fi
 if node tests/blit-check.mjs; then :; else fail=1; fi
 if node tests/uart-check.mjs; then :; else fail=1; fi

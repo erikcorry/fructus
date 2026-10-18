@@ -47,8 +47,11 @@ const m = machine();
 // instruction is in that word, three if it reaches into the next.
 {
   const { code, syms } = assemble('tests/branch-cost.s');
-  const cost = (label) => {
+  // `guess`: what every entry of the jmp ra predictor's table holds - 0, the
+  // target of a jump through r0, or 0xffff, a guess that is wrong.
+  const cost = (label, guess = 0xffff) => {
     m.mem.fill(0);
+    m.jtm.fill(guess);
     m.load(code);
     m.R.fill(0);                       // r0 = 0: `eq #0` is taken, `ne #0` is not
     m.pc = syms.get(label);
@@ -68,11 +71,13 @@ const m = machine();
     ['c_abs',   3, 'a 3-byte absolute call, to an odd 2-byte instruction'],
     ['c_lr',    5, '`call lr`, to the next instruction, odd and 2 bytes'],
     ['j_reg',   6, 'a 2-byte jump through a register, to an even 3-byte instruction'],
+    // Guessed right, the target is read as it dispatches, as an absolute one's.
+    ['j_reg',   3, 'a 2-byte jump through a register, guessed right, to an even 3-byte instruction', 0],
     ['i_ret',   6, 'ret: one byte, through a register, to an even 3-byte instruction'],
   ];
-  for (const [label, cycles, what] of want)
-    check('branch cost', cost(label) === cycles,
-          `${what} cost ${cost(label)} cycles, want ${cycles}`);
+  for (const [label, cycles, what, guess] of want)
+    check('branch cost', cost(label, guess) === cycles,
+          `${what} cost ${cost(label, guess)} cycles, want ${cycles}`);
 
   // The pair that isolates the cause: the same branch, the same three bytes,
   // both at even addresses, taken and not.  Taken, it is the cycle any

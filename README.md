@@ -486,10 +486,12 @@ monitor can print it. `nop` is at `0x82`, away from them.
 with the fetcher keeping up: an ALU instruction or an untaken branch is one
 cycle; a taken branch five; a jump or call four, or five through a register,
 and any of them one more when the instruction at the target spans two words;
-a load or store of N accesses N + 2, where an access is a byte or a whole word
-at an even address, so `ld` is three aligned and four not, and a
-three-register `push` five with sp even and eight with it odd; mul, mulhu,
-mulhs, clz and popcount two, and recip five. A taken branch is what
+a jump or call through a register, other than `ret`, is guessed from a table
+of where such jumps went before, and costs what an absolute one does when
+the guess is right; a load or store of N accesses N + 2, where an access is
+a byte or a whole word at an even address, so `ld` is three aligned and four
+not, and a three-register `push` five with sp even and eight with it odd;
+mul, mulhu, mulhs, clz and popcount two, and recip five. A taken branch is what
 makes a longer unrolled loop worth anything once the instruction mix is fixed,
 and a memory instruction is the slowest thing a program does often. The
 simulator does not keep a list of which instructions are which: the semantics
@@ -690,10 +692,10 @@ time, and the known CRCs for both the performance and validation seeds.
 
 | Build | Bytes | Cycles/iteration | CoreMark/MHz | CoreMark at 30 MHz | at 25.175 MHz |
 |---|---:|---:|---:|---:|---:|
-| `-Os` | 8622 | 2,023,742 | 0.494 | 14.82 | 12.44 |
-| `-Os -mmul` | 8240 | 970,087 | 1.031 | 30.93 | 25.95 |
-| `-O2` | 12141 | 1,841,792 | 0.543 | 16.29 | 13.67 |
-| `-O2 -mmul` | 11873 | 807,185 | 1.239 | 37.17 | 31.19 |
+| `-Os` | 8629 | 2,009,261 | 0.498 | 14.93 | 12.53 |
+| `-Os -mmul` | 8238 | 959,609 | 1.042 | 31.26 | 26.23 |
+| `-O2` | 12148 | 1,836,926 | 0.544 | 16.33 | 13.70 |
+| `-O2 -mmul` | 11871 | 806,233 | 1.240 | 37.21 | 31.23 |
 
 30 MHz is the processor alone on the iCE40; with the VGA frame buffers it
 runs at the 25.175 MHz pixel clock. Bytes are the whole image — `.text`,
@@ -711,8 +713,8 @@ jpeg into one score. It is the geometric mean of the speedups over `-Os
 
 | | `-mmul` | without |
 |-|------:|--------:|
-| `-Os` | **108.7** | 81.0 |
-| `-O2` | 120.3 | 99.2 |
+| `-Os` | **109.6** | 82.0 |
+| `-O2` | 120.9 | 99.9 |
 
 `just fructusmark` scores `-Os -mmul` in about a minute and a half, and
 `-O2` and `--no-mul` select the other builds.

@@ -461,6 +461,28 @@ SOURCES.push([
   'f11: add  r2, r2, #2', 'ret',
 ].map((l) => '          ' + l).join('\n'));
 
+// AN INTERPRETER'S DISPATCH: handlers that end in a jmp through a register,
+// 0xb2's and jmp r5's, in an order that repeats, with forward branches
+// between, and calls through a register, call ra's and call r5's - so the
+// jmp ra predictor learns them, guesses right, and once in a while wrong,
+// where the branch inside h3 changes its mind.  Then `call lr`, which is
+// guessed and never right.
+SOURCES.push([
+  'jmp  go',
+  'f1:  add  r3, r3, #7', 'ret',
+  'f2:  brclr r1, #2, f2x', 'add  r3, r3, #9', 'f2x: ret',
+  'go:  mov  r3, #0', 'mov  r1, #24',
+  'top: mov  r2, #h1', 'jmp  r2',
+  'h1:  add  r3, r3, #1', 'mov  r5, #h2', 'jmp  r5',
+  'h2:  brset r1, #1, h2x', 'add  r3, r3, #2', 'h2x: mov  r2, #h3', 'jmp  r2',
+  'h3:  brclr r1, #8, h3x', 'mov  r5, #h1b', 'jmp  r5', 'h3x: mov  r2, #h4', 'jmp  r2',
+  'h1b: add  r3, r3, #5', 'mov  r2, #h4', 'jmp  r2',
+  'h4:  mov  r2, #f1', 'call r2', 'mov  r5, #f2', 'call r5',
+  'add  r1, r1, #-1', 'br   ne, r1, #0, top',
+  'mov  r1, #6', 'cl:  mov  lr, #cx', 'call lr', 'cx:  add  r1, r1, #-1', 'br   ne, r1, #0, cl',
+  'halt',
+].map((l) => '          ' + l).join('\n'));
+
 // The second copy has its nop IN THE SOURCE, not put in front of the bytes:
 // a call or a jmp to a label is an absolute address, which the assembler
 // has to see move.
@@ -606,9 +628,12 @@ for (let p = 0; p < PROGRAMS; p++) {
       // ra, ret - which goes through taken_q; `call lr` goes to the next pc,
       // not the register, and costs three.  An absolute target is read as the
       // jump dispatches, so jmp's target dispatches two cycles after it, and
-      // call's three, when its ALU cycle has moved the pc.
+      // call's three, when its ALU cycle has moved the pc.  jmp ra's and call
+      // ra's targets, guessed right, are read as they dispatch too: two, three.
       const jm = JUMP_SEM.exec(d.insn.semantics ?? '');
       const jump = !jm ? 0 : jm[2] === 'target' ? (jm[1] ? 3 : 2)
+                 : /^pc = R\[a\]$/.test(jm[0]) ? 2
+                 : /^lr = pc; pc = R\[a\]$/.test(jm[0]) && d.ops.a !== 7 ? 3
                  : /R\[a\]|^pc = lr$/.test(jm[0]) && !(/^lr = pc; pc = R\[a\]$/.test(jm[0]) && d.ops.a === 7) ? 5 : 4;
       const exc = EXC.test(d.insn.mnemonic) ? EXC_CYCLES[d.insn.mnemonic]
                 : d.insn.extra_cycles > 0 ? 1 + d.insn.extra_cycles : 0;
@@ -681,6 +706,7 @@ ${BLIT_WIRING}
             u.shadow_sp = 0; u.shadow_lr = 0; u.shadow_isp = 0;
             // Nor is the predictor's table, which a new Machine starts empty.
             for (h = 0; h < 256; h = h + 1) u.bpm[h] = 0;
+            for (h = 0; h < 1024; h = h + 1) begin u.jtm[h] = 0; u.jcm[h] = 0; end
             mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
             mem[${GVECTOR}] = 8'h${HALT.toString(16).padStart(2, '0')};
             mem[${DVECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
