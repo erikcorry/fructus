@@ -94,10 +94,18 @@ out=a.out
 prev=
 script="-T $root/ld/fructus-sim.ld"
 mul=
+# QUESTIONS FOR THE DRIVER LINK NOTHING, and go to it as they are:
+# -print-prog-name, --version and the rest, which build tools ask a compiler
+# before using it.  Followed by the link below they printed their answer and
+# then an objcopy error about an a.out nobody made.  A -v is a question only
+# alone; with sources it is a verbose build.
+[ "$*" = -v ] && exec $CC -v
 for a in "$@"; do
     [ "$prev" = -o ] && out=$a
     case $a in
         -c|-S|-E) exec $CC "$@" ;;
+        -print-*|--print-*|-dumpversion|-dumpfullversion|-dumpmachine|-dumpspecs|\
+        --version|--help|--help=*|--target-help|-###) exec $CC "$@" ;;
         -T*|-Wl,-T*|-Wl,--script*|--script*) script= ;;
         -mmul) mul=1 ;;
         -mno-mul) mul= ;;
