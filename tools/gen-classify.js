@@ -209,6 +209,46 @@ const cases = rows.map((r) => {
   return `        8'h${r.op.toString(16).padStart(2, '0')}: t = ${W}'b${t.join('_')};    // ${r.who}`;
 }).join('\n');
 
+// THE LENGTH OF AN EMPTY OPCODE IS CHOSEN, NOT LEFT x: yosys fills an x with
+// 0, a length no row has, and the decode of 1, 2, 3 and 0 took 22 LUTs four
+// deep.  Laid out eight wide, the rows' lengths follow the opcode bits:
+//
+//     1   rows 00-0f and 80-8f                   op[6:4] == 0
+//     3   column 1 of every other row            op[2:0] == 1
+//         and in the top half rows 90-97, a8-af, op[7] & (op[5:3] == 2 | op[5:3] == 5
+//         and b0, b1, b4, b5                          | op[5:3] == 6 & !op[1])
+//     2   the rest
+//
+// and an empty opcode is given what the rule says - which, op[6] unread in
+// the top half, repeats rows 90, a8 and b0 at d0, e8 and f0.  So len[1] is one
+// LUT, len[0] two levels, four LUTs in all: rtl/cpu.sv's cl0 and cl1 are on
+// the loop from the buffer through the length to the fetch.  A row that
+// breaks the rule is refused, and the rule must change with the opcodes.
+const lenRule = (op) => {
+  const b = (i) => (op >> i) & 1, f53 = (op >> 3) & 7;
+  if (((op >> 4) & 7) === 0) return 1;
+  if ((op & 7) === 1 || (b(7) && (f53 === 2 || f53 === 5 || (f53 === 6 && !b(1))))) return 3;
+  return 2;
+};
+for (const r of rows)
+  if (lenRule(r.op) !== r.nbytes) throw new Error(`opcode ${r.op.toString(16)}: ${r.nbytes} bytes, and the length rule says ${lenRule(r.op)}`);
+// An empty row is microcoded without a routine - not a memory instruction,
+// no sequencer - and the rest is the mapper's, its length aside.
+const emptyRow = (len) => [bits(KIND.ucode, 2), bits(len, 2), bits(X, 1), bits(X, 4), bits(X, 4), bits(X, 4),
+  bits(X, 4), bits(X, 2), bits(X, 2), '0', bits(X, 1), bits(X, 1), bits(X, 2), bits(X, 1), bits(X, 1),
+  '0', bits(X, ENTRY_BITS), bits(X, 3), bits(X, 1), bits(X, 3)].join('_');
+const used = new Set(rows.map((r) => r.op));
+const empties = [...Array(256).keys()].filter((op) => !used.has(op));
+const emptyCases = empties.map((op) =>
+  `        8'h${op.toString(16).padStart(2, '0')}: t = ${W}'b${emptyRow(lenRule(op))};`).join('\n');
+// A literal short of W is padded with zeros on the left, and every field
+// slides: the default once lost five bits, and an empty opcode read as an
+// ALU row of length 0.
+for (const line of [...cases.split('\n'), ...emptyCases.split('\n')]) {
+  const n = line.match(/'b([01x_]+);/)[1].replace(/_/g, '').length;
+  if (n !== W) throw new Error(`a row of ${n} bits, not ${W}: ${line.trim()}`);
+}
+
 process.stdout.write(`// =============================================================================
 // classify.sv - the processor's predecode: what the opcode is
 // =============================================================================
@@ -221,29 +261,24 @@ process.stdout.write(`// =======================================================
 //
 // ${rows.length} opcodes: ${counts[0]} ALU, ${counts[1]} microcoded - ${memRows} of them memory instructions and
 // ${excRows} exception instructions or mul - ${counts[2]} conditional branches, ${counts[3]} jumps.
-// AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
-// MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
-// pc was worked out behind it, so the length is never used.  Pinned at one, as
-// it was, it measured 32.96 MHz against 33.59, and the length's lookup was on
-// the critical path in some seeds; free, it is on none.  The empty cells -
-// ${256 - rows.length} of them - let synthesis carry the pattern of the rows and columns
-// across them.
-// Rearranging the opcodes that ARE used, with the empties still pinned, made
-// it worse: 31.08.
+// AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH FOLLOWS THE
+// RULE THE USED ONES DO - tools/gen-classify.js has it.  Microcoded stops
+// dispatch, and it traps in the ALU stage, so the length only has to be cheap:
+// four LUTs, len[0] two deep.  Left x, as it was, yosys made it 0 - a fourth
+// length - and the decode 22 LUTs four deep, in cl0 and cl1 on the loop from
+// the buffer through the length to the fetch.  The ${256 - rows.length} empty rows
+// are written out; the default is never reached.
 //
-// THAT IS SAFE ONLY WHILE A TRAP IS WHERE THE MACHINE STOPS.  Dispatching an
-// empty opcode loads the pc with its length added, so the pc behind it is
-// garbage - x in simulation - and nothing may save it.  Today nothing does:
-// \`trapped\` is terminal, and an interrupt cannot be taken behind the opcode
-// because dispatch has stopped.  One taken AS it dispatches never sees it at
-// all - the brk substituted for it is classified instead, and the take keeps
-// the pc - so lr gets the opcode's own address.  But a routine for
-// isa/fructus.toml's reserved illegal_insn vector that saved \`pc\` as brk's
-// does would save the garbage: it must save the ALU stage's e_pc, the
-// opcode's own address, or the empties' length must be pinned again.
+// THE pc BEHIND AN EMPTY OPCODE IS ITS ADDRESS PLUS THAT LENGTH, which means
+// nothing.  Today nothing reads it: \`trapped\` is terminal, and an interrupt
+// cannot be taken behind the opcode because dispatch has stopped.  One taken
+// AS it dispatches never sees it at all - the brk substituted for it is
+// classified instead, and the take keeps the pc - so lr gets the opcode's own
+// address.  But a routine for isa/fructus.toml's reserved illegal_insn vector
+// must save the ALU stage's e_pc, the opcode's own address, not \`pc\`.
 //
 // EVERY x HERE IS A COLUMN ITS ROW DOES NOT READ, and synthesis fills each one
-// as suits it.  So rtl/cpu.sv must hold whatever lands there: the dispatch
+// - yosys with 0.  So rtl/cpu.sv must hold whatever lands there: the dispatch
 // latches that let \`two\` and \`ext\` hold an instruction were both bugs of an x
 // that was read after all.  tests/dontcare-check.mjs fills them with zeros,
 // ones and random bits and runs the processor each way.
@@ -283,7 +318,9 @@ module classify (
         (* rom_style = "logic" *)
         case (op)
 ${cases}
-        default: t = ${W}'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_${'x'.repeat(ENTRY_BITS)}_x_x;
+        // empty: microcoded, so it traps; the length is the rule's
+${emptyCases}
+        default: t = ${W}'b${emptyRow(X)};
         endcase
     end
 

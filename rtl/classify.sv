@@ -10,29 +10,24 @@
 //
 // 170 opcodes: 107 ALU, 49 microcoded - 44 of them memory instructions and
 // 4 exception instructions or mul - 7 conditional branches, 7 jumps.
-// AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH IS LEFT TO THE
-// MAPPER.  Microcoded stops dispatch, and it traps in the ALU stage whatever
-// pc was worked out behind it, so the length is never used.  Pinned at one, as
-// it was, it measured 32.96 MHz against 33.59, and the length's lookup was on
-// the critical path in some seeds; free, it is on none.  The empty cells -
-// 86 of them - let synthesis carry the pattern of the rows and columns
-// across them.
-// Rearranging the opcodes that ARE used, with the empties still pinned, made
-// it worse: 31.08.
+// AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH FOLLOWS THE
+// RULE THE USED ONES DO - tools/gen-classify.js has it.  Microcoded stops
+// dispatch, and it traps in the ALU stage, so the length only has to be cheap:
+// four LUTs, len[0] two deep.  Left x, as it was, yosys made it 0 - a fourth
+// length - and the decode 22 LUTs four deep, in cl0 and cl1 on the loop from
+// the buffer through the length to the fetch.  The 86 empty rows
+// are written out; the default is never reached.
 //
-// THAT IS SAFE ONLY WHILE A TRAP IS WHERE THE MACHINE STOPS.  Dispatching an
-// empty opcode loads the pc with its length added, so the pc behind it is
-// garbage - x in simulation - and nothing may save it.  Today nothing does:
-// `trapped` is terminal, and an interrupt cannot be taken behind the opcode
-// because dispatch has stopped.  One taken AS it dispatches never sees it at
-// all - the brk substituted for it is classified instead, and the take keeps
-// the pc - so lr gets the opcode's own address.  But a routine for
-// isa/fructus.toml's reserved illegal_insn vector that saved `pc` as brk's
-// does would save the garbage: it must save the ALU stage's e_pc, the
-// opcode's own address, or the empties' length must be pinned again.
+// THE pc BEHIND AN EMPTY OPCODE IS ITS ADDRESS PLUS THAT LENGTH, which means
+// nothing.  Today nothing reads it: `trapped` is terminal, and an interrupt
+// cannot be taken behind the opcode because dispatch has stopped.  One taken
+// AS it dispatches never sees it at all - the brk substituted for it is
+// classified instead, and the take keeps the pc - so lr gets the opcode's own
+// address.  But a routine for isa/fructus.toml's reserved illegal_insn vector
+// must save the ALU stage's e_pc, the opcode's own address, not `pc`.
 //
 // EVERY x HERE IS A COLUMN ITS ROW DOES NOT READ, and synthesis fills each one
-// as suits it.  So rtl/cpu.sv must hold whatever lands there: the dispatch
+// - yosys with 0.  So rtl/cpu.sv must hold whatever lands there: the dispatch
 // latches that let `two` and `ext` hold an instruction were both bugs of an x
 // that was read after all.  tests/dontcare-check.mjs fills them with zeros,
 // ones and random bits and runs the processor each way.
@@ -241,7 +236,94 @@ module classify (
         8'hc7: t = 45'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_101;    // mulhu
         8'hce: t = 45'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_011;    // mulhs
         8'hcf: t = 45'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_011;    // mulhs
-        default: t = 45'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_x_x;
+        // empty: microcoded, so it traps; the length is the rule's
+        8'h10: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h14: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h15: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h18: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h1c: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h1d: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h24: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h25: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h2c: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h2d: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h44: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h45: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h64: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h65: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h6c: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h6d: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h74: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h75: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'h99: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'ha1: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'ha9: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hb0: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hb1: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hba: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hbb: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hbc: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hbd: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hc0: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hc1: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hc2: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hc4: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hc5: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hc8: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hc9: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hca: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hcb: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hcc: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hcd: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hd0: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hd1: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hd2: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hd3: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hd4: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hd5: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hd6: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hd7: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hd8: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hd9: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hda: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hdb: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hdc: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hdd: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hde: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hdf: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'he0: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'he1: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'he2: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'he3: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'he4: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'he5: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'he6: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'he7: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'he8: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'he9: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hea: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'heb: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hec: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hed: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hee: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hef: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hf0: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hf1: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hf2: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hf3: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hf4: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hf5: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hf6: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hf7: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hf8: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hf9: t = 45'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hfa: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hfb: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hfc: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hfd: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hfe: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        8'hff: t = 45'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        default: t = 45'b01_xx_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
         endcase
     end
 

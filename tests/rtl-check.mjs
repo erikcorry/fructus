@@ -677,4 +677,54 @@ endmodule
   run('cond', [`${RTL}/compare.sv`, `${RTL}/cond.sv`], 'cond-tb');
 }
 
+// =============================================================================
+// rtl/classify.sv - every opcode's length, and the empty ones' kind
+// =============================================================================
+// The reference is tools/decode.js: an opcode is used if some second byte
+// decodes, and its length is the decoder's.  An empty opcode must come out
+// microcoded with no routine, so it traps in the ALU stage - a row of the
+// wrong width once slid its fields and made every empty one an ALU no-op of
+// length 0, which dispatched itself for ever - and with a length of 1, 2 or 3.
+{
+  const dec = buildDecoder(spec), vec = [];
+  for (let op = 0; op < 256; op++) {
+    let len = 0;
+    for (let b1 = 0; b1 < 256 && !len; b1++) len = decode(dec, [op, b1, 0], 0)?.nbytes ?? 0;
+    vec.push(`${op} ${len}`);
+  }
+  writeFileSync('build/classify-tb.txt', vec.join('\n') + '\n');
+  writeFileSync('build/classify-tb.sv', `module tb;
+    logic [7:0] op; integer want_, f, rr, n = 0, empty = 0, bad = 0;
+    wire [1:0] kind, len; wire useq, mem;
+    classify c (.op(op), .kind(kind), .len(len), .useq(useq), .mem(mem));
+    initial begin
+        f = $fopen("build/classify-tb.txt", "r");
+        if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
+        while (!$feof(f)) begin
+            rr = $fscanf(f, "%d %d\\n", op, want_);
+            if (rr == 2) begin
+                #1; n = n + 1;
+                if (want_ == 0) empty = empty + 1;
+                if (want_ != 0 ? len !== want_[1:0]
+                               : (kind !== 2'd1 || useq !== 1'b0 || mem !== 1'b0 || len === 2'd0 || ^len === 1'bx)) begin
+                    bad = bad + 1;
+                    if (bad < 6) $display("  MISMATCH opcode %h: want length %0d, got kind %b length %b useq %b mem %b",
+                                          op, want_, kind, len, useq, mem);
+                end
+            end
+        end
+        if (bad == 0) $display("ok    rtl/classify.sv: %0d opcodes, every used one's length, the %0d empty ones microcoded without a routine", n, empty);
+        else $display("FAIL  rtl/classify.sv: %0d of %0d wrong", bad, n);
+        $finish;
+    end
+endmodule
+`);
+  execFileSync('iverilog', ['-g2012', '-o', 'build/classify-tb.vvp', `${RTL}/classify.sv`, 'build/classify-tb.sv'],
+               { stdio: 'inherit' });
+  const o = execFileSync('vvp', ['build/classify-tb.vvp'], { encoding: 'utf8' });
+  process.stdout.write(o.split('\n').filter((l) => /^(ok|FAIL)|MISMATCH/.test(l)).join('\n') + '\n');
+  for (const f of ['build/classify-tb.vvp', 'build/classify-tb.sv', 'build/classify-tb.txt']) rmSync(f, { force: true });
+  if (/FAIL/.test(o)) failed = true;
+}
+
 process.exit(failed ? 1 : 0);
