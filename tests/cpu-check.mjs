@@ -571,8 +571,11 @@ for (let p = 0; p < PROGRAMS; p++) {
   m.mem[GVECTOR] = HALT;
   m.mem[DVECTOR] = RTI;
   reg.forEach((v, k) => { m.R[k] = v; });
-  // AND ITS TWIN IN BLIT MODE, stepped alongside: the same machine but for
-  // its loads' timing, which changes what the fetcher has when.
+  // AND ITS TWIN IN BLIT MODE, traced on its own: the same machine but for
+  // its loads' timing, which changes what the fetcher has when - and so,
+  // now and then, which instruction a guard trap replaces, since a trap is
+  // taken at a cycle, not at an instruction.  So blit mode is held to its
+  // twin's pcs and registers, not the plain machine's.
   const mb = new Machine(spec, { io, blit: true }).load(m.mem, 0);
   mb.R.set(m.R);
   // WHETHER A BRANCH IS TAKEN IS NOT WHERE THE pc LANDS: a branch to the
@@ -580,49 +583,51 @@ for (let p = 0; p < PROGRAMS; p++) {
   // pays for taking it.  So a branch is stepped a second time, on a copy
   // whose offset byte is 1, and it was taken if that copy's pc moved by one
   // more than the branch's length.
-  const takes = (pc, len) => {
-    const c = new Machine(spec, { io }).load(m.mem, 0);
-    c.R.set(m.R);
-    c.pc = pc;
-    c.mem[(pc + 2) & 0xffff] = 1;
-    c.step();
-    return c.pc === ((pc + len + 1) & 0xffff);
+  const run = (m) => {
+    const takes = (pc, len) => {
+      const c = new Machine(spec, { io }).load(m.mem, 0);
+      c.R.set(m.R);
+      c.pc = pc;
+      c.mem[(pc + 2) & 0xffff] = 1;
+      c.step();
+      return c.pc === ((pc + len + 1) & 0xffff);
+    };
+    const trace = [];
+    for (let guard = 0; !m.halted && guard < 5000; guard++) {
+      const pc = m.pc;
+      // A guard trap is a brk dispatched where the next instruction would be,
+      // and so is a divide by zero.
+      const trap = m.divPending || (m.guardPending && m.fe.t >= m.guardAt);
+      if (m.divPending && !m.blit) dtraps++;
+      const d = decode(dec, trap ? [0, 0, 0]
+                                           : [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
+      const taken = branches.has(`${d.insn.mnemonic}/${d.form.name}@${m.mem[pc]}`) && takes(pc, d.nbytes);
+      // A jump costs three cycles, or four through a register - jmp ra, call
+      // ra, ret - which goes through taken_q; `call lr` goes to the next pc,
+      // not the register, and costs three.  An absolute target is read as the
+      // jump dispatches, so jmp's target dispatches two cycles after it, and
+      // call's three, when its ALU cycle has moved the pc.
+      const jm = JUMP_SEM.exec(d.insn.semantics ?? '');
+      const jump = !jm ? 0 : jm[2] === 'target' ? (jm[1] ? 3 : 2)
+                 : /R\[a\]|^pc = lr$/.test(jm[0]) && !(/^lr = pc; pc = R\[a\]$/.test(jm[0]) && d.ops.a === 7) ? 5 : 4;
+      const exc = EXC.test(d.insn.mnemonic) ? EXC_CYCLES[d.insn.mnemonic]
+                : d.insn.extra_cycles > 0 ? 1 + d.insn.extra_cycles : 0;
+      const mem = memBytes(d.insn.semantics ?? '');
+      const memst = mem && /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(d.insn.semantics);
+      // Blit mode makes every load but pop a cycle slower.
+      const late = mem && !memst && !/^base = sp; /.test(d.insn.semantics);
+      const before = m.cycles(), xfer0 = m.xfer;
+      m.step();
+      const cyc = m.cycles() - before;   // what the simulator charged it
+      // A memory instruction's accesses: an aligned word is one, a byte one.
+      const acc = mem ? m.xfer - xfer0 : 0;
+      const back = !!(m.mem[(pc + 2) & 0xffff] & 0x80);
+      if (!m.halted) trace.push({ pc, len: d.nbytes, taken, back, jump, mem, acc, memst, late, exc, cyc, R: Array.from(m.R) });
+    }
+    return { trace, hash: fold(m.mem), gtrap: m.pc === ((GVECTOR + 1) & 0xffff) };
   };
-  const trace = [];
-  for (let guard = 0; !m.halted && guard < 5000; guard++) {
-    const pc = m.pc;
-    // A guard trap is a brk dispatched where the next instruction would be,
-    // and so is a divide by zero.
-    const trap = m.divPending || (m.guardPending && m.fe.t >= m.guardAt);
-    if (m.divPending) dtraps++;
-    const d = decode(dec, trap ? [0, 0, 0]
-                                         : [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
-    const taken = branches.has(`${d.insn.mnemonic}/${d.form.name}@${m.mem[pc]}`) && takes(pc, d.nbytes);
-    // A jump costs three cycles, or four through a register - jmp ra, call
-    // ra, ret - which goes through taken_q; `call lr` goes to the next pc,
-    // not the register, and costs three.  An absolute target is read as the
-    // jump dispatches, so jmp's target dispatches two cycles after it, and
-    // call's three, when its ALU cycle has moved the pc.
-    const jm = JUMP_SEM.exec(d.insn.semantics ?? '');
-    const jump = !jm ? 0 : jm[2] === 'target' ? (jm[1] ? 3 : 2)
-               : /R\[a\]|^pc = lr$/.test(jm[0]) && !(/^lr = pc; pc = R\[a\]$/.test(jm[0]) && d.ops.a === 7) ? 5 : 4;
-    const exc = EXC.test(d.insn.mnemonic) ? EXC_CYCLES[d.insn.mnemonic]
-              : d.insn.extra_cycles > 0 ? 1 + d.insn.extra_cycles : 0;
-    const mem = memBytes(d.insn.semantics ?? '');
-    const memst = mem && /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(d.insn.semantics);
-    // Blit mode makes every load but pop a cycle slower.
-    const late = mem && !memst && !/^base = sp; /.test(d.insn.semantics);
-    const before = m.cycles(), xfer0 = m.xfer, beforeb = mb.cycles();
-    m.step();
-    mb.step();
-    const cyc = m.cycles() - before;   // what the simulator charged it
-    const cycb = mb.cycles() - beforeb; // and in blit mode
-    // A memory instruction's accesses: an aligned word is one, a byte one.
-    const acc = mem ? m.xfer - xfer0 : 0;
-    const back = !!(m.mem[(pc + 2) & 0xffff] & 0x80);
-    if (!m.halted) trace.push({ pc, len: d.nbytes, taken, back, jump, mem, acc, memst, late, exc, cyc, cycb, R: Array.from(m.R) });
-  }
-  programs.push({ bytes, reg, trace, hash: fold(m.mem), io, gtrap: m.pc === ((GVECTOR + 1) & 0xffff) });
+  const plain = run(m), blit = run(mb);
+  programs.push({ bytes, reg, ...plain, io, blit });
   writeFileSync(`build/cpu-prog-${p}.hex`, bytes.map((b) => b.toString(16).padStart(2, '0')).join('\n') + '\n');
   writeFileSync(`build/cpu-reg-${p}.hex`, reg.map(hex4).join('\n') + '\n');
 }
@@ -714,8 +719,8 @@ if (trace(outCells) !== trace(out)) {
 let bad = 0, instructions = 0, cycles = 0;
 const complain = (msg) => { if (bad++ < 8) console.log(`  MISMATCH ${msg}`); };
 
-// One run's output against the simulator.  In blit mode ld, ld8 and ldm cost
-// a cycle more.
+// One run's output against the simulator: in blit mode, its blit-mode twin,
+// whose ld, ld8 and ldm cost a cycle more.
 function check(out, blit, what) {
   const rets = programs.map(() => []), disps = programs.map(() => []), squashes = programs.map(() => []), ends = [];
   for (const line of out.split('\n')) {
@@ -725,7 +730,8 @@ function check(out, blit, what) {
     if (f[0] === 'SQUASH') squashes[+f[1]].push(+f[2]);
     if (f[0] === 'END')  ends[+f[1]] = { halted: f[2] === '1', trapped: f[3] === '1', cyc: +f[4], hash: +f[5] };
   }
-  programs.forEach(({ trace, hash }, p) => {
+  programs.forEach((q, p) => {
+    const { trace, hash } = blit ? q.blit : q;
     const say = (msg) => complain(`${what}program ${p}${msg}`);
     if (ends[p] && ends[p].hash !== hash)
       say(`: memory folds to ${ends[p].hash} on the RTL and ${hash} on the simulator`);
@@ -753,7 +759,7 @@ function check(out, blit, what) {
     // bytes there as soon as the back end lets it go.
     for (let i = 1; i < Math.min(ds.length, trace.length + 1); i++) {
       const prev = trace[i - 1];
-      const want = blit ? prev.cycb : prev.cyc;
+      const want = prev.cyc;
       const floor = prev.exc ? prev.exc
                   : prev.mem ? prev.acc + 2 + (blit && prev.late ? 1 : 0)
                   : prev.jump ? prev.jump : prev.taken ? 3 : 1;
