@@ -89,7 +89,7 @@
 ; bit of it and stops as soon as it runs out.  The test doubles as the setup:
 ; whichever way it goes, one of the two operands has to move into r5 anyway,
 ; and the case where they are already the right way round needs the extra
-; `mov r1, r0` - which is the pinned one-byte encoding at 0x0a.
+; `mov r1, r0` - which is the pinned one-byte encoding at 0x85.
 ;
 ; `__mulhi3.sorted` IS A SECOND ENTRY POINT for callers that have already put
 ; the smaller operand in r1.  __umulhisi3 sorts before it decides whether the
@@ -97,7 +97,7 @@
 ; made and does not want making again.
 ;
 ; THE MULTIPLICAND LIVES IN r1 so that every accumulate is `add r0, r0, r1`,
-; the pinned one-byte encoding at 0x07.  Six of them in the loop.
+; the pinned one-byte encoding at 0x80.  Six of them in the loop.
 
 __mulhi3:
         br      ls, r1, r0, .sorted     ; 1   b <= a: b is the multiplier
@@ -368,7 +368,7 @@ __umulsidi3:
         call    __umulhisi3             ; 5
         add     r3, r3, r0              ; 1   X.lo
         islo    r0, r3, r0              ; 1
-        add     r1, r1, r0              ; 1   into P2.hi; it cannot wrap
+        add     r1, r0, r1              ; 1   into P2.hi; it cannot wrap
         add     r2, r2, r1              ; 1   X.hi
         islo    r4, r2, r1              ; 1   cx
 

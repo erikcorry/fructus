@@ -161,7 +161,7 @@ the spec is what defines the language:
 
 The last one covers `ld`, `ld8`, `st` and `st8`. Rewriting happens *before*
 form selection, so the shorthand still reaches the shortest encoding —
-`ld r0, [r0]` is one byte, the pinned abbreviation at `0x03`.
+`ld r0, [r0]` is one byte, the pinned abbreviation at `0x04`.
 
 Disassembly prints the long form in every case except `mov`. A listing read
 beside a hex dump should show every field the bytes carry, and an offset field
@@ -477,10 +477,10 @@ wide, so an aligned word moves in one cycle and an unaligned one a byte at a
 time, a cycle a byte.  The first address decides for a whole `push`, `pop`,
 `stm` or `ldm`, so a stack kept even moves a register a cycle.
 
-**The exception instructions are the lowest opcodes** — `brk` at `0x00`, `halt`
-at `0x01`, `rti` at `0x02` — so erased memory, an unwritten ROM and a wild jump
-into a zeroed page all trap to the handler with the faulting address in `lr`,
-where a monitor can print it. `nop` is at `0x87`, well away from them.
+**The exception instructions are the lowest opcodes** — `brk` at `0x00`,
+`halt` at `0x01` — so erased memory, an unwritten ROM and a wild jump into a
+zeroed page all trap to the handler with the faulting address in `lr`, where a
+monitor can print it. `nop` is at `0x82`, away from them.
 
 **The cost model is the pipeline's**, and it is under `[cpu]` in the spec,
 with the fetcher keeping up: an ALU instruction or an untaken branch is one
@@ -525,12 +525,15 @@ is meaningless there.
 ### The one-byte region
 
 Thirty-two slots, `x000_xxxx`, and every one-byte instruction is in it:
-`brk`, `halt` and `rti` at the bottom, `nop` at 0x87, `ret`, `sei` and `cli`,
-`jmp r5` and `call r5`, and pinned abbreviations — `add r0, r0, #1`,
-`mov r0, r1`, `mov r0, #0`, `push lr`, `ld r0, [sp, #0]` and their neighbours
-at one byte instead of two.
+the ones that take more than a cycle in `0000_xxxx` — `brk` and `halt` at the
+bottom, `jmp r5` and `call r5` at 0x02 and 0x03 (the low bits of `jmp ra` and
+`call ra`), the one-byte loads and store, `ret`, `rti`, `sei`, `cli`, pushes
+and pops — and the single-cycle ones in `1000_xxxx`: `nop` at 0x82 and pinned
+abbreviations — `add r0, r0, #1`, `mov r0, r1`, `mov r0, #0` and their
+neighbours at one byte instead of two, as `push lr` and `ld r0, [sp, #0]` are
+in the lower half.
 
-`mov r0, #0` (0x83) is there for the 65C02's reason: `STZ` was one of that
+`mov r0, #0` (0x88) is there for the 65C02's reason: `STZ` was one of that
 part's most valuable additions because clearing a location is the commonest
 thing a program does that the 6502 had no short way to say. Zeroing a register
 is the same observation one level in — loop counters, accumulators, null

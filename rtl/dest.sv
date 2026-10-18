@@ -43,15 +43,15 @@
 // THE REGISTERS THE MICROCODE NAMES are the one-byte forms' pinned destinations
 // and the two registers the stack and calls write:
 //
-//     r0        ld/implicit, ld8/implicit, add/inc_r0, add/dec_r0,
-//               add/inc2_r0, ld/r0_sp, or/mov_r0_r1, mov/r0_zero, xor/r0_not,
-//               add/r0_r0_r1, mov/r0_one, shl/r0_dbl
-//     r1        add/r1_r1_r0, or/mov_r1_r0, mov/r1_zero, ldm
+//     r0        ld/implicit, ld8/implicit, ld/r0_sp, add/r0_r0_r1, xor/r0_not,
+//               or/mov_r0_r1, mov/r0_one, mov/r0_zero, add/inc_r0, add/dec_r0,
+//               add/inc2_r0, shl/r0_dbl
+//     r1        add/r1_r0_r1, or/mov_r1_r0, mov/r1_zero, ldm
 //     r2        pop/r2, or/mov_r2_r0, mov/r2_zero
 //     r3        mov/r3_zero
 //     r5        stm
 //     sp (r6)   brk, rti, push, pop
-//     lr (r7)   brk, rti, call, pop/lr
+//     lr (r7)   brk, call, rti, pop/lr
 //
 // MEASURED on an iCE40 UP5K, yosys 0.52 -nobram + nextpnr-ice40 0.7: an 8x16
 // register file written at this block's address, logic cells and the median of

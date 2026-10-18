@@ -461,7 +461,7 @@ for (const r of rules) {
 // Two rules can only collide if nothing PINS them apart.  A form that fixes an
 // operand to a constant, or a fan-out branch that pins a table value, is
 // disjoint from any rule pinning the same operand to something else - which is
-// how `add r0, r0, r1` and `add r1, r1, r0` share a size and a pattern without
+// how `add r0, r0, r1` and `add r1, r0, r1` share a size and a pattern without
 // ever being ambiguous.
 const disjoint = (x, y) =>
   Object.keys(x.pins).some((k) => k in y.pins && x.pins[k] !== y.pins[k]);

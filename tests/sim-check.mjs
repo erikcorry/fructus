@@ -132,8 +132,9 @@ const m = machine();
         `pc=${n.pc} halted=${n.halted}`);
 
   // And the layout the argument above depends on: the instructions a wild jump
-  // is likeliest to hit are the three that trap, stop or return from a trap,
-  // so they take the LOWEST opcodes in the machine and nop sits far away.
+  // is likeliest to hit are the two that trap and stop, so they take the
+  // LOWEST opcodes in the machine and nop sits far away.  rti was the third
+  // until jmp r5 and call r5 took 0x02 and 0x03 for their low bits.
   // Stated as PROPERTIES, not addresses.  These were pinned to 0x00/0x01/0x0f
   // and the whole block moved, so the assertions failed for the right reason
   // and had to be rewritten anyway - which is the argument for writing the
@@ -146,14 +147,14 @@ const m = machine();
       if (bits.length === 8 && /^[01]{8}$/.test(bits)) oneByte.push(parseInt(bits, 2));
     }
   oneByte.sort((a, b) => a - b);
-  const exception = ['brk', 'halt', 'rti'].map(opcodeOf);
-  check('the three exception opcodes are the lowest in the machine',
+  const exception = ['brk', 'halt'].map(opcodeOf);
+  check('brk and halt are the lowest opcodes in the machine',
         exception.every((op, k) => oneByte[k] === op) && exception[0] === 0,
-        `lowest are ${oneByte.slice(0, 3).map((o) => '0x' + o.toString(16)).join(' ')}`);
+        `lowest are ${oneByte.slice(0, 2).map((o) => '0x' + o.toString(16)).join(' ')}`);
   check('and brk is opcode zero, so erased memory traps',
         opcodeOf('brk') === 0, `brk=0x${opcodeOf('brk').toString(16)}`);
   check('nop is nowhere near them',
-        NOP > exception[2] + 8, `nop=0x${NOP.toString(16)}`);
+        NOP > exception[1] + 8, `nop=0x${NOP.toString(16)}`);
   console.log('ok    brk is opcode zero: zeroed memory traps where the mistake happened');
 }
 

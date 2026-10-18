@@ -29,75 +29,73 @@
 <text x="181" y="212" font-size="9" fill="rgba(0,0,0,.45)">01</text>
 <text x="269" y="212" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
 <text x="181" y="229" font-size="13" font-weight="600" fill="#000">halt</text>
-<rect x="280" y="198" width="104" height="62" rx="3" fill="#E3A863"/>
+<rect x="280" y="198" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="288" y="212" font-size="9" fill="rgba(0,0,0,.45)">02</text>
 <text x="376" y="212" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="288" y="229" font-size="13" font-weight="600" fill="#000">rti</text>
+<text x="288" y="229" font-size="13" font-weight="600" fill="#000">jmp</text>
+<text x="288" y="243" font-size="8.5" fill="rgba(0,0,0,.62)">r5</text>
 <rect x="387" y="198" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="395" y="212" font-size="9" fill="rgba(0,0,0,.45)">03</text>
 <text x="483" y="212" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="395" y="229" font-size="13" font-weight="600" fill="#000">ld</text>
-<text x="395" y="243" font-size="8.5" fill="rgba(0,0,0,.62)">r0, [r0, #0]</text>
+<text x="395" y="229" font-size="13" font-weight="600" fill="#000">call</text>
+<text x="395" y="243" font-size="8.5" fill="rgba(0,0,0,.62)">r5</text>
 <rect x="494" y="198" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="502" y="212" font-size="9" fill="rgba(0,0,0,.45)">04</text>
 <text x="590" y="212" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="502" y="229" font-size="13" font-weight="600" fill="#000">ld8</text>
+<text x="502" y="229" font-size="13" font-weight="600" fill="#000">ld</text>
 <text x="502" y="243" font-size="8.5" fill="rgba(0,0,0,.62)">r0, [r0, #0]</text>
 <rect x="601" y="198" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="609" y="212" font-size="9" fill="rgba(0,0,0,.45)">05</text>
 <text x="697" y="212" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="609" y="229" font-size="13" font-weight="600" fill="#000">add</text>
-<text x="609" y="243" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r0, #1</text>
+<text x="609" y="229" font-size="13" font-weight="600" fill="#000">ld8</text>
+<text x="609" y="243" font-size="8.5" fill="rgba(0,0,0,.62)">r0, [r0, #0]</text>
 <rect x="708" y="198" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="716" y="212" font-size="9" fill="rgba(0,0,0,.45)">06</text>
 <text x="804" y="212" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="716" y="229" font-size="13" font-weight="600" fill="#000">add</text>
-<text x="716" y="243" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r0, #-1</text>
+<text x="716" y="229" font-size="13" font-weight="600" fill="#000">ld</text>
+<text x="716" y="243" font-size="8.5" fill="rgba(0,0,0,.62)">r0, [r6, #0]</text>
 <rect x="815" y="198" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="823" y="212" font-size="9" fill="rgba(0,0,0,.45)">07</text>
 <text x="911" y="212" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="823" y="229" font-size="13" font-weight="600" fill="#000">add</text>
-<text x="823" y="243" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r0, #2</text>
+<text x="823" y="229" font-size="13" font-weight="600" fill="#000">st</text>
+<text x="823" y="243" font-size="8.5" fill="rgba(0,0,0,.62)">r0, [r6, #0]</text>
 <text x="57" y="298" font-size="10" fill="#6A7180" text-anchor="end">08</text>
 <rect x="66" y="263" width="104" height="62" rx="3" fill="#E3A863"/>
 <text x="74" y="277" font-size="9" fill="rgba(0,0,0,.45)">08</text>
 <text x="162" y="277" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
 <text x="74" y="294" font-size="13" font-weight="600" fill="#000">ret</text>
-<rect x="173" y="263" width="104" height="62" rx="3" fill="#F8CE8B"/>
+<rect x="173" y="263" width="104" height="62" rx="3" fill="#E3A863"/>
 <text x="181" y="277" font-size="9" fill="rgba(0,0,0,.45)">09</text>
 <text x="269" y="277" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="181" y="294" font-size="13" font-weight="600" fill="#000">jmp</text>
-<text x="181" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r5</text>
-<rect x="280" y="263" width="104" height="62" rx="3" fill="#F8CE8B"/>
+<text x="181" y="294" font-size="13" font-weight="600" fill="#000">rti</text>
+<rect x="280" y="263" width="104" height="62" rx="3" fill="#E3A863"/>
 <text x="288" y="277" font-size="9" fill="rgba(0,0,0,.45)">0a</text>
 <text x="376" y="277" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="288" y="294" font-size="13" font-weight="600" fill="#000">call</text>
-<text x="288" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r5</text>
-<rect x="387" y="263" width="104" height="62" rx="3" fill="#F8CE8B"/>
+<text x="288" y="294" font-size="13" font-weight="600" fill="#000">sei</text>
+<rect x="387" y="263" width="104" height="62" rx="3" fill="#E3A863"/>
 <text x="395" y="277" font-size="9" fill="rgba(0,0,0,.45)">0b</text>
 <text x="483" y="277" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="395" y="294" font-size="13" font-weight="600" fill="#000">push</text>
-<text x="395" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r7</text>
+<text x="395" y="294" font-size="13" font-weight="600" fill="#000">cli</text>
 <rect x="494" y="263" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="502" y="277" font-size="9" fill="rgba(0,0,0,.45)">0c</text>
 <text x="590" y="277" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="502" y="294" font-size="13" font-weight="600" fill="#000">pop</text>
+<text x="502" y="294" font-size="13" font-weight="600" fill="#000">push</text>
 <text x="502" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r7</text>
 <rect x="601" y="263" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="609" y="277" font-size="9" fill="rgba(0,0,0,.45)">0d</text>
 <text x="697" y="277" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="609" y="294" font-size="13" font-weight="600" fill="#000">push</text>
-<text x="609" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r0</text>
+<text x="609" y="294" font-size="13" font-weight="600" fill="#000">pop</text>
+<text x="609" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r7</text>
 <rect x="708" y="263" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="716" y="277" font-size="9" fill="rgba(0,0,0,.45)">0e</text>
 <text x="804" y="277" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="716" y="294" font-size="13" font-weight="600" fill="#000">pop</text>
-<text x="716" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r2</text>
+<text x="716" y="294" font-size="13" font-weight="600" fill="#000">push</text>
+<text x="716" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r0</text>
 <rect x="815" y="263" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="823" y="277" font-size="9" fill="rgba(0,0,0,.45)">0f</text>
 <text x="911" y="277" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="823" y="294" font-size="13" font-weight="600" fill="#000">ld</text>
-<text x="823" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r0, [r6, #0]</text>
+<text x="823" y="294" font-size="13" font-weight="600" fill="#000">pop</text>
+<text x="823" y="308" font-size="8.5" fill="rgba(0,0,0,.62)">r2</text>
 <text x="57" y="363" font-size="10" fill="#6A7180" text-anchor="end">10</text>
 <rect x="66" y="328" width="104" height="62" rx="3" fill="#fff" stroke="#E2E5EA"/>
 <text x="74" y="343" font-size="9" fill="#B9BFC9">10</text>
@@ -624,47 +622,47 @@
 <text x="74" y="1252" font-size="9" fill="rgba(0,0,0,.45)">80</text>
 <text x="162" y="1252" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
 <text x="74" y="1269" font-size="13" font-weight="600" fill="#000">add</text>
-<text x="74" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r1, r1, r0</text>
+<text x="74" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r0, r1</text>
 <rect x="173" y="1238" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="181" y="1252" font-size="9" fill="rgba(0,0,0,.45)">81</text>
 <text x="269" y="1252" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="181" y="1269" font-size="13" font-weight="600" fill="#000">mov</text>
-<text x="181" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r1</text>
-<rect x="280" y="1238" width="104" height="62" rx="3" fill="#F8CE8B"/>
+<text x="181" y="1269" font-size="13" font-weight="600" fill="#000">add</text>
+<text x="181" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r1, r0, r1</text>
+<rect x="280" y="1238" width="104" height="62" rx="3" fill="#E3A863"/>
 <text x="288" y="1252" font-size="9" fill="rgba(0,0,0,.45)">82</text>
 <text x="376" y="1252" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="288" y="1269" font-size="13" font-weight="600" fill="#000">mov</text>
-<text x="288" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r1, r0</text>
+<text x="288" y="1269" font-size="13" font-weight="600" fill="#000">nop</text>
 <rect x="387" y="1238" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="395" y="1252" font-size="9" fill="rgba(0,0,0,.45)">83</text>
 <text x="483" y="1252" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="395" y="1269" font-size="13" font-weight="600" fill="#000">mov</text>
-<text x="395" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r0, #0</text>
+<text x="395" y="1269" font-size="13" font-weight="600" fill="#000">xor</text>
+<text x="395" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r0, #1</text>
 <rect x="494" y="1238" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="502" y="1252" font-size="9" fill="rgba(0,0,0,.45)">84</text>
 <text x="590" y="1252" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="502" y="1269" font-size="13" font-weight="600" fill="#000">xor</text>
-<text x="502" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r0, #1</text>
+<text x="502" y="1269" font-size="13" font-weight="600" fill="#000">mov</text>
+<text x="502" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r1</text>
 <rect x="601" y="1238" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="609" y="1252" font-size="9" fill="rgba(0,0,0,.45)">85</text>
 <text x="697" y="1252" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="609" y="1269" font-size="13" font-weight="600" fill="#000">add</text>
-<text x="609" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r0, r1</text>
+<text x="609" y="1269" font-size="13" font-weight="600" fill="#000">mov</text>
+<text x="609" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r1, r0</text>
 <rect x="708" y="1238" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="716" y="1252" font-size="9" fill="rgba(0,0,0,.45)">86</text>
 <text x="804" y="1252" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
 <text x="716" y="1269" font-size="13" font-weight="600" fill="#000">mov</text>
-<text x="716" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r0, #1</text>
-<rect x="815" y="1238" width="104" height="62" rx="3" fill="#E3A863"/>
+<text x="716" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r2, r0</text>
+<rect x="815" y="1238" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="823" y="1252" font-size="9" fill="rgba(0,0,0,.45)">87</text>
 <text x="911" y="1252" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="823" y="1269" font-size="13" font-weight="600" fill="#000">nop</text>
+<text x="823" y="1269" font-size="13" font-weight="600" fill="#000">mov</text>
+<text x="823" y="1283" font-size="8.5" fill="rgba(0,0,0,.62)">r0, #1</text>
 <text x="57" y="1338" font-size="10" fill="#6A7180" text-anchor="end">88</text>
 <rect x="66" y="1303" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="74" y="1317" font-size="9" fill="rgba(0,0,0,.45)">88</text>
 <text x="162" y="1317" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
 <text x="74" y="1334" font-size="13" font-weight="600" fill="#000">mov</text>
-<text x="74" y="1348" font-size="8.5" fill="rgba(0,0,0,.62)">r2, r0</text>
+<text x="74" y="1348" font-size="8.5" fill="rgba(0,0,0,.62)">r0, #0</text>
 <rect x="173" y="1303" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="181" y="1317" font-size="9" fill="rgba(0,0,0,.45)">89</text>
 <text x="269" y="1317" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
@@ -683,21 +681,23 @@
 <rect x="494" y="1303" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="502" y="1317" font-size="9" fill="rgba(0,0,0,.45)">8c</text>
 <text x="590" y="1317" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="502" y="1334" font-size="13" font-weight="600" fill="#000">shl</text>
+<text x="502" y="1334" font-size="13" font-weight="600" fill="#000">add</text>
 <text x="502" y="1348" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r0, #1</text>
 <rect x="601" y="1303" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="609" y="1317" font-size="9" fill="rgba(0,0,0,.45)">8d</text>
 <text x="697" y="1317" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="609" y="1334" font-size="13" font-weight="600" fill="#000">st</text>
-<text x="609" y="1348" font-size="8.5" fill="rgba(0,0,0,.62)">r0, [r6, #0]</text>
-<rect x="708" y="1303" width="104" height="62" rx="3" fill="#E3A863"/>
+<text x="609" y="1334" font-size="13" font-weight="600" fill="#000">add</text>
+<text x="609" y="1348" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r0, #-1</text>
+<rect x="708" y="1303" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="716" y="1317" font-size="9" fill="rgba(0,0,0,.45)">8e</text>
 <text x="804" y="1317" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="716" y="1334" font-size="13" font-weight="600" fill="#000">sei</text>
-<rect x="815" y="1303" width="104" height="62" rx="3" fill="#E3A863"/>
+<text x="716" y="1334" font-size="13" font-weight="600" fill="#000">add</text>
+<text x="716" y="1348" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r0, #2</text>
+<rect x="815" y="1303" width="104" height="62" rx="3" fill="#F8CE8B"/>
 <text x="823" y="1317" font-size="9" fill="rgba(0,0,0,.45)">8f</text>
 <text x="911" y="1317" font-size="8.5" fill="rgba(0,0,0,.42)" text-anchor="end">1B</text>
-<text x="823" y="1334" font-size="13" font-weight="600" fill="#000">cli</text>
+<text x="823" y="1334" font-size="13" font-weight="600" fill="#000">shl</text>
+<text x="823" y="1348" font-size="8.5" fill="rgba(0,0,0,.62)">r0, r0, #1</text>
 <text x="57" y="1403" font-size="10" fill="#6A7180" text-anchor="end">90</text>
 <rect x="66" y="1368" width="104" height="62" rx="3" fill="#DEC6F0"/>
 <text x="74" y="1382" font-size="9" fill="rgba(0,0,0,.45)">90</text>

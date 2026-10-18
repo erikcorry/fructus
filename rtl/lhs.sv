@@ -49,13 +49,13 @@
 // THE REGISTERS THE MICROCODE NAMES are the one-byte forms' pinned left-hand
 // sides and the stack pointer:
 //
-//     r0        ld/implicit, ld8/implicit, add/inc_r0, add/dec_r0,
-//               add/inc2_r0, or/mov_r1_r0, xor/r0_not, add/r0_r0_r1,
-//               or/mov_r2_r0, shl/r0_dbl
-//     r1        add/r1_r1_r0, or/mov_r0_r1, ldm
+//     r0        ld/implicit, ld8/implicit, add/r0_r0_r1, add/r1_r0_r1,
+//               xor/r0_not, or/mov_r1_r0, or/mov_r2_r0, add/inc_r0,
+//               add/dec_r0, add/inc2_r0, shl/r0_dbl
+//     r1        or/mov_r0_r1, ldm
 //     r5        stm
-//     sp (r6)   push, pop, ld/r0_sp, st/r0_sp
-//     lr (r7)   rti, ret
+//     sp (r6)   ld/r0_sp, st/r0_sp, push, pop
+//     lr (r7)   ret, rti
 //
 // `ret` and `jmp r5` are not here: they take their target on port B, through
 // rhs.sv's lr and r5 codes.  Port A could carry them just as well - nothing

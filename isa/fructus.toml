@@ -1052,36 +1052,47 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   0000_0000                brk                        1 byte
 #   0000_0001                halt                       1 byte
-#   0000_0010                rti                        1 byte
-#   0000_0011                ld   r0, [r0, #0]          1 byte
-#   0000_0100                ld8  r0, [r0, #0]          1 byte
-#   0000_0101                add  r0, r0, #1            1 byte
-#   0000_0110                add  r0, r0, #-1           1 byte
-#   0000_0111                add  r0, r0, #2            1 byte
+#   0000_0010                jmp  r5                    1 byte
+#   0000_0011                call r5                    1 byte
+#   0000_0100                ld   r0, [r0, #0]          1 byte
+#   0000_0101                ld8  r0, [r0, #0]          1 byte
+#   0000_0110                ld   r0, [sp, #0]          1 byte
+#   0000_0111                st   r0, [sp, #0]          1 byte
 #   0000_1000                ret                        1 byte
-#   0000_1001                jmp  r5                    1 byte
-#   0000_1010                call r5                    1 byte
-#   0000_1011                push lr                    1 byte
-#   0000_1100                pop  lr                    1 byte
-#   0000_1101                push r0                    1 byte
-#   0000_1110                pop  r2                    1 byte
-#   0000_1111                ld   r0, [sp, #0]          1 byte
-#   1000_0000                add  r1, r1, r0            1 byte
-#   1000_0001                or   r0, r1, #0  = mov     1 byte
-#   1000_0010                or   r1, r0, #0  = mov     1 byte
-#   1000_0011                mov  r0, #0                1 byte
-#   1000_0100                xor  r0, r0, #1            1 byte
-#   1000_0101                add  r0, r0, r1            1 byte
-#   1000_0110                mov  r0, #1                1 byte
-#   1000_0111                nop                        1 byte
-#   1000_1000                or   r2, r0, #0  = mov     1 byte
+#   0000_1001                rti                        1 byte
+#   0000_1010                sei                        1 byte, ie = 1
+#   0000_1011                cli                        1 byte, ie = 0
+#   0000_1100                push lr                    1 byte
+#   0000_1101                pop  lr                    1 byte
+#   0000_1110                push r0                    1 byte
+#   0000_1111                pop  r2                    1 byte
+#   1000_0000                add  r0, r0, r1            1 byte
+#   1000_0001                add  r1, r0, r1            1 byte
+#   1000_0010                nop                        1 byte
+#   1000_0011                xor  r0, r0, #1            1 byte
+#   1000_0100                or   r0, r1, #0  = mov     1 byte
+#   1000_0101                or   r1, r0, #0  = mov     1 byte
+#   1000_0110                or   r2, r0, #0  = mov     1 byte
+#   1000_0111                mov  r0, #1                1 byte
+#   1000_1000                mov  r0, #0                1 byte
 #   1000_1001                mov  r1, #0                1 byte
 #   1000_1010                mov  r2, #0                1 byte
 #   1000_1011                mov  r3, #0                1 byte
-#   1000_1100                shl  r0, r0, #1            1 byte
-#   1000_1101                st   r0, [sp, #0]          1 byte
-#   1000_1110                sei                        1 byte, ie = 1
-#   1000_1111                cli                        1 byte, ie = 0
+#   1000_1100                add  r0, r0, #1            1 byte
+#   1000_1101                add  r0, r0, #-1           1 byte
+#   1000_1110                add  r0, r0, #2            1 byte
+#   1000_1111                shl  r0, r0, #1            1 byte
+#
+#   THE HALVES SPLIT BY TIME: 0000_xxxx is every one-byte instruction that
+#   takes more than a cycle - memory, the stack, control flow, the exception
+#   and interrupt ones - and 1000_xxxx every one that takes one.  Within them
+#   the opcodes that do alike sit together: jmp r5 and call r5 are 0x02 and
+#   0x03, the same low bits as jmp ra and call ra at 0xb2 and 0xb3, so the
+#   processor's jmp ra predictor recognizes all four as x0xx_001x with
+#   bits 7, 5 and 4 equal; the four memory instructions are 0x04..0x07;
+#   the two three-register adds 0x80 and 0x81 differ in the destination bit
+#   only (add r1 has its sources swapped to make it so); mov r0..r3, #0 is
+#   0x88..0x8b, the register in the low two bits.
 #
 #   THE SECOND EIGHT OF EACH HALF ARE CHOSEN BY COUNT, over SOM++'s DeltaBlue
 #   and CoreMark at -Os and -O2 with malloc linked in - the exact instructions
@@ -1093,18 +1104,13 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   target with arguments in r0-r3 can wait, and an interpreter can be written
 #   to dispatch through it.
 #
-#   THE THREE EXCEPTION INSTRUCTIONS ARE THE FIRST THREE OPCODES: enter one,
-#   wait for one, return from one.  They are adjacent because a wild jump lands
-#   on low addresses.
+#   THE LOW END OF THE BLOCK IS WHERE A MISTAKE LANDS, and brk and halt are
+#   there for that.  Erased memory and a zeroed page decode as brk, so a wild
+#   jump traps to the handler with the faulting address in lr instead of
+#   running on; the opcode after it stops the machine.  Neither takes an
+#   operand, so neither can be led further astray by the byte that follows.
 #
-#   THE LOW END OF THE BLOCK IS WHERE A MISTAKE LANDS, and putting the three
-#   exception opcodes there is the point.  Erased memory and a zeroed page
-#   decode as brk, so a wild jump traps to the handler with the faulting
-#   address in lr instead of running on; the two opcodes after it stop the
-#   machine and return from a trap.  None of the three takes an operand, so
-#   none can be led further astray by the byte that follows.
-#
-#   nop holds 0x87, far from 0x00 - which matters for the reason brk is at
+#   nop holds 0x82, away from 0x00 - which matters for the reason brk is at
 #   zero in the first place: a nop sled through erased memory is the failure
 #   that looks like a working machine, and it is the harder of the two to
 #   diagnose.
@@ -1172,7 +1178,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   both widths, the 16-bit one takes the lower opcode and the byte-wide one
 #   the next:
 #
-#       0x03 ld   / 0x04 ld8        the one-byte implicit pair
+#       0x04 ld   / 0x05 ld8        the one-byte implicit pair
 #       0x10 st   / 0x18 st8        the store rows
 #       0x20 ld   / 0x28 ld8        the load rows
 #
@@ -1339,7 +1345,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   The two free slots in each group are NOT where the single-byte implicit
 #   forms live; those are up in the unstructured one-byte region, where `add`
-#   already holds 0x05..0x07, 0x80 and 0x85.  There is deliberately no one-byte
+#   already holds 0x80, 0x81 and 0x8c..0x8e.  There is deliberately no one-byte
 #   `add rd, rs`: covering all 64 register pairs would cost a quarter of the
 #   map, while the two pairs that actually dominate cost two opcodes.
 #   ------------------------------------------------------------------------
@@ -1536,7 +1542,7 @@ semantics = "R[d] = M8[R[a] + off]"
 
   [[insn.form]]
   name     = "implicit"
-  encoding = "0000_0100"
+  encoding = "0000_0101"
   fix      = { d = 0, a = 0, off = 0 }
 
   [[insn.form]]
@@ -1609,12 +1615,12 @@ semantics = "R[d] = M16[R[a] + off]"
 
   [[insn.form]]
   name     = "implicit"
-  encoding = "0000_0011"
+  encoding = "0000_0100"
   fix      = { d = 0, a = 0, off = 0 }
 
   [[insn.form]]
   name     = "r0_sp"
-  encoding = "0000_1111"
+  encoding = "0000_0110"
   fix      = { d = 0, a = 6, off = 0 }
 
   [[insn.form]]
@@ -1682,7 +1688,7 @@ semantics = "M16[R[a] + off] = R[s]"
 
   [[insn.form]]
   name     = "r0_sp"
-  encoding = "1000_1101"
+  encoding = "0000_0111"
   fix      = { s = 0, a = 6, off = 0 }
 
   [[insn.form]]
@@ -1818,7 +1824,7 @@ semantics = "R[d] = imm"
   # are left after this and `ret`.
   [[insn.form]]
   name     = "r0_zero"
-  encoding = "1000_0011"
+  encoding = "1000_1000"
   fix      = { d = 0, imm = 0 }
 
   [[insn.form]]
@@ -1838,7 +1844,7 @@ semantics = "R[d] = imm"
 
   [[insn.form]]
   name     = "r0_one"
-  encoding = "1000_0110"
+  encoding = "1000_0111"
   fix      = { d = 0, imm = 1 }
 
   [[insn.form]]
@@ -1971,17 +1977,20 @@ syntax   = "{d}, {a}, {b}"
 semantics = "R[d] = R[a] + R[b]"
 
   # Two fully implicit one-byte encodings for the two register triples that
-  # dominate in practice.  Listed first only for readability - forms are tried
-  # shortest-first regardless of the order they appear here.
+  # dominate in practice, r0 = r0 + r1 and r1 = r1 + r0.  The second is
+  # written with its sources swapped, r0 then r1 as in the first, so that the
+  # two opcodes differ in the destination bit alone; a compiler puts a
+  # commutative pair in that order.  Listed first only for readability - forms
+  # are tried shortest-first regardless of the order they appear here.
   [[insn.form]]
   name     = "r0_r0_r1"
-  encoding = "1000_0101"
+  encoding = "1000_0000"
   fix      = { d = 0, a = 0, b = 1 }
 
   [[insn.form]]
-  name     = "r1_r1_r0"
-  encoding = "1000_0000"
-  fix      = { d = 1, a = 1, b = 0 }
+  name     = "r1_r0_r1"
+  encoding = "1000_0001"
+  fix      = { d = 1, a = 0, b = 1 }
 
   [[insn.form]]
   name     = "three_reg"
@@ -2007,17 +2016,17 @@ semantics = "R[d] = R[a] + imm"
   # is pinned, so these carry no fields at all.
   [[insn.form]]
   name     = "inc_r0"
-  encoding = "0000_0101"
+  encoding = "1000_1100"
   fix      = { d = 0, a = 0, imm = 1 }
 
   [[insn.form]]
   name     = "dec_r0"
-  encoding = "0000_0110"
+  encoding = "1000_1101"
   fix      = { d = 0, a = 0, imm = -1 }
 
   [[insn.form]]
   name     = "inc2_r0"
-  encoding = "0000_0111"
+  encoding = "1000_1110"
   fix      = { d = 0, a = 0, imm = 2 }
 
   # Destination doubles as the first source, which frees five bits for the
@@ -2155,7 +2164,7 @@ semantics = "R[d] = R[a] ^ imm"
   # is what an abbreviation is.
   [[insn.form]]
   name     = "r0_not"
-  encoding = "1000_0100"
+  encoding = "1000_0011"
   fix      = { d = 0, a = 0, imm = 1 }
 
   [[insn.form]]
@@ -2237,17 +2246,17 @@ semantics = "R[d] = R[a] | imm"
   # and shortest-first selection lands on these.
   [[insn.form]]
   name     = "mov_r0_r1"
-  encoding = "1000_0001"
+  encoding = "1000_0100"
   fix      = { d = 0, a = 1, imm = 0 }
 
   [[insn.form]]
   name     = "mov_r1_r0"
-  encoding = "1000_0010"
+  encoding = "1000_0101"
   fix      = { d = 1, a = 0, imm = 0 }
 
   [[insn.form]]
   name     = "mov_r2_r0"
-  encoding = "1000_1000"
+  encoding = "1000_0110"
   fix      = { d = 2, a = 0, imm = 0 }
 
   [[insn.form]]
@@ -2404,7 +2413,7 @@ semantics = "R[d] = shl(R[a], imm & 15)"
 
   [[insn.form]]
   name     = "r0_dbl"
-  encoding = "1000_1100"
+  encoding = "1000_1111"
   fix      = { d = 0, a = 0, imm = 1 }
 
   [[insn.form]]
@@ -3245,12 +3254,12 @@ semantics = "base = sp; M16[base - 2] = R[a]; sp = base - 2"
 
   [[insn.form]]
   name     = "r0"
-  encoding = "0000_1101"
+  encoding = "0000_1110"
   fix      = { a = 0 }
 
   [[insn.form]]
   name     = "lr"
-  encoding = "0000_1011"
+  encoding = "0000_1100"
   fix      = { a = 7 }
 
 [[insn]]
@@ -3292,12 +3301,12 @@ semantics = "base = sp; R[a] = M16[base]; sp = base + 2"
 
   [[insn.form]]
   name     = "r2"
-  encoding = "0000_1110"
+  encoding = "0000_1111"
   fix      = { a = 2 }
 
   [[insn.form]]
   name     = "lr"
-  encoding = "0000_1100"
+  encoding = "0000_1101"
   fix      = { a = 7 }
 
 [[insn]]
@@ -3524,7 +3533,7 @@ semantics = "lr = pc; pc = R[a]"
 
   [[insn.form]]
   name     = "r5"
-  encoding = "0000_1010"
+  encoding = "0000_0011"
   fix      = { a = 5 }
 
 [[insn]]
@@ -3555,15 +3564,17 @@ semantics = "pc = lr"
 # stages in r5 anyway, or an interpreter's dispatch - saves the byte.
 #
 # ret IS ONE BYTE TOO: `pc = lr' needs no operand at all.  The three of them
-# sit in the one-byte region, at 0x08, 0x09 and 0x0a, with every other
+# sit in the one-byte region, at 0x08, 0x02 and 0x03, with every other
 # instruction of their length.  ret used to be at 1010_1011, in the control
 # row, so that the scarce one-byte region kept its slots and every transfer
 # of control was 1010_xxxx; with the region twice the size and its length test
 # simpler for holding everything one byte long, that was the wrong trade.
 #
-# 0x00, 0x01 and 0x02 are brk, halt and rti, so a wild jump into a zeroed page
-# traps to a handler that can name the faulting address rather than unwinding
-# to wherever lr happened to point.
+# jmp r5 and call r5 are 0x02 and 0x03 for their low bits, which are jmp
+# ra's and call ra's at 0xb2 and 0xb3: the jmp ra predictor tells all four
+# from everything else with a few bits.  0x00 and 0x01 are brk and halt, so a
+# wild jump into a zeroed page traps to a handler that can name the faulting
+# address rather than unwinding to wherever lr happened to point.
 [[insn]]
 mnemonic = "jmp"
 summary  = "pc = ra"
@@ -3579,7 +3590,7 @@ semantics = "pc = R[a]"
 
   [[insn.form]]
   name     = "r5"
-  encoding = "0000_1001"
+  encoding = "0000_0010"
   fix      = { a = 5 }
 
 
@@ -3592,11 +3603,11 @@ semantics = "pc = R[a]"
 # eight registers that is a real cost paid at every critical section, to buy
 # nesting that hand-written kernel code can simply not do.
 #
-# THEY ARE ONE BYTE, AND THEY TAKE THE LAST TWO SLOTS OF THE ONE-BYTE REGION,
-# 0x8e and 0x8f.  They used to be in the control row, at the price of making
-# its length irregular, because the region was sixteen opcodes and worth more
-# as abbreviations; at thirty-two it holds everything one byte long, and these
-# two take the slots that the counts valued least.
+# THEY ARE ONE BYTE, AT 0x0a AND 0x0b, among the one-byte instructions that
+# take more than a cycle.  They used to be in the control row, at the price of
+# making its length irregular, because the region was sixteen opcodes and
+# worth more as abbreviations; at thirty-two it holds everything one byte
+# long.
 [[insn]]
 mnemonic = "sei"
 summary  = "enable interrupts"
@@ -3605,7 +3616,7 @@ syntax   = ""
 semantics = "ie = 1"
 
   [[insn.form]]
-  encoding = "1000_1110"
+  encoding = "0000_1010"
 
 
 [[insn]]
@@ -3616,12 +3627,12 @@ syntax   = ""
 semantics = "ie = 0"
 
   [[insn.form]]
-  encoding = "1000_1111"
+  encoding = "0000_1011"
 
 
 # --- the exception block: brk, halt, rti ------------------------------------
-# THE THREE LOWEST OPCODES ARE THE THREE EXCEPTION INSTRUCTIONS - enter one,
-# wait for one, return from one - and they are at 0x00, 0x01 and 0x02 for the
+# THE TWO LOWEST OPCODES ARE brk AND halt - enter an exception, wait for one;
+# rti, returning from one, is 0x09 - and they are at 0x00 and 0x01 for the
 # reason halt used to be at zero on its own.  Erased memory, an unwritten ROM
 # and a wild jump into a zeroed page all land on 0x00, and the useful thing for
 # the machine to do there is stop in a way somebody can find afterwards.
@@ -3633,8 +3644,8 @@ semantics = "ie = 0"
 # the handler with the faulting address in lr, so a monitor can print it.  The
 # sled argument that put halt at zero is unchanged and now buys more.
 #
-# NOP IS FAR FROM THEM, at 0x87, which is the same argument run the other way:
-# the low opcodes are what a mistake lands on, so they hold the three
+# NOP IS AWAY FROM THEM, at 0x82, which is the same argument run the other way:
+# the low opcodes are what a mistake lands on, so they hold the
 # instructions that stop or divert, and nop sits well away.  A nop sled through erased memory produces a machine that looks alive
 # while executing nothing, which is the harder failure to diagnose of the two.
 #
@@ -3741,7 +3752,7 @@ syntax   = ""
 semantics = "pc = lr; lr = shadow_lr; shadow_isp = sp; sp = shadow_sp; ie = 1"
 
   [[insn.form]]
-  encoding = "0000_0010"
+  encoding = "0000_1001"
 
 
 [[insn]]
@@ -3752,7 +3763,7 @@ syntax   = ""
 semantics = ""
 
   [[insn.form]]
-  encoding = "1000_0111"
+  encoding = "1000_0010"
 
 
 # =============================================================================

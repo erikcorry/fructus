@@ -97,7 +97,7 @@
 digits3:
         mov     r5, r1                  ; buf, out of the way of the digit
         shl     r1, r0, #2
-        add     r1, r1, r0              ; 5n
+        add     r1, r0, r1              ; 5n
         shl     r1, r1, #3              ; 40n
         add     r0, r0, r1              ; 41n = n/100, 12 fraction bits
         mov     r1, r0
