@@ -70,11 +70,14 @@
 // what was last written to it from the memory itself, which is what keeps its
 // address decode off the memory's write enable.  Only the four words the
 // hardware changes have a read path: the status register and the arrays'
-// three addresses.  They are chosen from the processor's address into a flop
-// a cycle later, beside the memory's word, as `src' chooses between the two
-// SPRAMs, and reach the processor on `mem_data', the port only its loads
-// read, so that the choice is not in front of decode - and on blit mode's
-// late port, through `lo_hold'.  An
+// three addresses.  They are chosen in the cycle a load's word arrives, from
+// the processor's `mar', which then holds the address the word was read at,
+// and reach the processor on `mem_data', the port only its loads read, so
+// that the choice is not in front of decode - and on blit mode's late port,
+// through `lo_hold'.  Decoded from the processor's address a cycle earlier
+// instead, they were timed through the fetch's arms of its address mux: the
+// critical path of half the seeds, 28.59 MHz against 29.70 (28.2 .. 31.0),
+// 4461 cells against 4489, medians of sixteen.  An
 // array's data register reads as the word last written to it, and moves
 // nothing: the block RAMs' read ports are the display's.
 //
@@ -202,9 +205,12 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     // processor takes the whole word and picks its own byte.
     logic src;
     always_ff @(posedge clk) src <= hi;
-    // `io_q': the word read was one of the four registers with a read path,
-    // and `io_word' is it; see the registers below.
-    logic io_q = 1'b0; logic [15:0] io_word;
+    // `io_q': the word arriving is one of the registers with a read path, and
+    // `io_word' is it; see the registers below.  Both are decoded from `ra`,
+    // the processor's mar, which in the cycle a load's word arrives is the
+    // address it was read at.  Only a load's capture reads dword.
+    wire [15:0] ra; wire rld;          // rld: a load's word arrives
+    wire io_q; wire [15:0] io_word;
     wire [15:0] rdata = src ? hi_word : lo_word;
     wire [15:0] dword = io_q ? io_word : rdata;    // a load's: the processor's mem_data
 
@@ -228,7 +234,8 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     // sixteen seeds, floorplanned.  The price is the optimisations across its
     // ports, which here are wiring.
     (* keep_hierarchy *)
-    cpu u (.clk(clk), .rst(rst), .boot(boot), .mem_addr(addr), .mem_whi(whi), .mem_rdata(rdata),
+    cpu u (.clk(clk), .rst(rst), .boot(boot), .mem_addr(addr), .mem_whi(whi), .mem_rmar(ra), .mem_rld(rld),
+                .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(lanes), .blit(blit), .mem_late(late), .mem_data(dword),
                 .irq(irq_s),
                 .halted(halted), .trapped(trapped), .result(result),
@@ -336,16 +343,14 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     // Its three words, [cpu.io] in isa/fructus.toml, written like the GPU's
     // registers, a cycle late; the data register takes st8 as well as st.
     // `u_rd': a load of the data register, decoded with io_q from the
-    // processor's address and not a store's, takes the received byte.  A load
-    // puts its address out once; nothing else the processor does puts out an
-    // I/O page address without a store, since no code runs from the page.
+    // processor's mar in the cycle its word arrives - `rld`, once per access -
+    // takes the received byte.
 `ifdef FRUCTUS_UART
     localparam [15:0] U_DATA = `FRUCTUS_IO_CONSOLE, U_STAT = `FRUCTUS_IO_UART_STATUS,
                       U_DIV  = `FRUCTUS_IO_UART_DIVISOR;
     wire uw = we_w && mask_w[0];
     wire [7:0] u_byte; wire [15:0] u_status;
-    logic u_rd = 1'b0;
-    always_ff @(posedge clk) u_rd <= addr[15:1] == U_DATA[15:1] && !we && !boot;
+    wire u_rd = rld && ra[15:1] == U_DATA[15:1];
     uart ser (.clk, .rst, .wr_data(uw && addr_w[15:1] == U_DATA[15:1]),
               .wr_status(uw && addr_w[15:1] == U_STAT[15:1]),
               .wr_div(uw && addr_w[15:1] == U_DIV[15:1]), .wword(wword_w),
@@ -362,8 +367,7 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     wire bw = we_w && mask_w[0];
     wire [7:0] b_byte; wire [15:0] b_status;
     wire b_dp_in, b_dm_in, b_dp_out, b_dm_out, b_oe;
-    logic b_rd = 1'b0;
-    always_ff @(posedge clk) b_rd <= addr[15:1] == B_DATA[15:1] && !we && !boot;
+    wire b_rd = rld && ra[15:1] == B_DATA[15:1];
     usb port (.clk, .rst, .wr_data(bw && addr_w[15:1] == B_DATA[15:1]),
               .wr_status(bw && addr_w[15:1] == B_STAT[15:1]),
               .wr_ctrl(bw && addr_w[15:1] == B_CTRL[15:1]),
@@ -386,44 +390,38 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
 `ifdef FRUCTUS_USB
     // The USB port's are the four bytes at B_DATA, the UART's with bit 4
     // set, so bit 4 picks between the two.
-    wire [15:0] usb_word = addr[1] ? b_status : {8'd0, b_byte};
+    wire [15:0] usb_word = ra[1] ? b_status : {8'd0, b_byte};
     // One compare for both, bit 4 either way: two of 14 bits each made
     // mal -> io_q a third of the seeds' critical path, 13 cells.
     `ifdef FRUCTUS_UART
-    wire [15:0] cpu_word = addr[4] ? usb_word : addr[1] ? u_status : {8'd0, u_byte};
-    wire        dev_hit  = addr[15:5] == B_DATA[15:5] && addr[3:2] == B_DATA[3:2];
+    wire [15:0] cpu_word = ra[4] ? usb_word : ra[1] ? u_status : {8'd0, u_byte};
+    wire        dev_hit  = ra[15:5] == B_DATA[15:5] && ra[3:2] == B_DATA[3:2];
     `else
     wire [15:0] cpu_word = usb_word;
-    wire        dev_hit  = addr[15:2] == B_DATA[15:2];
+    wire        dev_hit  = ra[15:2] == B_DATA[15:2];
     `endif
-    always_ff @(posedge clk) begin
-        io_q    <= addr[15:7] == 9'h009 && (addr[6:1] == 6'h02 || addr[6:1] == 6'h10
-                                         || addr[6:1] == 6'h12 || addr[6:1] == 6'h14)
-                   || dev_hit;
-        io_word <= !addr[7] ? cpu_word
-                 : !addr[5] ? status : addr[3] ? {10'd0, attr_i}
-                 : addr[2] ? {6'd0, pat_i} : {11'd0, pal_i};
-    end
+    assign io_q    = (ra[15:7] == 9'h009 && (ra[6:1] == 6'h02 || ra[6:1] == 6'h10
+                                         || ra[6:1] == 6'h12 || ra[6:1] == 6'h14)
+                   || dev_hit);
+    assign io_word = !ra[7] ? cpu_word
+                 : !ra[5] ? status : ra[3] ? {10'd0, attr_i}
+                 : ra[2] ? {6'd0, pat_i} : {11'd0, pal_i};
 `elsif FRUCTUS_UART
     // The UART's two words are the four bytes at U_DATA, and bit 7 of the
     // address - 0 there, 1 for the GPU's - and bit 1 choose the word, so only
     // io_q's one bit waits for the whole address.  Chosen by the compares
     // themselves, the word was every seed's critical path: 25.14 MHz.
-    always_ff @(posedge clk) begin
-        io_q    <= addr[15:7] == 9'h009 && (addr[6:1] == 6'h02 || addr[6:1] == 6'h10
-                                         || addr[6:1] == 6'h12 || addr[6:1] == 6'h14)
-                   || addr[15:2] == U_DATA[15:2];
-        io_word <= !addr[7] ? (addr[1] ? u_status : {8'd0, u_byte})
-                 : !addr[5] ? status : addr[3] ? {10'd0, attr_i}
-                 : addr[2] ? {6'd0, pat_i} : {11'd0, pal_i};
-    end
+    assign io_q    = (ra[15:7] == 9'h009 && (ra[6:1] == 6'h02 || ra[6:1] == 6'h10
+                                         || ra[6:1] == 6'h12 || ra[6:1] == 6'h14)
+                   || ra[15:2] == U_DATA[15:2]);
+    assign io_word = !ra[7] ? (ra[1] ? u_status : {8'd0, u_byte})
+                 : !ra[5] ? status : ra[3] ? {10'd0, attr_i}
+                 : ra[2] ? {6'd0, pat_i} : {11'd0, pal_i};
 `else
-    always_ff @(posedge clk) begin
-        io_q    <= addr[15:7] == 9'h009 && (addr[6:1] == 6'h02 || addr[6:1] == 6'h10
-                                         || addr[6:1] == 6'h12 || addr[6:1] == 6'h14);
-        io_word <= !addr[5] ? status : addr[3] ? {10'd0, attr_i}
-                 : addr[2] ? {6'd0, pat_i} : {11'd0, pal_i};
-    end
+    assign io_q    = (ra[15:7] == 9'h009 && (ra[6:1] == 6'h02 || ra[6:1] == 6'h10
+                                         || ra[6:1] == 6'h12 || ra[6:1] == 6'h14));
+    assign io_word = !ra[5] ? status : ra[3] ? {10'd0, attr_i}
+                 : ra[2] ? {6'd0, pat_i} : {11'd0, pal_i};
 `endif
     video vid (.clk, .h_len, .v_len, .font,
                .pal_we, .pal_addr(pal_i), .pal_data(wword_w[7:0]),
