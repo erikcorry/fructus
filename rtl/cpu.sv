@@ -449,6 +449,8 @@ module cpu (
     output logic [15:0] mem_wdata,   // -> memory: the word to write, even byte low
     output logic [1:0]  mem_we,      // -> memory: write these lanes at this edge -
                                      //    [0] the even byte, [1] the odd
+    output logic        mem_whi,     // -> memory: mem_addr[15] whenever mem_we is set,
+                                     //    from a flop: a write's address is mar
 `ifdef FRUCTUS_BLIT
     input  logic        blit,        // <- the system: ld, ld8 and ldm's bytes come late
     input  logic [15:0] mem_late,    // <- the word at the address sampled two edges ago;
@@ -1404,6 +1406,7 @@ module cpu (
     assign mem_wdata = {(mal | wsel) ? wq[15:8] : wq[7:0], (~mal & wsel) ? wq[15:8] : wq[7:0]};
     wire [1:0] wlanes = {mal | mar[0], mal | ~mar[0]};
     assign mem_we    = {2{weq & aphase}} & wlanes;
+    assign mem_whi   = mar[15];
     assign retire    = (e_valid & ~taken_q & ~e_useq) | mdone;
     assign retire_pc = mdone ? mpc : e_pc;
 

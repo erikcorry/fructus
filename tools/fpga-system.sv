@@ -171,6 +171,14 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     wire we = |lanes;
     wire [3:0] mask = {lanes[1], lanes[1], lanes[0], lanes[0]};
     wire hi = addr[15];
+    // WHICH SPRAM A WRITE GOES TO IS THE PROCESSOR'S mar[15], `whi`, and not
+    // addr[15]: a write's address is always mar, but nextpnr cannot know that,
+    // and timed the fetch's arms of the address mux - a predicted jump's
+    // target, from the instruction buffer - into ram_hi's write enable, the
+    // critical path of 14 seeds of 16.  From the flop the system measures
+    // 28.59 MHz (27.7 .. 29.2), 4461 cells, against 26.48 (25.4 .. 26.9),
+    // 4482, medians of sixteen.
+    wire whi;
 
     // The mode, decoded as it is written, so that each use is one flop.
     // `want_a`: A is to be shown.  The others are what happens to the buffer
@@ -182,11 +190,11 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     wire [15:0] lo_word, hi_word;
     wire [15:0] mdata = boot ? {boot_byte, boot_byte} : wdata;
     SB_SPRAM256KA ram_lo (.ADDRESS(addr[14:1]), .DATAIN(mdata),
-                          .MASKWREN(we && !hi ? mask : 4'h0), .WREN(we && !hi),
+                          .MASKWREN(we && !whi ? mask : 4'h0), .WREN(we && !whi),
                           .CHIPSELECT(1'b1), .CLOCK(clk), .STANDBY(1'b0),
                           .SLEEP(1'b0), .POWEROFF(1'b1), .DATAOUT(lo_word));
     SB_SPRAM256KA ram_hi (.ADDRESS(addr[14:1]), .DATAIN(mdata),
-                          .MASKWREN(we && hi && !fb_st ? mask : 4'h0), .WREN(we && hi && !fb_st),
+                          .MASKWREN(we && whi && !fb_st ? mask : 4'h0), .WREN(we && whi && !fb_st),
                           .CHIPSELECT(1'b1), .CLOCK(clk), .STANDBY(1'b0),
                           .SLEEP(1'b0), .POWEROFF(1'b1), .DATAOUT(hi_word));
 
@@ -220,7 +228,7 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     // sixteen seeds, floorplanned.  The price is the optimisations across its
     // ports, which here are wiring.
     (* keep_hierarchy *)
-    cpu u (.clk(clk), .rst(rst), .boot(boot), .mem_addr(addr), .mem_rdata(rdata),
+    cpu u (.clk(clk), .rst(rst), .boot(boot), .mem_addr(addr), .mem_whi(whi), .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(lanes), .blit(blit), .mem_late(late), .mem_data(dword),
                 .irq(irq_s),
                 .halted(halted), .trapped(trapped), .result(result),
