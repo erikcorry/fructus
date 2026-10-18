@@ -136,15 +136,29 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     // processor's stores - its boot loop, rtl/cpu.sv - write the flash's byte
     // and not their own, and the register block and the frame buffers take no
     // write, so an image's bytes in the I/O page set no mode.
-    logic rst_q = 1'b0, start = 1'b0, rst, boot;
+    logic rst_q = 1'b0, start = 1'b0;
+    logic rst = 1'b0, boot = 1'b0;
     always_ff @(posedge clk) begin rst_q <= din; start <= rst_q; end
     wire [7:0] boot_byte; wire spi_on;
     if (BOOT) begin : g_boot
-        spiboot sb (.clk, .start, .rst, .boot, .on(spi_on), .mosi(flash_mosi),
+        // rst AND boot AGAIN, A CYCLE LATER, FROM FLOPS THAT START AT 0.
+        // spiboot's start at 1, which an iCE40 flop cannot: yosys keeps them
+        // inverted, with a LUT after, so the reset reached the processor as a
+        // LUT's output out at spiboot's corner - 11 ns of the critical path in
+        // 12 seeds of 16 before the processor's first cell.  Both a cycle
+        // later keeps them in step with each other, and moves the processor's
+        // write of byte m to cycle 46 + 8m, still inside byte_q's 42 .. 49 +
+        // 8m.  At power-up the processor has a cycle out of reset with every
+        // flop at 0, in which it does nothing.  The system measures the same,
+        // 29.63 MHz (28.0 .. 30.6) against 29.70, and 4464 cells against 4489,
+        // medians of sixteen, and no seed's critical path starts at the reset.
+        wire sb_rst, sb_boot;
+        spiboot sb (.clk, .start, .rst(sb_rst), .boot(sb_boot), .on(spi_on), .mosi(flash_mosi),
                     .miso(flash_miso), .byte_q(boot_byte));
+        always_ff @(posedge clk) begin rst <= sb_rst; boot <= sb_boot; end
     end else begin : g_noboot
         always_ff @(posedge clk) rst <= start;
-        assign boot = 1'b0, spi_on = 1'b0, boot_byte = 8'h00, flash_mosi = 1'b0;
+        assign spi_on = 1'b0, boot_byte = 8'h00, flash_mosi = 1'b0;
     end
     // The flash's clock, high in the low half of each cycle the read is on.
     SB_IO #(.PIN_TYPE(6'b0100_01)) sck_pad (.PACKAGE_PIN(flash_sck), .OUTPUT_CLK(clk),
