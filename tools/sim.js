@@ -619,7 +619,12 @@ export class Machine {
       const t = this.fe.t, prior = this.cbrAt;
       this.cbrAt = t;
       // Its verdict goes into the jmp ra predictor's history from the u stage.
-      this.jq.push({ at: t + 4, v: this.wrotePc ? 1 : 0 });
+      // What the next guess would land lands now: a program with no jmp ra
+      // for millions of branches - compress - would queue them all, and
+      // drain them with a shift each.
+      const q = this.jq;
+      while (q.length && q[0].at <= t - 2) this.land(q.shift());
+      q.push({ at: t + 4, v: this.wrotePc ? 1 : 0 });
       if (this.predict(t, !!(this.mem[(at + 2) & 0xffff] & 0x80), prior !== t - 2 && this.rpAt !== t - 2)) {
         if (this.wrotePc) return { hold: 3, redirect: 1 };
         return { hold: 1 + this.penalty, redirect: this.penalty };
@@ -629,8 +634,13 @@ export class Machine {
     // Every jump, call and return puts a bit of its own address in the
     // predictor's history: see path().
     if (this.wrotePc && !k.branch) this.path(this.fe.t, at);
-    // Every call pushes where it returns to, from its ALU stage.
-    if (this.wrotePc && k.calls) this.rsq.push({ at: this.fe.t + 4, v: this.R[this.named.lr] });
+    // Every call pushes where it returns to, from its ALU stage - landing,
+    // as the jmp ra history does, what the next ret would.
+    if (this.wrotePc && k.calls) {
+      const q = this.rsq;
+      while (q.length && q[0].at <= this.fe.t) this.rsLand(q.shift());
+      q.push({ at: this.fe.t + 4, v: this.R[this.named.lr] });
+    }
     if (this.wrotePc && k.predict) {
       // jmp AND call TO AN ABSOLUTE ADDRESS read their target's word as they
       // dispatch.  jmp moves the pc there too, so the target dispatches once
