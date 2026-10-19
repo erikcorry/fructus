@@ -629,10 +629,11 @@ for (let p = 0; p < PROGRAMS; p++) {
       // not the register, and costs three.  An absolute target is read as the
       // jump dispatches, so jmp's target dispatches two cycles after it, and
       // call's three, when its ALU cycle has moved the pc.  jmp ra's and call
-      // ra's targets, guessed right, are read as they dispatch too: two, three.
+      // ra's targets, guessed right, are read as they dispatch too: two, three;
+      // and ret's, from the return stack: two.
       const jm = JUMP_SEM.exec(d.insn.semantics ?? '');
       const jump = !jm ? 0 : jm[2] === 'target' ? (jm[1] ? 3 : 2)
-                 : /^pc = R\[a\]$/.test(jm[0]) ? 2
+                 : /^pc = (R\[a\]|lr)$/.test(jm[0]) ? 2
                  : /^lr = pc; pc = R\[a\]$/.test(jm[0]) && d.ops.a !== 7 ? 3
                  : /R\[a\]|^pc = lr$/.test(jm[0]) && !(/^lr = pc; pc = R\[a\]$/.test(jm[0]) && d.ops.a === 7) ? 5 : 4;
       const exc = EXC.test(d.insn.mnemonic) ? EXC_CYCLES[d.insn.mnemonic]

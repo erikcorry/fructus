@@ -274,6 +274,12 @@ export class Machine {
     this.jh      = 0;      // the last five guessed jumps' target bits 8 .. 3, the newest lowest
     this.jbh     = 0;      // the branches' verdicts since, the newest lowest
     this.rpAt    = undefined;   // the cycle the last guessed jmp ra dispatched
+    // THE RETURN STACK, rtl/cpu.sv's: see guessRet().  Its block is not
+    // reset; its pointer and its top are.
+    this.rsm     = new Uint16Array(256);   // what is below the top, rsm[rsp - 1] the next
+    this.rsp     = 0;
+    this.rtq     = 0;      // the top, which a ret guesses
+    this.rsq     = [];     // pushes and pops still to land: { at, v } or { at }
 
     // WHICH INSTRUCTIONS PAY IT COMES FROM THE SEMANTICS, not from a list here
     // that would have to be kept in step.  An instruction is a relative branch
@@ -565,6 +571,7 @@ export class Machine {
       jra:    /^pc = R\[[a-z]\]$/.test(sem),
       predict: /(^|; )pc = target$/.test(sem),
       calls:  /^lr = pc; /.test(sem),
+      ret:    /^pc = lr$/.test(sem),
     };
   }
 
@@ -622,6 +629,8 @@ export class Machine {
     // Every jump, call and return puts a bit of its own address in the
     // predictor's history: see path().
     if (this.wrotePc && !k.branch) this.path(this.fe.t, at);
+    // Every call pushes where it returns to, from its ALU stage.
+    if (this.wrotePc && k.calls) this.rsq.push({ at: this.fe.t + 4, v: this.R[this.named.lr] });
     if (this.wrotePc && k.predict) {
       // jmp AND call TO AN ABSOLUTE ADDRESS read their target's word as they
       // dispatch.  jmp moves the pc there too, so the target dispatches once
@@ -630,8 +639,9 @@ export class Machine {
       return { hold: k.calls ? 3 : 1, redirect: 0, unpredicted: { hold: 3, redirect: 2 } };
     }
     const callLr = k.callA && d.ops.a === this.named.lr;
-    const g = this.wrotePc && (k.jra || k.callA) ? this.guessJra(this.fe.t, !callLr) : null;
-    if (g && k.jra) {
+    const g = this.wrotePc && (k.jra || k.callA) ? this.guessJra(this.fe.t, !callLr)
+            : this.wrotePc && k.ret ? this.guessRet(this.fe.t) : null;
+    if (g && (k.jra || k.ret)) {
       return { hold: 1, redirect: 0 };
     } else if (g) {
       // A call ra guessed right goes as a call to an absolute address.
@@ -712,6 +722,36 @@ export class Machine {
     this.rpAt = t;
     if (!ok && viaReg) this.ghAt = t + 3;
     return ok;
+  }
+
+  // A ret's GUESS, dispatched in cycle t: the top of the return stack,
+  // rtq, under the jmp ra predictor's conditions, which it shares the path
+  // of.  The stack moves in a call's or a ret's ALU stage, two cycles after
+  // its dispatch: a push puts the return address on top and the old top in
+  // the block, a pop takes the top from the word below it, which the block
+  // reads always.  rtq follows the top a cycle later, with its word plus one
+  // beside it, and can be read from the cycle after that.  A ret dispatched
+  // before then guesses what rtq held.  The pointer wraps, so a deeper stack loses
+  // its oldest entries, and those rets are guessed wrong.
+  guessRet(t) {
+    while (this.rsq.length && this.rsq[0].at <= t) this.rsLand(this.rsq.shift());
+    this.rsq.push({ at: t + 4 });
+    if (this.fe.nw < 2 || this.fe.busy.includes(t) || this.rpAt === t - 1) return false;
+    this.rpAt = t;
+    const ok = this.rtq === this.pc;
+    if (!ok) this.ghAt = t + 3;
+    return ok;
+  }
+
+  rsLand(e) {
+    if (e.v !== undefined) {
+      this.rsm[this.rsp] = this.rtq;
+      this.rsp = (this.rsp + 1) & 255;
+      this.rtq = e.v;
+    } else {
+      this.rsp = (this.rsp - 1) & 255;
+      this.rtq = this.rsm[this.rsp];
+    }
   }
 
   land(e) {
@@ -806,6 +846,8 @@ export class Machine {
     }
     this.jh = this.jbh = 0;
     this.rpAt = undefined;
+    for (const e of this.rsq.splice(0)) this.rsLand(e);
+    this.rsp = this.rtq = 0;
     this.advance(at, 0, { hold: 0 });
     this.starve = starve;
   }

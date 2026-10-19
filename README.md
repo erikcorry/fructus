@@ -266,8 +266,9 @@ five cycles, six if the instruction at the right target spans two words.
 `jmp` and `call` to an absolute address fetch their target as they dispatch
 and take two and three cycles; through a register, jumps and calls take
 five, or two and three when a table of where they went before guessed the
-target; `ret` is not guessed. A call that went straight to its target never
-pays for a target spanning two words: the buffer fills while it writes `lr`.
+target; `ret` five, or two when a return stack in a block RAM guessed it. A
+call that went straight to its target never pays for a target spanning two
+words: the buffer fills while it writes `lr`.
 Measured behind a real SPRAM, the processor runs at 30.0 MHz
 (medians of sixteen placements); [experiments/ib](experiments/ib/README.md)
 has how the buffer was chosen, and
@@ -490,8 +491,9 @@ with the fetcher keeping up: an ALU instruction is one cycle; a conditional
 branch guessed right one if not taken and three if taken, and guessed wrong
 five; `jmp` and `call` to an absolute address two and three; through a
 register five, or two and three when the guess of the target is right, and
-`ret` five, never guessed; any of them one more when the instruction at the
-target spans two words, except a call that went straight to its target; a load or store of N accesses N + 2, where an access is
+`ret` five, or two when the return stack's guess is right; any of them one
+more when the instruction at the target spans two words, except a call that
+went straight to its target; a load or store of N accesses N + 2, where an access is
 a byte or a whole word at an even address, so `ld` is three aligned and four
 not, and a three-register `push` five with sp even and eight with it odd;
 mul, mulhu, mulhs, clz and popcount two, and recip five. A taken branch is what
@@ -695,10 +697,10 @@ time, and the known CRCs for both the performance and validation seeds.
 
 | Build | Bytes | Cycles/iteration | CoreMark/MHz | CoreMark at 30 MHz | at 25.175 MHz |
 |---|---:|---:|---:|---:|---:|
-| `-Os` | 8629 | 2,009,261 | 0.498 | 14.93 | 12.53 |
-| `-Os -mmul` | 8238 | 959,609 | 1.042 | 31.26 | 26.23 |
-| `-O2` | 12148 | 1,836,926 | 0.544 | 16.33 | 13.70 |
-| `-O2 -mmul` | 11871 | 806,233 | 1.240 | 37.21 | 31.23 |
+| `-Os` | 8629 | 1,942,925 | 0.515 | 15.44 | 12.96 |
+| `-Os -mmul` | 8238 | 952,379 | 1.050 | 31.50 | 26.43 |
+| `-O2` | 12148 | 1,783,800 | 0.561 | 16.82 | 14.11 |
+| `-O2 -mmul` | 11871 | 800,778 | 1.249 | 37.46 | 31.44 |
 
 30 MHz is the processor alone on the iCE40; with the VGA frame buffers it
 runs at the 25.175 MHz pixel clock. Bytes are the whole image — `.text`,
@@ -716,8 +718,8 @@ jpeg into one score. It is the geometric mean of the speedups over `-Os
 
 | | `-mmul` | without |
 |-|------:|--------:|
-| `-Os` | **109.6** | 82.0 |
-| `-O2` | 120.9 | 99.9 |
+| `-Os` | **111.4** | 84.1 |
+| `-O2` | 122.7 | 101.9 |
 
 `just fructusmark` scores `-Os -mmul` in about a minute and a half, and
 `-O2` and `--no-mul` select the other builds.

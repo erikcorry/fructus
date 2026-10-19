@@ -9,8 +9,8 @@
 // in a seed sweep that shows it as a MHz median.
 //
 //   rtl/cpu.sv's prr      the predictor's recognizer: prr in three LUTs from
-//                         the buffer's word and pcl[0], prcall in one; and
-//                         it must say exactly what the spec says
+//                         the buffer's word and pcl[0], prcall and prret in
+//                         one; and it must say exactly what the spec says
 //   rtl/classify.sv len   the length decode, len[1] in one LUT and len[0]
 //                         in two: the fetcher's next pointer adds it
 //
@@ -81,12 +81,12 @@ const hold = (what, got, most) => {
 
 // --- the jmp ra predictor's recognizer ----------------------------------------
 {
-  // prb0, prb1, prr and prcall, as rtl/cpu.sv writes them, from iw[0] and
-  // pcl[0].
-  const lines = readFileSync('rtl/cpu.sv', 'utf8').split('\n')
-    .filter((l) => /^\s*wire\s+(prb0|prb1|prr|prcall)\s*=/.test(l));
-  if (lines.length !== 4) throw new Error(`rtl/cpu.sv: ${lines.length} of the recognizer's four wires found`);
-  writeFileSync('build/depth-jra.sv', `module jra_op (input logic [15:0] w, input logic odd, output logic jra, output logic call);
+  // prb0, prb1, prr, prcall and prret, as rtl/cpu.sv writes them, from
+  // iw[0] and pcl[0].
+  const lines = readFileSync('rtl/cpu.sv', 'utf8').match(/^\s*wire\s+(prb0|prb1|prr|prcall|prret)\s*=[^;]*;/gm) ?? [];
+  if (lines.length !== 5) throw new Error(`rtl/cpu.sv: ${lines.length} of the recognizer's five wires found`);
+  writeFileSync('build/depth-jra.sv', `module jra_op (input logic [15:0] w, input logic odd, output logic jra, output logic call,
+               output logic ret);
     logic [15:0] iw [0:0];
     logic [15:0] pcl;
     assign iw[0] = w;
@@ -94,14 +94,16 @@ const hold = (what, got, most) => {
 ${lines.join('\n')}
     assign jra = prr;
     assign call = prcall;
+    assign ret = prret;
 endmodule
 `);
   const jo = synth(['build/depth-jra.sv'], 'jra_op');
   rmSync('build/depth-jra.sv', { force: true });
   const dj = hold('rtl/cpu.sv prr', jo.depth('jra'), 3);
   const dc = hold('rtl/cpu.sv prcall', jo.depth('call'), 1);
+  const dr = hold('rtl/cpu.sv prret', jo.depth('ret'), 1);
   // What the spec says each opcode is: a jump through a register, a call
-  // through one, or neither.
+  // through one, a return, or none of them.
   const want = [];
   for (let op = 0; op < 256; op++) {
     let sem = null;
@@ -109,20 +111,23 @@ endmodule
       const d = decode(dec, [op, b1, 0], 0);
       if (d) sem = d.insn.semantics ?? '';
     }
-    want.push(/^pc = R\[a\]$/.test(sem) ? 'jmp' : /^lr = pc; pc = R\[a\]$/.test(sem) ? 'call' : null);
+    want.push(/^pc = R\[a\]$/.test(sem) ? 'jmp' : /^lr = pc; pc = R\[a\]$/.test(sem) ? 'call'
+              : /^pc = lr$/.test(sem) ? 'ret' : null);
   }
   let bad = 0;
   for (let op = 0; op < 256; op++) for (const odd of [0, 1]) {
     // The other byte of the word, which must not matter.
     const r = [0x00, 0xb2, 0x02, 0xff].map((other) => jo.run({ w: odd ? other | op << 8 : op | other << 8, odd }))
-                                       .find((r) => r('jra') !== +!!want[op] || want[op] && r('call') !== +(want[op] === 'call'));
+                                       .find((r) => r('jra') !== +!!want[op] ||
+                                                    want[op] && (r('call') !== +(want[op] === 'call') ||
+                                                                 r('ret') !== +(want[op] === 'ret')));
     if (r && bad++ < 4)
-      console.log(`  0x${op.toString(16).padStart(2, '0')} ${odd ? 'odd' : 'even'}: jra ${r('jra')} call ${r('call')}, the spec says ${want[op] ?? 'neither'}`);
+      console.log(`  0x${op.toString(16).padStart(2, '0')} ${odd ? 'odd' : 'even'}: jra ${r('jra')} call ${r('call')} ret ${r('ret')}, the spec says ${want[op] ?? 'none'}`);
   }
   const named = want.map((k, op) => k && `0x${op.toString(16).padStart(2, '0')}`).filter(Boolean);
   if (bad) { console.log(`FAIL  rtl/cpu.sv prr: ${bad} disagreements with the spec`); fail++; }
-  else if (dj <= 3 && dc <= 1)
-    console.log(`ok    rtl/cpu.sv prr: ${named.join(' ')} and nothing else, ${dj} LUTs deep, prcall ${dc}; ${jo.luts} LUTs`);
+  else if (dj <= 3 && dc <= 1 && dr <= 1)
+    console.log(`ok    rtl/cpu.sv prr: ${named.join(' ')} and nothing else, ${dj} LUTs deep, prcall ${dc}, prret ${dr}; ${jo.luts} LUTs`);
 }
 
 // --- the length decode ------------------------------------------------------
