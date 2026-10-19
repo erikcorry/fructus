@@ -244,7 +244,8 @@ length_from_first_byte = true
 #     jmp to a target in its bytes                   2
 #     call to a target in its bytes                  3
 #     jmp ra, call ra, their target guessed right    2, 3
-#       - unguessed or guessed wrong, and ret        5
+#     ret, its target guessed right                  2
+#       - any of them unguessed or guessed wrong     5
 #       - and call lr, which goes to the next one    4
 #     mul, clz, popcount                             1 + extra_cycles = 2
 #     recip                                          1 + extra_cycles = 5
@@ -309,7 +310,13 @@ length_from_first_byte = true
 # before the fetch: five.  Unless the jmp ra predictor guessed it - a table of
 # 1024 targets, indexed by where the last few jumps went - and then jmp ra and
 # call ra go as the absolute forms do, and a wrong guess, caught against the
-# register in the ALU cycle, costs what no guess does.  ret is not guessed.
+# register in the ALU cycle, costs what no guess does.  A ret is guessed too,
+# from a return stack - its top in a flop, 256 entries below it in a block
+# RAM - and goes as a jmp ra guessed right does.  The stack moves in a call's
+# or a ret's ALU stage, and its top reaches the guess four cycles after the
+# call or ret dispatched: a ret sooner, as in a function that is nothing but
+# a ret, guesses the old top and costs five.  The stack's pointer wraps, so
+# the returns of a recursion deeper than that are guessed wrong.
 # `call lr` goes to the NEW lr - the next instruction - and reads no
 # register, so it costs four.
 #
@@ -3509,7 +3516,8 @@ semantics = "pc = target"
 # Nothing decodes worse for it: decode is a flat 256-entry table and always
 # was, so where the pc writers sit is a claim about how the map READS, not a
 # mask any hardware applies - but for the jmp ra predictor's, which picks out
-# jmp and call through a register with a few bits and leaves ret alone.
+# jmp and call through a register, and ret, with a few bits: ret's bit 3, set
+# in none of the others, has its guess come from the return stack.
 [[insn]]
 mnemonic = "call"
 summary  = "lr = pc of next instruction; pc = imm16"

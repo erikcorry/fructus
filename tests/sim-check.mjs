@@ -47,14 +47,16 @@ const m = machine();
 // instruction is in that word, three if it reaches into the next.
 {
   const { code, syms } = assemble('tests/branch-cost.s');
-  // `guess`: what every entry of the jmp ra predictor's table holds - 0, the
-  // target of a jump through r0, or 0xffff, a guess that is wrong.  A new
+  // `guess`: what every entry of the jmp ra predictor's table and the top of
+  // the return stack hold - 0, the target of a jump through r0 or of a ret
+  // to lr = 0, or 0xffff, a guess that is wrong.  A new
   // machine each time: prime() keeps the fetcher where it is, so what one
   // jump's predictors had still to learn would land in the next one's run.
   const cost = (label, guess = 0xffff) => {
     const m = machine();
     m.mem.fill(0);
     m.jtm.fill(guess);
+    m.rtq = guess;
     m.load(code);
     m.R.fill(0);                       // r0 = 0: `eq #0` is taken, `ne #0` is not
     m.pc = syms.get(label);
@@ -77,6 +79,7 @@ const m = machine();
     // Guessed right, the target is read as it dispatches, as an absolute one's.
     ['j_reg',   3, 'a 2-byte jump through a register, guessed right, to an even 3-byte instruction', 0],
     ['i_ret',   6, 'ret: one byte, through a register, to an even 3-byte instruction'],
+    ['i_ret',   3, 'ret: one byte, guessed right from the return stack, to an even 3-byte instruction', 0],
     ['c_reg',   6, 'a 2-byte call through a register, to an even 3-byte instruction'],
     // A call guessed right holds dispatch while its target's words come in.
     ['c_reg',   3, 'a 2-byte call through a register, guessed right, to an even 3-byte instruction', 0],
@@ -94,7 +97,7 @@ const m = machine();
   // The penalty is declared in the spec, not buried in the simulator.
   check('branch cost', spec.cpu.taken_branch_penalty === 3,
         `spec says the penalty is ${spec.cpu.taken_branch_penalty}`);
-  console.log('ok    cost model: a branch guessed wrong 5 or 6 cycles, a jump 2 or 3, a call 3, through a register unguessed 5 or 6, as its target needs one word or two');
+  console.log('ok    cost model: a branch guessed wrong 5 or 6 cycles, a jump 2 or 3, a call 3, through a register or a ret unguessed 5 or 6, as its target needs one word or two');
 }
 
 // --- zeroed memory traps, and does not run away ------------------------------

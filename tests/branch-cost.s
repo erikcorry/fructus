@@ -10,9 +10,10 @@
 ; right target dispatches two cycles after that.  jmp and call to an address
 ; in their bytes read it as they dispatch: two cycles and three.  Through a
 ; register they are five, or two and three when the jmp ra predictor guessed
-; the target; ret is never guessed.  Each is one more when the instruction at
-; the target spans two words - two bytes at an odd address, or three at any -
-; as every target below does, except a call that went straight to its target:
+; the target, and ret five, or two when the return stack guessed it.  Each is
+; one more when the instruction at the target spans two words - two bytes at
+; an odd address, or three at any - as every target below does, except a call
+; that went straight to its target:
 ; it holds dispatch two cycles after its target's word is read, and the
 ; fetcher brings the second word in that time.  Every performance figure in
 ; this repo rests on that, and nothing else in the suite would notice if the
