@@ -228,8 +228,11 @@ function cycles(insn, info) {
     return m16 ? `${m8 + m16 + 2}, odd ${m8 + 2 * m16 + 2}` : String(m8 + 2);
   }
   if (k.extra) return String(1 + k.extra);
-  if (k.branch) return `1, taken ${spec.cpu.taken_branch_penalty + 2}`;
-  if (/(^|;\s*)pc = /.test(sem)) return k.callA ? '5 (lr: 4)' : k.viaReg ? '5' : '4';
+  if (k.branch) return `1, taken 3, wrong ${spec.cpu.taken_branch_penalty + 2}`;
+  if (k.predict) return k.calls ? '3' : '2';
+  if (k.jra) return '2, wrong 5';
+  if (k.callA) return '3, wrong 5 (lr: 4)';
+  if (/(^|;\s*)pc = /.test(sem)) return '5';
   return '1';
 }
 
@@ -757,7 +760,7 @@ function instructionPages(g) {
 const LEGEND = [
   ['Opcode', 'The instruction\'s bytes in hex, byte 0 first.  A range such as 3E–3F means the low bits of that byte belong to an operand field, so any value in the range is this instruction; xx is a byte made entirely of operand fields.  The first byte alone decides the length of an instruction.'],
   ['Instruction', 'The assembly syntax for that encoding.  rd, ra, rb, rs and rc are any of r0–r7 (sp is r6 and lr is r7); a name such as r0 is a register the encoding pins.  imm5, imm10, off8 and similar are signed fields of that many bits, sign-extended to 16 bits; immbit5, immask5, imm3 and shift3 are table fields whose values are listed on the page.'],
-  ['Bytes, Cycles', 'Length, and the cycles from this instruction\'s dispatch to the next one\'s, when the fetcher keeps up - see The cost model.  "odd" is the cost when a word in memory is at an odd address; "taken" is a conditional branch that branches.  A taken branch, a jump, a call, a return, brk and rti cost one more when the instruction at their target reaches into a second word: two bytes at an odd address, or three at any.'],
+  ['Bytes, Cycles', 'Length, and the cycles from this instruction\'s dispatch to the next one\'s, when the fetcher keeps up - see The cost model.  "odd" is the cost when a word in memory is at an odd address; "taken" is a conditional branch that branches, guessed right; "wrong" is a branch guessed wrong, or a jump or call through a register whose target was not guessed or guessed wrong.  A taken branch, a jump, a call, a return, brk and rti cost one more when the instruction at their target reaches into a second word: two bytes at an odd address, or three at any - but not a call that went straight to its target, which holds dispatch while the second word comes in.'],
   ['Form', 'The form\'s name in isa/fructus.toml, which also labels its diagram under Encodings.  The assembler picks the shortest form that can hold the operands written.'],
   ['Operation', 'The spec\'s semantics, which tools/sim.js executes.  pc is already the address of the next instruction; R[n] is a register, M8[] and M16[] are memory (16-bit values little-endian); everything is truncated to 16 bits when stored.'],
 ];

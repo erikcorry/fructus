@@ -265,7 +265,10 @@ if taken. A wrong guess is found in the ALU stage, beside the ALU, and costs
 five cycles, six if the instruction at the right target spans two words.
 `jmp` and `call` to an absolute address fetch their target as they dispatch
 and take two and three cycles; through a register, jumps and calls take
-five. Measured behind a real SPRAM, the processor runs at 30.0 MHz
+five, or two and three when a table of where they went before guessed the
+target; `ret` is not guessed. A call that went straight to its target never
+pays for a target spanning two words: the buffer fills while it writes `lr`.
+Measured behind a real SPRAM, the processor runs at 30.0 MHz
 (medians of sixteen placements); [experiments/ib](experiments/ib/README.md)
 has how the buffer was chosen, and
 [ideas/branch-prediction.md](ideas/branch-prediction.md) the predictor.
@@ -483,12 +486,12 @@ zeroed page all trap to the handler with the faulting address in `lr`, where a
 monitor can print it. `nop` is at `0x82`, away from them.
 
 **The cost model is the pipeline's**, and it is under `[cpu]` in the spec,
-with the fetcher keeping up: an ALU instruction or an untaken branch is one
-cycle; a taken branch five; a jump or call four, or five through a register,
-and any of them one more when the instruction at the target spans two words;
-a jump or call through a register, other than `ret`, is guessed from a table
-of where such jumps went before, and costs what an absolute one does when
-the guess is right; a load or store of N accesses N + 2, where an access is
+with the fetcher keeping up: an ALU instruction is one cycle; a conditional
+branch guessed right one if not taken and three if taken, and guessed wrong
+five; `jmp` and `call` to an absolute address two and three; through a
+register five, or two and three when the guess of the target is right, and
+`ret` five, never guessed; any of them one more when the instruction at the
+target spans two words, except a call that went straight to its target; a load or store of N accesses N + 2, where an access is
 a byte or a whole word at an even address, so `ld` is three aligned and four
 not, and a three-register `push` five with sp even and eight with it odd;
 mul, mulhu, mulhs, clz and popcount two, and recip five. A taken branch is what

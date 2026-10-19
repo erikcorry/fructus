@@ -237,10 +237,14 @@ length_from_first_byte = true
 # These are its own costs, with the next instruction's bytes already in the
 # buffer - see THE FETCHER, below, for when they are not:
 #
-#     an ALU instruction, a branch not taken, nop    1
-#     a conditional branch, taken                    taken_branch_penalty + 2 = 5
-#     jmp and call to a target in their bytes        4
-#     jmp ra, call ra, ret - a target in a register  5
+#     an ALU instruction, nop                        1
+#     a conditional branch guessed right, not taken  1
+#       - guessed right, taken                       3
+#       - guessed wrong, either way                  taken_branch_penalty + 2 = 5
+#     jmp to a target in its bytes                   2
+#     call to a target in its bytes                  3
+#     jmp ra, call ra, their target guessed right    2, 3
+#       - unguessed or guessed wrong, and ret        5
 #       - and call lr, which goes to the next one    4
 #     mul, clz, popcount                             1 + extra_cycles = 2
 #     recip                                          1 + extra_cycles = 5
@@ -253,8 +257,12 @@ length_from_first_byte = true
 #
 # A redirect - a taken branch, a jump, a call, a return, brk, rti - costs
 # one more when the instruction at its target reaches into a second word:
-# two bytes at an odd address, or three at any.  In a system built in blit
-# mode, ld, ld8 and ldm cost one more as well; see rtl/cpu.sv.
+# two bytes at an odd address, or three at any.  A call that went straight to
+# its target does not: it holds dispatch two cycles after its target's word
+# is read, and the fetcher brings the second word in that time.  jmp and call
+# to a target in their bytes cost 4 when a store's last access has the bus as
+# they dispatch.  In a system built in blit mode, ld, ld8 and ldm cost one
+# more as well; see rtl/cpu.sv.
 #
 # THE FETCHER reads a word, two bytes, in every cycle the bus is not a load's
 # or a store's, into a buffer of three words, whole words in, and an
@@ -281,22 +289,32 @@ length_from_first_byte = true
 # through a taken branch, a jump, a call, a return or rti, each of which
 # empties the buffer and reads memory afresh.
 #
-# A TAKEN BRANCH IS FIVE because the pipeline runs on down the fall-through
-# path behind it: the ALU stage decides it, the three instructions behind it
-# are squashed, and the target's word is read, arriving the cycle after.  Not
-# taken, it costs what any instruction does.  Taken means the assignment to
-# pc RAN - a branch to the very next instruction still pays, and
-# tests/branch-cost.s says so.
+# A CONDITIONAL BRANCH IS GUESSED AS IT DISPATCHES, by a table of two-bit
+# counters indexed by the last eleven verdicts and bits of the jumps'
+# addresses, or, when the table has nothing, backward taken and forward not.
+# Guessed not taken, dispatch runs on down the fall-through: right, it costs
+# what any instruction does.  Guessed taken, its target, an add away, is read
+# the cycle after its dispatch: right, it is three.  A WRONG GUESS IS FIVE
+# because the pipeline has run on down the path it guessed: the ALU stage
+# decides it, the three instructions behind it are squashed, and the right
+# target's word is read, arriving the cycle after.  Taken means the
+# assignment to pc RAN - a branch to the very next instruction still pays,
+# and tests/branch-cost.s says so.
 #
 # A JUMP OR CALL STOPS DISPATCH behind it, since its fall-through is never
-# right, and reads its target in its ALU cycle.  Through a register the
-# target goes through a flop first, a cycle later.  `call lr` goes to the NEW
-# lr - the next instruction - and reads no register, so it costs four.
+# right.  To a target in its bytes it reads the target's word as it
+# dispatches: jmp moves the pc there too, two cycles, and call in its ALU
+# cycle, three, writing lr from the pc that is already past it.  Through a
+# register the target is known only in the ALU cycle and goes through a flop
+# before the fetch: five.  Unless the jmp ra predictor guessed it - a table of
+# 1024 targets, indexed by where the last few jumps went - and then jmp ra and
+# call ra go as the absolute forms do, and a wrong guess, caught against the
+# register in the ALU cycle, costs what no guess does.  ret is not guessed.
+# `call lr` goes to the NEW lr - the next instruction - and reads no
+# register, so it costs four.
 #
-# THAT IS WHY `jmp ra` IS NOT ONE BYTE.  It was, pinned to r5, and the byte it
-# saved bought nothing the pin did not take back: an indirect jump through the
-# one register the assembler may clobber is a jump you have to arrange for.
-# Two bytes and any register is the same five cycles.
+# jmp ra COSTS THE SAME IN ONE BYTE OR TWO: jmp r5 in one, any register in
+# two.  What it pays for is the register, or the guess of it, not the byte.
 #
 # A MEMORY INSTRUCTION STOPS DISPATCH TOO, and makes an access a cycle.  A
 # load's first address comes straight from the ALU's adder; a store
@@ -3039,8 +3057,8 @@ semantics = "if ((R[a] & mask) != 0) pc = pc + off"
 #   or a 1, in two bytes, with no shift and no mask-then-compare.
 #
 #   BRANCHLESS SELECTION.  A predicate as a VALUE rather than as control flow -
-#   which on a machine whose taken branches cost five cycles and whose ALU
-#   instructions cost one, is often the cheaper shape.
+#   which on a machine whose branches guessed wrong cost five cycles and
+#   whose ALU instructions cost one, is often the cheaper shape.
 #
 #   BOOL-RETURNING FUNCTIONS WITH NO BRANCH AT ALL.  A C function returning
 #   `a == b` compiles to one `iseq` and a `ret`, where before it needed a
@@ -3445,9 +3463,10 @@ semantics = "base = r1; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 # byte-serial core a relative target cost a CYCLE MORE, because the adder and
 # the verdict landed in flops an edge later than the instruction's own bytes
 # did: three bytes and four cycles against three and three.  On the pipeline
-# both would be four cycles, so what they cost now is two opcodes, for
-# position independence that a machine with a linker and no address-space
-# randomisation never asked for.
+# the absolute form reads its target as it dispatches, where a relative one
+# would need an adder in dispatch to keep up, so what they would cost now is
+# that adder and two opcodes, for position independence that a machine with a
+# linker and no address-space randomisation never asked for.
 #
 # So jmp and call sit side by side at 0xaa and 0xab, with the same byte 1,
 # each above its form through a register: jmp ra at 0xb2, call ra at 0xb3.
@@ -3475,12 +3494,10 @@ semantics = "pc = target"
 # Return is just pc = lr, so it needs no operands and fits in one byte - and
 # being one byte is what decides where it lives.
 #
-# IT IS A PC WRITER OUTSIDE 1001_xxxx, deliberately - one of two now that
-# `jmp r5` has joined it at 0x02.  The control-flow block is exactly two rows
-# and holds exactly sixteen instructions once the two mask branches come home
-# to their columns; ret is the seventeenth, and it was the only one-byte
-# instruction living out there until jmp arrived.  Every other one-byte opcode
-# is in x000_0xxx, so that is where both of them go.
+# IT IS AT 0x08, OUTSIDE THE CONTROL ROW AT 1010_1xxx, deliberately, as
+# `jmp r5` and `call r5` are at 0x02 and 0x03: every one-byte instruction is
+# in 0000_xxxx or 1000_xxxx, those that take more than a cycle in the first
+# and those that take one in the second, so that is where the three go.
 #
 # It fits that region on its own terms rather than as an exile.  The one-byte
 # block is instructions with nothing left to say - `add r0, r0, #1`, `mov r0,
@@ -3489,9 +3506,10 @@ semantics = "pc = target"
 # most executed instruction in any program, which is what a one-byte opcode is
 # for.
 #
-# Nothing decodes worse for it: decode is a flat 256-entry table and always was,
-# so "the pc writers are 1001_xxxx" is a claim about how the map READS, not a
-# mask any hardware applies.
+# Nothing decodes worse for it: decode is a flat 256-entry table and always
+# was, so where the pc writers sit is a claim about how the map READS, not a
+# mask any hardware applies - but for the jmp ra predictor's, which picks out
+# jmp and call through a register with a few bits and leaves ret alone.
 [[insn]]
 mnemonic = "call"
 summary  = "lr = pc of next instruction; pc = imm16"
@@ -3506,8 +3524,9 @@ semantics = "lr = pc; pc = target"
 
 # --- the indirect call ------------------------------------------------------
 # `call rX` is `call imm16` with the target coming from the register file
-# instead of the instruction stream: same lr write, same jump, one less fetch.
-# Two bytes.
+# instead of the instruction stream: same lr write, same jump, a byte less to
+# fetch.  Two bytes.  Five cycles, as the target is known only in the ALU
+# cycle - or three, as `call imm16`, when the jmp ra predictor guessed it.
 #
 # IT IS NOT OPTIONAL FOR C.  Before it existed, `ret` was the only transfer
 # that read a register, so a function pointer could be tail called - `mov lr,
@@ -3557,9 +3576,10 @@ semantics = "pc = lr"
 # IT TAKES ANY REGISTER, IN TWO BYTES, AND r5 IN ONE.  It was once one byte
 # with r5 pinned and nothing else, and the byte it saved was charged back in
 # register allocation: every indirect jump had to get its address into the one
-# register the assembler is also free to clobber.  Both forms cost the same
-# five cycles, because what this instruction pays for is reading a register,
-# not fetching a byte.  With both, nothing has to move for the general case,
+# register the assembler is also free to clobber.  Both forms cost the same -
+# two cycles with the target guessed right, five without - because what this
+# instruction pays for is the register, or the guess of it, not fetching a
+# byte.  With both, nothing has to move for the general case,
 # and code that can choose r5 - a tail call through a pointer, which gcc
 # stages in r5 anyway, or an interpreter's dispatch - saves the byte.
 #
