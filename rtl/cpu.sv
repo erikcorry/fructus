@@ -658,16 +658,17 @@ module cpu (
     // three ways, each a three-bit tag and a two-bit counter, way k at bits
     // 5k + 4 .. 5k: one SB_RAM40_4K, read every cycle at gh[10:3], so the
     // word is the RAM's output flops by the time a branch looks, and only
-    // the tags' compare with gh[2:0] is in front of `pbok`.  A hit's counter
-    // guesses taken from 2 up.  No hit, or a word read before gh last
-    // changed - a branch dispatched the cycle before - and backward guesses
-    // taken, as it did before there was a table.
+    // the tags' compare with bgh[2:0], gh as it was then, is in front of
+    // `pbok`.  A hit's counter guesses taken from 2 up; no hit, and backward
+    // guesses taken, as it did before there was a table.  A word read before
+    // gh last changed - right behind a branch or a jump - is looked up at
+    // the history it was read at, which leaves out the newest bit.
     //
     // THE TABLE LEARNS A CYCLE AFTER THE ALU STAGE, from what the branch
-    // carried down the pipeline: a hit counts its counter towards the
-    // verdict, and a wrong guess without one writes the pattern into way
-    // `rr`, the three in turn, its counter weak.  Each write is one way's
-    // five bits; a guess from a stale word teaches nothing.  tools/sim.js's
+    // carried down the pipeline - bgh, where it looked, which joins the jmp
+    // ra predictor's index in the ALU stage: a hit counts its counter towards the verdict, and a
+    // wrong guess without one writes the pattern into way `rr`, the three in
+    // turn, its counter weak.  Each write is one way's five bits.  tools/sim.js's
     // predict() is the same machine, cycle for cycle.
     //
     // A JUMP'S ADDRESS GOES INTO gh TOO: bits 3 and 5 of every jump, call and
@@ -687,11 +688,11 @@ module cpu (
     wire        pbr = pcl[0] ? isbr(iw[0][15:8]) : isbr(iw[0][7:0]);
     logic       e_cbr;
     logic [10:0] gh;                  // the last eleven verdicts, the newest lowest
-    logic        gch;                 // gh was written at the last edge: bpw is stale
     logic [14:0] bpm [0:255];
     logic [14:0] bpw;                 // bpm[gh[10:3]], read at the last edge
-    wire [2:0]  bh   = {bpw[14:12] == gh[2:0], bpw[9:7] == gh[2:0], bpw[4:2] == gh[2:0]};
-    wire        bhit = ~gch & |bh;
+    logic [10:0] bgh;                 // gh then
+    wire [2:0]  bh   = {bpw[14:12] == bgh[2:0], bpw[9:7] == bgh[2:0], bpw[4:2] == bgh[2:0]};
+    wire        bhit = |bh;
     wire [1:0]  bway = bh[0] ? 2'd0 : bh[1] ? 2'd1 : 2'd2;
     wire [1:0]  bctr = bh[0] ? bpw[1:0] : bh[1] ? bpw[6:5] : bpw[11:10];
     wire        pbok = pbr & (bhit ? bctr[1] : ib2[7]) & ~e_cbr & ~e_rp;
@@ -851,7 +852,8 @@ module cpu (
     // DECODE
     // =========================================================================
     logic        d_valid, d_ucode, d_halt, d_wen, d_cbr, d_jump, d_pj, d_bp;
-    logic        d_bfr, d_bhit;         // the predictor's look, carried to the ALU stage
+    logic        d_bhit;                // the predictor's look, carried to the ALU stage
+    logic [10:0] bix;                   //   where it looked, bgh
     logic        d_jb;                  // a jump's bit for the history
     logic [1:0]  d_bway, d_bctr;
     logic        d_mem, d_mst, d_mw2, d_mblk, d_mpush;
@@ -873,8 +875,9 @@ module cpu (
         d_rc    <= prcall;
         d_rr    <= prret;
         if (prd) {rg, rix, rconf} <= {rgw, jixq, jcq};
+        bix     <= bgh;
         d_bp    <= pbok;
-        {d_bfr, d_bhit, d_bway, d_bctr} <= {~gch, bhit, bway, bctr};
+        {d_bhit, d_bway, d_bctr} <= {bhit, bway, bctr};
         d_jb    <= pjb;
         {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
         d_uent  <= c_uent;
@@ -1015,7 +1018,8 @@ module cpu (
     logic [15:0] aq, bq;
     logic        e_neg, e_mask, e_ucode, e_halt, e_jump, e_jreg, e_pj;
     logic        e_call, e_ret;          // a call or a ret, for the return stack
-    logic        e_bp, e_bfr, e_bhit, e_jp, e_jb;
+    logic        e_bp, e_bhit, e_jp, e_jb;
+    logic [10:0] e_ix;
     logic [1:0]  e_bway, e_bctr;
     logic [2:0]  e_code;
     logic [15:0] e_tgt;
@@ -1053,7 +1057,8 @@ module cpu (
         if (!e_keep) e_op <= mhold ? 4'd4 : d_alu;
         if (!e_keep) e_lsel <= mhold ? 3'd5 : d_lsel;
         e_cbr   <= keep & d_cbr;
-        {e_bp, e_bfr, e_bhit, e_bway, e_bctr} <= {d_bp, d_bfr, d_bhit, d_bway, d_bctr};
+        {e_bp, e_bhit, e_bway, e_bctr} <= {d_bp, d_bhit, d_bway, d_bctr};
+        e_ix    <= d_rp ? {1'b0, rix} : bix;   // a jmp ra's, else a branch's
         {e_jp, e_jb} <= {djp, d_jb};
         e_jump  <= keep & d_jump;
         e_pj    <= d_pj;
@@ -1142,48 +1147,44 @@ module cpu (
     // The branch's own history is `ch`, the verdicts of the branches and the
     // bits of the jumps that got this far: every one on the right path does,
     // in order, and none on a wrong one - so ch is what gh was when this one
-    // dispatched.
+    // dispatched.  The table learns at u_ix, the bgh it looked at, which is
+    // ch but for a stale look's, a bit behind.
     logic [10:0] ch;
-    logic        u_b, u_bp, u_bfr, u_bhit, u_jp, u_jb;
+    logic        u_b, u_bp, u_bhit, u_jp, u_jb;
     logic [1:0]  u_bway, u_bctr, rr;
     logic        u_rp, u_rr, u_rok, u_conf;
-    logic [9:0]  u_ix;
+    logic [10:0] u_ix;
     always_ff @(posedge clk) begin
         u_rp <= ~rst & e_rp & ~taken_q;
         u_rr <= e_rr;
-        {u_rok, u_conf, u_ix} <= {rok, rconf, rix};
+        {u_rok, u_conf, u_ix} <= {rok, rconf, e_ix};
         u_b <= ~rst & e_cbr & ~taken_q;
         u_jp <= ~rst & e_jp & ~taken_q;
         u_jb <= e_jb;
-        {u_bp, u_bfr, u_bhit, u_bway, u_bctr} <= {e_bp, e_bfr, e_bhit, e_bway, e_bctr};
+        {u_bp, u_bhit, u_bway, u_bctr} <= {e_bp, e_bhit, e_bway, e_bctr};
     end
     wire        uvd = u_bp ^ taken_q;                  // the verdict
     wire [1:0]  unc = uvd ? (u_bctr == 2'd3 ? 2'd3 : u_bctr + 2'd1)
                           : (u_bctr == 2'd0 ? 2'd0 : u_bctr - 2'd1);
-    wire        uwe = u_b & u_bfr & (u_bhit | taken_q);
+    wire        uwe = u_b & (u_bhit | taken_q);
     wire [1:0]  bpwy = u_bhit ? u_bway : rr;
-    wire [4:0]  bpv = {ch[2:0], u_bhit ? unc : {uvd, ~uvd}};
+    wire [4:0]  bpv = {u_ix[2:0], u_bhit ? unc : {uvd, ~uvd}};
     always_ff @(posedge clk) begin
-        if (uwe & bpwy == 2'd0) bpm[ch[10:3]][4:0]   <= bpv;
-        if (uwe & bpwy == 2'd1) bpm[ch[10:3]][9:5]   <= bpv;
-        if (uwe & bpwy == 2'd2) bpm[ch[10:3]][14:10] <= bpv;
+        if (uwe & bpwy == 2'd0) bpm[u_ix[10:3]][4:0]   <= bpv;
+        if (uwe & bpwy == 2'd1) bpm[u_ix[10:3]][9:5]   <= bpv;
+        if (uwe & bpwy == 2'd2) bpm[u_ix[10:3]][14:10] <= bpv;
         bpw <= bpm[gh[10:3]];
+        bgh <= gh;
         if (rst) ch <= 11'd0;
         else if (u_b | u_jp) ch <= {ch[9:0], u_b ? uvd : u_jb};
         if (rst) rr <= 2'd0;
         else if (uwe & ~u_bhit) rr <= (rr == 2'd2) ? 2'd0 : rr + 2'd1;
-        if (rst) begin
-            gh <= 11'd0; gch <= 1'b0;
-        end else if (u_b & taken_q) begin
-            gh <= {ch[9:0], uvd}; gch <= 1'b1;
-        end else if (u_rp & taken_q) begin
-            // a wrong guess of a jmp ra: what dispatched behind it is gone
-            gh <= {ch[9:0], u_jb}; gch <= 1'b1;
-        end else if (gon & pbr) begin
-            gh <= {gh[9:0], pbok}; gch <= 1'b1;
-        end else if (djp) begin
-            gh <= {gh[9:0], d_jb}; gch <= 1'b1;
-        end else gch <= 1'b0;
+        if (rst) gh <= 11'd0;
+        else if (u_b & taken_q) gh <= {ch[9:0], uvd};
+        // a wrong guess of a jmp ra: what dispatched behind it is gone
+        else if (u_rp & taken_q) gh <= {ch[9:0], u_jb};
+        else if (gon & pbr) gh <= {gh[9:0], pbok};
+        else if (djp) gh <= {gh[9:0], d_jb};
     end
     initial for (int i = 0; i < 256; i++) bpm[i] = 15'd0;
 
@@ -1192,8 +1193,8 @@ module cpu (
     // a wrong guess without it replaces the target.
     always_ff @(posedge clk) begin
         // A ret guessed from the return stack teaches the table nothing.
-        if (u_rp & ~u_rr) jcm[u_ix] <= u_rok;
-        if (u_rp & ~u_rr & ~u_rok & ~u_conf) jtm[u_ix] <= tgt_q;
+        if (u_rp & ~u_rr) jcm[u_ix[9:0]] <= u_rok;
+        if (u_rp & ~u_rr & ~u_rok & ~u_conf) jtm[u_ix[9:0]] <= tgt_q;
         jtw <= jtm[jix];
         jcw <= jcm[jix];
         jtq <= jtw; jtq1 <= jtw[15:1] + 15'd1; jcq <= jcw;
