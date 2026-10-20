@@ -265,8 +265,7 @@ export class Machine {
     this.bpq     = [];     // writes still to land: { at, ix, way, v }
     this.rr      = 0;      // the way the next new entry goes in
     this.gh      = 0;      // the last eleven verdicts, the newest lowest
-    this.ghAt    = undefined;   // the cycle whose closing edge last wrote gh
-    this.ghWas   = 0;      // gh before that write
+    this.ghLog   = [{ at: -Infinity, h: 0 }];   // gh's values, each with the edge that wrote it
     // THE jmp ra PREDICTOR, rtl/cpu.sv's: see guessJra().  Its tables are not
     // reset either; a reset clears its histories.
     this.jtm     = new Int32Array(1024);   // targets
@@ -613,8 +612,9 @@ export class Machine {
     // branch to the very next instruction still pays, which
     // tests/branch-cost.s pins.
     //
-    // A BRANCH PREDICTED TAKEN - see predict() - has its target, an add away,
-    // read the cycle after its dispatch, and goes on with its condition
+    // A BRANCH PREDICTED TAKEN - see predict() - reads its target, an add
+    // away, as it dispatches, as jmp does - or the cycle after, while a
+    // store's last access has the bus - and goes on with its condition
     // inverted, so a wrong guess - not taken - costs what a taken branch does.
     if (k.branch) {
       const t = this.fe.t, prior = this.cbrAt;
@@ -626,8 +626,8 @@ export class Machine {
       const q = this.jq;
       while (q.length && q[0].at <= t - 2) this.land(q.shift());
       q.push({ at: t + 4, v: this.wrotePc ? 1 : 0 });
-      if (this.predict(t, !!(this.mem[(at + 2) & 0xffff] & 0x80), prior !== t - 2 && this.rpAt !== t - 2)) {
-        if (this.wrotePc) return { hold: 3, redirect: 1 };
+      if (this.predict(t, prior !== t - 2 && this.rpAt !== t - 2)) {
+        if (this.wrotePc) return { hold: 1, redirect: 0, unpredicted: { hold: 3, redirect: 1 } };
         return { hold: 1 + this.penalty, redirect: this.penalty };
       }
       if (this.wrotePc) return { hold: 1 + this.penalty, redirect: this.penalty };
@@ -645,12 +645,11 @@ export class Machine {
     if (this.wrotePc && k.predict) {
       // jmp AND call TO AN ABSOLUTE ADDRESS read their target's word as they
       // dispatch.  jmp moves the pc there too, so the target dispatches once
-      // its word has arrived; call moves it in its ALU cycle.  Unless a
-      // store's last access has the bus: then neither is predicted.
-      return { hold: k.calls ? 3 : 1, redirect: 0, unpredicted: { hold: 3, redirect: 2 } };
+      // its word has arrived; call moves it in its ALU cycle.  While a
+      // memory instruction's last access has the bus they read it a cycle on.
+      return { hold: k.calls ? 3 : 1, redirect: 0, unpredicted: { hold: 3, redirect: 1 } };
     }
-    const callLr = k.callA && d.ops.a === this.named.lr;
-    const g = this.wrotePc && (k.jra || k.callA) ? this.guessJra(this.fe.t, !callLr)
+    const g = this.wrotePc && (k.jra || k.callA) ? this.guessJra(this.fe.t)
             : this.wrotePc && k.ret ? this.guessRet(this.fe.t) : null;
     if (g && (k.jra || k.ret)) {
       return { hold: 1, redirect: 0 };
@@ -658,12 +657,11 @@ export class Machine {
       // A call ra guessed right goes as a call to an absolute address.
       return { hold: 3, redirect: 0 };
     } else if (this.wrotePc) {
-      // A JUMP OR CALL stops dispatch behind it and reads its target in its
-      // ALU cycle.  Through a register - jmp ra, call ra, ret - the target
-      // goes through taken_q, a cycle later.  `call lr` goes to the NEW lr,
-      // the next pc, which is no register read.
-      const viaReg = k.viaReg && !(k.callA && d.ops.a === this.named.lr);
-      return viaReg ? { hold: 4, redirect: 3 } : { hold: 3, redirect: 2 };
+      // A JUMP OR CALL THROUGH A REGISTER, unguessed, stops dispatch behind
+      // it, and its target, known in its ALU cycle, goes through taken_q a
+      // cycle later.  `call lr` is undefined: its target would be the lr it
+      // writes.
+      return { hold: 4, redirect: 3 };
     }
     return { hold: 1 };
   }
@@ -673,46 +671,63 @@ export class Machine {
   // three-bit tag and a two-bit counter, way k at bits 5k + 4 .. 5k.  The
   // history `gh` holds the last eleven verdicts: bits 10 .. 3 are the word's
   // address, read every cycle, and bits 2 .. 0 are matched against the tags.
-  // A hit's counter guesses taken from 2 up; no hit, and the sign bit
-  // guesses, backward taken.  A word read before gh last changed - right
-  // behind a branch or a jump - is looked up at the history it was read at,
-  // ghWas.  None while a branch is in the ALU stage (`free` false), as before.
+  // THE LOOK IS LATCHED A CYCLE EARLY: the word read at the edge before
+  // t - 1 is matched in t - 1 against gh as it is then, and the hit, way and
+  // counter wait in flops for whatever dispatches in t.  The read at the
+  // edge that puts gh right after a misprediction is at the righted
+  // history, so a wrong path's bits never reach a look.  A hit's counter
+  // guesses taken from 2 up; no hit, and it is guessed not taken.  None while
+  // a branch or a guessed ra-jump is in the ALU stage (`free` false).
   //
   // The guess goes into gh as the branch dispatches, and a wrong one is put
   // right in the redirect, three cycles on.  The table learns a cycle after
-  // the ALU stage, t + 3, which a read can see from t + 5: a hit counts its
+  // the ALU stage, t + 3, which a look can see from t + 6: a hit counts its
   // counter towards the verdict, and a wrong guess without one puts the
-  // pattern in way rr, the ways in turn, its counter weak - at the history
-  // it looked at, which the branch carries down the pipeline.
-  predict(t, back, free) {
+  // pattern in way rr, the ways in turn, its counter weak - at the word and
+  // tag it looked at, which the branch carries down the pipeline.
+  predict(t, free) {
     const q = this.bpq;
-    while (q.length && q[0].at <= t - 2) {
+    while (q.length && q[0].at <= t - 3) {
       const { ix, way, v } = q.shift();
       const w = way < 0 ? this.rr : way;
       if (way < 0) this.rr = (this.rr + 1) % 3;
       this.bpm[ix] = (this.bpm[ix] & ~(31 << 5 * w)) | (v << 5 * w);
     }
-    const gh = this.gh, h = this.ghAt === t - 1 ? this.ghWas : gh;
-    const ix = h >> 3, tag = h & 7, word = this.bpm[ix];
+    const gh = this.gh;
+    const ix = this.ghRead(t - 2) >> 3, tag = this.ghIn(t - 1) & 7, word = this.bpm[ix];
     let way = -1;
     for (let w = 0; w < 3 && way < 0; w++) if ((word >> 5 * w + 2 & 7) === tag) way = w;
     const ctr = way < 0 ? 0 : word >> 5 * way & 3;
-    const guess = free && (way < 0 ? back : ctr >= 2);
+    const guess = free && way >= 0 && ctr >= 2;
     const verdict = this.wrotePc;
     if (way >= 0)
       q.push({ at: t + 3, ix, way, v: tag << 2 | (verdict ? Math.min(3, ctr + 1) : Math.max(0, ctr - 1)) });
     else if (guess !== verdict)
       q.push({ at: t + 3, ix, way: -1, v: tag << 2 | (verdict ? 2 : 1) });
-    this.ghWas = gh;
     this.gh = (gh << 1 | (verdict ? 1 : 0)) & 0x7ff;
-    this.ghAt = guess === verdict ? t : t + 3;
+    if (guess === verdict) this.ghWrote(t, this.gh);
+    else { this.ghWrote(t, (gh << 1 | (guess ? 1 : 0)) & 0x7ff); this.ghWrote(t + 3, this.gh, true); }
     return guess;
+  }
+
+  // gh's history: `at` the cycle whose closing edge wrote h, `fix` a
+  // misprediction's righting, which the table's read takes at that edge.
+  ghWrote(at, h, fix = false) {
+    this.ghLog.push({ at, h, fix });
+    if (this.ghLog.length > 32) this.ghLog.splice(0, 16);
+  }
+  // gh in cycle c, and the history the table reads at the edge closing c.
+  ghIn(c) { return this.ghAt_((e) => e.at <= c - 1); }
+  ghRead(c) { return this.ghAt_((e) => e.at <= c - 1 || (e.at === c && e.fix)); }
+  ghAt_(ok) {
+    let best = null;
+    for (const e of this.ghLog) if (ok(e) && (!best || e.at >= best.at)) best = e;
+    return best ? best.h : 0;
   }
 
   // A jmp ra's OR call ra's GUESS, dispatched in cycle t: whether it guessed
   // right, and so goes on at its target at once, like jmp to an absolute
-  // address, or as call to one does.  `call lr`, whose target is the next pc
-  // and no register, is guessed and learned from, but never right.  The
+  // address, or as call to one does.  The
   // table, 1024 targets and a confidence bit each, is read every cycle, at
   // jh's three ten-bit pieces XORed with jbh; the word read in cycle t - 2 is
   // in flops at t.  None with fewer than two words in the buffer, with a
@@ -724,15 +739,15 @@ export class Machine {
   // jh, and jbh is emptied.  A branch's verdict goes into jbh the same way.
   // A wrong guess is redirected through taken_q, as an unguessed jmp ra is,
   // and gh is put right at t + 3.
-  guessJra(t, viaReg) {
+  guessJra(t) {
     const q = this.jq;
     while (q.length && q[0].at <= t - 2) this.land(q.shift());
     if (this.fe.nw < 2 || this.fe.busy.includes(t) || this.rpAt === t - 1) return false;
     const jh = this.jh, ix = (jh ^ jh >>> 10 ^ jh >>> 20 ^ this.jbh) & 1023;
-    const ok = viaReg && this.jtm[ix] === this.pc;
+    const ok = this.jtm[ix] === this.pc;
     q.push({ at: t + 4, ix, ok, conf: this.jcm[ix], tgt: this.pc });
     this.rpAt = t;
-    if (!ok && viaReg) this.ghAt = t + 3;
+    if (!ok) this.ghWrote(t + 3, this.gh, true);
     return ok;
   }
 
@@ -751,7 +766,7 @@ export class Machine {
     if (this.fe.nw < 2 || this.fe.busy.includes(t) || this.rpAt === t - 1) return false;
     this.rpAt = t;
     const ok = this.rtq === this.pc;
-    if (!ok) this.ghAt = t + 3;
+    if (!ok) this.ghWrote(t + 3, this.gh, true);
     return ok;
   }
 
@@ -780,9 +795,8 @@ export class Machine {
   // In an interpreter that is the bytecode just finished, and so the one now
   // running is told apart from the others that ran the same branches before.
   path(t, at) {
-    this.ghWas = this.gh;
     this.gh = (this.gh << 1 | ((at >> 3 ^ at >> 5) & 1)) & 0x7ff;
-    this.ghAt = t + 1;
+    this.ghWrote(t + 1, this.gh);
   }
 
   // THE FETCHER, as rtl/cpu.sv's: a buffer of three words, whole words in,
@@ -851,8 +865,8 @@ export class Machine {
       if (way < 0) this.rr = (this.rr + 1) % 3;
       this.bpm[ix] = (this.bpm[ix] & ~(31 << 5 * w)) | (v << 5 * w);
     }
-    this.gh = this.ghWas = this.rr = 0;
-    this.ghAt = undefined;
+    this.gh = this.rr = 0;
+    this.ghLog = [{ at: -Infinity, h: 0 }];
     for (const e of this.jq.splice(0)) if (e.ix !== undefined) {
       this.jcm[e.ix] = e.ok ? 1 : 0;
       if (!e.ok && !e.conf) this.jtm[e.ix] = e.tgt;

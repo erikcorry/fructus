@@ -74,7 +74,6 @@ const m = machine();
     // An absolute jmp or call reads its target's word as it dispatches.
     ['j_abs',   3, 'a 3-byte absolute jump, to an even 3-byte instruction'],
     ['c_abs',   3, 'a 3-byte absolute call, to an odd 2-byte instruction'],
-    ['c_lr',    5, '`call lr`, to the next instruction, odd and 2 bytes'],
     ['j_reg',   6, 'a 2-byte jump through a register, to an even 3-byte instruction'],
     // Guessed right, the target is read as it dispatches, as an absolute one's.
     ['j_reg',   3, 'a 2-byte jump through a register, guessed right, to an even 3-byte instruction', 0],

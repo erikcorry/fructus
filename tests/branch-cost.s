@@ -39,9 +39,9 @@
 ;
 ; THE REGISTER FORMS COST THREE MORE UNGUESSED, WHATEVER THEIR LENGTH - `jmp
 ; r0` in two bytes and `ret` in one - because the target is the register's,
-; known in the ALU cycle, and goes through a flop before the fetch.  `call lr`
-; goes to the NEW lr, the next instruction, reads no register, and costs one
-; less.  Guessed right, `jmp r0` and `call r0` cost what the absolute forms do.
+; known in the ALU cycle, and goes through a flop before the fetch.  Guessed
+; right, `jmp r0` and `call r0` cost what the absolute forms do.  (`call lr` is
+; undefined; two bytes stand where it was, so the addresses below stay.)
 ; ============================================================================
 
 b_taken:        br      eq, r0, #0, b_taken_x   ; 0x00, 3 bytes, taken, guessed not -> 6
@@ -54,8 +54,8 @@ j_abs:          jmp     j_abs_x                 ; 0x09, 3 bytes, absolute  -> 3
 j_abs_x:
 c_abs:          call    c_abs_x                 ; 0x0c, 3 bytes, absolute  -> 3
 c_abs_x:
-c_lr:           call    lr                      ; 0x0f, 2 bytes, the new lr -> 5
-c_lr_x:
+pad:            jmp     r0                      ; 0x0f, 2 bytes, not run
+pad_x:
 j_reg:          jmp     r0                      ; 0x11, 2 bytes, register  -> 6, guessed 3
 j_reg_x:
 i_ret:          ret                             ; 0x13, 1 byte,  register  -> 6
