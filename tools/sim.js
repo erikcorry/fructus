@@ -266,6 +266,7 @@ export class Machine {
     this.rr      = 0;      // the way the next new entry goes in
     this.gh      = 0;      // the last eleven verdicts, the newest lowest
     this.ghAt    = undefined;   // the cycle whose closing edge last wrote gh
+    this.ghWas   = 0;      // gh before that write
     // THE jmp ra PREDICTOR, rtl/cpu.sv's: see guessJra().  Its tables are not
     // reset either; a reset clears its histories.
     this.jtm     = new Int32Array(1024);   // targets
@@ -672,17 +673,17 @@ export class Machine {
   // three-bit tag and a two-bit counter, way k at bits 5k + 4 .. 5k.  The
   // history `gh` holds the last eleven verdicts: bits 10 .. 3 are the word's
   // address, read every cycle, and bits 2 .. 0 are matched against the tags.
-  // A hit's counter guesses taken from 2 up; no hit, or a word read before
-  // gh last changed - a branch dispatched the cycle before - and the sign
-  // bit guesses, backward taken.  None while a branch is in the ALU stage
-  // (`free` false), as before.
+  // A hit's counter guesses taken from 2 up; no hit, and the sign bit
+  // guesses, backward taken.  A word read before gh last changed - right
+  // behind a branch or a jump - is looked up at the history it was read at,
+  // ghWas.  None while a branch is in the ALU stage (`free` false), as before.
   //
   // The guess goes into gh as the branch dispatches, and a wrong one is put
   // right in the redirect, three cycles on.  The table learns a cycle after
   // the ALU stage, t + 3, which a read can see from t + 5: a hit counts its
   // counter towards the verdict, and a wrong guess without one puts the
-  // pattern in way rr, the ways in turn, its counter weak.  A guess from a
-  // stale word teaches nothing.
+  // pattern in way rr, the ways in turn, its counter weak - at the history
+  // it looked at, which the branch carries down the pipeline.
   predict(t, back, free) {
     const q = this.bpq;
     while (q.length && q[0].at <= t - 2) {
@@ -691,17 +692,18 @@ export class Machine {
       if (way < 0) this.rr = (this.rr + 1) % 3;
       this.bpm[ix] = (this.bpm[ix] & ~(31 << 5 * w)) | (v << 5 * w);
     }
-    const gh = this.gh, fresh = this.ghAt !== t - 1;
-    const ix = gh >> 3, tag = gh & 7, word = this.bpm[ix];
+    const gh = this.gh, h = this.ghAt === t - 1 ? this.ghWas : gh;
+    const ix = h >> 3, tag = h & 7, word = this.bpm[ix];
     let way = -1;
-    if (fresh) for (let w = 0; w < 3 && way < 0; w++) if ((word >> 5 * w + 2 & 7) === tag) way = w;
+    for (let w = 0; w < 3 && way < 0; w++) if ((word >> 5 * w + 2 & 7) === tag) way = w;
     const ctr = way < 0 ? 0 : word >> 5 * way & 3;
     const guess = free && (way < 0 ? back : ctr >= 2);
     const verdict = this.wrotePc;
-    if (fresh && way >= 0)
+    if (way >= 0)
       q.push({ at: t + 3, ix, way, v: tag << 2 | (verdict ? Math.min(3, ctr + 1) : Math.max(0, ctr - 1)) });
-    else if (fresh && guess !== verdict)
+    else if (guess !== verdict)
       q.push({ at: t + 3, ix, way: -1, v: tag << 2 | (verdict ? 2 : 1) });
+    this.ghWas = gh;
     this.gh = (gh << 1 | (verdict ? 1 : 0)) & 0x7ff;
     this.ghAt = guess === verdict ? t : t + 3;
     return guess;
@@ -778,6 +780,7 @@ export class Machine {
   // In an interpreter that is the bytecode just finished, and so the one now
   // running is told apart from the others that ran the same branches before.
   path(t, at) {
+    this.ghWas = this.gh;
     this.gh = (this.gh << 1 | ((at >> 3 ^ at >> 5) & 1)) & 0x7ff;
     this.ghAt = t + 1;
   }
@@ -848,7 +851,7 @@ export class Machine {
       if (way < 0) this.rr = (this.rr + 1) % 3;
       this.bpm[ix] = (this.bpm[ix] & ~(31 << 5 * w)) | (v << 5 * w);
     }
-    this.gh = this.rr = 0;
+    this.gh = this.ghWas = this.rr = 0;
     this.ghAt = undefined;
     for (const e of this.jq.splice(0)) if (e.ix !== undefined) {
       this.jcm[e.ix] = e.ok ? 1 : 0;
