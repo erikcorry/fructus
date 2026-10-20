@@ -82,17 +82,13 @@
 // dispatches the next: four cycles, or five as a taken branch's target can
 // be, with nothing to squash.
 //
-// `call lr` GOES TO THE NEXT INSTRUCTION.  Its semantics, `lr = pc; pc =
-// R[a]`, write lr before they read it, so this core - with tools/sim.js - goes
-// to the NEW lr, and `call lr` is a way of writing the return address and
-// falling through.  The byte-serial core read the register a cycle early and
-// went to the OLD lr, which would make `call lr` a coroutine swap: jump to
-// where lr pointed and leave the return address in its place.  Checked in
-// simulation, `call r7` at 0x100 with lr = 0x4000: this core and tools/sim.js
-// go to 0x102; the byte-serial core went to 0x4000.  isa/fructus.toml does
-// not yet say which it means.  The byte-serial core also left lr = 0x0103
-// after a two-byte `call ra` at 0x100, where tools/sim.js and this core leave
-// 0x0102; its tests called only absolute targets, so none saw it.
+// `call lr` IS UNDEFINED.  Its semantics, `lr = pc; pc = R[a]`, write lr
+// before they read it, so taken literally it goes to the next instruction;
+// the byte-serial core read the register a cycle early and went to the OLD
+// lr.  This core goes wherever its guess or the operand flop says, and
+// isa/fructus.toml promises neither.  The byte-serial core also left lr =
+// 0x0103 after a two-byte `call ra` at 0x100, where tools/sim.js and this
+// core leave 0x0102; its tests called only absolute targets, so none saw it.
 //
 // A LOAD, A STORE OR A BLOCK MOVE ENTERS THE PIPELINE AND STOPS DISPATCH.  The
 // ALU computes the first address - base plus offset, op 0 - and a load puts it
@@ -229,7 +225,22 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     ret GUESSED FROM A RETURN STACK, as here       3269    30.03  28.7 .. 31.6
+//     A BRANCH GUESSED TAKEN IN TWO CYCLES, as here  3443    30.80  28.6 .. 32.0
+//       Its target read as it dispatches; a miss guessed not taken; abs16
+//       jmp and call dispatching while the bus is busy; `call lr` undefined.
+//       -2.2 .. -4.0% cycles on CoreMark, DeltaBlue, Richards and SPEC92's
+//       four, 3.3% on their score.
+//       Measured with abc's `&dch -r` (tools/speed.mjs since d53824a): main,
+//       461747a, 30.62 with it, 30.73 without, this 29.87 without.  On the
+//       way, the target sum `sext(d) + 3 + 4 pcc` from the byte: pcc's wide
+//       route at the head of ten cells, 28.57; pcc out of it, 29.09; the
+//       high byte from pcb's -1, 0, +1, shared with the pc's own increment,
+//       29.63; ~rst out of `slot`, 29.09 under `&dch -f -r`, whose choices
+//       missed the ALU's 4941 mapping; pb out of fp's enable, fp taking pnxt
+//       a cycle late through pnq, 30.80.  Critical paths nw -> fp, seven
+//       cells, the ALU's write-back, and pc + 2's low byte in front of the
+//       target's chain to the SPRAM, thirteen
+//     ret GUESSED FROM A RETURN STACK                3269    30.03  28.7 .. 31.6
 //     jmp ra AND call ra GUESSED                     3126    29.96  28.6 .. 31.1
 //       2560 LUT4 against 2462 and 30.21, 2868 cells, before it; six seeds'
 //       critical paths rst -> fp, eight cells.  The recognizer decoding
@@ -366,7 +377,10 @@
 // branches taken, so the address comes from flops, cost three MHz however the
 // verdict was then used, apparently by crowding the logic round the SPRAM -
 // the slowed paths were the ALU's own, which had not changed.  A cycle on
-// taken branches is not worth ten per cent on everything.
+// taken branches is not worth ten per cent on everything.  Later the
+// dynamic predictor made the guess a flop's, and a branch guessed taken
+// reads its target as it dispatches, as jmp does: two cycles - see THE
+// GUESS below.
 //
 // THE pc'S THREE SUMS STAY ON THE CARRY CHAIN.  They are three chains - 41
 // carry cells, the fetch address sharing pc + 2's - and a carry chain's cells
@@ -499,8 +513,12 @@ module cpu (
     logic [13:0] pcb;       // the base of pc[15:2]
     logic [1:0]  pcl;       // pc[1:0]
     logic        pcc;       // a carry into the base, not yet added
-    wire  [13:0] pcb1 = pcb + 14'd1;
-    wire  [13:0] pch  = pcc ? pcb1 : pcb;
+    // pcb + 1 is six bits of increment and a high byte that is pcbh or
+    // hp1 - the branch target's high bytes, below, made once for both.
+    wire  [7:0]  pcbh = pcb[13:6];
+    wire  [7:0]  hm1  = pcbh - 8'd1, hp1 = pcbh + 8'd1;
+    wire  [5:0]  pcm1 = pcb[5:0] + 6'd1;
+    wire  [13:0] pch  = pcc ? {&pcb[5:0] ? hp1 : pcbh, pcm1} : pcb;
     wire  [15:0] pc   = {pch, pcl};  // the instruction at ib0, dispatching this cycle if `go`
     wire         go;        // this cycle dispatches
     logic        stop;      // a microcoded instruction was dispatched: freeze
@@ -531,7 +549,10 @@ module cpu (
     logic      gq, dq;
     // A slot is a cycle that may dispatch; `take` needs only a byte in the
     // buffer, since brk has no bytes but its opcode, and it shifts nothing.
-    wire       slot = ~rst & ~stop & ~skip & ~taken_q;
+    // Not rst, which reaches everything from its corner: after its first
+    // cycle the buffer is empty, and what that cycle's dispatch would write
+    // rst overrides or clears the valid bit of.
+    wire       slot = ~stop & ~skip & ~taken_q;
     wire       take = slot & (nw != 3'd0) & ((ie_q & irq) | gq | dq);
     wire [7:0] op = ib0 & {8{~take}};
 
@@ -573,8 +594,9 @@ module cpu (
     // call leaves the pc on the next instruction, which is its return
     // address, and stops dispatch; its ALU cycle moves the pc, as an
     // unpredicted jump's does, without touching the bus: three cycles.  If
-    // the sequencer has the bus - a store's last access - neither is
-    // predicted, and both go as they did: four.
+    // the sequencer has the bus - a store's last access - both still
+    // dispatch, and the fetch reads the target from tgt_q a cycle on,
+    // through pjq: three.
     wire pjb0 = (iw[0][7:0]  == 8'haa) | (iw[0][7:0]  == 8'hab);
     wire pjb1 = (iw[0][15:8] == 8'haa) | (iw[0][15:8] == 8'hab);
     wire pjr  = pcl[0] ? pjb1 : pjb0;
@@ -642,31 +664,40 @@ module cpu (
     // The pc takes the guesses in arms of its own, the address one arm, the
     // two muxed in front: the other way round, 28.7 MHz against 30.0.
     wire  [15:0] rgw = prret ? rtq : jtq;
-    // A CONDITIONAL BRANCH PREDICTED TAKEN has its target read the cycle
-    // after it dispatches.  All seven are three bytes with the displacement
-    // last, so the target is an add away; it goes into tgt_q, and `pbq` reads
-    // it the cycle after as taken_q would, without the squash: the branch
-    // itself is in decode then, and goes on with its condition inverted and
-    // the fall-through as its target.  So the ALU stage's `taken` now means
-    // MISPREDICTED, in both directions, and taken_q squashes the wrong path
-    // and fetches the right one.  No guess while a branch is in the ALU
+    // A CONDITIONAL BRANCH PREDICTED TAKEN reads its target as it
+    // dispatches, `pb`, as jmp does.  All seven are three bytes with the
+    // displacement last, so the target is pc + 3 plus ib2, which is iw[1]'s
+    // low byte at an even pc and its high byte at an odd one: pcl[0] picks
+    // the byte, and the sum - with pc + 5's beside it for fp - is made every
+    // cycle from flops, whatever the buffer holds; see ONE CARRY CHAIN EACH.  Dispatch
+    // moves the pc to the fall-through, and `pbm` moves it to the target, in
+    // tgt_q, the cycle after; so the branch, in decode then, goes on with its
+    // condition inverted and the fall-through as its target.  While the
+    // sequencer has the bus `pbq` reads tgt_q the cycle after instead, as
+    // taken_q would, without the squash.  So the ALU stage's `taken` now
+    // means MISPREDICTED, in both directions, and taken_q squashes the wrong
+    // path and fetches the right one.  No guess while a branch is in the ALU
     // stage, whose verdict owns tgt_q that cycle.
     //
-    // THE GUESS IS THE TABLE'S, OR THE SIGN BIT'S.  `gh` is the last eleven
+    // THE GUESS IS THE TABLE'S.  `gh` is the last eleven
     // guesses, the newest lowest - put right by a misprediction, so the last
     // eleven verdicts by the time anything reads it.  bpm is 256 words of
     // three ways, each a three-bit tag and a two-bit counter, way k at bits
-    // 5k + 4 .. 5k: one SB_RAM40_4K, read every cycle at gh[10:3], so the
-    // word is the RAM's output flops by the time a branch looks, and only
-    // the tags' compare with bgh[2:0], gh as it was then, is in front of
-    // `pbok`.  A hit's counter guesses taken from 2 up; no hit, and backward
-    // guesses taken, as it did before there was a table.  A word read before
-    // gh last changed - right behind a branch or a jump - is looked up at
-    // the history it was read at, which leaves out the newest bit.
+    // 5k + 4 .. 5k: one SB_RAM40_4K, read every cycle at gh[10:3].  THE
+    // LOOK IS LATCHED A CYCLE EARLY: the word is matched against gh[2:0] the
+    // cycle after the read, and the hit, way and counter wait in flops for
+    // whatever dispatches next, so only the opcode check is in front of
+    // `pbok`, which picks the fetch.  The table is
+    // indexed by history alone, so the look does not need to know which
+    // instruction it is for.  The read at the edge that puts gh right after
+    // a misprediction is at the righted history, `ghr`, so a wrong path's
+    // bits never reach a look.  A hit's counter guesses taken from 2 up; no
+    // hit, and the branch is guessed not taken: no byte of the instruction
+    // is in the guess, which is flops by the time the branch is at the head.
     //
     // THE TABLE LEARNS A CYCLE AFTER THE ALU STAGE, from what the branch
-    // carried down the pipeline - bgh, where it looked, which joins the jmp
-    // ra predictor's index in the ALU stage: a hit counts its counter towards the verdict, and a
+    // carried down the pipeline - `blq`, the word and tag it looked at, which
+    // joins the jmp ra predictor's index in the ALU stage: a hit counts its counter towards the verdict, and a
     // wrong guess without one writes the pattern into way `rr`, the three in
     // turn, its counter weak.  Each write is one way's five bits.  tools/sim.js's
     // predict() is the same machine, cycle for cycle.
@@ -681,22 +712,35 @@ module cpu (
     // dispatch in that cycle - a jump stops dispatch, and a predicted jmp's
     // target has had one word arrive, and a branch is three bytes - so the
     // order in gh is the program's.
+    // The seven are 101x_xxxx: with bit 4 clear the low nibble is 1000 or
+    // 11xx (a8, ac - af), with it set 010x (b4, b5).  Spelled so, a byte is
+    // two LUTs deep - three small checks, then one to join them - where the
+    // seven compares ORed mapped to three, and pcl[0]'s pick a fourth.
     function automatic logic isbr(input logic [7:0] b);
-        isbr = b == 8'ha8 | b == 8'hac | b == 8'had | b == 8'hae | b == 8'haf
-             | b == 8'hb4 | b == 8'hb5;
+        logic h, l0, l1;
+        h    = b[7:5] == 3'b101;
+        l0   = b[3:0] == 4'b1000 | b[3:2] == 2'b11;
+        l1   = b[3:1] == 3'b010;
+        isbr = h & (b[4] ? l1 : l0);
     endfunction
     wire        pbr = pcl[0] ? isbr(iw[0][15:8]) : isbr(iw[0][7:0]);
     logic       e_cbr;
     logic [10:0] gh;                  // the last eleven verdicts, the newest lowest
     logic [14:0] bpm [0:255];
-    logic [14:0] bpw;                 // bpm[gh[10:3]], read at the last edge
-    logic [10:0] bgh;                 // gh then
-    wire [2:0]  bh   = {bpw[14:12] == bgh[2:0], bpw[9:7] == bgh[2:0], bpw[4:2] == bgh[2:0]};
-    wire        bhit = |bh;
+    logic [14:0] bpw;                 // bpm[ghr[10:3]], read at the last edge
+    logic [10:0] bgh;                 // ghr then
+    wire [2:0]  bh   = {bpw[14:12] == gh[2:0], bpw[9:7] == gh[2:0], bpw[4:2] == gh[2:0]};
     wire [1:0]  bway = bh[0] ? 2'd0 : bh[1] ? 2'd1 : 2'd2;
     wire [1:0]  bctr = bh[0] ? bpw[1:0] : bh[1] ? bpw[6:5] : bpw[11:10];
-    wire        pbok = pbr & (bhit ? bctr[1] : ib2[7]) & ~e_cbr & ~e_rp;
+    logic       bhq;                  // the look, latched: a hit,
+    logic [1:0] bwq, bcq;             //   its way and counter,
+    logic [10:0] blq;                 //   and the word and tag it was
+    // Guessed taken: a hit whose counter says so - a miss is guessed not
+    // taken - and no branch or guessed ra-jump in the ALU stage.  Flops only.
+    wire        btk  = bhq & bcq[1] & ~e_cbr & ~e_rp;
+    wire        pbok = pbr & btk;
     logic       pbq;                  // a predicted branch's target is in tgt_q
+    logic       pjq;                  // and a jmp's or call's, read while the bus was busy
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
     // down the fall-through path behind it, which costs nothing if the branch
@@ -722,13 +766,57 @@ module cpu (
     // pj is spelled from flops: three bytes are there when two words are, so
     // neither the classifier's length nor `go` is in front of the address
     // pins.  An interrupt taken in its place lets it fire anyway: the pc
-    // stays, and the brk's own redirect empties the buffer again.
-    wire pjok    = pjr & ~aphase;
+    // stays, and the brk's own redirect empties the buffer again.  While the
+    // sequencer has the bus it dispatches all the same, its target goes into
+    // tgt_q, and `pjq` reads it the cycle after, as pbq does a branch's; a
+    // jmp stops dispatch for that cycle, and a call stops it anyway.
+    wire pjok    = pjr;
     wire pjd     = go & ~take & pjok;
     wire pj      = pjok & slot & (nw >= 3'd2);
     wire pbd     = go & ~take & pbok;
     wire prd     = go & ~take & prok;
-    wire [15:0] padd = pc + {{8{ib2[7]}}, ib2} + 16'd3;
+    // ONE CARRY CHAIN EACH, AND THE BYTE STRAIGHT IN: pc + 3 + sext(d) is
+    // (pc + 2) + d + 1, the 1 the chain's carry in, and d picked by pcl[0]
+    // from iw[1] in one LUT - nothing added to it first.  pc + 2's low byte
+    // comes off the flops: pc's low byte is X = {pcb[5:0], pcl}, or X + 4
+    // under pcc, so pc + 2 is X + 2 or X + 6, both made beforehand, and pcc,
+    // whose wires reach everywhere, only picks one.  The word after the
+    // branch, pc + 5 + sext(d), is X + 4 or X + 8 the same way.
+    wire [7:0]  pcx  = {pcb[5:0], pcl};
+    // Their carries out, which the high byte wants early, are compares
+    // of X's high bits - X >= 254, 250, 252, 248 - and not the sums' last
+    // carry, which would wait for the whole chain.
+    wire [7:0]  px2  = pcx + 8'd2, px6 = pcx + 8'd6, px4 = pcx + 8'd4, px8 = pcx + 8'd8;
+    wire        c2   = &pcx[7:1], c6 = &pcx[7:3] & (pcx[2] | pcx[1]);
+    wire        c4   = &pcx[7:2], c8 = &pcx[7:3];
+    wire [8:0]  pt   = pcc ? {c6, px6} : {c2, px2}, pn = pcc ? {c8, px8} : {c4, px4};
+    wire [7:0]  bd   = pcl[0] ? iw[1][15:8] : iw[1][7:0];
+    // AND THAT CHAIN IS ONLY THE LOW BYTE'S: the high byte is pcb's, plus
+    // the carry out of pc + 2 (early), plus the chain's carry, less d's sign
+    // (early): so pcb's -1 .. +1, the two that the early bits leave chosen
+    // before the chain ends, and its carry picks between them.  Never +2:
+    // that needs pcc to carry into the high byte, leaving pc at the foot
+    // of its page, and a target past the page's top, 256 bytes on.
+    function automatic logic [15:0] rel(input logic [8:0] p, input logic [7:0] d,
+                                        input logic [7:0] hm1, input logic [7:0] h0,
+                                        input logic [7:0] hp1);
+        logic [8:0] lo;
+        logic [7:0] dn, up;
+        lo  = {1'b0, p[7:0]} + {1'b0, d} + 9'd1;
+        dn  = p[8] ? (d[7] ? h0 : hp1) : (d[7] ? hm1 : h0);    // no carry out of the chain
+        up  = p[8] | ~d[7] ? hp1 : h0;                         // a carry
+        rel = {lo[8] ? up : dn, lo[7:0]};
+    endfunction
+    wire [15:0] padd = rel(pt, bd, hm1, pcbh, hp1);           // a branch's target
+    wire [15:0] pnx  = rel(pn, bd, hm1, pcbh, hp1);
+    wire [14:0] pnxt = pnx[15:1];                              // and the word after it
+    // THE FETCH'S GUESSES ARE AN OPCODE CHECK AND AN EARLY BIT EACH: whether
+    // the fetch may go - a slot, the bus, the whole instruction in - and for
+    // a branch whether it is guessed taken and allowed (btk), all from flops,
+    // so that only the opcode checks are in series in front of the fetch.
+    wire        gok  = slot & ~aphase & (nw >= 3'd2);
+    wire        pb   = pbr & btk & gok;                        // the fetch reads it
+    logic       pbm;                            // it did: the pc goes there next
     wire        pjb  = pc[3] ^ pc[5];               // a jump's bit for gh
     // mul, clz AND popcount TAKE TWO CYCLES IN THE ALU STAGE, and leave a
     // cycle with no dispatch after them, `skip`: see the ALU stage.
@@ -754,16 +842,24 @@ module cpu (
     wire [15:0] rjaddr;
     wire        wake;                      // an interrupt ends a halt
     wire        xrel;                      // a long hold releases dispatch: the ALU stage
-    wire        jfetch;                    // jnow, unless a predicted call fetched already
-    wire        redir = taken_q | pbq;     // the fetch goes to tgt_q
+    wire        redir = taken_q | pbq | pjq;   // the fetch goes to tgt_q
     wire        fetch = ~ldnow & ~aphase;   // the bus is the fetcher's, when no redirect or jump arm has it
-    assign mem_addr = redir   ? {tgt_q[15:1], 1'b0}
-                    : jfetch  ? {jaddr[15:1], 1'b0}
+    // THE THREE GUESSES ARE ONE ARM: jmp and call to an absolute address,
+    // jmp ra, call ra and ret, and a branch guessed taken are told apart by
+    // their opcodes, so the opcode checks alone pick the target - from flops,
+    // early - and only the arm's select waits for the rest of each decision.
+    // AND THEY ARE THE OUTERMOST ARMS, the branch's first: its sum comes
+    // last.  No other arm can want the bus then - gok has slot, which a
+    // redirect, a load's ALU cycle and the cycle after a pbq all clear, and
+    // ~aphase - so they need no gating by the arms written after them.
+    wire        pjg   = (pjr & gok) | (prr & ~d_rp & gok);   // jmp, or an ra-jump
+    wire [15:0] jgt   = pjr ? ptgt : rgw;
+    assign mem_addr = pb      ? {padd[15:1], 1'b0}
+                    : pjg     ? {jgt[15:1], 1'b0}
+                    : redir   ? {tgt_q[15:1], 1'b0}
                     : ldnow   ? asum
                     : aphase  ? maddr
-                    : pj      ? {ptgt[15:1], 1'b0}
-                    : prj     ? {prret ? rtq[15:1] : jtq[15:1], 1'b0}
-                    :           {fp, 1'b0};
+                    :           {pbf ? pnq : fp, 1'b0};
 
     // --- the buffer --------------------------------------------------------------
     // WORDS LEAVING: pc's word goes once the pc passes it.  sw[l] is how many
@@ -780,7 +876,6 @@ module cpu (
         for (int s = 0; s < 4; s++) croom[s] = nw + {2'b0, finq} <= 3'(2 + s);
     wire [1:0]  sel   = gon ? sw[lenr] : 2'd0;
     wire        keepw = fetch & (gon ? croom[sw[lenr]] : croom[0]);
-    wire [15:0] raddr = redir ? tgt_q : jaddr;      // a redirect's target
     // ONE LUT AFTER THE LATE SELECT.  A slot takes the word at position s,
     // and position p holds iw[p] if it is valid and the arriving word if
     // not - `e`, from flops and the port, settled early.  Holding is the
@@ -797,25 +892,38 @@ module cpu (
 
     always_ff @(posedge clk) begin
         if (rst) begin
-            nw <= 3'd0; finq <= 1'b0; fp <= 15'd0;
-        end else if (redir | jfetch) begin
+            nw <= 3'd0; finq <= 1'b0;
+        end else if (pb | pjg | redir) begin
             // The redirect's own read is the target's word.
-            nw <= 3'd0; finq <= 1'b1; fp <= raddr[15:1] + 15'd1;
-        end else if (pj) begin
-            nw <= 3'd0; finq <= 1'b1; fp <= ptgt[15:1] + 15'd1;
-        end else if (prj) begin
-            nw <= 3'd0; finq <= 1'b1; fp <= prret ? rtq1 : jtq1;
+            nw <= 3'd0; finq <= 1'b1;
         end else begin
-            nw <= nw + {2'b0, finq} - {1'b0, sel};
+            // a jmp read late, through pjq: what the buffer holds is behind it
+            nw <= (pjd & aphase) ? 3'd0 : nw + {2'b0, finq} - {1'b0, sel};
             finq <= keepw;
-            if (keepw) fp <= fp + 15'd1;
         end
+    end
+    // A PREDICTED BRANCH LEAVES fp ALONE: its next word, pnxt, waits in pnq,
+    // which the fetch reads in the cycle after, and fp takes it then - so the
+    // branch's recognizer is not in fp's enable, the end of the fetch's
+    // longest paths.  That cycle nothing dispatches - the branch set stop -
+    // and the buffer is empty but for the target's word, so a word fetched
+    // then is always kept: fp moves on past it whenever the bus was free.
+    logic        pbf;       // the cycle after a predicted branch
+    logic [14:0] pnq;       // pnxt, a cycle late
+    always_ff @(posedge clk) begin
+        pbf <= ~rst & pb;
+        pnq <= pnxt;
+        if (rst)        fp <= 15'd0;
+        else if (pjg)   fp <= pjr ? ptgt[15:1] + 15'd1 : prret ? rtq1 : jtq1;
+        else if (redir) fp <= tgt_q[15:1] + 15'd1;
+        else if (pbf)   fp <= fetch ? pnq + 15'd1 : pnq;
+        else if (keepw) fp <= fp + 15'd1;
     end
 
     always_ff @(posedge clk) begin
         if (rst) begin
             {pcb, pcl, pcc} <= 17'd0; stop <= boot; skip <= 1'b0;
-        end else if (redir) begin
+        end else if (redir | pbm) begin
             {pcb, pcl, pcc} <= {tgt_q, 1'b0}; stop <= 1'b0; skip <= 1'b0;
         end else if (jnow) begin
             {pcb, pcl, pcc} <= {jaddr, 1'b0}; stop <= 1'b0; skip <= 1'b0;
@@ -831,7 +939,11 @@ module cpu (
             stop <= 1'b0;
         end else if (pjd & ~pjcall) begin
             // jmp goes down the pipeline as an ALU instruction that writes
-            // nothing, and dispatch carries on at its target.
+            // nothing, and dispatch carries on at its target - a cycle on,
+            // through pjq, if the sequencer had the bus; the buffer is
+            // emptied then, so nothing dispatches in between.  (Holding that
+            // cycle with `stop` or `skip` raised abc's delay target from 4941
+            // to 5374: their next state is a long chain already.)
             {pcb, pcl, pcc} <= {ptgt, 1'b0}; stop <= 1'b0; skip <= 1'b0;
         end else if (prd & ~prcall & ~prret) begin
             {pcb, pcl, pcc} <= {jtq, 1'b0}; stop <= 1'b0; skip <= 1'b0;
@@ -875,9 +987,9 @@ module cpu (
         d_rc    <= prcall;
         d_rr    <= prret;
         if (prd) {rg, rix, rconf} <= {rgw, jixq, jcq};
-        bix     <= bgh;
+        bix     <= blq;
         d_bp    <= pbok;
-        {d_bhit, d_bway, d_bctr} <= {bhit, bway, bctr};
+        {d_bhit, d_bway, d_bctr} <= {bhq, bwq, bcq};
         d_jb    <= pjb;
         {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
         d_uent  <= c_uent;
@@ -935,18 +1047,14 @@ module cpu (
     // A displacement is always byte 2, since every relative transfer is a
     // three-byte branch, and counts from the instruction after - which
     // dispatch had already, as the pc it moved on to.  An absolute target is
-    // bytes 1 and 2; a register's is the left operand.
-    //
-    // `call lr` IS THE EXCEPTION: its semantics are `lr = pc; pc = R[a]`, in
-    // that order, so it goes to the NEW lr - the next instruction - and not the
-    // register's old value, which is what `aq` holds.
+    // bytes 1 and 2; a register's is the left operand - for `call lr`, which
+    // is undefined, the old lr.
     wire [2:0] ccode;
     wire       cneg, cmask;
     cond cu (.insn(ins), .src(d_cond), .code(ccode), .neg(cneg), .mask(cmask));
     wire        jreg    = (d_pcsrc == 2'd3);
-    wire        calllr  = d_jump & d_wen & jreg & (an == `FRUCTUS_REG_LR);
     wire [15:0] tgt     = (d_pcsrc == 2'd2) ? ins[23:8]
-                        : calllr | d_bp     ? d_next     // a predicted branch's fall-through
+                        : d_bp              ? d_next     // a predicted branch's fall-through
                         :                     d_next + {{8{b2[7]}}, b2};
 
     // =========================================================================
@@ -1067,9 +1175,9 @@ module cpu (
         e_rr    <= d_rr;
         e_call  <= keep & d_jump & d_wen;
         e_ret   <= keep & d_jump & (d_op == 8'h08);
-        e_jreg  <= jreg & ~calllr;
+        e_jreg  <= jreg;
         {e_code, e_neg, e_mask} <= {ccode, cneg ^ d_bp, cmask};
-        e_tgt   <= (d_rp & jreg & ~calllr) ? rg : tgt;   // a guessed call ra's pc, if right
+        e_tgt   <= (d_rp & jreg) ? rg : tgt;   // a guessed call ra's pc, if right
         e_ucode <= d_ucode & ~taken_q;
         e_mem   <= keep & d_mem;
         {e_mst, e_mw2, e_mblk} <= {d_mst, d_mw2, d_mblk};
@@ -1109,10 +1217,10 @@ module cpu (
     // the fetch goes there through taken_q's arm.  So aq - the operand flop
     // the ALU, the comparator and the bypass all hang on - no longer reaches
     // the address mux or the pc at all, and this arm is a flop's alone.
-    // jmp ra, call ra and ret take four cycles, not three; `call lr`, whose
-    // target is the next pc and not the register, stays at three.
+    // jmp ra, call ra and ret take four cycles, not three.  `call lr` is
+    // undefined: its target would be the lr it writes.
     wire jrq      = e_jump & e_jreg & ~taken_q;
-    wire rok      = e_jreg & (aq == rg);   // guessed right; never `call lr`, whose target is no register
+    wire rok      = e_jreg & (aq == rg);   // guessed right
     wire jreg_now = jrq & ~(e_rp & rok);
     // A call ra guessed goes as a predicted call to an absolute address does:
     // the pc moves in its ALU cycle, to its target's word fetched already.  It
@@ -1121,7 +1229,6 @@ module cpu (
     // and puts the pc right.
     assign jnow  = e_jump & (~e_jreg | (e_rp & e_rc)) & ~taken_q;
     assign jaddr = e_tgt;
-    assign jfetch = e_jump & ~e_jreg & ~taken_q & ~e_pj;   // jnow, but not a predicted call: its target is in already
 
     wire taken;
     compare cp (.lhs(aq), .rhs(bq), .cond(e_code), .neg(e_neg), .mask(e_mask), .taken(taken));
@@ -1135,8 +1242,13 @@ module cpu (
         // The squash taken_q brings finds nothing to squash - dispatch is
         // stopped - and the routine's own writes are not taken_q's to stop.
         taken_q <= ~rst & ~taken_q & ((e_cbr & taken) | urj | jreg_now);
-        tgt_q   <= (urj | jrq) ? rjaddr : pbd ? padd : e_tgt;
-        pbq     <= ~rst & pbd;
+        // An abs jump's target, taken whether or not it dispatches: only pjq,
+        // which does wait for that, reads it; and while the sequencer has
+        // the bus the ALU stage holds no branch whose e_tgt it would need.
+        tgt_q   <= (urj | jrq) ? rjaddr : pbd ? padd : (pjr & aphase) ? ptgt : e_tgt;
+        pbq     <= ~rst & pbd & aphase;
+        pjq     <= ~rst & pjd & aphase;
+        pbm     <= ~rst & pbd & ~aphase;
         for (int k = 0; k < 8; k++) if ((e_we[k] & ~taken_q) | mwe[k]) R[k] <= y;
     end
     assign result = y;
@@ -1167,14 +1279,17 @@ module cpu (
     wire [1:0]  unc = uvd ? (u_bctr == 2'd3 ? 2'd3 : u_bctr + 2'd1)
                           : (u_bctr == 2'd0 ? 2'd0 : u_bctr - 2'd1);
     wire        uwe = u_b & (u_bhit | taken_q);
+    // gh as the next edge leaves it, where a misprediction rights it
+    wire [10:0] ghr = (u_b & taken_q) ? {ch[9:0], uvd} : (u_rp & taken_q) ? {ch[9:0], u_jb} : gh;
     wire [1:0]  bpwy = u_bhit ? u_bway : rr;
     wire [4:0]  bpv = {u_ix[2:0], u_bhit ? unc : {uvd, ~uvd}};
     always_ff @(posedge clk) begin
         if (uwe & bpwy == 2'd0) bpm[u_ix[10:3]][4:0]   <= bpv;
         if (uwe & bpwy == 2'd1) bpm[u_ix[10:3]][9:5]   <= bpv;
         if (uwe & bpwy == 2'd2) bpm[u_ix[10:3]][14:10] <= bpv;
-        bpw <= bpm[gh[10:3]];
-        bgh <= gh;
+        bpw <= bpm[ghr[10:3]];
+        bgh <= ghr;
+        {bhq, bwq, bcq, blq} <= {|bh, bway, bctr, bgh[10:3], gh[2:0]};
         if (rst) ch <= 11'd0;
         else if (u_b | u_jp) ch <= {ch[9:0], u_b ? uvd : u_jb};
         if (rst) rr <= 2'd0;

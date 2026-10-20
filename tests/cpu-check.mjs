@@ -17,7 +17,8 @@
 // instruction for instruction - branches included, which write nothing.  And
 // the dispatches must come exactly as rtl/cpu.sv's header says: one a
 // cycle, except that an instruction of three bytes starting at an odd address
-// is followed by a cycle with none, and a taken branch by three.  The
+// is followed by a cycle with none, a taken branch by three, and one
+// predicted taken by one.  The
 // dispatches a taken branch squashes are dropped before that is checked.
 // The forms are drawn so that every length lands at both alignments.
 //
@@ -140,9 +141,10 @@ const EXC_CYCLES = { brk: 7, rti: 7, sei: 4, cli: 4 };
 // after layout like a branch's offset.  A register target is a pair: a
 // `mov rX, #target` and then the jump through rX - so the jump always reads
 // the register the instruction just ahead of it wrote, through the bypass.
-// X is drawn at random, so `call r7`, which goes to the new lr and not the
-// target, comes up too.  ret is a mov into lr and then ret, and a one-byte
-// jump or call through a pinned register - `jmp r5' - is a mov into that one.
+// X is drawn at random - but not lr for a call, since `call lr` is
+// undefined: its target would be the lr it writes.  ret is a mov into lr
+// and then ret, and a one-byte jump or call through a pinned register -
+// `jmp r5' - is a mov into that one.
 const JUMP_SEM = /^(lr = pc; )?pc = (target|pc \+ target|R\[a\]|lr)$/;
 const find = (want) => {
   for (let op = 0; op < 256; op++)
@@ -160,7 +162,7 @@ for (let op = 0; op < 256; op++) {
   const m = d && JUMP_SEM.exec(d.insn.semantics ?? '');
   if (!m) continue;
   const how = m[2] === 'target' ? 'abs' : m[2] === 'pc + target' ? 'rel' : m[2] === 'lr' ? 'ret' : 'reg';
-  jumps.push({ op, jump: how, pinned: d.nbytes === 1 && how === 'reg' ? d.ops.a : undefined });
+  jumps.push({ op, jump: how, call: !!m[1], pinned: d.nbytes === 1 && how === 'reg' ? d.ops.a : undefined });
 }
 
 // Lay a list of forms out as bytes, pointing each branch forward at a random
@@ -191,7 +193,7 @@ const draw = (f) => {
     case 'ret': return [MOV_TO[7], 0, 0, f.op];
     case 'reg': {
       if (f.pinned !== undefined) return [MOV_TO[f.pinned], 0, 0, f.op];
-      const x = rnd() & 7; return [MOV_TO[x], 0, 0, f.op, x];
+      const x = f.call ? rnd() % 7 : rnd() & 7; return [MOV_TO[x], 0, 0, f.op, x];
     }
   }
   if (f.nbytes === 1) return [f.op];
@@ -437,11 +439,16 @@ const SOURCES = [
       }
   SOURCES.push([...lines, 'halt'].map((l) => '          ' + l).join('\n'));
 }
-// BACKWARD BRANCHES, which dispatch predicts taken: a loop on each of the
-// seven, so each is taken and then not; one never taken; one with a branch
+// BACKWARD BRANCHES, which the table learns to guess taken: a loop on each
+// of the seven, so each is taken and then not; one never taken; one with a branch
 // two ahead of it, whose verdict owns tgt_q, so it is not predicted; a push
-// just before one; a call in a loop; and loops nested, so that the inner
-// one's wrong guess at its exit is followed by the outer one's branch.
+// just before one; a call in a loop; loops nested, so that the inner
+// one's wrong guess at its exit is followed by the outer one's branch; and
+// a call whose target is a branch back, which dispatches the cycle after
+// the call's ALU cycle moves the pc there; and a forward branch always taken
+// straight behind one never taken, whose look is latched before the first
+// one's bit reaches the history, and is right only once the table has
+// learned in the word it read.
 SOURCES.push([
   'mov  sp, #0x3100', 'mov  r3, #0', 'mov  r2, #0',
   'mov  r1, #3', 'l1: add  r2, r2, #1', 'add  r1, r1, #-1', 'br   ne, r1, #0, l1',
@@ -457,16 +464,19 @@ SOURCES.push([
   'mov  r1, #3', 'l11: call f11', 'add  r1, r1, #-1', 'br   ne, r1, #0, l11',
   'mov  r4, #2', 'l12: mov  r1, #2', 'l13: add  r2, r2, r1', 'add  r1, r1, #-1', 'br   ne, r1, #0, l13',
   'add  r4, r4, #-1', 'br   ne, r4, #0, l12',
+  'mov  r1, #3', 'l14: call f14', 'add  r1, r1, #-1', 'br   ne, r1, #0, l14',
+  'mov  r1, #10', 'l15: br   ne, r3, r3, l15x', 'br   eq, r3, r3, l15y', 'l15x: add  r2, r2, #7',
+  'l15y: add  r1, r1, #-1', 'br   ne, r1, #0, l15',
   'halt',
   'f11: add  r2, r2, #2', 'ret',
+  'f14r: add  r2, r2, #5', 'ret', 'f14: br   eq, r3, #0, f14r',
 ].map((l) => '          ' + l).join('\n'));
 
 // AN INTERPRETER'S DISPATCH: handlers that end in a jmp through a register,
 // 0xb2's and jmp r5's, in an order that repeats, with forward branches
 // between, and calls through a register, call ra's and call r5's - so the
 // jmp ra predictor learns them, guesses right, and once in a while wrong,
-// where the branch inside h3 changes its mind.  Then `call lr`, which is
-// guessed and never right.
+// where the branch inside h3 changes its mind.
 SOURCES.push([
   'jmp  go',
   'f1:  add  r3, r3, #7', 'ret',
@@ -479,7 +489,6 @@ SOURCES.push([
   'h1b: add  r3, r3, #5', 'mov  r2, #h4', 'jmp  r2',
   'h4:  mov  r2, #f1', 'call r2', 'mov  r5, #f2', 'call r5',
   'add  r1, r1, #-1', 'br   ne, r1, #0, top',
-  'mov  r1, #6', 'cl:  mov  lr, #cx', 'call lr', 'cx:  add  r1, r1, #-1', 'br   ne, r1, #0, cl',
   'halt',
 ].map((l) => '          ' + l).join('\n'));
 
@@ -624,18 +633,15 @@ for (let p = 0; p < PROGRAMS; p++) {
       const d = decode(dec, trap ? [0, 0, 0]
                                            : [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
       const taken = branches.has(`${d.insn.mnemonic}/${d.form.name}@${m.mem[pc]}`) && takes(pc, d.nbytes);
-      // A jump costs three cycles, or four through a register - jmp ra, call
-      // ra, ret - which goes through taken_q; `call lr` goes to the next pc,
-      // not the register, and costs three.  An absolute target is read as the
+      // A jump costs four cycles through a register - jmp ra, call ra, ret -
+      // which goes through taken_q.  An absolute target is read as the
       // jump dispatches, so jmp's target dispatches two cycles after it, and
       // call's three, when its ALU cycle has moved the pc.  jmp ra's and call
       // ra's targets, guessed right, are read as they dispatch too: two, three;
       // and ret's, from the return stack: two.
       const jm = JUMP_SEM.exec(d.insn.semantics ?? '');
       const jump = !jm ? 0 : jm[2] === 'target' ? (jm[1] ? 3 : 2)
-                 : /^pc = (R\[a\]|lr)$/.test(jm[0]) ? 2
-                 : /^lr = pc; pc = R\[a\]$/.test(jm[0]) && d.ops.a !== 7 ? 3
-                 : /R\[a\]|^pc = lr$/.test(jm[0]) && !(/^lr = pc; pc = R\[a\]$/.test(jm[0]) && d.ops.a === 7) ? 5 : 4;
+                 : jm[1] ? 3 : 2;
       const exc = EXC.test(d.insn.mnemonic) ? EXC_CYCLES[d.insn.mnemonic]
                 : d.insn.extra_cycles > 0 ? 1 + d.insn.extra_cycles : 0;
       const mem = memBytes(d.insn.semantics ?? '');
@@ -789,7 +795,7 @@ function check(out, blit, what) {
       const want = prev.cyc;
       const floor = prev.exc ? prev.exc
                   : prev.mem ? prev.acc + 2 + (blit && prev.late ? 1 : 0)
-                  : prev.jump ? prev.jump : prev.taken ? 3 : 1;
+                  : prev.jump ? prev.jump : prev.taken ? 2 : 1;
       if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) say(` dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
       if (ds[i].cyc - ds[i - 1].cyc !== want)
         say(` dispatch ${i}: ${ds[i].cyc - ds[i - 1].cyc} cycles after the one at 0x${prev.pc.toString(16)}, tools/sim.js charges ${want}`);

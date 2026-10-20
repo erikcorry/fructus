@@ -239,14 +239,13 @@ length_from_first_byte = true
 #
 #     an ALU instruction, nop                        1
 #     a conditional branch guessed right, not taken  1
-#       - guessed right, taken                       3
+#       - guessed right, taken                       2
 #       - guessed wrong, either way                  taken_branch_penalty + 2 = 5
 #     jmp to a target in its bytes                   2
 #     call to a target in its bytes                  3
 #     jmp ra, call ra, their target guessed right    2, 3
 #     ret, its target guessed right                  2
 #       - any of them unguessed or guessed wrong     5
-#       - and call lr, which goes to the next one    4
 #     mul, clz, popcount                             1 + extra_cycles = 2
 #     recip                                          1 + extra_cycles = 5
 #     a load or store of N accesses: ld8, ld, pop,
@@ -260,9 +259,10 @@ length_from_first_byte = true
 # one more when the instruction at its target reaches into a second word:
 # two bytes at an odd address, or three at any.  A call that went straight to
 # its target does not: it holds dispatch two cycles after its target's word
-# is read, and the fetcher brings the second word in that time.  jmp and call
-# to a target in their bytes cost 4 when a store's last access has the bus as
-# they dispatch.  In a system built in blit mode, ld, ld8 and ldm cost one
+# is read, and the fetcher brings the second word in that time.  A branch
+# guessed taken, and jmp and call to a target in their bytes, read their
+# target a cycle late when a store's last access has the bus as they
+# dispatch, and cost 3.  In a system built in blit mode, ld, ld8 and ldm cost one
 # more as well; see rtl/cpu.sv.
 #
 # THE FETCHER reads a word, two bytes, in every cycle the bus is not a load's
@@ -292,10 +292,10 @@ length_from_first_byte = true
 #
 # A CONDITIONAL BRANCH IS GUESSED AS IT DISPATCHES, by a table of two-bit
 # counters indexed by the last eleven verdicts and bits of the jumps'
-# addresses, or, when the table has nothing, backward taken and forward not.
-# Guessed not taken, dispatch runs on down the fall-through: right, it costs
-# what any instruction does.  Guessed taken, its target, an add away, is read
-# the cycle after its dispatch: right, it is three.  A WRONG GUESS IS FIVE
+# addresses; when the table has nothing it is guessed not taken.  Guessed not
+# taken, dispatch runs on down the fall-through: right, it costs what any
+# instruction does.  Guessed taken, its target, an add away, is read as it
+# dispatches, as jmp's is: right, it is two.  A WRONG GUESS IS FIVE
 # because the pipeline has run on down the path it guessed: the ALU stage
 # decides it, the three instructions behind it are squashed, and the right
 # target's word is read, arriving the cycle after.  Taken means the
@@ -317,8 +317,7 @@ length_from_first_byte = true
 # call or ret dispatched: a ret sooner, as in a function that is nothing but
 # a ret, guesses the old top and costs five.  The stack's pointer wraps, so
 # the returns of a recursion deeper than that are guessed wrong.
-# `call lr` goes to the NEW lr - the next instruction - and reads no
-# register, so it costs four.
+# `call lr` is undefined: see the indirect call.
 #
 # jmp ra COSTS THE SAME IN ONE BYTE OR TWO: jmp r5 in one, any register in
 # two.  What it pays for is the register, or the guess of it, not the byte.
@@ -355,9 +354,9 @@ length_from_first_byte = true
 # semantics already say.  `if (...) pc = pc + off` is a conditional branch;
 # any other assignment to pc is a jump; M8[] and M16[] are memory.
 #
-# The cycle, counted from a TAKEN conditional branch's dispatch, in which it
-# reads its target's word; the target dispatches two cycles later at the
-# earliest.
+# The cycle, counted from the dispatch of a conditional branch TAKEN but not
+# guessed so, in which it reads its target's word; the target dispatches two
+# cycles later at the earliest.
 taken_branch_penalty = 3
 
 
@@ -3542,6 +3541,12 @@ semantics = "lr = pc; pc = target"
 # address, because the only instruction that could jump to a register was the
 # one that consumed the register holding it.  Function pointers, vtables and
 # qsort all need this opcode.
+#
+# `call lr` IS UNDEFINED.  The semantics write lr before they read R[a], so
+# taken literally it goes to the next instruction; the byte-serial core read
+# the old lr and went there.  Neither is worth a gate: the jmp ra predictor
+# guesses a call's target from where calls went, and the target of this one
+# would be the lr it writes.  gcc never emits it.
 #
 # AND `call r5` IS ONE BYTE, as `jmp r5` is.  r5 carries no argument and no
 # return value, so a call through a pointer with its arguments in r0-r3 can

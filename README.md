@@ -259,9 +259,9 @@ keeps up: it brings two bytes a cycle, and falls behind in a run of three-byte
 instructions or after a run of loads and stores - 6% of the cycles of the
 benchmark kernels. A conditional branch is guessed as it dispatches: by a
 table of two-bit counters indexed by the last eleven branch verdicts and
-bits of the jumps' addresses, or, on a miss, backward taken and forward not.
-A branch guessed right costs nothing extra if not taken, and three cycles
-if taken. A wrong guess is found in the ALU stage, beside the ALU, and costs
+bits of the jumps' addresses, or, on a miss, not taken. A branch guessed
+right costs nothing extra if not taken, and two cycles if taken: its target
+is read as it dispatches, as a `jmp`'s is. A wrong guess is found in the ALU stage, beside the ALU, and costs
 five cycles, six if the instruction at the right target spans two words.
 `jmp` and `call` to an absolute address fetch their target as they dispatch
 and take two and three cycles; through a register, jumps and calls take
@@ -269,7 +269,7 @@ five, or two and three when a table of where they went before guessed the
 target; `ret` five, or two when a return stack in a block RAM guessed it. A
 call that went straight to its target never pays for a target spanning two
 words: the buffer fills while it writes `lr`.
-Measured behind a real SPRAM, the processor runs at 30.0 MHz
+Measured behind a real SPRAM, the processor runs at 30.8 MHz
 (medians of sixteen placements); [experiments/ib](experiments/ib/README.md)
 has how the buffer was chosen, and
 [ideas/branch-prediction.md](ideas/branch-prediction.md) the predictor.
