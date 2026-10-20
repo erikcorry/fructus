@@ -73,7 +73,11 @@ await run('yosys', ['-q', '-p',
 const stat = readFileSync(`${OUT}/top.stat`, 'utf8');
 // A design with a kept hierarchy has a section per module and then the
 // whole design's, last - which is the one wanted.
-const count = (cell) => Number([...stat.matchAll(new RegExp(`${cell}\\s+(\\d+)`, 'g'))].pop()?.[1] ?? 0);
+// yosys 0.52 prints `SB_LUT4   2665`, later ones `2665   SB_LUT4`.
+const count = (cell) => {
+  const m = [...stat.matchAll(new RegExp(`^[ \\t]*(?:${cell}[ \\t]+(\\d+)|(\\d+)[ \\t]+${cell})[ \\t]*$`, 'gm'))].pop();
+  return Number(m?.[1] ?? m?.[2] ?? 0);
+};
 console.log(`${count('SB_LUT4')} LUT4, ${count('SB_RAM40_4K')} block RAMs`);
 
 // --- place once per seed, as many at a time as there are cores -----------------
