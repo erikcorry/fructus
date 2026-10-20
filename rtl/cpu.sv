@@ -230,17 +230,6 @@
 //
 //                                                   cells     MHz   spread
 //     ret GUESSED FROM A RETURN STACK, as here       3269    30.03  28.7 .. 31.6
-//       2665 LUT4 and one block RAM more against 2560 and 29.96, 3126 cells,
-//       before it.  Critical paths rst -> fp, stop or pcl, and the ALU loop,
-//       seven or eight cells.  Written otherwise, the same logic: the two
-//       guesses muxed in front of every use, 28.34, abc's delay target 5991
-//       against 5836; in separate address arms, 28.66 - the target 5836 but
-//       the ALU loop half a level deeper - and with the stack's top a flop
-//       on and the return address from bq, not a flop of its own, 29.32;
-//       those arms in the other order, 28.73.  The system 4857 cells against
-//       4705, 30.30 MHz against 29.88, every seed placed.  -2.32% cycles
-//       on Richards, -2.79% DeltaBlue, -0.75% CoreMark at -Os -mmul;
-//       FructusMark 109.6 to 111.4
 //     jmp ra AND call ra GUESSED                     3126    29.96  28.6 .. 31.1
 //       2560 LUT4 against 2462 and 30.21, 2868 cells, before it; six seeds'
 //       critical paths rst -> fp, eight cells.  The recognizer decoding
@@ -650,10 +639,8 @@ module cpu (
     logic [7:0]  rsp;
     logic [15:0] rtn, rtq, rsd;
     logic [14:0] rtq1;                // rtq[15:1] + 1
-    // The pc takes the two guesses in arms of its own, and the address one
-    // arm, the two muxed in front of it; written the other way round abc
-    // mapped the fetch and the ALU loop a level deeper and placed 28.7 MHz
-    // against 30.0.
+    // The pc takes the guesses in arms of its own, the address one arm, the
+    // two muxed in front: the other way round, 28.7 MHz against 30.0.
     wire  [15:0] rgw = prret ? rtq : jtq;
     // A CONDITIONAL BRANCH PREDICTED TAKEN has its target read the cycle
     // after it dispatches.  All seven are three bytes with the displacement
@@ -1575,3 +1562,21 @@ module cpu (
 
 endmodule
 
+// ret GUESSED FROM A RETURN STACK, the sixteen-seed table's row, whose notes
+// are kept here, below the logic, because the lines above it name yosys's
+// cells - $and$rtl/cpu.sv:706$12 - and abc's mapping follows their order.
+// With these twelve lines in the table, the same logic mapped to abc's delay
+// target 5991, not 5836, 2636 LUT4, and placed 28.77 MHz, not 30.03.  A
+// change that moves the lines can move the clock as far: measure the tree
+// it is against on the same day.
+//       2665 LUT4 and one block RAM more against 2560 and 29.96, 3126 cells,
+//       before it.  Critical paths rst -> fp, stop or pcl, and the ALU loop,
+//       seven or eight cells.  Written otherwise, the same logic: the two
+//       guesses muxed in front of every use, 28.34, abc's delay target 5991
+//       against 5836; in separate address arms, 28.66 - the target 5836 but
+//       the ALU loop half a level deeper - and with the stack's top a flop
+//       on and the return address from bq, not a flop of its own, 29.32;
+//       those arms in the other order, 28.73.  The system 4857 cells against
+//       4705, 30.30 MHz against 29.88, every seed placed.  -2.32% cycles
+//       on Richards, -2.79% DeltaBlue, -0.75% CoreMark at -Os -mmul;
+//       FructusMark 109.6 to 111.4
