@@ -66,9 +66,22 @@ mkdirSync(OUT, { recursive: true });
 const files = [...MODULES.map((m) => `rtl/${m}.sv`), SYSTEM ? 'tools/fpga-system.sv' : 'tools/fpga-top.sv'];
 
 // --- synthesise once; every seed places the same netlist -----------------------
+// ABC'S CHOICES WITHOUT -f.  synth_ice40's abc9 script computes structural
+// choices with `&dch -f -r`, a light synthesis of the alternatives, and on
+// many netlists that misses the structure abc maps fastest: a change anywhere
+// in the design moved its delay from 4941 to 5374 and the whole design a level
+// deeper.  The full `&dch -r` found 4941 on every netlist tried where -f did,
+// and on most where it did not; 30.80 MHz against 29.87 on the same tree,
+// main's 30.62 against 30.73.  So map_luts is spelled out here, with that one
+// change - the rest is synth_ice40's own script.
+const ABC9 = '&scorr;&sweep;&dc2;&dch,-r;&ps;&if,-W,250,-v;&mfs';
 process.stdout.write('synthesising ... ');
 await run('yosys', ['-q', '-p',
-  `read_verilog -sv ${SYSTEM ? '-DFRUCTUS_BLIT ' : ''}${UART ? '-DFRUCTUS_UART ' : ''}${USB ? '-DFRUCTUS_USB ' : ''}${files.join(' ')}; synth_ice40 -top top -json ${OUT}/top.json; `
+  `read_verilog -sv ${SYSTEM ? '-DFRUCTUS_BLIT ' : ''}${UART ? '-DFRUCTUS_UART ' : ''}${USB ? '-DFRUCTUS_USB ' : ''}${files.join(' ')}; `
+  + `synth_ice40 -top top -run :map_luts; `
+  + `read_verilog -D ICE40_HX -icells -lib -specify +/ice40/abc9_model.v; abc9 -W 250 -script +${ABC9}; `
+  + `ice40_wrapcarry -unwrap; techmap -map +/ice40/ff_map.v; clean; opt_lut -tech ice40; `
+  + `synth_ice40 -top top -run map_cells:; write_json ${OUT}/top.json; `
   + `tee -o ${OUT}/top.stat stat`]);
 const stat = readFileSync(`${OUT}/top.stat`, 'utf8');
 // A design with a kept hierarchy has a section per module and then the
