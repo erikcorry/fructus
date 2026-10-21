@@ -234,10 +234,13 @@ const SOURCES = [
           ldm  r0, r3
           add  r0, r0, #1
           halt`,
-  // A byte stored to the page's first byte.
+  // A byte stored to the page's first byte.  A store of one register lets
+  // the next instruction dispatch before its access, so the trap may be two
+  // instructions late: two before the halt, or it would come after it.
   `       mov  r1, #0x400
           mov  r0, #0x77
           st8  r0, [r1, #0]
+          add  r0, r0, #1
           add  r0, r0, #1
           halt`,
   // THE SHADOWS' WORDS, [cpu.io]: stored and loaded by word, by byte, at odd
@@ -490,6 +493,25 @@ SOURCES.push([
   'h4:  mov  r2, #f1', 'call r2', 'mov  r5, #f2', 'call r5',
   'add  r1, r1, #-1', 'br   ne, r1, #0, top',
   'halt',
+].map((l) => '          ' + l).join('\n'));
+
+// A GUESSED JUMP IN A STORE'S WRITE CYCLE: ret, jmp ra and call ra each a
+// cycle after the instruction after a store - aligned, odd and a block - so
+// the guess is read late, through pjq or pjw, and the jmp ra's target
+// changes every other lap, so a late guess is sometimes wrong.
+SOURCES.push([
+  'mov  sp, #0x3100', 'mov  r4, #0x2001', 'mov  r3, #0', 'mov  r1, #12',
+  'top: call g1', 'call g2', 'call g3',
+  'mov  r2, #h1', 'brset r1, #2, tx', 'mov  r2, #h2',
+  'tx:  st   r3, [r4, #-1]', 'add  r3, r3, #1', 'jmp  r2',
+  'h1:  add  r3, r3, #2', 'jmp  back',
+  'h2:  add  r3, r3, #3',
+  'back: mov  r5, #g1', 'st   r3, [r4, #0]', 'add  r3, r3, #1', 'call r5',
+  'add  r1, r1, #-1', 'br   ne, r1, #0, top',
+  'halt',
+  'g1:  st   r3, [r4, #-1]', 'mov  r0, #0', 'ret',
+  'g2:  st   r3, [r4, #0]', 'mov  r0, #1', 'ret',
+  'g3:  push r2, r3', 'ret',
 ].map((l) => '          ' + l).join('\n'));
 
 // The second copy has its nop IN THE SOURCE, not put in front of the bytes:
@@ -794,6 +816,7 @@ function check(out, blit, what) {
       const prev = trace[i - 1];
       const want = prev.cyc;
       const floor = prev.exc ? prev.exc
+                  : prev.memst ? Math.max(2, prev.acc)
                   : prev.mem ? prev.acc + 2 + (blit && prev.late ? 1 : 0)
                   : prev.jump ? prev.jump : prev.taken ? 2 : 1;
       if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) say(` dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
@@ -846,11 +869,11 @@ for (const f of ['build/cpu-tb.vvp', 'build/cpu-tb.sv']) rmSync(f, { force: true
 // A PROGRAM THAT RAN cli may rightly take none, and one whose ie is clear at
 // the halt is not woken; the simulator, started with ie set as the test bench
 // sets the RTL's, says which those are.
-// A GUARD TRAP MAY COME AN INSTRUCTION EARLIER under interrupts: an
-// interrupt taken in the cycle the hit sets gq becomes the guard's brk, at
-// the dispatch the trap would otherwise have let one more instruction take.
+// A GUARD TRAP MAY COME A CYCLE EARLIER under interrupts: an interrupt
+// taken in the cycle the hit sets gq becomes the guard's brk, at the
+// dispatch the trap would otherwise have let one more instruction take.
 // So a program ends as the simulator's run does, or as one whose guard traps
-// are all taken at the very next dispatch.
+// are all taken a cycle before the simulator's.
 const finalOf = ({ bytes, reg, io }, exact) => {
   const m = new Machine(spec, { io }).load(bytes, 0);
   m.mem[VECTOR] = RTI;
@@ -861,8 +884,9 @@ const finalOf = ({ bytes, reg, io }, exact) => {
   let cli = false;
   for (let guard = 0; !m.halted && guard < 5000; guard++) {
     if (m.mem[m.pc] === excs[2].op) cli = true;
+    const at = m.guardAt;
     m.step();
-    if (exact && m.guardPending) m.guardAt = 0;
+    if (exact && m.guardPending && m.guardAt !== at) m.guardAt -= 1;
   }
   m.mem[m.pc] = HALT;                            // as the test bench puts after the halt
   let hash = 0;

@@ -248,8 +248,8 @@ length_from_first_byte = true
 #       - any of them unguessed or guessed wrong     5
 #     mul, clz, popcount                             1 + extra_cycles = 2
 #     recip                                          1 + extra_cycles = 5
-#     a load or store of N accesses: ld8, ld, pop,
-#       ldm, st8, st, push, stm                      N + 2
+#     a load of N accesses: ld8, ld, pop, ldm        N + 2
+#     a store of N accesses: st8, st, push, stm      N + 1
 #       - an access is a byte, or a whole word at an EVEN address;
 #         a word at an odd address is two
 #     sei, cli                                       4
@@ -260,10 +260,11 @@ length_from_first_byte = true
 # two bytes at an odd address, or three at any.  A call that went straight to
 # its target does not: it holds dispatch two cycles after its target's word
 # is read, and the fetcher brings the second word in that time.  A branch
-# guessed taken, and jmp and call to a target in their bytes, read their
-# target a cycle late when a store's last access has the bus as they
-# dispatch, and cost 3.  In a system built in blit mode, ld, ld8 and ldm cost one
-# more as well; see rtl/cpu.sv.
+# guessed taken, jmp and call to a target in their bytes, and jmp ra, call
+# ra and ret guessed, read their target a cycle late when a store's access
+# has the bus as they dispatch, and cost 3 - more behind a block store whose
+# next access has it too.  In a system built in blit mode, ld, ld8 and ldm
+# cost one more as well; see rtl/cpu.sv.
 #
 # THE FETCHER reads a word, two bytes, in every cycle the bus is not a load's
 # or a store's, into a buffer of three words, whole words in, and an
@@ -324,13 +325,14 @@ length_from_first_byte = true
 #
 # A MEMORY INSTRUCTION STOPS DISPATCH TOO, and makes an access a cycle.  A
 # load's first address comes straight from the ALU's adder; a store
-# registers it first, a cycle later, but releases dispatch a step before its
-# last access, since the next instruction's bytes come from the buffer and
-# not the bus.  So loads and stores cost the same: `ld r1, [r2, #4]` is three
-# cycles if r2 + 4 is even and four if it is odd, and `push r0-r2`, six
-# bytes, is five with sp even and eight with it odd - a memory instruction is
-# still the slowest thing a program does often, and keeping a value in a
-# register is worth a few ALU instructions.
+# registers it first, a cycle later, but releases dispatch two steps before
+# its last access, since the next instruction's bytes come from the buffer
+# and not the bus, and each register is read a step ahead of its write.  So
+# `ld r1, [r2, #4]` is three cycles if r2 + 4 is even and four if it is odd,
+# `st` two and three, and `push r0-r2`, six bytes, is four with sp even and
+# seven with it odd - a memory instruction is still the slowest thing a
+# program does often, and keeping a value in a register is worth a few ALU
+# instructions.
 #
 # AN ALIGNED WORD IS ONE ACCESS because memory is a word wide: both bytes are
 # read or written in the same cycle.  A word at an odd address still works,

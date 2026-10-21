@@ -47,7 +47,7 @@
 //     3      D   the last step
 //     5:4    W   a loaded register is written: 1, 2 or 3, through the ALU
 //     6      P   a block move's pointer is written, the same way
-//     7      WE  the NEXT step writes memory
+//     7      WE  the NEXT step writes memory - and a guess read late waits for it
 //     9:8    KS  the register read this step: 0 .. 2 of the list, 3 a literal
 //     10     KH  which half of it a store's next byte is - or, when KS is 3, lr and not sp
 //     12:11  SH  a shadow takes aq, the register read the step before: 1 shadow_sp, 2 shadow_lr, 3 shadow_isp
@@ -114,7 +114,7 @@ module ucode (
         rom[8'h2d] = 32'h00000000;
         rom[8'h2e] = 32'h00000000;
         rom[8'h2f] = 32'h00000000;
-        rom[8'h30] = 32'h00000485;
+        rom[8'h30] = 32'h00000481;
         rom[8'h31] = 32'h00000009;
         rom[8'h32] = 32'h00000000;
         rom[8'h33] = 32'h00000000;
@@ -122,9 +122,9 @@ module ucode (
         rom[8'h35] = 32'h00000000;
         rom[8'h36] = 32'h00000000;
         rom[8'h37] = 32'h00000000;
-        rom[8'h38] = 32'h00000485;
-        rom[8'h39] = 32'h00000001;
-        rom[8'h3a] = 32'h00000048;
+        rom[8'h38] = 32'h00000481;
+        rom[8'h39] = 32'h00000049;
+        rom[8'h3a] = 32'h00000000;
         rom[8'h3b] = 32'h00000000;
         rom[8'h3c] = 32'h00000000;
         rom[8'h3d] = 32'h00000000;
@@ -186,8 +186,8 @@ module ucode (
         rom[8'h75] = 32'h00000000;
         rom[8'h76] = 32'h00000000;
         rom[8'h77] = 32'h00000000;
-        rom[8'h78] = 32'h00000001;
-        rom[8'h79] = 32'h00000048;
+        rom[8'h78] = 32'h00000049;
+        rom[8'h79] = 32'h00000000;
         rom[8'h7a] = 32'h00000000;
         rom[8'h7b] = 32'h00000000;
         rom[8'h7c] = 32'h00000000;
@@ -195,20 +195,20 @@ module ucode (
         rom[8'h7e] = 32'h00000000;
         rom[8'h7f] = 32'h00000000;
         rom[8'h80] = 32'h00000481;
-        rom[8'h81] = 32'h00000181;
-        rom[8'h82] = 32'h00000585;
-        rom[8'h83] = 32'h00000001;
-        rom[8'h84] = 32'h00000048;
+        rom[8'h81] = 32'h00000185;
+        rom[8'h82] = 32'h00000581;
+        rom[8'h83] = 32'h00000049;
+        rom[8'h84] = 32'h00000000;
         rom[8'h85] = 32'h00000000;
         rom[8'h86] = 32'h00000000;
         rom[8'h87] = 32'h00000000;
         rom[8'hb0] = 32'h00000481;
         rom[8'hb1] = 32'h00000181;
         rom[8'hb2] = 32'h00000581;
-        rom[8'hb3] = 32'h00000281;
-        rom[8'hb4] = 32'h00000685;
-        rom[8'hb5] = 32'h00000001;
-        rom[8'hb6] = 32'h00000048;
+        rom[8'hb3] = 32'h00000285;
+        rom[8'hb4] = 32'h00000681;
+        rom[8'hb5] = 32'h00000049;
+        rom[8'hb6] = 32'h00000000;
         rom[8'hb7] = 32'h00000000;
         rom[8'hb8] = 32'h00086700;
         rom[8'hb9] = 32'h00224300;
@@ -218,9 +218,9 @@ module ucode (
         rom[8'hbd] = 32'h00000000;
         rom[8'hbe] = 32'h00000000;
         rom[8'hbf] = 32'h00000000;
-        rom[8'hc0] = 32'h00000185;
-        rom[8'hc1] = 32'h00000001;
-        rom[8'hc2] = 32'h00000048;
+        rom[8'hc0] = 32'h00000181;
+        rom[8'hc1] = 32'h00000049;
+        rom[8'hc2] = 32'h00000000;
         rom[8'hc3] = 32'h00000000;
         rom[8'hc4] = 32'h00000000;
         rom[8'hc5] = 32'h00000000;
@@ -234,10 +234,10 @@ module ucode (
         rom[8'hed] = 32'h00000000;
         rom[8'hee] = 32'h00000000;
         rom[8'hef] = 32'h00000000;
-        rom[8'hf0] = 32'h00000181;
-        rom[8'hf1] = 32'h00000285;
-        rom[8'hf2] = 32'h00000001;
-        rom[8'hf3] = 32'h00000048;
+        rom[8'hf0] = 32'h00000185;
+        rom[8'hf1] = 32'h00000281;
+        rom[8'hf2] = 32'h00000049;
+        rom[8'hf3] = 32'h00000000;
         rom[8'hf4] = 32'h00000000;
         rom[8'hf5] = 32'h00000000;
         rom[8'hf6] = 32'h00000000;
