@@ -95,13 +95,14 @@
 // straight out from the adder, while a store registers it first; a sequencer
 // then makes one access a cycle - a whole word when the first address is
 // even, a byte when it is odd - writes registers through the ALU's result, and
-// releases dispatch a step before its last access, so that the next
-// instruction reaches decode after the routine's last use of decode's port.
-// The bus is the sequencer's whenever it wants it, and the fetcher's in every
-// other cycle.  N accesses cost N + 2 cycles from one dispatch to the next,
-// load or store: 3 for ld8 and st8, and for ld, st and a one-register pop or
-// push aligned, 4 for them at an odd address; 5 for three registers aligned,
-// 8 odd.  See THE MEMORY SEQUENCER below.
+// releases dispatch so that the next instruction reaches decode after the
+// routine's last use of decode's port: a load a step before its last access,
+// a store two, since it reads each register a step ahead of writing it.  The
+// bus is the sequencer's whenever it wants it, and the fetcher's in every
+// other cycle.  N accesses cost N + 2 cycles from one dispatch to the next
+// for a load, N + 1 for a store: 3 for ld8, and for ld and a one-register pop
+// aligned, 4 for them at an odd address, 5 for three registers aligned and 8
+// odd; a store one fewer.  See THE MEMORY SEQUENCER below.
 //
 // BLIT MODE, ONLY WHEN `FRUCTUS_BLIT IS DEFINED.  A system whose data can come
 // from memory at the far side of the die - the display's frame buffers,
@@ -225,7 +226,18 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
-//     A BRANCH GUESSED TAKEN IN TWO CYCLES, as here  3443    30.80  28.6 .. 32.0
+//     A STORE OF ONE REGISTER NOT STOPPING DISPATCH  3483    30.01  27.9 .. 31.8
+//       2860 LUT4 against 2819, and the row below rerun the same day, 30.80.
+//       Its register read through decode's borrowed port into aq in its ALU
+//       cycle and written from there the cycle after; a jmp ra, call ra or
+//       ret guessed in that write's cycle reads its target a cycle late
+//       through pjq, as abs16 jmp does, instead of going unguessed.  -2.9 ..
+//       -7.1% cycles at -Os -mmul, FructusMark 115.1 to 120.7, and -O2
+//       -mmul 126.2 to 133.0; at the clocks measured, +2.2%.  A guard trap
+//       up to two instructions late.  The store written in its ALU cycle
+//       instead, from a third read port whose select is a flop: 30.07, 2936
+//       LUT4, Richards 0.22% fewer cycles - not kept, for 76 LUT4s
+//     A BRANCH GUESSED TAKEN IN TWO CYCLES           3443    30.80  28.6 .. 32.0
 //       Its target read as it dispatches; a miss guessed not taken; abs16
 //       jmp and call dispatching while the bus is busy; `call lr` undefined.
 //       -2.2 .. -4.0% cycles on CoreMark, DeltaBlue, Richards and SPEC92's
@@ -344,7 +356,8 @@
 // that loses the tie, which is why taking the shadows and then wq off the
 // port's output removed them from the reports and bought nothing: the
 // shadows now take aq for that reason, but wq taken from aq as well cost 134
-// LUT4s and measured no faster, and was not kept.
+// LUT4s and measured no faster, and was not kept.  (wq is gone since: a store
+// that does not stop dispatch reads its register in its ALU cycle, into aq.)
 //
 // THE MICROCODE IS 125 LUT4s AND 148 CELLS SMALLER for one of the part's
 // thirty block RAMs, at the same clock: 1494 LUT4 against 1619.  Its control
@@ -544,7 +557,6 @@ module cpu (
     // A GUARD TRAP IS ONE TOO, and not maskable: `gq', below, says a load or
     // store touched a guard of the I/O page, and the next dispatch is its brk.
     // So is a divide by zero: `dq', a recip whose ra had bit 15 clear.
-    wire       ie_q;                           // below, with the shadows
     wire       aphase;                         // the sequencer has the bus: below
     logic      gq, dq;
     // A slot is a cycle that may dispatch; `take` needs only a byte in the
@@ -552,11 +564,21 @@ module cpu (
     // Not rst, which reaches everything from its corner: after its first
     // cycle the buffer is empty, and what that cycle's dispatch would write
     // rst overrides or clears the valid bit of.
-    wire       slot = ~stop & ~skip & ~taken_q;
-    wire       take = slot & (nw != 3'd0) & ((ie_q & irq) | gq | dq);
+    // A store of one register skips the cycle after its dispatch, and a word
+    // at an odd address the cycle after that too: `sodd`, its ALU cycle's,
+    // from the operand flops - see the memory sequencer.
+    wire       sodd;
+    wire       slot = ~stop & ~skip & ~taken_q & ~sodd;
+    // An interrupt waits while a store runs, so that a guard its access hits
+    // makes the next brk the guard's, as it does when the hit and the take
+    // coincide; dispatch may go on before the access now.  `ieq` is ie with
+    // that folded in, a flop, so take has no more inputs than it had.
+    wire       ieq;                            // below, with ie
+    wire       take = slot & (nw != 3'd0) & ((ieq & irq) | gq | dq);
     wire [7:0] op = ib0 & {8{~take}};
 
     wire [1:0] kind, len, c_cond, c_pcsrc, c_mn;
+    wire       c_skp, c_stp;
     wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush, c_useq, c_urs;
     wire [2:0] c_ext;                  // extra cycles in the ALU stage
 `ifdef FRUCTUS_BLIT
@@ -574,7 +596,7 @@ module cpu (
 `ifdef FRUCTUS_BLIT
                 .ulate(c_ulate),
 `endif
-                .ext(c_ext), .urs(c_urs), .lsel(c_lsel));
+                .ext(c_ext), .urs(c_urs), .lsel(c_lsel), .skp(c_skp), .stp(c_stp));
     // THE BUFFER'S LENGTH IS ib0's OWN, not the masked opcode's: an interrupt
     // moves nothing out, so the length need not wait for `take`.  And it is
     // classified from the flops, both bytes that could be the opcode, by two
@@ -643,7 +665,7 @@ module cpu (
     logic        d_rr, e_rr;          //   a ret, guessed from the return stack
     logic [9:0]  rix;
     logic        rconf;
-    wire prok = prr & ~aphase & ~d_rp & (nw >= 3'd2);
+    wire prok = prr & ~d_rp & (nw >= 3'd2);
     wire prj  = prok & slot;          // the fetch reads the guess
     // THE RETURN STACK: rtn its top, and the block the rest, 256 words in one
     // block RAM.  A call pushes where it returns to in its ALU stage - the old
@@ -741,6 +763,12 @@ module cpu (
     wire        pbok = pbr & btk;
     logic       pbq;                  // a predicted branch's target is in tgt_q
     logic       pjq;                  // and a jmp's or call's, read while the bus was busy
+    // A GUESS READ LATE WAITS A CYCLE MORE when the bus is the sequencer's
+    // then too: a block store releases dispatch two accesses before its
+    // last, and the word's WE says the next step is one.  So pbq and pjq
+    // are only ever set for a cycle whose bus is free, and the address mux,
+    // whose arms are in the order their selects settle, needs no priority.
+    logic       pbw, pjw;
 
     // A CONDITIONAL BRANCH FLOWS LIKE AN ALU INSTRUCTION.  Dispatch carries on
     // down the fall-through path behind it, which costs nothing if the branch
@@ -755,7 +783,8 @@ module cpu (
     // A MEMORY INSTRUCTION ENTERS THE PIPELINE AND STOPS DISPATCH, as a jump
     // does: from its ALU cycle on the bus is the sequencer's whenever it wants
     // it, and the routine borrows decode's left port, so dispatch resumes when
-    // the sequencer releases it, a step before its last access.
+    // the sequencer releases it, a step before its last access - two for a
+    // store, and a store of one register only skips a cycle: see c_skp.
     wire piped   = flows | is_jump | c_useq;
     // The whole instruction is in the buffer.  An interrupt's brk needs only ib0.
     // Spelled so that an empty buffer's x opcode gives simulation the 0 the
@@ -825,7 +854,13 @@ module cpu (
     // come: the next instruction dispatches in the first and reaches decode
     // in the last, where it takes the result through the bypass.  So any
     // count from two up needs nothing more than the compare.
-    wire c_long = |c_ext[2:1];
+    // A STORE OF ONE REGISTER DOES NOT STOP DISPATCH: it reads its register
+    // through decode's borrowed port in its ALU cycle and writes it the cycle
+    // after, so an instruction dispatched in that ALU cycle reaches decode
+    // with the port free, and its own ALU cycle after the access.  So it is
+    // a two-cycle instruction, a bubble behind it - three if it is a word at
+    // an odd address.  Predecode's skp and stp columns say which, as they do
+    // for mul and recip.
 
     // The candidates for the next pc come off the pc flop in parallel, so the
     // classifier's length only picks one.
@@ -898,7 +933,7 @@ module cpu (
             nw <= 3'd0; finq <= 1'b1;
         end else begin
             // a jmp read late, through pjq: what the buffer holds is behind it
-            nw <= (pjd & aphase) ? 3'd0 : nw + {2'b0, finq} - {1'b0, sel};
+            nw <= ((pjd | prd) & aphase) ? 3'd0 : nw + {2'b0, finq} - {1'b0, sel};
             finq <= keepw;
         end
     end
@@ -952,8 +987,8 @@ module cpu (
         end else if (go) begin
             pcb     <= pch;
             {pcc, pcl} <= pcs;
-            skip    <= flows & (c_ext != 3'd0) & ~c_long;
-            stop    <= ~flows | c_long | pbok;   // a predicted branch: tgt_q next
+            skip    <= c_skp;
+            stop    <= c_stp | pbok;   // a predicted branch: tgt_q next
         end else begin
             skip    <= 1'b0;
         end
@@ -1131,7 +1166,7 @@ module cpu (
     logic [1:0]  e_bway, e_bctr;
     logic [2:0]  e_code;
     logic [15:0] e_tgt;
-    logic        e_mem, e_mst, e_mw2, e_mblk;
+    logic        e_mem, e_mst, e_mw2, e_mblk, e_s1w;
     logic [3:0]  e_mstep;
     logic [2:0]  e_l0, e_l1, e_l2, e_ptr;
     logic [4:0]  e_uent;               // where the microcode routine starts
@@ -1180,6 +1215,7 @@ module cpu (
         e_tgt   <= (d_rp & jreg) ? rg : tgt;   // a guessed call ra's pc, if right
         e_ucode <= d_ucode & ~taken_q;
         e_mem   <= keep & d_mem;
+        e_s1w   <= keep & d_mem & d_mst & d_mw2;   // a word store: sodd's
         {e_mst, e_mw2, e_mblk} <= {d_mst, d_mw2, d_mblk};
         {e_mstep, e_l0, e_l1, e_l2, e_ptr} <= {mstep_d, ml0_d, ml1_d, ml2_d, an};
 `ifdef FRUCTUS_BLIT
@@ -1245,9 +1281,12 @@ module cpu (
         // An abs jump's target, taken whether or not it dispatches: only pjq,
         // which does wait for that, reads it; and while the sequencer has
         // the bus the ALU stage holds no branch whose e_tgt it would need.
-        tgt_q   <= (urj | jrq) ? rjaddr : pbd ? padd : (pjr & aphase) ? ptgt : e_tgt;
-        pbq     <= ~rst & pbd & aphase;
-        pjq     <= ~rst & pjd & aphase;
+        tgt_q   <= (urj | jrq) ? rjaddr : (pbw | pjw) ? tgt_q
+                 : pbd ? padd : ((pjr | prr) & aphase) ? jgt : e_tgt;
+        pbq     <= ~rst & ((pbd & aphase & ~uw[7]) | pbw);
+        pjq     <= ~rst & (((pjd | prd) & aphase & ~uw[7]) | pjw);
+        pbw     <= ~rst & pbd & aphase & uw[7];
+        pjw     <= ~rst & (pjd | prd) & aphase & uw[7];
         pbm     <= ~rst & pbd & ~aphase;
         for (int k = 0; k < 8; k++) if ((e_we[k] & ~taken_q) | mwe[k]) R[k] <= y;
     end
@@ -1346,7 +1385,7 @@ module cpu (
     // aligned word:
     //
     //     address steps  the address is mar, or the next access's for a load;
-    //                    a store writes what `wq` holds, filled the step before
+    //                    a store writes what `aq` holds, read the step before
     //     arrivals       a load's byte comes back, from the lane its address
     //                    had, and shifts into `ldq` - low byte first - or its
     //                    aligned word, whole
@@ -1387,7 +1426,7 @@ module cpu (
     // 0's word 0 is idle's, all zeros; its words 1 .. 7, which nothing else
     // reads, store one byte a lap, and with no D the step count wraps, so
     // the eight steps go round until the system resets again without `boot`.
-    // The byte stored is not wq's: the system puts the flash's on the
+    // The byte stored is not aq's: the system puts the flash's on the
     // memory's data pins, so nothing new stands between the register file
     // and the store port.  Counting from the first cycle out of reset as 0,
     // a lap's word k is in cycle 8n + k for n >= 0 and k >= 1 - cycle 0 has
@@ -1401,13 +1440,16 @@ module cpu (
     wire mstart = e_useq & ~taken_q;
     wire [15:0] ea   = asum;
     wire        al   = e_mw2 & ~ea[0];     // a word instruction, aligned: bit 3
+    // A word store at an odd address in its ALU cycle: two accesses, so no
+    // dispatch in this cycle either.  Bit 0 of the address is aq[0] ^ bq[0],
+    // flops, and a block of more than one register has stopped dispatch.
+    assign sodd = e_s1w & (aq[0] ^ bq[0]);
     wire [15:0] ptrv = aq + {{12{e_mstep[3]}}, e_mstep};   // where the pointer ends
 
     logic       mact, mst, mw2, mblk, mlane, weq, mal, wsel;
     logic [2:0] mu;                        // the step, less one
     logic [4:0] ment;                      // the routine's entry
     logic [2:0] ml0, ml1, ml2, mpr;
-    logic [15:0] wq;
     logic [15:0] mpc;
 
     // A load puts its first address out in its ALU cycle, from the adder.
@@ -1497,11 +1539,12 @@ module cpu (
     // a store's access is at mar, and `mldq' says mar is an address a load
     // put out the cycle before.
     //
-    // SO IT CAN BE AN INSTRUCTION LATE.  A memory instruction releases
-    // dispatch a step before its last access, and the instruction after it
-    // may dispatch in the very cycle a last access's hit sets gq: then it
-    // runs, and the trap takes the dispatch after, lr the address after
-    // that.  Making it exact would cost the adder's carry in front of gq or a
+    // SO IT CAN BE AN INSTRUCTION LATE, OR TWO.  A memory instruction
+    // releases dispatch a step before its last access, and the instruction
+    // after it may dispatch in the very cycle a last access's hit sets gq:
+    // then it runs, and the trap takes the dispatch after, lr the address
+    // after that.  A store releases dispatch a step earlier still, so two
+    // single-cycle instructions can run before its trap.  Making it exact would cost the adder's carry in front of gq or a
     // squash, for a diagnostic.  tools/sim.js keeps the same time.  A hit
     // that coincides with an interrupt's take makes that brk the guard's -
     // through gent below - so a hit is never lost; the interrupt, still
@@ -1549,11 +1592,13 @@ module cpu (
                      : (uKS == 2'd2) ? ml2 : {`FRUCTUS_REG_SPLR, uKH};    // 3: sp or lr
     assign kreg_b = kreg;
     wire       khalf = ~mstart & uKH;
-    wire [15:0] kword = R[an_rd];
-    // wq TAKES THE WHOLE REGISTER, and `wsel` which half a byte store writes,
-    // so the half is chosen after the flop, on its way to the memory, and not
-    // between the register file's read and wq, where decode's longest path
-    // - from the SPRAM, through a register number and the read - ended.
+    // A STORE'S WORD IS aq: the register read through the borrowed port
+    // lands in the left operand flop, as an ALU instruction's would, and goes
+    // out the step after - the ALU's xor with nothing, taken from the flop
+    // itself.  The ALU stage is the sequencer's then, its op held, so nothing
+    // else reads aq; the instruction released into decode writes it as the
+    // last access goes out.  `wsel` says which half a byte store writes, so
+    // the half is chosen after the flop, on its way to the memory.
 
     always_ff @(posedge clk) begin
         if (rst)         mact <= boot;
@@ -1574,7 +1619,6 @@ module cpu (
             {mst, mw2, mblk} <= {e_mst, e_mw2, e_mblk};
             {ml0, ml1, ml2, mpr} <= {e_l0, e_l1, e_l2, e_ptr};
             mpc <= e_pc;
-            wq  <= kword;
             wsel <= khalf;
             weq <= e_mst;
         end else begin
@@ -1582,7 +1626,6 @@ module cpu (
             if (aphase) begin mar <= mar + {14'd0, mal, ~mal}; mlane <= maddr[0]; end
             if (mcap)   ldq <= mal ? mword : mw2 ? {mbyte, ldq[15:8]} : {8'h00, mbyte};
             else if (uLQ != 3'd0) ldq <= lqsrc;
-            wq  <= kword;
             wsel <= khalf;
             weq <= uWE;
         end
@@ -1596,8 +1639,8 @@ module cpu (
     // rti's return address is aq too.  The vector is isa/fructus.toml's
     // [cpu.vectors] brk.
     localparam [15:0] VECTOR = `FRUCTUS_VECTOR_BRK;
-    logic        ie;
-    assign ie_q  = ie;
+    logic        ie, ieo;
+    assign ieq   = ieo;
     // THE PRODUCT OF aq AND bq, worked on every cycle and a cycle late: the ALU
     // takes it as op 14 in a mul's second, held cycle.  e_lsel, which op 14
     // has no other use for, says which half - see rtl/alu.sv's mul.  (clz and popcount chosen
@@ -1652,6 +1695,10 @@ module cpu (
         if (rst)                ie <= 1'b0;
         else if (uIE == 2'd1)   ie <= 1'b0;
         else if (uIE == 2'd2)   ie <= 1'b1;
+        // ie as it will be, unless a store is in its ALU cycle or its
+        // routine next cycle: one in decode now, starting, or not done.
+        ieo <= ~rst & (uIE == 2'd1 ? 1'b0 : uIE == 2'd2 ? 1'b1 : ie)
+             & ~(keep & d_useq & d_mst) & ~(mstart & e_mst) & ~(mact & mst & ~mdone);
     end
 
     // A store's address is mar; a load's, whose mar is the address it last
@@ -1659,7 +1706,7 @@ module cpu (
     assign maddr = mar + {14'd0, ~mst & mal, ~mst & ~mal};
     // A word goes out as it is; a byte in both lanes, and only its own lane
     // is written.
-    assign mem_wdata = {(mal | wsel) ? wq[15:8] : wq[7:0], (~mal & wsel) ? wq[15:8] : wq[7:0]};
+    assign mem_wdata = {(mal | wsel) ? aq[15:8] : aq[7:0], (~mal & wsel) ? aq[15:8] : aq[7:0]};
     wire [1:0] wlanes = {mal | mar[0], mal | ~mar[0]};
     assign mem_we    = {2{weq & aphase}} & wlanes;
     assign mem_whi   = mar[15];

@@ -594,13 +594,17 @@ export class Machine {
     // A MEMORY INSTRUCTION STOPS DISPATCH until a step before its last
     // access, and makes an access a cycle from its ALU cycle on, two after
     // its dispatch: a word when it is aligned, a byte when not.  A load's
-    // first address is the ALU's own; a store registers its address first,
-    // a cycle later.  Either way the next instruction may dispatch N + 2
-    // cycles after it - in blit mode, a load but pop one more.
+    // first address is the ALU's own, and the next instruction may dispatch
+    // N + 2 cycles after it - in blit mode, but for pop, one more.  A store
+    // registers its address first, a cycle later, but reads each register
+    // a step ahead of writing it, so the next may dispatch N + 1 cycles
+    // after it: a store of one register does not stop dispatch at all, it
+    // skips a cycle, or two for a word at an odd address.
     if (k.memory) {
       const busy = [];
       for (let i = 0; i < moved; i++) busy.push((k.stores ? 3 : 2) + i);
-      return { hold: moved + 2 + (this.blit && !k.stores && !k.pops ? 1 : 0), busy };
+      if (k.stores) return { hold: moved + 1, busy };
+      return { hold: moved + 2 + (this.blit && !k.pops ? 1 : 0), busy };
     }
     // mul, clz, popcount and recip hold the ALU stage: `extra_cycles` more.
     if (k.extra) return { hold: 1 + k.extra };
@@ -652,10 +656,10 @@ export class Machine {
     const g = this.wrotePc && (k.jra || k.callA) ? this.guessJra(this.fe.t)
             : this.wrotePc && k.ret ? this.guessRet(this.fe.t) : null;
     if (g && (k.jra || k.ret)) {
-      return { hold: 1, redirect: 0 };
+      return { hold: 1, redirect: 0, unpredicted: { hold: 3, redirect: 1 } };
     } else if (g) {
       // A call ra guessed right goes as a call to an absolute address.
-      return { hold: 3, redirect: 0 };
+      return { hold: 3, redirect: 0, unpredicted: { hold: 3, redirect: 1 } };
     } else if (this.wrotePc) {
       // A JUMP OR CALL THROUGH A REGISTER, unguessed, stops dispatch behind
       // it, and its target, known in its ALU cycle, goes through taken_q a
@@ -742,7 +746,7 @@ export class Machine {
   guessJra(t) {
     const q = this.jq;
     while (q.length && q[0].at <= t - 2) this.land(q.shift());
-    if (this.fe.nw < 2 || this.fe.busy.includes(t) || this.rpAt === t - 1) return false;
+    if (this.fe.nw < 2 || this.rpAt === t - 1) return false;
     const jh = this.jh, ix = (jh ^ jh >>> 10 ^ jh >>> 20 ^ this.jbh) & 1023;
     const ok = this.jtm[ix] === this.pc;
     q.push({ at: t + 4, ix, ok, conf: this.jcm[ix], tgt: this.pc });
@@ -763,7 +767,7 @@ export class Machine {
   guessRet(t) {
     while (this.rsq.length && this.rsq[0].at <= t) this.rsLand(this.rsq.shift());
     this.rsq.push({ at: t + 4 });
-    if (this.fe.nw < 2 || this.fe.busy.includes(t) || this.rpAt === t - 1) return false;
+    if (this.fe.nw < 2 || this.rpAt === t - 1) return false;
     this.rpAt = t;
     const ok = this.rtq === this.pc;
     if (!ok) this.ghWrote(t + 3, this.gh, true);
@@ -812,8 +816,12 @@ export class Machine {
   // until the next one dispatches, and returns the cycles between.
   advance(at, len, timing) {
     const fe = this.fe;
-    const { hold, busy = [], redirect = -1 } =
+    let { hold, busy = [], redirect = -1 } =
       timing.unpredicted && fe.busy.includes(fe.t) ? timing.unpredicted : timing;
+    // A guess read late waits for the bus: a block store's last access may
+    // be the cycle after the one it dispatched in.
+    if (timing.unpredicted && fe.busy.includes(fe.t))
+      while (fe.busy.includes(fe.t + redirect)) { redirect++; hold++; }
     for (const b of busy) fe.busy.push(fe.t + b);
     let { nw, finq } = fe;
     for (let c = 0; ; c++) {

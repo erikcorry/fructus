@@ -32,12 +32,11 @@
 ; ----------------------------------------------------------------------------
 ; MEASURED
 ; ----------------------------------------------------------------------------
-;       digits3         41 bytes, 34 cycles for every n, no branches
+;       digits3         41 bytes, 31 cycles for every n, no branches
 ;
-; Fifteen of those 39 are its three stores, five cycles each - a store stops
-; the pipeline while it goes out, see the cost model under [cpu] in the spec -
-; and four are the `ret`.  The other twenty are twenty instructions, a cycle
-; each, whatever their length.
+; Six of those 31 are its three stores, two cycles each - see the cost model
+; under [cpu] in the spec - and five are the call and the `ret`.  The other
+; twenty are twenty instructions, a cycle each, whatever their length.
 ;
 ; For comparison, a divmod10 by 51/512 with one correction - also exact below
 ; 1000, and needing the fixup because 51/512 undershoots - inlined twice with

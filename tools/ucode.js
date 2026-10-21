@@ -28,7 +28,7 @@ export const FIELDS = [
   ['D',   3, 1, 'the last step'],
   ['W',   4, 2, 'a loaded register is written: 1, 2 or 3, through the ALU'],
   ['P',   6, 1, "a block move's pointer is written, the same way"],
-  ['WE',  7, 1, 'the NEXT step writes memory'],
+  ['WE',  7, 1, 'the NEXT step writes memory - and a guess read late waits for it'],
   ['KS',  8, 2, 'the register read this step: 0 .. 2 of the list, 3 a literal'],
   ['KH', 10, 1, "which half of it a store's next byte is - or, when KS is 3, lr and not sp"],
   ['SH', 11, 2, 'a shadow takes aq, the register read the step before: 1 shadow_sp, 2 shadow_lr, 3 shadow_isp'],
@@ -61,12 +61,19 @@ function memSteps({ st, blk, w2, n }, late = 0, aligned = 0) {
   const step = Array.from({ length: STEPS + 2 }, () => ({}));
   if (st) {
     for (let k = 1; k <= N; k++) step[k].A = 1;
-    // Released a step before the last access: the next instruction then
-    // reaches decode after the routine's last read through decode's port.
-    // A routine of one access releases in its ALU cycle instead, through
-    // predecode's `urs`, as a one-access load does.
-    if (N >= 2) step[N - 1].R = 1;
-    if (blk) { step[N + 1].P = 1; step[N + 1].D = 1; } else step[N].D = 1;
+    // The next instruction dispatches N + 1 cycles after the store, so that
+    // it reaches decode after the routine's last read through decode's port,
+    // in step N - 1, and its ALU cycle comes after the last access.  So the
+    // release is in step N - 2: in the ALU cycle, through predecode's `urs`,
+    // for a block of two registers aligned.  A store of one register never
+    // stops dispatch - rtl/cpu.sv skips a cycle instead, and one more if it
+    // is a word at an odd address - and so has no release.
+    if (blk && n >= 2 && N >= 3) step[N - 2].R = 1;
+    // Done with the last access, and a block's pointer written then, through
+    // the ALU, which the next instruction reaches only a cycle later: after
+    // the last read, so a stored register that is the pointer is read as it was.
+    step[N].D = 1;
+    if (blk) step[N].P = 1;
     // In step k the next access, access k, is made ready: register k / B,
     // half k % B.  Access 0 was made ready in the ALU cycle.
     for (let k = 1; k < N; k++) Object.assign(step[k], { WE: 1, KS: Math.floor(k / B), KH: k % B });

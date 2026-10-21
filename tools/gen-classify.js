@@ -150,7 +150,7 @@ const memOf = (r) => {
   return null;
 };
 const bits = (v, w) => (v === X ? 'x'.repeat(w) : v.toString(2).padStart(w, '0'));
-const W = 40 + ENTRY_BITS;
+const W = 42 + ENTRY_BITS;
 const late1 = [], late0 = [];          // the rows with a routine, by ulate
 const counts = [0, 0, 0, 0];
 let memRows = 0, excRows = 0;
@@ -180,11 +180,23 @@ const cases = rows.map((r) => {
   // SB_MAC16 registered at both ends, measured no faster and put a second
   // bubble's flop on dispatch's path.)
   if (ext === 2 || ext > 7) throw new Error(`opcode ${r.op}: ${ext} extra cycles, and rtl/cpu.sv holds 1 or 3 to 7`);
-  // Released in the ALU cycle: a routine of one access, so that the next
-  // instruction reaches decode as a load's write lands, or after a store's
-  // last read.  ld8's and st8's is always one; ld's, st's, pop's and push's
-  // of one register only when aligned, which rtl/cpu.sv learns in that cycle.
-  const urs = (mem && mem.n === 1);
+  // Released in the ALU cycle: a load of one access, so that the next
+  // instruction reaches decode as its write lands - ld8's is always one; ld's
+  // and pop's of one register only when aligned, which rtl/cpu.sv learns in
+  // that cycle - or a store of two accesses, a block of two registers
+  // aligned, so that it reaches decode after the store's last read.  A store
+  // of one register never stops dispatch: see tools/ucode.js.
+  const urs = (mem && (mem.st ? mem.blk && mem.n === 2 : mem.n === 1));
+  // WHAT DISPATCH DOES NEXT, from the opcode alone, so that rtl/cpu.sv's
+  // stop and skip take a column each and nothing worked out behind the
+  // table: a cycle with none after one extra ALU cycle - mul, clz,
+  // popcount - or after a store of one register, which never stops
+  // dispatch (see tools/ucode.js); a stop after everything else that does
+  // not flow, and after more extra cycles than one - recip.
+  const flows = k === KIND.alu || cbr;
+  const st1 = !!mem && !!mem.st && mem.n === 1;
+  const skp = (flows && ext === 1) || st1;
+  const stp = (!flows && !st1) || ext > 1;
   if (mem) memRows++;
   if (exc !== null) excRows++;
   const writes = (k === KIND.alu || jump) && r.v.dest !== X;
@@ -204,7 +216,8 @@ const cases = rows.map((r) => {
              bits(mem ? 1 : 0, 1), mf(mem?.st, 1), mf(mem?.w2, 1), mf(mem?.n, 2), mf(mem?.blk, 1), mf(mem?.push, 1),
              bits(useq ? 1 : 0, 1), bits(mem ? entryOf(mem) : exc ?? X, ENTRY_BITS),
              bits(piped ? ext : X, 3), bits(useq ? (urs ? 1 : 0) : X, 1),
-             bits(mem ? X : f(lselOf(r.v.alu), writes), 3)];
+             bits(mem ? X : f(lselOf(r.v.alu), writes), 3),
+             bits(skp ? 1 : 0, 1), bits(stp ? 1 : 0, 1)];
   if (useq) (mem?.late ? late1 : late0).push(r.op);
   return `        8'h${r.op.toString(16).padStart(2, '0')}: t = ${W}'b${t.join('_')};    // ${r.who}`;
 }).join('\n');
@@ -236,7 +249,7 @@ for (const r of rows)
 // no sequencer - and the rest is the mapper's, its length aside.
 const emptyRow = (len) => [bits(KIND.ucode, 2), bits(len, 2), bits(X, 1), bits(X, 4), bits(X, 4), bits(X, 4),
   bits(X, 4), bits(X, 2), bits(X, 2), '0', bits(X, 1), bits(X, 1), bits(X, 2), bits(X, 1), bits(X, 1),
-  '0', bits(X, ENTRY_BITS), bits(X, 3), bits(X, 1), bits(X, 3)].join('_');
+  '0', bits(X, ENTRY_BITS), bits(X, 3), bits(X, 1), bits(X, 3), '0', '1'].join('_');
 const used = new Set(rows.map((r) => r.op));
 const empties = [...Array(256).keys()].filter((op) => !used.has(op));
 const emptyCases = empties.map((op) =>
@@ -310,7 +323,9 @@ module classify (
 \`endif
     output logic       urs,       // dispatch is released in its ALU cycle - a word
                                   //   only when aligned
-    output logic [2:0] lsel       // with alu_op 4: which of the fast group - rtl/alu.sv
+    output logic [2:0] lsel,      // with alu_op 4: which of the fast group - rtl/alu.sv
+    output logic       skp,       // dispatch leaves the next cycle empty
+    output logic       stp        //   or stops until released
 );
 
     logic [${W - 1}:0] t;
@@ -325,7 +340,7 @@ ${emptyCases}
     end
 
     assign {kind, len, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src,
-            mem, mst, mw2, mn, mblk, mpush, useq, uent, ext, urs, lsel} = t;
+            mem, mst, mw2, mn, mblk, mpush, useq, uent, ext, urs, lsel, skp, stp} = t;
     assign halt = (op == 8'h${HALT.toString(16).padStart(2, '0')});
 \`ifdef FRUCTUS_BLIT
     // Read only for a row with a routine, so the rest are the mapper's.

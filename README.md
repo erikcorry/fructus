@@ -488,14 +488,15 @@ monitor can print it. `nop` is at `0x82`, away from them.
 
 **The cost model is the pipeline's**, and it is under `[cpu]` in the spec,
 with the fetcher keeping up: an ALU instruction is one cycle; a conditional
-branch guessed right one if not taken and three if taken, and guessed wrong
+branch guessed right one if not taken and two if taken, and guessed wrong
 five; `jmp` and `call` to an absolute address two and three; through a
 register five, or two and three when the guess of the target is right, and
 `ret` five, or two when the return stack's guess is right; any of them one
 more when the instruction at the target spans two words, except a call that
-went straight to its target; a load or store of N accesses N + 2, where an access is
-a byte or a whole word at an even address, so `ld` is three aligned and four
-not, and a three-register `push` five with sp even and eight with it odd;
+went straight to its target; a load of N accesses N + 2 and a store N + 1,
+where an access is a byte or a whole word at an even address, so `ld` is three
+aligned and four not, `st` two and three, and a three-register `push` four with
+sp even and seven with it odd;
 mul, mulhu, mulhs, clz and popcount two, and recip five. A taken branch is what
 makes a longer unrolled loop worth anything once the instruction mix is fixed,
 and a memory instruction is the slowest thing a program does often. The
