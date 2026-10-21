@@ -291,6 +291,22 @@ length_from_first_byte = true
 # through a taken branch, a jump, a call, a return or rti, each of which
 # empties the buffer and reads memory afresh.
 #
+# NO TRANSFER MAY TARGET THE I/O PAGE, TAKEN OR NOT.  The fetcher reads
+# ahead and down guessed paths, so it may read the target of any branch,
+# jump or call that dispatches - one that is never taken included, and one
+# squashed behind a wrong guess - and the words after it.  Code may not be
+# laid out to run there, nor may a branch's static target lie there; a
+# compiler never generates one, and hand-written assembly may not either.
+# What the fetcher reads is never a load: the system acts only on the data
+# accesses the processor declares, a load's word on mem_rld and a store on
+# mem_we, and those come only from loads and stores the program runs, in
+# its order - never from one squashed behind a wrong guess.  There is no
+# store buffer, and an I/O register may change when read, so no load or
+# store makes an access until every guess ahead of it is decided: today
+# because its first access is in its ALU cycle, when the branch ahead has
+# left the ALU, and in any earlier start by waiting.  tests/cpu-check.mjs
+# holds every access to the simulator's.
+#
 # A CONDITIONAL BRANCH IS GUESSED AS IT DISPATCHES, by a table of two-bit
 # counters indexed by the last eleven verdicts and bits of the jumps'
 # addresses; when the table has nothing it is guessed not taken.  Guessed not
