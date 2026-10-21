@@ -488,7 +488,12 @@ module cpu (
     output logic        mem_whi,     // -> memory: mem_addr[15] whenever mem_we is set,
                                      //    from a flop: a write's address is mar
     output logic [15:0] mem_rmar,    // -> memory: in the cycle a load's word arrives,
-    output logic        mem_rld,     //    mem_rld, the address it was read at - mar
+    output logic        mem_rld,     //    mem_rld, the address it was read at - mar.
+                                     //    It and mem_we are the only accesses with
+                                     //    effects: once each for every access a load
+                                     //    or store the program runs makes, in its
+                                     //    order, and never for one squashed.  A fetch
+                                     //    may read anything, a guessed path's too
 `ifdef FRUCTUS_BLIT
     input  logic        blit,        // <- the system: ld, ld8 and ldm's bytes come late
     input  logic [15:0] mem_late,    // <- the word at the address sampled two edges ago;

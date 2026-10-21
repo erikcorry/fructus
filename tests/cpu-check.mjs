@@ -22,6 +22,17 @@
 // dispatches a taken branch squashes are dropped before that is checked.
 // The forms are drawn so that every length lands at both alignments.
 //
+// AND EVERY DATA ACCESS, in order: each cycle mem_we writes, and each cycle
+// mem_rld says a load's word arrived, with mem_rmar its address, must be one
+// the simulator's semantics made, in the order they made them - a byte, or a
+// word at an even address, an access.  That is the contract with the system,
+// whose I/O registers act on those two and on nothing else: a fetch may read
+// anything, a mispredicted path's included, but a load or store squashed
+// behind a wrong guess must never reach the bus as one.  Registers and the
+// memory at the halt would miss a squashed store whose word is written again
+// later, and any load at all, since reading is harmless to memory and not to
+// a port.
+//
 // Needs iverilog; skips without it.  CPU_KEEP=1 leaves the programs in
 // build/cpu-prog-N.hex, their registers in build/cpu-reg-N.hex and the last
 // bench's memory at each halt in build/cpu-mem-N.hex, for looking at one
@@ -193,7 +204,8 @@ const draw = (f) => {
     case 'ret': return [MOV_TO[7], 0, 0, f.op];
     case 'reg': {
       if (f.pinned !== undefined) return [MOV_TO[f.pinned], 0, 0, f.op];
-      const x = f.call ? rnd() % 7 : rnd() & 7; return [MOV_TO[x], 0, 0, f.op, x];
+      const xs = f.regs ?? (f.call ? [0, 1, 2, 3, 4, 5, 6] : [0, 1, 2, 3, 4, 5, 6, 7]);
+      const x = xs[rnd() % xs.length]; return [MOV_TO[x], 0, 0, f.op, x];
     }
   }
   if (f.nbytes === 1) return [f.op];
@@ -208,6 +220,36 @@ const HALT = parseInt(spec.insn.find((i) => i.mnemonic === 'halt')
 // second pass by one - and then random mixtures.
 const NOP = forms.get([...forms.keys()].find((k) => k.startsWith('nop/')));
 const shuffle = (xs) => xs.map((x) => [rnd(), x]).sort((a, b) => a[0] - b[0]).map((e) => e[1]);
+
+// MIXED PROGRAMS: loads, stores, ALU instructions, branches, jumps and the
+// exception instructions together, so that a load or a store lands in every
+// slot behind a branch guessed wrong, a jump guessed wrong and a trap, a
+// load straight after a store to the same word, and a load or store just
+// after the instruction that wrote its base, its index or its data.  Stores
+// must not reach the program, so three registers are POINTERS into a window
+// far above it, and nothing writes them but the instructions that walk
+// them: r1, ldm's; r5, stm's; and sp, push's and pop's.  Every store takes
+// its address from them, and most loads; the rest read anywhere.  The three
+// start a few bytes apart, so that what one writes another reads.
+const NAMED = new Machine(spec).named;
+const PTR = new Set([1, 5, NAMED.sp]);
+const writesOf = (d) => [...(d.insn.semantics ?? '').matchAll(/R\[([a-z])\] = /g)].map((m) => d.ops[m[1]]);
+const addrOf = (d) => {
+  const m = /M(8|16)\[R\[a\] \+ (off|R\[b\])\]/.exec(d.insn.semantics ?? '');
+  return m ? [d.ops.a, ...(m[2] === 'R[b]' ? [d.ops.b] : [])] : [];
+};
+const keepIf = (pool, ok) => pool.map((f) => ({ ...f, b1s: f.b1s.filter((b1) => ok(decode(dec, [f.op, b1, 0], 0))) }))
+                                 .filter((f) => f.b1s.length);
+const noPtrWrite = (d) => !writesOf(d).some((r) => PTR.has(r));
+const mix = {
+  alu:    keepIf(all, noPtrWrite),
+  ldPtr:  keepIf(loads, (d) => noPtrWrite(d) && addrOf(d).every((r) => PTR.has(r))),
+  ldAny:  keepIf(loads, noPtrWrite),
+  st:     keepIf(stores, (d) => addrOf(d).every((r) => PTR.has(r))),
+  jumps:  jumps.filter((j) => !PTR.has(j.pinned)).map((j) =>
+            j.jump === 'reg' && j.pinned === undefined
+              ? { ...j, regs: [0, 2, 3, 4, ...(j.call ? [] : [7])] } : j),
+};
 
 // Loops, and the register-register branch both ways round, assembled.  Each
 // is run twice: as written, and a byte later behind a nop, so that every
@@ -514,6 +556,63 @@ SOURCES.push([
   'g3:  push r2, r3', 'ret',
 ].map((l) => '          ' + l).join('\n'));
 
+// LOADS AND STORES WHERE A GUESS PUTS THEM, which the access check above
+// holds to the ones the program makes: behind a branch the table guesses
+// wrong, both ways - the laps alternate, then go in fours - behind a loop's
+// exit, at a jmp ra target guessed wrong, after a ret guessed wrong because
+// the function moved lr, and a call's target the same.  r1 points at
+// stand-ins for ports, which the bench cannot tell from memory; the check
+// is that nothing but these instructions reads or writes them, and only
+// when they run.
+SOURCES.push([
+  'mov  sp, #0x3100', 'mov  r1, #0x2800', 'mov  r5, #0x2810', 'mov  r4, #16', 'mov  r3, #0',
+  'top: brset r4, #1, odd',
+  'ld   r0, [r1, #0]', 'st   r4, [r1, #2]', 'ld8  r2, [r1, #4]',
+  'odd: brclr r4, #4, sk', 'push r4', 'pop  r2', 'stm  r3, r4',
+  'sk:  brset r4, #8, rare', 'ld   r0, [r1, #6]', 'st8  r4, [r1, #7]',
+  'rare: add  r3, r3, r0',
+  'mov  r2, #j1', 'brset r4, #2, jx', 'mov  r2, #j2',
+  'jx:  jmp  r2',
+  'j1:  ld   r0, [r1, #8]', 'st   r0, [r1, #10]', 'jmp  jn',
+  'j2:  st   r4, [r1, #12]', 'ld   r2, [r1, #12]',
+  'jn:  call f', 'ld   r0, [r1, #14]', 'st   r0, [r1, #16]',
+  'jr:  mov  r2, #g', 'call r2', 'ld8  r0, [r1, #18]',
+  'add  r4, r4, #-1', 'br   ne, r4, #0, top',
+  'ldm  r0, r2', 'halt',
+  'f:   brclr r4, #8, fr', 'mov  lr, #jr', 'fr: ret',
+  'g:   ld   r2, [r1, #20]', 'ret',
+].map((l) => '          ' + l).join('\n'));
+
+// A LOAD STRAIGHT AFTER A STORE, AND A LOAD WHOSE BASE WAS JUST WRITTEN:
+// the same word at once and a cycle later, aligned, odd and a byte, through
+// a zero offset and not; a push read back by pop and by ld; stm read by
+// ldm over the same words; pointers chased, ld r1, [r1] after ld r1, [r1]
+// and the one-byte ld r0, [r0]; a base an ALU instruction or a load wrote
+// the cycle before, for a load and a store; and a store's data written the
+// cycle before.  What an early address, or a load ahead of a store, would
+// get wrong.
+SOURCES.push([
+  'mov  sp, #0x3100', 'mov  r5, #0x3000', 'mov  r1, #0x3000', 'mov  r0, #0x1234',
+  'st   r0, [r5, #0]', 'ld   r2, [r5, #0]',
+  'add  r0, r0, #1', 'st   r0, [r5, #0]', 'add  r3, r2, #1', 'ld   r3, [r5, #0]',
+  'st8  r2, [r5, #1]', 'ld   r4, [r5, #0]',
+  'mov  r4, #0x3003', 'st   r0, [r4, #0]', 'ld   r2, [r4, #0]', 'ld8  r3, [r4, #0]', 'ld8  r3, [r4, #1]',
+  'st   r0, [r5, #0]', 'add  r2, r2, #1', 'ld   r3, [r5, #0]',
+  'push r0, r2', 'pop  r3', 'pop  r4',
+  'push r2', 'ld   r0, [sp]', 'st   r3, [sp]', 'pop  r4',
+  'mov  r0, #0x3010', 'st   r0, [r5, #0]', 'mov  r0, #0x3020', 'st   r0, [r5, #16]',
+  'mov  r0, #0x3000', 'st   r0, [r5, #32]',
+  'mov  r1, #0x3000', 'ld   r1, [r1, #0]', 'ld   r1, [r1, #0]', 'ld   r2, [r1, #0]',
+  'mov  r0, #0x3000', 'ld   r0, [r0]', 'ld   r0, [r0]', 'ld   r0, [r0]',
+  'mov  r1, #0x3000', 'stm  r0, r2, r3', 'ldm  r4, r2', 'ldm  r3, r0',
+  'mov  r4, #0x3000', 'add  r4, r4, #2', 'ld   r2, [r4, #0]', 'add  r4, r4, #-1', 'st   r2, [r4, #0]',
+  'add  r4, r4, #1', 'st8  r0, [r4, #0]', 'ld8  r3, [r4, #0]',
+  'ld   r4, [r5, #16]', 'st   r0, [r4, #0]', 'ld   r4, [r5, #16]', 'ld   r3, [r4, #0]',
+  'add  r0, r0, #5', 'st   r0, [r5, #0]', 'ld   r2, [r5, #0]',
+  'mov  r3, #0x3002', 'mov  r2, #0', 'st   r0, [r3, r2]', 'ld   r4, [r3, r2]',
+  'halt',
+].map((l) => '          ' + l).join('\n'));
+
 // The second copy has its nop IN THE SOURCE, not put in front of the bytes:
 // a call or a jmp to a label is an absolute address, which the assembler
 // has to see move.
@@ -531,12 +630,47 @@ const assembled = SOURCES.flatMap((src, i) => [src, `nop\n${src}`].map((text, j)
 const CLOCKED = new Set(SOURCES.flatMap((src, i) => (src.includes(`#0x${spec.cpu.io.cycles.toString(16)}`)
   ? [2 * i, 2 * i + 1] : [])));
 
-const N_ALU = 60, N_LD = 20, N_ST = 20;
-const N_RANDOM = N_ALU + N_LD + N_ST;
+const N_ALU = 60, N_LD = 20, N_ST = 20, N_MIX = 40;
+const N_RANDOM = N_ALU + N_LD + N_ST + N_MIX;
 // Even, and far above any program these make: the widest displacement is ten
 // signed bits and an index is another register from the same window.
 const safe = () => 0x2000 + ((rnd() % 0x1000) & ~1);
 const PROGRAMS = N_RANDOM + assembled.length;
+// THE SIMULATOR'S DATA ACCESSES, in the order its semantics made them: what
+// the system should see on mem_rld and mem_we.  A read is its byte address,
+// as mem_rmar gives it; a write its word, the lanes written and their bytes.
+// A word at an odd address is two, a byte at a time, the low first; and
+// run() puts each instruction's own in address order, as the sequencer
+// makes them.
+const logAccesses = (m) => {
+  const log = [];
+  const { rd8, rd16, wr8, wr16 } = Machine.prototype;
+  const rd = (a) => log.push({ w: 0, a: a & 0xffff, b: a & 0xffff, lanes: 0, data: 0 });
+  const wr = (a, v) => log.push({ w: 1, a: a & 0xfffe, b: a & 0xffff, lanes: 1 << (a & 1), data: (v & 0xff) << 8 * (a & 1) });
+  m.rd8 = (a) => { rd(a); return rd8.call(m, a); };
+  m.rd16 = (a) => { rd(a); if (a & 1) rd(a + 1); return rd16.call(m, a); };
+  m.wr8 = (a, v) => { wr(a, v); wr8.call(m, a, v); };
+  m.wr16 = (a, v) => {
+    if (a & 1) { wr(a, v); wr(a + 1, v >> 8); } else log.push({ w: 1, a: a & 0xfffe, b: a & 0xffff, lanes: 3, data: v & 0xffff });
+    wr16.call(m, a, v);
+  };
+  return log;
+};
+// Upward from the lowest byte, which memory's wrap can make 0xffff.
+const upward = (xs) => {
+  const lo = xs.find((x) => xs.every((y) => ((y.b - x.b) & 0xffff) < 16));
+  return lo ? xs.sort((x, y) => ((x.b - lo.b) & 0xffff) - ((y.b - lo.b) & 0xffff)) : xs;
+};
+const showAcc = (e) => e ? (e.w ? `write ${hex4(e.a)} lanes ${e.lanes} ${hex4(e.data)}` : `read ${hex4(e.a)}`) : 'nothing';
+// And folded, for the interrupt bench, which folds its own the same way.
+const foldAcc = (log) => {
+  let h = 0;
+  for (const e of log) {
+    h = (Math.imul(h, 31) + ((e.w << 18) | (e.lanes << 16) | e.a)) & 0x7fffffff;
+    h = (Math.imul(h, 31) + e.data) & 0x7fffffff;
+  }
+  return h;
+};
 const programs = [];
 // WHAT A STORE DID IS NOT IN ANY REGISTER, so both machines fold their whole
 // memory into one number at the halt.
@@ -574,9 +708,19 @@ const vvp = (file) => execFileSync('vvp', [file], { encoding: 'utf8', maxBuffer:
 // Built with FRUCTUS_BLIT, the test bench hands the processor each word again
 // a cycle later, as tools/fpga-system.sv does: \`late\` is the word at the
 // address sampled two edges ago.
+//
+// AND BOTH LOAD PORTS ARE POISONED outside a load's word: mem_data and
+// mem_late carry the word inverted except in the cycle mem_rld says a load's
+// word arrived, and the cycle after for mem_late.  The system's mem_data is
+// an I/O register's whenever mar points at one, whatever the cycle, so a
+// fetch, a store or a shadow that took a byte from either port would read
+// a register - and here reads garbage the simulator does not.  Only the
+// captures may: what keeps a fetch from ever reading an I/O register is that
+// instruction bytes come from mem_rdata alone.
 const BLIT_WIRING = `\`ifdef FRUCTUS_BLIT
     logic [15:0] late;
-    always @(posedge clk) late <= rdata;
+    always @(posedge clk) late <= rld ? rdata : ~rdata;
+    wire  [15:0] ldata = rld ? rdata : ~rdata;
 \`endif`;
 mkdirSync('build', { recursive: true });
 writeFileSync('build/cpu-zero.hex', '00\n'.repeat(65536));
@@ -605,12 +749,23 @@ for (let p = 0; p < PROGRAMS; p++) {
                                        : all[rnd() % all.length];
                                 });
     bytes = layout(picks).concat([HALT]);
-  } else if (p < N_RANDOM) {
+  } else if (p < N_ALU + N_LD + N_ST) {
     // Stores alone, from the safe window; the first has every one twice.
     const picks = p === N_ALU + N_LD ? shuffle([...stores, NOP, ...stores])
                                      : Array.from({ length: 30 }, () => stores[rnd() % stores.length]);
     bytes = layout(picks).concat([HALT]);
     draws = safe;
+  } else if (p < N_RANDOM) {
+    // Mixed, the pointers in the safe window and the rest anything.
+    const pick = (xs) => xs[rnd() % xs.length];
+    const picks = Array.from({ length: 40 }, () => {
+      const r = rnd() % 20;
+      return r < 5 ? pick(mix.ldPtr) : r < 6 ? pick(mix.ldAny) : r < 10 ? pick(mix.st)
+           : r < 13 ? pick(brs) : r < 15 ? pick(mix.jumps) : r < 16 ? pick(excs) : pick(mix.alu);
+    });
+    bytes = layout(picks).concat([HALT]);
+    const w = safe(), near = () => w + (rnd() % 8);
+    draws = (_, k) => (PTR.has(k) ? near() : val());
   } else {
     bytes = assembled[p - N_RANDOM];
   }
@@ -645,7 +800,7 @@ for (let p = 0; p < PROGRAMS; p++) {
       c.step();
       return c.pc === ((pc + len + 1) & 0xffff);
     };
-    const trace = [];
+    const trace = [], alog = logAccesses(m);
     for (let guard = 0; !m.halted && guard < 5000; guard++) {
       const pc = m.pc;
       // A guard trap is a brk dispatched where the next instruction would be,
@@ -670,15 +825,19 @@ for (let p = 0; p < PROGRAMS; p++) {
       const memst = mem && /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(d.insn.semantics);
       // Blit mode makes every load but pop a cycle slower.
       const late = mem && !memst && !/^base = sp; /.test(d.insn.semantics);
-      const before = m.cycles(), xfer0 = m.xfer;
+      const before = m.cycles(), xfer0 = m.xfer, a0 = alog.length;
       m.step();
+      // WITHIN AN INSTRUCTION, ADDRESS ORDER: a block move goes up memory
+      // whichever way its semantics list it - push's, top first - and an
+      // odd word its low byte first.
+      alog.push(...upward(alog.splice(a0)));
       const cyc = m.cycles() - before;   // what the simulator charged it
       // A memory instruction's accesses: an aligned word is one, a byte one.
       const acc = mem ? m.xfer - xfer0 : 0;
       const back = !!(m.mem[(pc + 2) & 0xffff] & 0x80);
       if (!m.halted) trace.push({ pc, len: d.nbytes, taken, back, jump, mem, acc, memst, late, exc, cyc, R: Array.from(m.R) });
     }
-    return { trace, hash: fold(m.mem), gtrap: m.pc === ((GVECTOR + 1) & 0xffff) };
+    return { trace, acc: alog, hash: fold(m.mem), gtrap: m.pc === ((GVECTOR + 1) & 0xffff) };
   };
   const plain = run(m), blit = run(mb);
   programs.push({ bytes, reg, ...plain, io, blit });
@@ -695,11 +854,13 @@ writeFileSync('build/cpu-tb.sv', `module tb;
     wire [15:0] wdata;
     wire [1:0] we;
     wire halted, trapped, ret;
+    wire [15:0] rmar;
+    wire rld, whi;
 ${BLIT_WIRING}
     cpu u (.clk(clk), .rst(rst), .boot(1'b0), .mem_addr(addr), .mem_rdata(rdata),
-                .mem_wdata(wdata), .mem_we(we), .irq(1'b0),
+                .mem_wdata(wdata), .mem_we(we), .mem_whi(whi), .mem_rmar(rmar), .mem_rld(rld), .irq(1'b0),
 \`ifdef FRUCTUS_BLIT
-                .blit(\`BLIT_ON), .mem_late(late), .mem_data(rdata),
+                .blit(\`BLIT_ON), .mem_late(late), .mem_data(ldata),
 \`endif
                 .halted(halted), .trapped(trapped), .result(), .retire(ret), .retire_pc(rpc));
     // A word a cycle, the even byte low, as the SPRAM delivers it; a write goes
@@ -710,12 +871,17 @@ ${BLIT_WIRING}
         if (we[0]) mem[{addr[15:1], 1'b0}] <= wdata[7:0];
         if (we[1]) mem[{addr[15:1], 1'b1}] <= wdata[15:8];
     end
-    integer p, k, cyc, ev, epc, go, dpc, sq, h;
+    integer p, k, cyc, ev, epc, go, dpc, sq, h, rl, rm, wv, wa, wd, wh;
     reg [8*64:1] name;
     task step;
         begin
             ev = ret; epc = rpc; go = u.go; dpc = u.pc; sq = u.taken_q;
+            rl = rld; rm = rmar; wv = we; wa = addr; wd = wdata; wh = whi;
             #1 clk = 1; #1 clk = 0;
+            // A load's word arrived, its address put out the cycle before;
+            // a write at this edge.
+            if (rl) $display("RD %0d %0d %h", p, cyc, rm[15:0]);
+            if (wv != 0) $display("WR %0d %0d %h %0d %h %0d", p, cyc, wa[15:0], wv, wd[15:0], wh);
             if (sq) $display("SQUASH %0d %0d", p, cyc);
             if (go) $display("DISP %0d %0d %h", p, cyc, dpc[15:0]);
             if (ev) $display("RET %0d %h %h %h %h %h %h %h %h %h", p, epc[15:0],
@@ -771,18 +937,28 @@ if (trace(outCells) !== trace(out)) {
   process.exit(1);
 }
 
-let bad = 0, instructions = 0, cycles = 0;
+let bad = 0, instructions = 0, cycles = 0, accesses = 0, squashedMem = 0;
 const complain = (msg) => { if (bad++ < 8) console.log(`  MISMATCH ${msg}`); };
 
 // One run's output against the simulator: in blit mode, its blit-mode twin,
 // whose ld, ld8 and ldm cost a cycle more.
 function check(out, blit, what) {
   const rets = programs.map(() => []), disps = programs.map(() => []), squashes = programs.map(() => []), ends = [];
+  const accs = programs.map(() => []);
   for (const line of out.split('\n')) {
     const f = line.trim().split(/\s+/);
     if (f[0] === 'RET')  rets[+f[1]].push({ pc: parseInt(f[2], 16), R: f.slice(3, 11).map((h) => parseInt(h, 16)) });
     if (f[0] === 'DISP') disps[+f[1]].push({ cyc: +f[2], pc: parseInt(f[3], 16) });
     if (f[0] === 'SQUASH') squashes[+f[1]].push(+f[2]);
+    // In the order they used the bus: a read in the cycle before its word
+    // arrived, a write in its own, and a write first should the two ever
+    // claim one cycle, as the interrupt bench folds them.
+    if (f[0] === 'RD') accs[+f[1]].push({ t: 2 * (+f[2] - 1) + 1, w: 0, a: parseInt(f[3], 16), lanes: 0, data: 0 });
+    if (f[0] === 'WR') {
+      const a = parseInt(f[3], 16), lanes = +f[4], d = parseInt(f[5], 16);
+      accs[+f[1]].push({ t: 2 * +f[2], w: 1, a: a & 0xfffe, lanes, whi: +f[6], hi: a >> 15,
+                         data: (lanes & 1 ? d & 0xff : 0) | (lanes & 2 ? d & 0xff00 : 0) });
+    }
     if (f[0] === 'END')  ends[+f[1]] = { halted: f[2] === '1', trapped: f[3] === '1', cyc: +f[4], hash: +f[5] };
   }
   programs.forEach((q, p) => {
@@ -794,6 +970,14 @@ function check(out, blit, what) {
     // three instructions behind the branch.
     const got = rets[p];
     const ds = disps[p].filter((d) => !squashes[p].some((t) => d.cyc >= t - 2 && d.cyc <= t));
+    // How many of those undone were loads or stores: what the access check
+    // is for, so it should not be few.
+    if (!blit) for (const d of disps[p]) {
+      if (!squashes[p].some((t) => d.cyc >= t - 2 && d.cyc <= t)) continue;
+      const b = q.bytes, at = d.pc;
+      const di = at < b.length ? decode(dec, [b[at], b[at + 1] ?? 0, b[at + 2] ?? 0], 0) : null;
+      if (di && memBytes(di.insn.semantics ?? '')) squashedMem++;
+    }
     if (!ends[p]?.halted || ends[p]?.trapped)
       say(`: ended ${ends[p]?.trapped ? 'trapped' : 'without halting'}`);
     if (got.length !== trace.length) say(`: ${got.length} retired, the simulator ran ${trace.length}`);
@@ -824,6 +1008,19 @@ function check(out, blit, what) {
         say(` dispatch ${i}: ${ds[i].cyc - ds[i - 1].cyc} cycles after the one at 0x${prev.pc.toString(16)}, tools/sim.js charges ${want}`);
       if (want < floor)
         say(` instruction at 0x${prev.pc.toString(16)}: tools/sim.js charges ${want} cycles, less than the ${floor} it takes at least`);
+    }
+    // The data accesses, one for one.
+    const acc = blit ? q.blit.acc : q.acc;
+    const ga = accs[p].sort((x, y) => x.t - y.t);
+    for (let i = 0; i < Math.max(ga.length, acc.length); i++) {
+      const g = ga[i], t = acc[i];
+      if (g && g.w && g.whi !== g.hi) say(` access ${i}: mem_whi ${g.whi} with the address's bit 15 ${g.hi}`);
+      if (!g || !t || g.w !== t.w || g.a !== t.a || g.lanes !== t.lanes || g.data !== t.data) {
+        say(` access ${i}: the rtl's ${showAcc(g)} in cycle ${g ? g.t >> 1 : '-'}, the simulator's ${showAcc(t)}; `
+          + `${ga.length} on the bus, ${acc.length} in the semantics`);
+        break;
+      }
+      if (!blit) accesses++;
     }
     if (!blit) cycles += ends[p]?.cyc ?? 0;
   });
@@ -882,16 +1079,18 @@ const finalOf = ({ bytes, reg, io }, exact) => {
   m.ie = 1;
   reg.forEach((v, k) => { m.R[k] = v; });
   let cli = false;
+  const alog = logAccesses(m);
   for (let guard = 0; !m.halted && guard < 5000; guard++) {
     if (m.mem[m.pc] === excs[2].op) cli = true;
-    const at = m.guardAt;
+    const at = m.guardAt, a0 = alog.length;
     m.step();
+    alog.push(...upward(alog.splice(a0)));
     if (exact && m.guardPending && m.guardAt !== at) m.guardAt -= 1;
   }
   m.mem[m.pc] = HALT;                            // as the test bench puts after the halt
   let hash = 0;
   for (let k = 0; k < 65536; k++) hash = (Math.imul(hash, 31) + m.mem[k]) & 0x7fffffff;
-  return { R: Array.from(m.R), hash, cli, ie: m.ie };
+  return { R: Array.from(m.R), hash, cli, ie: m.ie, acc: foldAcc(alog) };
 };
 const finals = programs.map((q) => finalOf(q, false));
 const exacts = programs.map((q) => finalOf(q, true));
@@ -905,11 +1104,13 @@ writeFileSync('build/cpu-irq-tb.sv', `module tb;
     wire [15:0] wdata;
     wire [1:0] we;
     wire halted, trapped;
+    wire [15:0] rmar;
+    wire rld;
 ${BLIT_WIRING}
     cpu u (.clk(clk), .rst(rst), .boot(1'b0), .mem_addr(addr), .mem_rdata(rdata),
-                .mem_wdata(wdata), .mem_we(we), .irq(irq),
+                .mem_wdata(wdata), .mem_we(we), .mem_rmar(rmar), .mem_rld(rld), .irq(irq),
 \`ifdef FRUCTUS_BLIT
-                .blit(\`BLIT_ON), .mem_late(late), .mem_data(rdata),
+                .blit(\`BLIT_ON), .mem_late(late), .mem_data(ldata),
 \`endif
                 .halted(halted), .trapped(trapped), .result(), .retire(), .retire_pc());
     always @(posedge clk) begin
@@ -917,8 +1118,17 @@ ${BLIT_WIRING}
         if (we[0]) mem[{addr[15:1], 1'b0}] <= wdata[7:0];
         if (we[1]) mem[{addr[15:1], 1'b1}] <= wdata[15:8];
     end
-    integer p, k, cyc, takes, h, pc1;
+    integer p, k, cyc, takes, h, pc1, acch, wv, wa, wd, rl, rm;
     reg [8*64:1] name;
+    // The data accesses folded as tests/cpu-check.mjs folds the simulator's,
+    // in the order they had the bus: at each edge the read whose word
+    // arrives, its address put out the cycle before, and then the write.
+    task fold(input integer code, input integer data);
+        begin
+            acch = (acch * 31 + code) & 32'h7fffffff;
+            acch = (acch * 31 + data) & 32'h7fffffff;
+        end
+    endtask
     // One cycle.  With \`raise\`, the line goes up at \`next\`; it drops after
     // a take, and \`next\` is then 17 to 39 cycles on.
     task tick(input integer raise);
@@ -926,7 +1136,11 @@ ${BLIT_WIRING}
             if (raise && cyc == next) irq = 1;
             drop = u.take;
             if (drop) takes = takes + 1;
+            rl = rld; rm = rmar; wv = we; wa = addr; wd = wdata;
             #1 clk = 1; #1 clk = 0;
+            if (rl) fold(rm & 16'hffff, 0);
+            if (wv != 0) fold((1 << 18) | (wv << 16) | (wa & 16'hfffe),
+                              ((wv & 1) ? (wd & 16'h00ff) : 0) | ((wv & 2) ? (wd & 16'hff00) : 0));
             if (drop) begin
                 irq = 0;
                 lfsr = (lfsr * 1103515245 + 12345) & 32'h7fffffff;
@@ -949,7 +1163,7 @@ ${BLIT_WIRING}
             for (k = 0; k < 8; k = k + 1) u.R[k] = regs[k];
             u.shadow_sp = 0; u.shadow_lr = 0; u.shadow_isp = 0;
             u.ie = 1'b1;                       // as sei would
-            rst = 0; cyc = 0; takes = 0; next = 5 + p % 7; lfsr = p + 1;
+            rst = 0; cyc = 0; takes = 0; next = 5 + p % 7; lfsr = p + 1; acch = 0;
             while (!halted && !trapped && cyc < 50000) tick(1);
             // At the halt: a second one after it, and the line once more.
             pc1 = u.pc;
@@ -960,8 +1174,8 @@ ${BLIT_WIRING}
             irq = 0;
             repeat (40) tick(0);
             $sformat(name, "build/cpu-mem-%0d.hex", p); $writememh(name, mem);
-            $display("IRQ %0d %0d %0d %0d 0 %h %h %h %h %h %h %h %h %0d %0d", p, halted, trapped, takes,
-                     u.R[0], u.R[1], u.R[2], u.R[3], u.R[4], u.R[5], u.R[6], u.R[7], pc1, u.pc);
+            $display("IRQ %0d %0d %0d %0d 0 %h %h %h %h %h %h %h %h %0d %0d %0d", p, halted, trapped, takes,
+                     u.R[0], u.R[1], u.R[2], u.R[3], u.R[4], u.R[5], u.R[6], u.R[7], pc1, u.pc, acch);
         end
         $finish;
     end
@@ -979,12 +1193,14 @@ for (const blit of [false, true]) {
     const f = line.trim().split(/\s+/);
     if (f[0] !== 'IRQ') continue;
     const p = +f[1], R = f.slice(6, 14).map((x) => parseInt(x, 16));
-    const fin = +f[5] === exacts[p].hash && R.every((v, k) => v === exacts[p].R[k]) ? exacts[p] : finals[p];
+    const fin = +f[5] === exacts[p].hash && R.every((v, k) => v === exacts[p].R[k]) && +f[16] === exacts[p].acc
+              ? exacts[p] : finals[p];
     irqSeen.add(p);
     if (!blit) irqTakes += +f[4];
     if (f[2] !== '1' || f[3] !== '0') complain(`program ${p}: ${f[3] === '1' ? 'trapped' : 'did not halt'} under interrupts${what}`);
     if (!fin.cli && +f[4] < 1) complain(`program ${p}: no interrupt taken${what}`);
     if (+f[5] !== fin.hash) complain(`program ${p}: memory folds to ${f[5]} under interrupts${what} and ${fin.hash} without`);
+    if (+f[16] !== fin.acc) complain(`program ${p}: its data accesses fold to ${f[16]} under interrupts${what} and ${fin.acc} without`);
     if (fin.ie && +f[15] !== +f[14] + 1)
       complain(`program ${p}${what}: waited at 0x${(+f[14]).toString(16)} and ended at 0x${(+f[15]).toString(16)}, not a byte on, after the interrupt at the halt`);
     // The interrupts' own cycles are in a count read after them.
@@ -1013,11 +1229,12 @@ if (bad === 0) {
   console.log(`ok    rtl/cpu.sv: ${PROGRAMS} programs, ${instructions} instructions over `
             + `${all.length + brs.length + jumps.length + loads.length + stores.length} forms, `
             + `${taken} branches taken, ${jumped} jumps, ${moved} memory instructions, ${whole} a word at a time; `
-            + `registers, memory, dispatch cadence and tools/sim.js's cycle counts agree, `
-            + `${cycles} cycles to halt; ${gtraps} guard traps, ${gtraps - GUARD_PROGRAMS} of them random; `
+            + `registers, memory, ${accesses} data accesses in order, dispatch cadence and tools/sim.js's cycle counts agree, `
+            + `${cycles} cycles to halt, ${squashedMem} loads and stores dispatched and squashed; `
+            + `${gtraps} guard traps, ${gtraps - GUARD_PROGRAMS} of them random; `
             + `${dtraps} divide-by-zero traps`);
   console.log(`ok    rtl/cpu.sv, interrupted: ${PROGRAMS} programs under ${irqTakes} interrupts, `
-            + `the last at each halt, end as tools/sim.js does without them`);
+            + `the last at each halt, end as tools/sim.js does without them, their data accesses too`);
   const lateLoads = programs.reduce((n, { trace }) => n + trace.filter((t) => t.late).length, 0);
   console.log(`ok    rtl/cpu.sv, built for blit mode: the same machine with it off; with it on, `
             + `${lateLoads} loads a cycle late, interrupted and not, as predicted`);
