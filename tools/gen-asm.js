@@ -63,7 +63,7 @@ function relocFor(et, pcrel) {
 // order they are written.  A combo operand - condimm5 - is written as two
 // pieces, `{k.cond}` and `#{k.imm}`, so it becomes two slots: the first carries
 // the encoded value and the second only constrains it.
-function rowsFor(insn, form, swapped) {
+function rowsFor(insn, form, swapped, first = null) {
   const { runs, encType, nbytes } = decodeEncoding(insn, form);
   const ops = insn.operands ?? [];
   const fix = form.fix ?? {};
@@ -151,6 +151,11 @@ function rowsFor(insn, form, swapped) {
     }
   }
 
+  // A form's first_for copy: the operands it names pinned to their values
+  // and still placed, so a table operand still encodes its index.
+  for (const s of slots)
+    if (first && s.op.name in first) { s.fixed = 1; s.value = u16(first[s.op.name]); }
+
   // --- where the bits go -----------------------------------------------------
   // The instruction is one word, byte 0 in the most significant position, so a
   // run starting at character `at' of the encoding string with width w lands at
@@ -180,7 +185,8 @@ function rowsFor(insn, form, swapped) {
 
   return { mnemonic: insn.mnemonic, syntax, nbytes, slots, places, base,
            insn, form, swapped,
-           tag: `${insn.mnemonic}/${form.name}${swapped ? ' swapped' : ''}` };
+           first: !!first,
+           tag: `${insn.mnemonic}/${form.name}${swapped ? ' swapped' : ''}${first ? ' first' : ''}` };
 }
 
 // --- build every row ---------------------------------------------------------
@@ -189,12 +195,16 @@ for (const insn of spec.insn)
   for (const form of insn.form ?? []) {
     rows.push(rowsFor(insn, form, false));
     if (insn.swap_operands) rows.push(rowsFor(insn, form, true));
+    // first_for: a copy of the row that accepts only those values, sorted
+    // ahead of the other rows of its size.
+    if (form.first_for) rows.push(rowsFor(insn, form, false, form.first_for));
   }
 
-// Shortest first, and stable within a size so the spec's own order breaks ties.
-// gas takes the first row that accepts what was written, so this ordering is
-// the "prefer the smaller encoding" rule; there is no size search in gas.
-rows.sort((a, b) => a.nbytes - b.nbytes);
+// Shortest first, and stable within a size so the spec's own order breaks ties
+// - but a first_for copy ahead of the rest of its size.  gas takes the first
+// row that accepts what was written, so this ordering is the "prefer the
+// smaller encoding" rule; there is no size search in gas.
+rows.sort((a, b) => a.nbytes - b.nbytes || b.first - a.first);
 
 // --- which row a first byte decodes to ---------------------------------------
 // The disassembler needs the same rows, reached the other way round.  It is a
@@ -218,7 +228,7 @@ for (let b = 0; b < 256; b++) {
                     + `which the opcode map cannot discriminate on`);
     const m1 = c.nbytes >= 2 ? (c.mask >>> (w - 16)) & 0xff : 0;
     const l1 = c.nbytes >= 2 ? (c.lit  >>> (w - 16)) & 0xff : 0;
-    const k = rows.findIndex((r) => !r.swapped && r.insn === c.insn && r.form === c.form);
+    const k = rows.findIndex((r) => !r.swapped && !r.first && r.insn === c.insn && r.form === c.form);
     if (k < 0) throw new Error(`opcode 0x${b.toString(16)} decodes to a form with no row`);
     cand.push({ mask: m1, match: l1, form: k });
   }
@@ -284,7 +294,8 @@ for (const r of rows) {
 for (const r of rows)
   r.slots.forEach((s, i) => {
     const placed = r.places.some((p) => p.slot === i);
-    const ways = (s.fixed ? 1 : 0) + (s.tie >= 0 ? 1 : 0) + (placed ? 1 : 0);
+    // A first_for copy's pinned operand is placed as well: its pin only narrows.
+    const ways = (s.fixed && !(r.first && placed) ? 1 : 0) + (s.tie >= 0 ? 1 : 0) + (placed ? 1 : 0);
     if (s.kind === 'FR_CK') return;              // constrains its anchor, encodes nothing
     if (ways !== 1) throw new Error(`${r.tag}: slot ${i} is determined ${ways} ways`);
   });
