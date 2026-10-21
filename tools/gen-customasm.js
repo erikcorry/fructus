@@ -329,7 +329,8 @@ function rulesFor(insn, form, formIdx, swapped = false) {
       : take(val[r.op], r.hi, r.lo)).join(' @ ');
 
     return { mnemonic: insn.mnemonic, pattern: renderPattern(insn, patt), pre, asserts,
-             body: bits, nbytes, formIdx, encType, pins, ties: Object.entries(tie), tag: `${insn.mnemonic}/${form.name ?? 'form'}${swapped ? ' (operands exchanged)' : ''}` };
+             body: bits, nbytes, formIdx, encType, pins, ties: Object.entries(tie),
+             first: form.first_for ?? null, tag: `${insn.mnemonic}/${form.name ?? 'form'}${swapped ? ' (operands exchanged)' : ''}` };
   });
 }
 
@@ -504,9 +505,20 @@ for (const group of groups.values()) {
                               `tie would lose an encoding`);
         }
 
-        for (const r of mine)
+        // A rule pinned to every value its form's first_for names takes the
+        // tie instead: it keeps the tied case, and the winner gives it up.
+        const firsts = (r) => r.first
+          && Object.entries(r.first).every(([k, v]) => r.pins[k] === `${v & 0xffff}`);
+        for (const r of mine) {
+          if (firsts(r)) {
+            for (const w of theirs)
+              for (const [k, v] of Object.entries(r.first))
+                w.asserts.push(`$assert((${k} & 0xffff) != ${hex(v & 0xffff)}, "${k} == ${v} is ${r.tag}, first_for")`);
+            continue;
+          }
           for (const [x, y] of winner.ties)
             r.asserts.push(`$assert(${x} != ${y}, "${x} == ${y} is ${winner.tag}, the same size")`);
+        }
         broken += mine.length;
       } else {
         // SAME SHAPE, DIFFERENT VOCABULARY.  `and rd, rd, #imm5` against

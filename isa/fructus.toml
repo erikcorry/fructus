@@ -63,6 +63,8 @@
 # The assembler picks the *first form whose constraints the operands satisfy*,
 # with forms tried shortest-first, so `ld8 r0, [r0, #0]` automatically becomes
 # the one-byte encoding while `ld8 r3, [r3, #-2]` becomes the two-byte one.
+# A form with `first_for = { op = value, ... }` is tried before the others of
+# its size when the operands have those values: ld's and ld8's reg_reg.
 # The disassembler prints both through the same syntax template, so text ->
 # bytes -> text round-trips.
 #
@@ -1602,10 +1604,17 @@ semantics = "R[d] = M8[R[a] + off]"
   #
   # Paying an opcode bit to widen the register fields is the whole trick here:
   # it is what makes room for a separate destination and address in two bytes.
+  #
+  # `first_for` MAKES THIS FORM WIN A TIE at the values it names: where an
+  # earlier form of the same size also fits - reg_off5, when d is a - the
+  # assembler takes this one.  So every load at offset 0 that is not one
+  # byte is this form, and a core can find one from byte 0 and the top two
+  # bits of byte 1 alone, whatever its registers, without decoding imm5.
   [[insn.form]]
   name     = "reg_reg"
   encoding = "0010_101i  jjaa_addd"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
+  first_for = { off = 0 }
 
   # Three bytes, and in exchange everything is independent and nothing is
   # scattered: a whole opcode byte, then dest, address and a signed 10-bit
@@ -1675,6 +1684,7 @@ semantics = "R[d] = M16[R[a] + off]"
   name     = "reg_reg"
   encoding = "0010_001i  jjaa_addd"
   fields   = { i = "off:imm3[0]", j = "off:imm3[2:1]" }
+  first_for = { off = 0 }           # as ld8's
 
   [[insn.form]]
   name     = "reg_reg10"
