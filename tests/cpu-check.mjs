@@ -583,6 +583,36 @@ SOURCES.push([
   'g:   ld   r2, [r1, #20]', 'ret',
 ].map((l) => '          ' + l).join('\n'));
 
+// A JUMP BEHIND A GUESS NOT YET FOUND WRONG.  A jmp through a register,
+// guessed from the table, whose target changes lap by lap among three
+// jumps of its own: a one-byte ret, a one-byte jmp r5 and a two-byte jmp
+// ra, chosen by a xorshift with no branch, so that the verdicts in the
+// table's index say nothing.  Each fits in the word the first guess read, so it dispatches in the
+// cycle the first jump is compared, the cycle before the squash - unguessed
+// itself, since a guess needs two words in the buffer and it has the one;
+// the nops let the buffer fill for the first jump's.  Nothing longer can
+// be there - a conditional branch's three bytes need the second
+// word, which comes as the squash does - and nothing behind a guessed call
+// ra, whose target dispatches a cycle later than jmp ra's.  Run twice, as
+// every source is, so jmp ra lands at both alignments; it fits only at an
+// even one.
+// The targets come first, so that every mov of a label is of one already
+// placed: the assembler cannot settle a mov whose length its own target's
+// address decides.
+SOURCES.push([
+  'mov  r4, #41', 'mov  r0, #0xace1', 'jmp  back',
+  'ta:  ret', 'tb:  jmp  r5', 'td:  jmp  r3',
+  'back: add  r4, r4, #-1', 'br   eq, r4, #0, done',
+  'mov  r1, r0', 'shl  r1, r1, #7', 'xor  r0, r0, r1',
+  'mov  r1, r0', 'lsr  r1, r1, #9', 'xor  r0, r0, r1',
+  'mov  r1, r0', 'shl  r1, r1, #8', 'xor  r0, r0, r1',
+  'and  r2, r0, #1', 'mov  r1, r0', 'lsr  r1, r1, #1', 'and  r1, r1, #1', 'add  r2, r2, r1',
+  'mov  r1, #ta', 'add  r2, r2, r1',
+  'mov  r5, #back', 'mov  r3, #back', 'mov  lr, #back',
+  'nop', 'nop', 'jmp  r2',
+  'done: halt',
+].map((l) => '          ' + l).join('\n'));
+
 // A LOAD STRAIGHT AFTER A STORE, AND A LOAD WHOSE BASE WAS JUST WRITTEN:
 // the same word at once and a cycle later, aligned, odd and a byte, through
 // a zero offset and not; a push read back by pop and by ld; stm read by
@@ -938,6 +968,7 @@ if (trace(outCells) !== trace(out)) {
 }
 
 let bad = 0, instructions = 0, cycles = 0, accesses = 0, squashedMem = 0;
+const nested = {};
 const complain = (msg) => { if (bad++ < 8) console.log(`  MISMATCH ${msg}`); };
 
 // One run's output against the simulator: in blit mode, its blit-mode twin,
@@ -970,13 +1001,31 @@ function check(out, blit, what) {
     // three instructions behind the branch.
     const got = rets[p];
     const ds = disps[p].filter((d) => !squashes[p].some((t) => d.cyc >= t - 2 && d.cyc <= t));
-    // How many of those undone were loads or stores: what the access check
-    // is for, so it should not be few.
-    if (!blit) for (const d of disps[p]) {
-      if (!squashes[p].some((t) => d.cyc >= t - 2 && d.cyc <= t)) continue;
-      const b = q.bytes, at = d.pc;
-      const di = at < b.length ? decode(dec, [b[at], b[at + 1] ?? 0, b[at + 2] ?? 0], 0) : null;
-      if (di && memBytes(di.insn.semantics ?? '')) squashedMem++;
+    // WHAT THE SQUASHES UNDID, by what caused them - the last dispatch
+    // before the three undone, whose ALU cycle decided - so that the cases
+    // two guesses deep are seen to happen: a conditional branch, or a
+    // guessed jump, dispatched behind a jump or a branch guessed wrong, its
+    // own guess already made when the first was found out.
+    if (!blit) {
+      const at = (pc) => decode(dec, [q.bytes[pc] ?? 0, q.bytes[pc + 1] ?? 0, q.bytes[pc + 2] ?? 0], 0);
+      const kindOf = (pc) => {
+        if (pc >= q.bytes.length) return 'other';
+        const di = at(pc), sem = di?.insn.semantics ?? '';
+        return /^if \(.*\) pc = pc \+ off$/.test(sem) ? 'branch'
+             : /^(lr = pc; )?pc = (R\[a\]|lr)$/.test(sem) ? 'guessed'
+             : memBytes(sem) ? 'mem' : 'other';
+      };
+      for (const t of squashes[p]) {
+        const undone = disps[p].filter((d) => d.cyc >= t - 2 && d.cyc <= t);
+        const cause = disps[p].filter((d) => d.cyc < t - 2).pop();
+        if (!cause) continue;
+        const why = kindOf(cause.pc);
+        for (const d of undone) {
+          const k = kindOf(d.pc);
+          if (k === 'mem') squashedMem++;
+          if (k === 'branch' || k === 'guessed') nested[`${k} behind ${why}`] = (nested[`${k} behind ${why}`] ?? 0) + 1;
+        }
+      }
     }
     if (!ends[p]?.halted || ends[p]?.trapped)
       say(`: ended ${ends[p]?.trapped ? 'trapped' : 'without halting'}`);
@@ -1233,6 +1282,10 @@ if (bad === 0) {
             + `${cycles} cycles to halt, ${squashedMem} loads and stores dispatched and squashed; `
             + `${gtraps} guard traps, ${gtraps - GUARD_PROGRAMS} of them random; `
             + `${dtraps} divide-by-zero traps`);
+  for (const k of ['branch behind branch', 'guessed behind branch', 'guessed behind guessed'])
+    if (!nested[k]) { console.log(`FAIL  rtl/cpu.sv: no ${k} squashed - the programs no longer reach it`); process.exit(1); }
+  console.log(`ok    rtl/cpu.sv, two guesses deep, squashed: ` +
+              Object.entries(nested).sort().map(([k, n]) => `${n} ${k}`).join(', '));
   console.log(`ok    rtl/cpu.sv, interrupted: ${PROGRAMS} programs under ${irqTakes} interrupts, `
             + `the last at each halt, end as tools/sim.js does without them, their data accesses too`);
   const lateLoads = programs.reduce((n, { trace }) => n + trace.filter((t) => t.late).length, 0);
