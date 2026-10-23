@@ -645,53 +645,23 @@ module cpu (
     wire pjr  = pcl[0] ? pjb1 : pjb0;
     wire [15:0] ptgt = {ib2, ib1};
     wire        pjcall = ib0[0];      // 0xab, given pjr; 0xaa has bit 0 clear
-    // jmp ra AND call ra, 0xb2/0xb3 OR 0x02/0x03, ARE GUESSED AS THEY
-    // DISPATCH, from a table indexed by where the last five went and the
-    // branches since: jtm, 1024 targets, and jcm, a confidence bit each.  Read
-    // every cycle, the word lies in flops, jtq, until a jmp ra wants it; the
-    // fetch reads it as a predicted jmp's, and the jump goes down the pipeline
-    // to have aq compared with the guess, `rg`, in its ALU cycle - a wrong one
-    // redirects through taken_q, as an unguessed jmp ra does always.  It learns where it looked: the
-    // index the word was read at goes down the pipeline with it.
-    // The instruction at the head of the buffer, the word's low byte or, at
-    // an odd pc, its high one: jmp ra 1011_0010, call ra 1011_0011, jmp r5
-    // 0000_0010 or call r5 0000_0011.  They are x0xx_001x with bits 7, 5 and
-    // 4 equal, bit 0 the call, which the opcode map arranged for: prr is on
-    // the path into the fetch and the pc, and tests/depth-check.mjs holds it
-    // to three LUTs, prcall to one, and both to the spec.  Written out here,
-    // not as a module of its own: the same logic as a module measured 28.44
-    // MHz against 29.65, its ALU loop a LUT deeper for abc's area recovery.
-    // ret, 0000_1000, is guessed on the same path, from the return stack
-    // below: bits 7, 5 and 4 equal and clear, bit 6 clear, and bit 3 - which
-    // the family has clear - picks the stack's top over the table's word.
-    wire prb0 = ~iw[0][6]  & (iw[0][7]  == iw[0][5])  & (iw[0][5]  == iw[0][4])
-              & ((iw[0][3:1]  == 3'b001) | (~iw[0][7]  & (iw[0][3:0]  == 4'b1000)));
-    wire prb1 = ~iw[0][14] & (iw[0][15] == iw[0][13]) & (iw[0][13] == iw[0][12])
-              & ((iw[0][11:9] == 3'b001) | (~iw[0][15] & (iw[0][11:8] == 4'b1000)));
-    wire prr  = pcl[0] ? prb1 : prb0;
-    wire prcall = pcl[0] ? iw[0][8] : iw[0][0];
-    wire prret  = pcl[0] ? iw[0][11] : iw[0][3];
-    logic [29:0] jh;                  // the last five targets' bits 8:3, the newest lowest
-    logic [7:0]  jbh;                 // the verdicts since the last, the newest lowest
-    wire  [9:0]  jix = jh[9:0] ^ jh[19:10] ^ jh[29:20] ^ {2'b0, jbh};
-    logic [15:0] jtm [0:1023];
-    logic        jcm [0:1023];
-    logic [15:0] jtw, jtq;            // jtm[jix] read at the last edge, and a cycle on
-    logic [14:0] jtq1;                // jtq[15:1] + 1
-    logic        jcw, jcq;
-    logic [9:0]  jix1, jixq;          // the index jtq was read at
-    logic        d_rp, e_rp;          // a guessed jmp ra or call ra in decode, the ALU stage
-    logic        d_rc, e_rc;          //   a call ra
+    // ret, 0000_1000, IS GUESSED AS IT DISPATCHES, from the return stack
+    // below: the fetch reads the stack's top as a predicted jmp's target, and
+    // the ret goes down the pipeline to have aq compared with the guess, `rg`,
+    // in its ALU cycle - a wrong one redirects through taken_q, as an
+    // unguessed jump through a register does always.  prr, the opcode at the
+    // head of the buffer - the word's low byte or, at an odd pc, its high
+    // one - is on the path into the fetch and the pc, and
+    // tests/depth-check.mjs holds it to the spec.
+    // jmp ra, call ra, jmp r5 and call r5 were guessed too, from a table of
+    // 1024 targets indexed by where the last five went: 354 cells and five
+    // block RAMs of the system's, for 0.8% of FructusMark.  See af28add.
+    wire prr  = pcl[0] ? (iw[0][15:8] == 8'h08) : (iw[0][7:0] == 8'h08);
+    logic        d_rp, e_rp;          // a guessed ret in decode, the ALU stage
     logic [15:0] rg;                  // its guess
-    logic        d_rr, e_rr;          //   a ret, guessed from the return stack
-    logic [9:0]  rix;
-    logic        rconf;
-    // THE GUESS NEEDS ONLY THE INSTRUCTION'S OWN BYTES, since its target is
-    // not among them - not the classifier's length.  jmp r5, call r5 and ret
-    // are one byte and the head word holds them; jmp ra and call ra are two,
-    // bit 7 the family's only long ones, and the head word holds both bytes
-    // but at an odd pc.  From flops, as gok is.
-    wire prfit = (nw >= 3'd2) | ((nw == 3'd1) & ~(pcl[0] & iw[0][15]));
+    // THE GUESS NEEDS ONLY THE INSTRUCTION'S OWN BYTE, since its target is
+    // not among them - not the classifier's length: a word in the buffer.
+    wire prfit = nw != 3'd0;
     wire prok = prr & ~d_rp & prfit;
     wire prj  = prok & slot;          // the fetch reads the guess
     // THE RETURN STACK: rtn its top, and the block the rest, 256 words in one
@@ -710,9 +680,6 @@ module cpu (
     logic [7:0]  rsp;
     logic [15:0] rtn, rtq, rsd;
     logic [14:0] rtq1;                // rtq[15:1] + 1
-    // The pc takes the guesses in arms of its own, the address one arm, the
-    // two muxed in front: the other way round, 28.7 MHz against 30.0.
-    wire  [15:0] rgw = prret ? rtq : jtq;
     // A CONDITIONAL BRANCH PREDICTED TAKEN reads its target as it
     // dispatches, `pb`, as jmp does.  All seven are three bytes with the
     // displacement last, so the target is pc + 3 plus ib2, which is iw[1]'s
@@ -745,8 +712,8 @@ module cpu (
     // is in the guess, which is flops by the time the branch is at the head.
     //
     // THE TABLE LEARNS A CYCLE AFTER THE ALU STAGE, from what the branch
-    // carried down the pipeline - `blq`, the word and tag it looked at, which
-    // joins the jmp ra predictor's index in the ALU stage: a hit counts its counter towards the verdict, and a
+    // carried down the pipeline - `blq`, the word and tag it looked at: a hit
+    // counts its counter towards the verdict, and a
     // wrong guess without one writes the pattern into way `rr`, the three in
     // turn, its counter weak.  Each write is one way's five bits.  tools/sim.js's
     // predict() is the same machine, cycle for cycle.
@@ -785,7 +752,7 @@ module cpu (
     logic [1:0] bwq, bcq;             //   its way and counter,
     logic [10:0] blq;                 //   and the word and tag it was
     // Guessed taken: a hit whose counter says so - a miss is guessed not
-    // taken - and no branch or guessed ra-jump in the ALU stage.  Flops only.
+    // taken - and no branch or guessed ret in the ALU stage.  Flops only.
     wire        btk  = bhq & bcq[1] & ~e_cbr & ~e_rp;
     wire        pbok = pbr & btk;
     logic       pbq;                  // a predicted branch's target is in tgt_q
@@ -871,7 +838,7 @@ module cpu (
     // a branch whether it is guessed taken and allowed (btk), all from flops,
     // so that only the opcode checks are in series in front of the fetch.
     wire        gok  = slot & ~abusy & (nw >= 3'd2);
-    wire        prg  = slot & ~abusy & prfit;                // an ra-jump's: its own bytes
+    wire        prg  = slot & ~abusy & prfit;                // a ret's: its own byte
     wire        pb   = pbr & btk & gok;                        // the fetch reads it
     logic       pbm;                            // it did: the pc goes there next
     wire        pjb  = pc[3] ^ pc[5];               // a jump's bit for gh
@@ -909,15 +876,15 @@ module cpu (
     wire        redir = taken_q | pbq | pjq;   // the fetch goes to tgt_q
     wire        fetch = ~ldnow & ~aphase;   // the bus is the fetcher's, when no redirect or jump arm has it
     // THE THREE GUESSES ARE ONE ARM: jmp and call to an absolute address,
-    // jmp ra, call ra and ret, and a branch guessed taken are told apart by
+    // ret, and a branch guessed taken are told apart by
     // their opcodes, so the opcode checks alone pick the target - from flops,
     // early - and only the arm's select waits for the rest of each decision.
     // AND THEY ARE THE OUTERMOST ARMS, the branch's first: its sum comes
     // last.  No other arm can want the bus then - gok has slot, which a
     // redirect, a load's ALU cycle and the cycle after a pbq all clear, and
     // ~aphase - so they need no gating by the arms written after them.
-    wire        pjg   = (pjr & gok) | (prr & ~d_rp & prg);   // jmp, or an ra-jump
-    wire [15:0] jgt   = pjr ? ptgt : rgw;
+    wire        pjg   = (pjr & gok) | (prr & ~d_rp & prg);   // jmp, or a ret
+    wire [15:0] jgt   = pjr ? ptgt : rtq;
     assign mem_addr = pb      ? {padd[15:1], 1'b0}
                     : pjg     ? {jgt[15:1], 1'b0}
                     : redir   ? {tgt_q[15:1], 1'b0}
@@ -978,7 +945,7 @@ module cpu (
         pbf <= ~rst & pb;
         pnq <= pnxt;
         if (rst)        fp <= 15'd0;
-        else if (pjg)   fp <= pjr ? ptgt[15:1] + 15'd1 : prret ? rtq1 : jtq1;
+        else if (pjg)   fp <= pjr ? ptgt[15:1] + 15'd1 : rtq1;
         else if (redir) fp <= tgt_q[15:1] + 15'd1;
         else if (pbf)   fp <= fetch ? pnq + 15'd1 : pnq;
         else if (keepw) fp <= fp + 15'd1;
@@ -1009,9 +976,7 @@ module cpu (
             // cycle with `stop` or `skip` raised abc's delay target from 4941
             // to 5374: their next state is a long chain already.)
             {pcb, pcl, pcc} <= {ptgt, 1'b0}; stop <= 1'b0; skip <= 1'b0;
-        end else if (prd & ~prcall & ~prret) begin
-            {pcb, pcl, pcc} <= {jtq, 1'b0}; stop <= 1'b0; skip <= 1'b0;
-        end else if (prd & ~prcall) begin
+        end else if (prd) begin
             {pcb, pcl, pcc} <= {rtq, 1'b0}; stop <= 1'b0; skip <= 1'b0;
         end else if (go) begin
             pcb     <= pch;
@@ -1056,9 +1021,7 @@ module cpu (
         d_jump  <= is_jump & ~(pjok & ~pjcall);   // a predicted jmp has gone already
         d_pj    <= pjok;
         d_rp    <= ~rst & ~taken_q & prd;
-        d_rc    <= prcall;
-        d_rr    <= prret;
-        if (prd) {rg, rix, rconf} <= {rgw, jixq, jcq};
+        if (prd) rg <= rtq;
         bix     <= blq;
         d_bp    <= pbok;
         {d_bhit, d_bway, d_bctr} <= {bhq, bwq, bcq};
@@ -1247,13 +1210,11 @@ module cpu (
         if (!e_keep) e_lsel <= mhold ? 3'd5 : d_lsel;
         e_cbr   <= keep & d_cbr;
         {e_bp, e_bhit, e_bway, e_bctr} <= {d_bp, d_bhit, d_bway, d_bctr};
-        e_ix    <= d_rp ? {1'b0, rix} : bix;   // a jmp ra's, else a branch's
+        e_ix    <= bix;
         {e_jp, e_jb} <= {djp, d_jb};
         e_jump  <= keep & d_jump;
         e_pj    <= d_pj;
         e_rp    <= keep & d_rp;
-        e_rc    <= d_rc;
-        e_rr    <= d_rr;
         e_call  <= keep & d_jump & d_wen;
         e_ret   <= keep & d_jump & (d_op == 8'h08);
         e_jreg  <= jreg;
@@ -1306,12 +1267,7 @@ module cpu (
     wire jrq      = e_jump & e_jreg & ~taken_q;
     wire rok      = e_jreg & (aq == rg);   // guessed right
     wire jreg_now = jrq & ~(e_rp & rok);
-    // A call ra guessed goes as a predicted call to an absolute address does:
-    // the pc moves in its ALU cycle, to its target's word fetched already.  It
-    // moves whether the guess was right or not - not waiting for the compare -
-    // since a wrong one raises taken_q, which stops dispatch in the next cycle
-    // and puts the pc right.
-    assign jnow  = e_jump & (~e_jreg | (e_rp & e_rc)) & ~taken_q;
+    assign jnow  = e_jump & ~e_jreg & ~taken_q;
     assign jaddr = e_tgt;
 
     wire taken;
@@ -1351,12 +1307,11 @@ module cpu (
     logic [10:0] ch;
     logic        u_b, u_bp, u_bhit, u_jp, u_jb;
     logic [1:0]  u_bway, u_bctr, rr;
-    logic        u_rp, u_rr, u_rok, u_conf;
+    logic        u_rp;
     logic [10:0] u_ix;
     always_ff @(posedge clk) begin
         u_rp <= ~rst & e_rp & ~taken_q;
-        u_rr <= e_rr;
-        {u_rok, u_conf, u_ix} <= {rok, rconf, e_ix};
+        u_ix <= e_ix;
         u_b <= ~rst & e_cbr & ~taken_q;
         u_jp <= ~rst & e_jp & ~taken_q;
         u_jb <= e_jb;
@@ -1383,31 +1338,12 @@ module cpu (
         else if (uwe & ~u_bhit) rr <= (rr == 2'd2) ? 2'd0 : rr + 2'd1;
         if (rst) gh <= 11'd0;
         else if (u_b & taken_q) gh <= {ch[9:0], uvd};
-        // a wrong guess of a jmp ra: what dispatched behind it is gone
+        // a wrong guess of a ret: what dispatched behind it is gone
         else if (u_rp & taken_q) gh <= {ch[9:0], u_jb};
         else if (gon & pbr) gh <= {gh[9:0], pbok};
         else if (djp) gh <= {gh[9:0], d_jb};
     end
     initial for (int i = 0; i < 256; i++) bpm[i] = 15'd0;
-
-    // THE jmp ra TABLE LEARNS a cycle after the ALU stage, where tgt_q holds
-    // the target: right sets the confidence bit; wrong clears it, and only
-    // a wrong guess without it replaces the target.
-    always_ff @(posedge clk) begin
-        // A ret guessed from the return stack teaches the table nothing.
-        if (u_rp & ~u_rr) jcm[u_ix[9:0]] <= u_rok;
-        if (u_rp & ~u_rr & ~u_rok & ~u_conf) jtm[u_ix[9:0]] <= tgt_q;
-        jtw <= jtm[jix];
-        jcw <= jcm[jix];
-        jtq <= jtw; jtq1 <= jtw[15:1] + 15'd1; jcq <= jcw;
-        jix1 <= jix; jixq <= jix1;
-        if (rst) begin
-            jh <= 30'd0; jbh <= 8'd0;
-        end else if (u_rp & ~u_rr) begin
-            jh <= {jh[23:0], tgt_q[8:3]}; jbh <= 8'd0;
-        end else if (u_b) jbh <= {jbh[6:0], uvd};
-    end
-    initial for (int i = 0; i < 1024; i++) begin jtm[i] = 16'd0; jcm[i] = 1'b0; end
 
     // THE RETURN STACK MOVES in a call's or a ret's ALU stage: see above.
     always_ff @(posedge clk) begin
