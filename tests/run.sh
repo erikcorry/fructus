@@ -113,7 +113,7 @@ if node tests/libgcc-check.mjs; then :; else fail=1; fi
 # with the generators.  rtl/cpu.sv and rtl/alu.sv are written by hand, and
 # take the few facts about the instruction set they need from rtl/isa.svh.
 mkdir -p rtl
-for f in immgen.sv lhs.sv dest.sv cond.sv compare.sv classify.sv ucode.sv recip.sv isa.svh; do
+for f in immgen.sv lhs.sv dest.sv cond.sv compare.sv classify.sv ucode.sv isa.svh; do
     node "tools/gen-${f%.*}.js" > "build/_$f"
     if cmp -s "build/_$f" "rtl/$f"; then
         printf 'ok    rtl/%s is up to date with isa/fructus.toml\n' "$f"

@@ -349,7 +349,7 @@ immediate the ALU already has. `clz` and `popcount` are computed beside it with 
 middle, and taken a cycle later — `extra_cycles` in the spec, which the
 simulator counts.
 
-The instructions that need the DSPs — `mul`, `recip`, `mulhu` and `mulhs`, all
+The instructions that need the DSPs — `mul`, `mulhu` and `mulhs`, all
 optional and emitted by gcc only with `-mmul` — are one block, 0xb8 to 0xcf,
 above 0x80 and away from the base instruction set.
 `mul` takes the low half of a 16×16 product from an `SB_MAC16`, at 0xb8
@@ -367,24 +367,17 @@ since a part without a multiplier has none of them; without it a product is a
 call to libgcc's `__mulhi3`. With it a 16×16→32 product is `mul` and `mulhu`
 or `mulhs` inline, a 32×32→32 is four products inline at `-O2`, and a
 division by a constant is a `mulhu` or `mulhs` by its reciprocal.
-`recip rd, ra`, at 0xc3, is Möller and Granlund's 2/1 reciprocal of a
-normalised divisor, `floor((2³²−1)/d) − 2¹⁶` for `d = ra | 0x8000`, in five
-cycles. Its byte 1 is the imm3 column's with the immediate pinned at `#0`,
-which the assembler does not write. A 32-bit divisor's 3/2 reciprocal, with
-which a quotient word's estimate errs only one way, is made from it in
-software by their Algorithm 6: one more product and two rare corrections.
-It was an instruction, three cycles longer, until it turned out to cost 480
-logic cells for about 20 cycles of a wide 32-bit division. A high word with bit 15 clear,
-which after normalising means a divisor of zero, traps to `divide_by_zero`,
-0xffc8, as a guard does: `recip` writes its answer for `ra | 0x8000`, and the
-trap is taken in place of the next instruction. It is `rtl/recip.sv` beside the
-multiplier: a straight line per slot from one block RAM of 128 pairs, which
-lands 0 to 3 below, then a second product to find out how far. It has two
-`SB_MAC16`s of its own. To the ALU it is `mul` with every
-half zeroed and its answer OR'd in. With `-mmul` every division libgcc does
-is built on it: the `_mul` routines in `libgcc/lib1funcs.s` divide a word at a
-time, so a 16-bit division is about 33 cycles, a 32-bit one 82 to 95 against
-about 470 for the C, and a 64-bit one 260 to 580 against 720 to 3160.
+With `-mmul` libgcc's 32- and 64-bit divisions are built on it: the `_mul`
+routines in `libgcc/lib1funcs.s` divide a word at a time by Möller and
+Granlund's method, from the 2/1 reciprocal of a normalised divisor,
+`floor((2³²−1)/d) − 2¹⁶`, which `__recip_mul` makes with `mul` from a
+16-slot table and one Newton step in about 80 cycles. A 32-bit division is
+about 145 cycles against about 470 for the C, and a 64-bit one 300 to 540
+against 610 to 2800. 16-bit division keeps the shift-and-subtract loop,
+which beats a reciprocal for any quotient under about 200. The reciprocal was
+an instruction, `recip` at 0xc3, in five cycles, until its unit's 204 cells,
+block RAM and two `SB_MAC16`s were wanted for the rest of the system; a
+64-bit division costs about 75 cycles more without it.
 `rtl/alu.sv` instantiates the DSPs rather
 than letting yosys's `-dsp` infer them, because the inference copies the operand
 flops into the DSP's input registers and drags the logic in front of them to
@@ -497,7 +490,7 @@ went straight to its target; `ld`, `ld8` and a store of N accesses N + 1, and
 `pop` and `ldm` N + 2, where an access is a byte or a whole word at an even
 address, so `ld` and `st` are two aligned and three not, and a three-register
 `push` four with sp even and seven with it odd;
-mul, mulhu, mulhs, clz and popcount two, and recip five. A taken branch is what
+mul, mulhu, mulhs, clz and popcount two. A taken branch is what
 makes a longer unrolled loop worth anything once the instruction mix is fixed,
 and a memory instruction is the slowest thing a program does often. The
 simulator does not keep a list of which instructions are which: the semantics

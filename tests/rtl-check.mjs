@@ -524,60 +524,6 @@ endmodule
     run('alu', ['-DCPU_CELLS', cells, `${RTL}/alu.sv`], 'alu-tb');
   } else console.log("skip  rtl/alu.sv's SB_MAC16: yosys's ice40 cell models not found");
 
-  // --- recip, against tools/sim.js ------------------------------------------------
-  // Each one through the cycles rtl/cpu.sv gives it - aq in the first, e_cnt
-  // counting 4 down to 0, lsel 111 - and its answer read in the last; and the
-  // answer must be zero in every other cycle, since it is ORed into the
-  // product.  All 65536 operands, so the top bit is seen to be ignored, in a
-  // shuffled order.  Behavioural, and then through yosys's SB_MAC16 model.
-  {
-    let seed = 12345;
-    const rnd = () => (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) >>> 8;
-    const vec = [];
-    for (let x = 0; x < 0x10000; x++) vec.push([4, x]);
-    for (let i = vec.length - 1; i > 0; i--) { const j = rnd() % (i + 1); [vec[i], vec[j]] = [vec[j], vec[i]]; }
-    writeFileSync('build/recip-tb.hex', vec.map(([k, a]) =>
-      `${k} ${hex4(a)} ${hex4(BUILTIN.recip(a, 0))}`).join('\n') + '\n');
-    var recipTb = `module tb;
-    logic clk = 0, go = 0; logic [2:0] cnt = 0; logic [15:0] a = 0, xa, want_; wire [15:0] p;
-    integer f, rr, len, k, n = 0, bad = 0, stray = 0;
-    recip u (.clk(clk), .a(a), .go(go), .cnt(cnt), .p(p));
-    initial begin
-        f = $fopen("build/recip-tb.hex", "r");
-        #1 clk = 1; #1 clk = 0;          // p's first value, zero
-        #1 clk = 1; #1 clk = 0;
-        while (!$feof(f)) begin
-            rr = $fscanf(f, "%d %h %h\\n", len, xa, want_);
-            if (rr == 3) begin
-                n = n + 1;
-                for (k = len; k >= 0; k = k - 1) begin
-                    // aq holds the operand in the first cycle only
-                    a = k == len ? xa : $random;
-                    go = 1; cnt = k[2:0];
-                    #1; if (k != 0 && p !== 16'd0) stray = stray + 1;
-                    if (k == 0 && p !== want_) begin
-                        bad = bad + 1;
-                        if (bad < 6) $display("  MISMATCH d=%h: want %h got %h", xa, want_, p);
-                    end
-                    #1 clk = 1; #1 clk = 0;
-                end
-            end
-        end
-        if (bad == 0 && stray == 0) $display("ok    rtl/recip.sv\${WHICH}: %0d operands against tools/sim.js, and zero between", n);
-        else $display("FAIL  rtl/recip.sv\${WHICH}: %0d of %0d wrong, %0d cycles not zero", bad, n, stray);
-        $finish;
-    end
-endmodule
-`;
-  }
-  writeFileSync('build/recip-tb.sv', recipTb.replaceAll('\${WHICH}', ''));
-  run('recip', [`${RTL}/recip.sv`], 'recip-tb');
-  if (cells && existsSync(cells)) {
-    writeFileSync('build/recip-tb.sv', recipTb.replaceAll('\${WHICH}', ", with yosys's SB_MAC16 model"));
-    run('recip', ['-DCPU_CELLS', cells, `${RTL}/recip.sv`], 'recip-tb');
-  } else console.log("skip  rtl/recip.sv's SB_MAC16: yosys's ice40 cell models not found");
-  rmSync('build/recip-tb.hex', { force: true });
-
   // --- the compare unit on its own: cond neg mask lhs rhs want ------------------
   const cmp = [];
   const crow = (c, ng, mk, l, r, w) => `${c} ${ng} ${mk} ${hex4(l)} ${hex4(r)} ${w}`;

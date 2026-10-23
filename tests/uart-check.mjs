@@ -260,7 +260,7 @@ endmodule
 `);
 
 const DIR = process.env.FRUCTUS_RTL ?? 'rtl';
-const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare', 'recip', 'uart', 'spiboot']
+const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare', 'uart', 'spiboot']
   .map((m) => `${DIR}/${m}.sv`);
 const VIDEO = ['video', 'timing', 'background', 'foreground', 'sprites'].map((m) => `${DIR}/video/${m}.sv`);
 execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', '-DFRUCTUS_UART', '-DNO_ICE40_DEFAULT_ASSIGNMENTS',

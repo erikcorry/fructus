@@ -8,14 +8,14 @@
 // rtl/cpu.sv decides from kind, length and `two` whether the next dispatch
 // can follow at once, and latches the rest for the decode stage.
 //
-// 170 opcodes: 107 ALU, 49 microcoded - 44 of them memory instructions and
+// 169 opcodes: 106 ALU, 49 microcoded - 44 of them memory instructions and
 // 4 exception instructions or mul - 7 conditional branches, 7 jumps.
 // AN OPCODE THE SPEC LEAVES EMPTY IS MICROCODED, AND ITS LENGTH FOLLOWS THE
 // RULE THE USED ONES DO - tools/gen-classify.js has it.  Microcoded stops
 // dispatch, and it traps in the ALU stage, so the length only has to be cheap:
 // four LUTs, len[0] two deep.  Left x, as it was, yosys made it 0 - a fourth
 // length - and the decode 22 LUTs four deep, in cl0 and cl1 on the loop from
-// the buffer through the length to the fetch.  The 86 empty rows
+// the buffer through the length to the fetch.  The 87 empty rows
 // are written out; the default is never reached.
 //
 // THE pc BEHIND AN EMPTY OPCODE IS ITS ADDRESS PLUS THAT LENGTH, which means
@@ -53,7 +53,7 @@ module classify (
     output logic       mpush,     //   downward, so its registers lie reversed
     output logic       useq,      // it runs a routine: a memory or exception instruction
     output logic [4:0] uent,      // where its routine starts in rtl/ucode.sv
-    output logic [2:0] ext,       // extra cycles in the ALU stage: clz, popcount, mul, recip
+    output logic [2:0] ext,       // extra cycles in the ALU stage: clz, popcount, mul
 `ifdef FRUCTUS_BLIT
     output logic       ulate,     // blit mode makes it late: ld, ld8 and ldm
 `endif
@@ -233,7 +233,6 @@ module classify (
         8'hb9: t = 47'b00_11_1_1110_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_110_1_0;    // mul
         8'hbe: t = 47'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_110_1_0;    // mul
         8'hbf: t = 47'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_110_1_0;    // mul
-        8'hc3: t = 47'b00_10_1_1110_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_100_x_111_0_1;    // recip
         8'hc6: t = 47'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_101_1_0;    // mulhu
         8'hc7: t = 47'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_101_1_0;    // mulhu
         8'hce: t = 47'b00_10_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_011_1_0;    // mulhs
@@ -269,6 +268,7 @@ module classify (
         8'hc0: t = 47'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx_0_1;
         8'hc1: t = 47'b01_11_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx_0_1;
         8'hc2: t = 47'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx_0_1;
+        8'hc3: t = 47'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx_0_1;
         8'hc4: t = 47'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx_0_1;
         8'hc5: t = 47'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx_0_1;
         8'hc8: t = 47'b01_10_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx_0_1;

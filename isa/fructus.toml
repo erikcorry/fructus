@@ -249,7 +249,6 @@ length_from_first_byte = true
 #       - unguessed or guessed wrong                 5
 #     jmp ra, call ra                                5
 #     mul, clz, popcount                             1 + extra_cycles = 2
-#     recip                                          1 + extra_cycles = 5
 #     a load of N accesses: ld8, ld                  N + 1
 #       - pop, ldm                                   N + 2
 #     a store of N accesses: st8, st, push, stm      N + 1
@@ -368,8 +367,7 @@ length_from_first_byte = true
 # register - clz and popcount's registered halfway so that they do not set the
 # clock every other instruction runs at, mul's because the DSP delivers its
 # product a cycle late.  The first cycle writes a wrong result, the second the
-# right one - see rtl/cpu.sv.  recip takes four: a table, two products and a
-# correction, each registered - see rtl/recip.sv.
+# right one - see rtl/cpu.sv.
 #
 # The simulator does not need a list of which instructions are which - the
 # semantics already say.  `if (...) pc = pc + off` is a conditional branch;
@@ -438,14 +436,8 @@ irq0         = 0xffd0
 # would cost rtl/cpu.sv a 16-bit register and a mux, for a report that can
 # say "just before" anyway.
 io_guard     = 0xffcc
-# IMPLEMENTED: a recip whose divisor's high word has its top bit clear.  A
-# divisor is normalised before it reaches recip, so the one that arrives
-# without that bit is almost always 0 - clz gave 16, a shift by 16 is a shift
-# by 0, and nothing moved it.  Taken as io_guard is: the recip runs out and
-# writes rd, its answer for ra | 0x8000, and the trap is entered where the
-# next instruction would have been, so lr is that instruction's address and
-# an rti carries on after the recip as if nothing had happened.
-divide_by_zero = 0xffc8
+# 0xffc8 was divide_by_zero, a recip of a divisor of 0, while recip was an
+# instruction.  Free.
 
 
 # =============================================================================
@@ -1487,21 +1479,22 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   1011_1001                mul   rd, ra, #imm10      3 bytes
 #   1011_1010 .. 1011_1101   -- free
 #   1011_111b                mul   rd, ra, rb          2 bytes
-#   1100_0000 .. 1100_0010   -- free
-#   1100_0011                recip rd, ra              2 bytes, byte 1 00aa_addd
-#   1100_0100 .. 1100_0101   -- free
+#   1100_0000 .. 1100_0101   -- free: 0xc3 was recip
 #   1100_011b                mulhu rd, ra, rb          2 bytes
 #   1100_1000 .. 1100_1101   -- free
 #   1100_111b                mulhs rd, ra, rb          2 bytes
 #   1101_0000 .. 1111_1111   -- free, 48 slots
 #
-#   0xb8 .. 0xcf IS -mmul, ALL OF IT: the four instructions that need the
+#   0xb8 .. 0xcf IS -mmul, ALL OF IT: the three instructions that need the
 #   SB_MAC16s, in one block above 0x80 and away from the base instruction set,
 #   since they are optional - a part without the DSPs leaves the block empty
 #   rather than holes in the rows the base set uses.  mul keeps the ALU
 #   group's columns in its row, +0 imm5, +1 imm10 and +6/+7 three registers;
-#   recip, which takes place beside the ALU rather than in it, is the imm3
-#   column at +b; mulhu and mulhs are the three-register columns that follow.
+#   mulhu and mulhs are the three-register columns that follow.  recip, the
+#   2/1 reciprocal of a divisor in five cycles, was the imm3 column at 0xc3:
+#   its unit took 204 cells, a block RAM and two SB_MAC16s, and
+#   libgcc/lib1funcs.s's __recip_mul makes the same answer with mul in
+#   about 80 cycles, a fifth of a 64-bit division's.
 #
 #   brset IS THE ONE OPCODE WHOSE LENGTH ITS ROW DOES NOT GIVE.  The three-byte
 #   row had eight places and nine three-byte opcodes wanting them, and brclr
@@ -1538,7 +1531,7 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #
 #   0111_1xxx                iseq / isset               see above
 #
-#   1011_1xxx .. 1100_1xxx   -mmul: mul, recip, mulhu, mulhs   see above
+#   1011_1xxx .. 1100_1xxx   -mmul: mul, mulhu, mulhs   see above
 #   1101_xxxx .. 1111_xxxx   otherwise free, 48 opcodes
 #
 # Note how cheap the one-byte two-register block is: `01dddsss` costs a quarter
@@ -2813,69 +2806,6 @@ extra_cycles = 1
   name     = "three_reg"
   encoding = "1100_111b  ccaa_addd"
   fields   = { b = "b:reg[0]", c = "b:reg[2:1]" }
-
-
-# --- recip -------------------------------------------------------------------
-# The reciprocal of a normalised divisor, Moller and Granlund's v, in sixteen
-# bits: with the divisor d = ra | 0x8000,
-#
-#     0xc3  recip rd, ra           2 bytes, byte 1 00aa_addd   5 cycles
-#
-#     rd = floor((2^32 - 1) / d) - 2^16
-#
-# as in "Improved division by invariant integers" (2011): the 2/1
-# reciprocal, and a 32 / 16 division is a mulhu by it.  ra's top bit is taken
-# as 1, whatever it is: a divisor is shifted until it is - and if it was not,
-# the instruction traps; see below.
-#
-# THE 3/2 RECIPROCAL IS SOFTWARE'S.  A 32-bit divisor's, which makes a
-# quotient estimate that errs only one way, is the 2/1 reciprocal of its high
-# word with the low word folded in by one product and two rare corrections -
-# the paper's Algorithm 6, in libgcc/lib1funcs.s.  It was an instruction,
-# recip rd, ra, rb, three cycles longer than this one: the third product and
-# its correction on 36-bit numbers took 480 logic cells, nearly a tenth of
-# the part, for about 20 cycles of a 32-bit division by a divisor of 65536
-# or more and 12 of a 64-bit one.
-#
-# A CLEAR TOP BIT TRAPS, to [cpu.vectors] divide_by_zero, after the recip has
-# written rd as if the bit were set.  A division normalises its divisor
-# first, so a high word without it is a divisor of 0.  The answer is still
-# the reciprocal of ra | 0x8000, so a handler that returns gets the junk a
-# division by zero always gave.
-#
-# IT IS THE imm3 COLUMN, WITH ITS IMMEDIATE PINNED AT 0.  Byte 1 is
-# 00aa_addd, the natural imm3 decoding at index 1, which is #0, and the
-# assembler writes the instruction without it.  The three other patterns, #2,
-# #4 and #8, would change the answer for 1, 18 and 19 of the 32768 high words,
-# and the unit does not read them: they are reserved, and what they do is
-# undefined.  So a divisor needs no register holding 0.
-#
-# A TABLE, A PRODUCT, A SECOND PRODUCT AND A CORRECTION make the answer, in
-# rtl/recip.sv with a block RAM and two SB_MAC16s of its own: v is first read
-# as A - S*lo >> 12 from 128 pairs indexed by d[14:8], which is within three
-# below, and then corrected by comparing beta^2 - 1 - (beta + v) * d with d,
-# 2d and 3d.  To everything but those it is mul: op 14, with an lsel of 111
-# that zeroes every half the SB_MAC16s beside the ALU make, and its own answer
-# OR'd in.
-
-[[insn]]
-mnemonic = "recip"
-summary  = "rd = floor((2^32 - 1) / (ra | 0x8000)) - 2^16"
-operands = [
-  { name = "d",   type = "reg" },
-  { name = "a",   type = "reg" },
-  { name = "imm", type = "int16" },
-]
-syntax   = "{d}, {a}"
-semantics = "R[d] = recip(R[a], imm)"
-extra_cycles = 4
-
-  # Only #0, and the assembler does not write it: byte 1's top two bits are
-  # imm3's index bits 2:1, pinned at 00.
-  [[insn.form]]
-  name     = "reg_reg_zero"
-  encoding = "1100_0011  00aa_addd"
-  fix      = { imm = 0 }
 
 
 # --- br ---------------------------------------------------------------------

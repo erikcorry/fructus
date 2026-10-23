@@ -157,9 +157,7 @@ export const ALU_OPS = [
   // so these two codes, like the fast group's, never reach rtl/alu.sv.
   { code: 15, name: 'mulhu', does: 'lhs * rhs, high half, unsigned' },
   { code: 16, name: 'mulhs', does: 'lhs * rhs, high half, signed' },
-  // And so is the reciprocal, whose answer rtl/recip.sv ORs into the product
-  // with all three halves zeroed.
-  { code: 17, name: 'recip', does: 'floor((2^32 - 1) / (lhs | 0x8000)) - 2^16, from rtl/recip.sv' },
+  // 17 was recip, whose answer its own unit ORed into the product.
   // rsb's borrow, lhs > rhs unsigned: op 1 to the ALU too, gen-classify.js
   // folding it in with an `lsel` that picks the borrow over the difference.
   { code: 18, name: 'ishi',  does: 'lhs > rhs, unsigned, as 0 or 1: the borrow out of rhs - lhs' },
@@ -168,7 +166,7 @@ export const ALU_OPS = [
 // The operations whose result is registered, so that an instruction using one
 // must declare `extra_cycles` and nothing else may: the byte-serial core's ucode.sv gives exactly
 // those the SLOW step.
-export const ALU_REGISTERED = new Set(['slow', 'mul', 'mulhu', 'mulhs', 'recip']);
+export const ALU_REGISTERED = new Set(['slow', 'mul', 'mulhu', 'mulhs']);
 
 // --- which operation each instruction needs, from its semantics ---------------
 export const ALU_RULES = [
@@ -191,7 +189,6 @@ export const ALU_RULES = [
   [/^R\[d\] = (sxt8|clz|bitrev|popcount)\(R\[a\]\)$/, 'unary'],
   [/^R\[d\] = R\[a\] \* (R\[b\]|imm)$/,                    'mul'],
   [/^R\[d\] = (mulhu|mulhs)\(R\[a\], R\[b\]\)$/,             (m) => m[1]],
-  [/^R\[d\] = recip\(R\[a\], (R\[b\]|imm)\)$/,              'recip'],
   [/^R\[d\] = R\[a\] == (R\[b\]|\(imm & 0xffff\))$/,        'iseq'],
   [/^R\[d\] = R\[a\] > R\[b\]$/,                         'ishi'],
   [/^R\[d\] = \(\((R\[b\]|imm) & 0xff\) << 8\) \| \(R\[a\] & 0xff\)$/, 'movhi'],
@@ -297,8 +294,7 @@ export function unaryLayout() {
   const ops = [];
   for (const insn of spec.insn)
     for (const form of insn.form ?? []) {
-      // recip rd, ra has the shape too, its imm3 index pinned at #0, but
-      // reads the immediate as an operand: only R[d] = f(R[a]) is unary.
+      // Only R[d] = f(R[a]) is unary.
       if (!/^R\[d\] = \w+\(R\[a\]\)$/.test(insn.semantics ?? '')) continue;
       const bits = (form.encoding ?? '').replace(/[\s_]/g, '');
       const m = /^([01]{8})([01]{2})a{3}d{3}$/.exec(bits);

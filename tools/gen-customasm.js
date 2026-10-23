@@ -227,7 +227,7 @@ function rulesFor(insn, form, formIdx, swapped = false) {
     const et = types[encType.get(op.name)];    // encoded type, if encoded
 
     // ---- fixed by the form -------------------------------------------------
-    // A fixed operand the syntax does not write - `recip rd, ra', whose #0 is
+    // A fixed operand the syntax does not write - as recip rd, ra's #0 was
     // pinned - has nothing to check: its bits are the form's literal ones.
     if (op.name in fix && !writes(insn, op.name)) {
       if (encType.has(op.name)) throw new Error(`${insn.mnemonic}: ${op.name} is unwritten but has a field`);

@@ -73,7 +73,7 @@ function rowsFor(insn, form, swapped, first = null) {
   const slots = [], anchor = new Map(), ref = new Map();
   for (const op of ops) {
     const lt = t[op.type];
-    // A fixed operand the syntax does not write - `recip rd, ra', whose #0 is
+    // A fixed operand the syntax does not write - as recip rd, ra's #0 was
     // pinned - is not a slot: gas has nothing to parse, and its bits are the
     // form's literal ones.
     if (op.name in fix && !new RegExp(`\\{${op.name}(\\.\\w+)?\\}`).test(insn.syntax ?? '')) {

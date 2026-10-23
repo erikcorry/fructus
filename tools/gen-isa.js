@@ -84,8 +84,6 @@ if (io.usb_status !== io.usb_data + 2 || (io.usb_data ^ io.console) !== 0x10)
   fail('[cpu.io]: usb_status must follow usb_data, which must be console with bit 4 flipped');
 const ioGuard = spec.cpu.vectors.io_guard;
 if (typeof ioGuard !== 'number') fail('[cpu.vectors] has no io_guard');
-const divZero = spec.cpu.vectors.divide_by_zero;
-if (typeof divZero !== 'number') fail('[cpu.vectors] has no divide_by_zero');
 if ((sp ^ lr) !== 1 || (sp & 1) !== 0)
   fail(`sp is r${sp} and lr r${lr}: rtl/cpu.sv's kreg names them as {${sp >> 1}, which}, so they must be an even register and the one after it`);
 
@@ -131,9 +129,6 @@ process.stdout.write(`// =======================================================
 
 // [cpu.vectors] io_guard: where a load or store that touches a guard goes.
 \`define FRUCTUS_VECTOR_IO_GUARD 16'h${hex(ioGuard, 4)}
-
-// [cpu.vectors] divide_by_zero: where a recip whose ra has bit 15 clear goes.
-\`define FRUCTUS_VECTOR_DIVIDE_BY_ZERO 16'h${hex(divZero, 4)}
 
 // [cpu.io]: the page, whose first and last 16 bytes are its guards.
 \`define FRUCTUS_IO_PAGE 8'h${hex(io.page >> 8, 2)}

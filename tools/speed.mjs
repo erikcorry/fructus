@@ -49,7 +49,7 @@ const JOBS = args.includes('--jobs') ? Number(args[args.indexOf('--jobs') + 1]) 
 const SEEDS = Number(args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--jobs') ?? 16);
 const OUT = SYSTEM && (UART || USB) ? `build/speed${UART ? '-uart' : ''}${USB ? '-usb' : ''}`
   : SYSTEM ? 'build/speed-system' : 'build/speed';
-const MODULES = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare', 'recip',
+const MODULES = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare',
   ...(UART ? ['uart'] : []), ...(USB ? ['usb'] : []),
   ...(SYSTEM ? ['spiboot', 'video/video', 'video/timing', 'video/background', 'video/foreground', 'video/sprites'] : [])];
 
