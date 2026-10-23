@@ -112,7 +112,9 @@
 // edges ago, where `mem_rdata` has the one sampled at the last.  Each costs a
 // cycle more, however many bytes it moves.  rtl/ucode.sv holds a late copy
 // of their routines, at the entry with its top bit set, and decode sets that
-// bit from `blit` and predecode's `ulate` column.
+// bit from `blit` and predecode's `ulate` column.  The mode is sampled once,
+// in the cycle the load dispatches: the same sample says whether dispatch
+// stops behind it.
 //
 // ONLY A DATA BYTE CAN COME FROM THE LATE PORT.  Instruction bytes reach
 // the instruction buffer from `mem_rdata` alone, and a load's bytes reach
@@ -1067,7 +1069,12 @@ module cpu (
         {d_ext, d_urs} <= {c_ext, c_urs};
         d_lsel  <= c_lsel;
 `ifdef FRUCTUS_BLIT
-        d_ulate <= c_ulate;
+        // The mode as the load dispatches, which `stop` above took too.  A
+        // second sample in decode, a cycle on, could see a mode write land
+        // in between: a late routine then ran with the next instruction
+        // dispatched behind it, which wrote that one's register with the
+        // pointer and never wrote the load's.
+        d_ulate <= c_ulate & blit;
 `endif
         d_pcsrc <= c_pcsrc;
         d_halt  <= c_halt;
@@ -1261,13 +1268,13 @@ module cpu (
         {e_mstep, e_l0, e_l1, e_l2, e_ptr} <= {mstep_d, ml0_d, ml1_d, ml2_d, an};
 `ifdef FRUCTUS_BLIT
         // BLIT MODE CHOOSES THE LATE COPY HERE, flops into flops: the entry's
-        // top bit, and no release in the ALU cycle.  The mode is sampled in
-        // the load's decode cycle.  The late ld8 releases in its step 1
+        // top bit, and no release in the ALU cycle.  The mode was sampled as
+        // the load dispatched, into d_ulate.  The late ld8 releases in its step 1
         // instead: released in its ALU cycle, the next instruction would
         // reach decode a step before the register it may read is written.
-        e_uent  <= d_uent | {blit & d_ulate, 4'd0};
+        e_uent  <= d_uent | {d_ulate, 4'd0};
         e_useq  <= keep & d_useq;
-        e_urs   <= d_urs & ~(blit & d_ulate);
+        e_urs   <= d_urs & ~d_ulate;
 `else
         e_uent  <= d_uent;
         e_useq  <= keep & d_useq;

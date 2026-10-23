@@ -15,7 +15,9 @@
 // WHAT THE PROGRAM DOES, and what is checked afterwards in the four SPRAMs:
 //
 //   - in processor mode, a store above 0x8000 lands in ram_hi and not a buffer;
-//   - blit mode is switched on and a load follows AT ONCE, with no padding;
+//   - blit mode is switched on and a load follows as soon as it may: a
+//     load sees a mode write three instructions on, and nearer it sees the
+//     old mode or the new - see THE MODE'S EDGE below;
 //   - ld and ld8 from the back buffer, at even and odd addresses;
 //   - st and st8 into it, each read back by the very next instruction;
 //   - ldm, reading the back buffer, and push and pop with the stack below
@@ -75,6 +77,15 @@ const hiC = (w) => (0xc000 + w * 3) & 0xffff;   // ram_hi
 const hex = (f) => Array.from({ length: WORDS }, (_, w) => f(w).toString(16).padStart(4, '0')).join('\n') + '\n';
 
 const RESULT = 0x6000;
+// THE MODE'S EDGE.  A load decides whether it is late once, as it dispatches,
+// so one that dispatches as a mode write lands sees the old mode or the new,
+// whole - and the instruction behind it runs as it should either way.  Once
+// that was sampled twice, a cycle apart: a late routine ran with dispatch
+// not stopped, the load's register was never written and the next
+// instruction's was written with the pointer.  So a load 0 .. 3
+// instructions after blit mode is set, each at both parities, and from three
+// on it must see the new mode.
+const EDGE = [0, 1, 2, 3].flatMap((k) => [0, 1].map((pad) => ({ k, pad })));
 const LINES = 8;          // the visible lines of the short frame
 const src = `
         mov  r1, #0x498            ; vertical timing, while the first front porch
@@ -107,8 +118,10 @@ const src = `
         mov  r1, #0x480
         mov  r0, #2
         st8  r0, [r1]              ; blit on
+        nop                        ; a load sees the mode three instructions on
+        nop
         mov  r2, #0x8010
-        ld   r3, [r2]              ; at once: A's word 8
+        ld   r3, [r2]              ; A's word 8
         mov  r4, #${RESULT}
         st   r3, [r4, #0]
         ld8  r3, [r2, #3]          ; 0x8013, the high byte of word 9
@@ -161,6 +174,8 @@ irqw:   ld   r0, [r4, #40]         ; until the handler has run twice
         mov  r1, #0x480
         mov  r0, #3
         st8  r0, [r1]              ; writethru
+        nop
+        nop
         mov  r2, #0x8200
         ld   r3, [r2, #2]          ; ram_hi's word 257, not A's
         st   r3, [r4, #20]
@@ -247,6 +262,20 @@ vb2:    ld   r0, [r1, #4]          ; and until the first visible line
         st   r3, [r4, #60]
         mov  r0, #0
         st8  r0, [r1]
+${EDGE.map(({ k, pad }, i) => `
+        mov  r4, #${RESULT + 128 + 4 * i}
+        mov  r0, #2${pad ? '\n        nop' : ''}
+        st8  r0, [r1]              ; blit on${'\n        nop'.repeat(k)}
+        mov  r2, #0x8010
+        ld   r3, [r2]              ; A's word 8, or ram_hi's if too near
+        mov  r5, #0x1234           ; the instruction behind the load
+        st   r3, [r4, #0]
+        st   r5, [r4, #2]
+        mov  r0, #0
+        st8  r0, [r1]
+        nop
+        nop
+        nop`).join('')}
         halt
 
 handler:                           ; brk and the interrupt line, in blit mode
@@ -329,6 +358,12 @@ const words = [
   ['fbb', 0x280, 0x6161, 'the blit-mode st landed in B'],
   ['fba', 0x280, fbA(0x280), 'and not in A'],
   ['hi', 0x280, hiC(0x280), 'nor in ram_hi'],
+  ...EDGE.flatMap(({ k, pad }, i) => [
+    ['lo', ((RESULT + 128) >> 1) + 2 * i, k >= 2 ? [fbA(8)] : [fbA(8), hiC(8)],
+     `the mode's edge: a load ${k + 1} instructions after the write${pad ? ', other parity' : ''}`],
+    ['lo', ((RESULT + 128) >> 1) + 2 * i + 1, 0x1234,
+     `the mode's edge: the instruction behind that load${pad ? ', other parity' : ''}`],
+  ]),
   ['fbb', 768, 0x6262, 'the writethru st reached B'],
   ['hi', 768, hiC(768), 'and not ram_hi'],
   ['fba', 768, fbA(768), 'and not A'],
@@ -389,8 +424,9 @@ if (!end || end[1] !== '1' || end[2] !== '0') {
 }
 for (const m of out.matchAll(/^W (\d+) ([0-9a-fx]+)/gm)) {
   const [mem, w, want, what] = words[+m[1]];
-  if (parseInt(m[2], 16) !== want) {
-    if (bad++ < 8) console.log(`  MISMATCH ${what}: ${mem} word ${w} is ${m[2]}, want ${want.toString(16).padStart(4, '0')}`);
+  if (![want].flat().includes(parseInt(m[2], 16))) {
+    const ok = [want].flat().map((v) => v.toString(16).padStart(4, '0')).join(' or ');
+    if (bad++ < 8) console.log(`  MISMATCH ${what}: ${mem} word ${w} is ${m[2]}, want ${ok}`);
   }
 }
 // THE COPY.  Every word of B is its old self or A's, since B is written only
