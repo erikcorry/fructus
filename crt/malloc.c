@@ -161,11 +161,21 @@ fix_left_size (header_t *right, header_t *new_left)
 
 /* ---- buckets ------------------------------------------------------------ */
 
+/* A bucket and the size it holds.  RETURNED, NOT WRITTEN THROUGH A POINTER:
+   two words come back in r0 and r1, where a pointer would be to the
+   caller's stack, and a store and a load on it.  */
+typedef struct
+{
+  int index;
+  unsigned rounded_up;
+} bucket_t;
+
 /* Operates in sizes that do not include the header.  ADJUST and INCREMENT are
-   what separate rounding up from rounding down; see the two callers.  */
-static int
-size_to_index_helper (unsigned size, unsigned *rounded_up_out,
-		      int adjust, int increment)
+   what separate rounding up from rounding down; see the two callers.
+   ALWAYS INLINED, which -Os would not do: each caller's constants fold, and
+   there is no call.  1.4% of espresso's cycles, and 16 bytes.  */
+static inline __attribute__ ((always_inline)) bucket_t
+size_to_index_helper (unsigned size, int adjust, int increment)
 {
   /* The 2-spaced buckets, up to 32.  Nothing smaller than a free block can
      ever be handed back, so that is the floor.  */
@@ -173,8 +183,7 @@ size_to_index_helper (unsigned size, unsigned *rounded_up_out,
     {
       if (size < MIN_PAYLOAD)
 	size = MIN_PAYLOAD;
-      *rounded_up_out = size;
-      return (size >> 1) - 1;
+      return (bucket_t) { (size >> 1) - 1, size };
     }
 
   /* Going up to the next bucket would also step past a size that IS one, so
@@ -187,23 +196,22 @@ size_to_index_helper (unsigned size, unsigned *rounded_up_out,
   unsigned column = (size >> row) & 7;
   int row_column = (row << 3) | column;
   row_column += increment;
-  *rounded_up_out = (8 + (row_column & 7)) << (row_column >> 3);
   /* Row 2 column 0 is size 32, which is also the last of the 2-spaced
      buckets, index 15: the two numberings meet there.  */
-  return row_column - 1;
+  return (bucket_t) { row_column - 1,
+		      (8 + (row_column & 7)) << (row_column >> 3) };
 }
 
-static int
-size_to_index_allocating (unsigned size, unsigned *rounded_up_out)
+static bucket_t
+size_to_index_allocating (unsigned size)
 {
-  return size_to_index_helper ((size + 1) & ~1, rounded_up_out, -2, 1);
+  return size_to_index_helper ((size + 1) & ~1, -2, 1);
 }
 
 static int
 size_to_index_freeing (unsigned size)
 {
-  unsigned dummy;
-  return size_to_index_helper (size, &dummy, 0, 0);
+  return size_to_index_helper (size, 0, 0).index;
 }
 
 /* The first bucket at or above INDEX with anything in it, or -1.  The bits
@@ -303,14 +311,16 @@ unlink_free (heap_t *heap, free_t *free_area, int bucket)
   heap->remaining -= free_area->header.size;
   free_t *next = free_area->next;
   free_t *prev = free_area->prev;
-  if (heap->free_lists[bucket] == free_area)
+  /* The head of its list is the block with no prev: create_free_area makes
+     every new head so.  */
+  if (prev != NULL)
+    prev->next = next;
+  else
     {
       heap->free_lists[bucket] = next;
       if (next == NULL)
 	heap->free_list_bits[bucket >> 4] &= ~(1u << (15 - (bucket & 15)));
     }
-  if (prev != NULL)
-    prev->next = next;
   if (next != NULL)
     next->prev = prev;
 }
@@ -362,12 +372,14 @@ free_memory (heap_t *heap, header_t *header, unsigned left_size,
     }
 }
 
-static void *
+/* Always inlined into malloc, its only caller, which -Os leaves out of line:
+   a call and a return fewer, and smaller.  */
+static inline __attribute__ ((always_inline)) void *
 cmpct_alloc (heap_t *heap, unsigned size)
 {
-  unsigned rounded_up;
-  int start_bucket = size_to_index_allocating (size, &rounded_up);
-  rounded_up += sizeof (header_t);
+  bucket_t start = size_to_index_allocating (size);
+  int start_bucket = start.index;
+  unsigned rounded_up = start.rounded_up + sizeof (header_t);
 
   int bucket = find_nonempty_bucket (heap, start_bucket);
   if (bucket == -1)
@@ -433,23 +445,11 @@ allocation_size (heap_t *heap, void *p)
   return ((header_t *) p)[-1].size - sizeof (header_t);
 }
 
-void
-free (void *p)
+/* free's for a block of a page shared with others, merging it with any free
+   neighbour.  */
+static void
+free_small (heap_t *heap, header_t *header)
 {
-  if (p == NULL)
-    return;
-  heap_t *heap = &the_heap;
-  /* A small allocation's payload is four bytes into its page at least, so a
-     page-aligned pointer is a page allocation and nothing else.  */
-  if (((unsigned) p & (PAGE_SIZE - 1)) == 0)
-    {
-      page_free (heap, p);
-      return;
-    }
-
-  header_t *header = (header_t *) p - 1;
-  if (IS_FREE (header))
-    abort ();			/* double free */
   unsigned size = header->size;
   header_t *left = left_header (header);
   header_t *right = right_header (header);
@@ -477,6 +477,30 @@ free (void *p)
     }
   else
     free_memory (heap, header, header->left_size, size);
+}
+
+void
+free (void *p)
+{
+  if (p == NULL)
+    return;
+  heap_t *heap = &the_heap;
+  /* A small allocation's payload is four bytes into its page at least, so a
+     page-aligned pointer is a page allocation and nothing else.  The common
+     cases come FIRST, as the fall-throughs, here and for the double free: a
+     branch the predictor has no entry for is guessed not taken, and -Os
+     lays the blocks out in the source's order whatever __builtin_expect
+     says.  */
+  if (((unsigned) p & (PAGE_SIZE - 1)) != 0)
+    {
+      header_t *header = (header_t *) p - 1;
+      if (!IS_FREE (header))
+	free_small (heap, header);
+      else
+	abort ();		/* double free */
+    }
+  else
+    page_free (heap, p);
 }
 
 void *
