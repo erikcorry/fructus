@@ -20,9 +20,11 @@
    would have that undone by a fructus_io_load it interrupted, which puts
    back the mode it read before the interrupt.
 
-   The simulator, tools/sim.js with tools/gpu.js, reads the registers
-   whatever the mode, so a load without the window works there and not on
-   the board.  */
+   PUTTING THE MODE BACK TAKES AS LONG: a load in the two instructions after
+   still runs late, and so reads the hardware's word.
+
+   The simulator, tools/gpu.js and tools/fcc-run.mjs, is as strict: a load
+   outside the window, or too soon inside it, reads the memory beneath.  */
 #ifndef _FRUCTUS_IO_H
 #define _FRUCTUS_IO_H
 

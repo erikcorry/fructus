@@ -938,7 +938,10 @@ change by polling, without an interrupt.
 `tools/fcc-run.mjs` runs a program with the display attached
 (`tools/gpu.js`): both frame buffers, the registers above, and the mode's
 routing of data above 0x8000. `crt/include/fructus/display.h` names it all
-for C, and `examples/display.c` uses it.
+for C, and `examples/display.c` uses it. It reads the registers the hardware changes
+only in the late bit's window, a write to the mode seen from the third
+instruction after, as the board does, so a program that forgets
+`fructus_io_load` fails there too.
 
 ```
 tools/fcc -O2 examples/display.c -o build/display

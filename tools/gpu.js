@@ -39,6 +39,16 @@
 // vertical front porch, as rtl/video/timing.sv comes up; a write to a timing
 // register starts a new frame there and then.
 //
+// AND A LOAD SEES THE MODE AS THE HARDWARE'S DOES: a write to it from the
+// third instruction after, so `modes' keeps each write with the instruction
+// it was made by.  The words the hardware changes - the status and the
+// arrays' three addresses here, the UART's in tools/fcc-run.mjs - are its
+// only while the late bit, bit 3, is in effect, or BLIT, which sets it; a
+// load outside that window reads the memory beneath, what was last stored
+// there.  So a program that forgets crt/include/fructus/io.h's window fails
+// here as it would on the board.  BLIT's loads above 0x8000 follow the same
+// mode; stores take a write at once.
+//
 // NOT MODELLED: blit mode's trap on a push or pop above 0x8000, and the
 // interrupt line.  Instruction fetch never sees the frame buffers, as on the
 // hardware: tools/sim.js fetches from the machine's memory, not through peek.
@@ -57,6 +67,8 @@ export class Gpu {
     // tools/fpga-system.sv - and the two halves that follow it in vertical
     // sync: `onA`, the display reads A, and `copyOn`.
     this.wantA = this.copy = this.blit = this.fbSt = false;
+    // The mode a load sees: each write, with m.count as it was made.
+    this.modes = [{ at: -Infinity, late: false, blit: false, wantA: false }];
     this.onA = this.copyOn = false;
     this.font = 0x6000;
     this.palette = new Uint8Array(32);
@@ -76,8 +88,12 @@ export class Gpu {
     const wr8 = m.wr8.bind(m), wr16 = m.wr16.bind(m);
     m.peek = (a) => {
       a &= 0xffff;
-      if (a >= 0x8000 && this.blit) { this.sync(); return this.fb[this.wantA ? 1 : 0][a & 0x7fff]; }
-      if ((a & ~0xff) === IO) { const r = this.readReg(a & 0xfe); if (r !== null) return (r >> ((a & 1) * 8)) & 0xff; }
+      const seen = this.loadMode();
+      if (a >= 0x8000 && seen.blit) { this.sync(); return this.fb[seen.wantA ? 1 : 0][a & 0x7fff]; }
+      if ((a & ~0xff) === IO && seen.late) {
+        const r = this.readReg(a & 0xfe);
+        if (r !== null) return (r >> ((a & 1) * 8)) & 0xff;
+      }
       return peek(a);
     };
     m.poke = (a, v) => {
@@ -112,6 +128,17 @@ export class Gpu {
     this.fb[toA ? 0 : 1][a & 0x7fff] = v & 0xff;
   }
 
+  // The mode the instruction now running sees, if it loads: the last write
+  // made three or more instructions ago.
+  loadMode() {
+    const now = this.m.count, ms = this.modes;
+    for (let i = ms.length - 1; i > 0; i--) if (ms[i].at + 3 <= now) return ms[i];
+    return ms[0];
+  }
+
+  // Whether a load now reads the words the hardware changes.
+  late() { return this.loadMode().late; }
+
   // The four words the hardware changes; anything else reads as memory.
   readReg(off) {
     switch (off) {
@@ -133,6 +160,10 @@ export class Gpu {
       this.copy = k === 1 && this.wantA;       // COPY runs only from A to B
       this.blit = k === 2;
       this.fbSt = k >= 2;
+      this.modes.push({ at: this.m.count, late: !!(w & 8) || this.blit, blit: this.blit, wantA: this.wantA });
+      // Older writes than the last in effect can never be seen again.
+      const seen = this.loadMode();
+      this.modes = [seen, ...this.modes.filter((e) => e.at > seen.at)];
       this.sync();                             // in vertical sync it is at once
     } else if (off === 0x82) { this.font = w & 0x7fff; this.dirty = true; }
     else if (off >= 0x90 && off <= 0x9e) {
