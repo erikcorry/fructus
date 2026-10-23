@@ -3429,6 +3429,18 @@ semantics = "base = sp; R[a] = M16[base]; R[b] = M16[base + 2]; R[c] = M16[base 
 # of one register was a misnomer anyway.  Its slots, 0x99 and 0xa1 now, are
 # free.
 #
+# NOR IS THERE AN ldp, and it was tried: `ldp rd, rb, [ra]`, any two registers
+# from [ra] and [ra + 2] through any pointer, left as it was, in two opcodes,
+# with a GCC peephole joining the split halves of a 32-bit load.  It scored
+# FructusMark -Os -mmul 127.5 -> 128.3 in the simulator, before any RTL, and
+# a pointer taken from the instruction rather than the predecode table is a
+# mux on the address path that could cost as much in MHz and cells.  The
+# post-increment kind - these two through any register - would have paid
+# 0.2%: most adjacent pairs are 32-bit values read, changed and written back,
+# so the pointer is still wanted.  And the commonest of those, a counter's
+# x++, does better without one: GCC leaves its high word in memory unless the
+# low word carries, 13 cycles to 8, which an ldp would only have made 11.
+#
 # THE ORDER IS THE SAME AS push's: the first register named is stored first, so
 # with a pointer that counts up it lands at the LOWEST address.  A save through
 # stm and a reload through ldm therefore take the SAME register list, where a

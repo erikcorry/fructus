@@ -6,6 +6,8 @@
 #   tests/fructusmark/run.sh             the score: -Os -mmul, the standard
 #   tests/fructusmark/run.sh -O2         the same programs at -O2
 #   tests/fructusmark/run.sh --no-mul    without the multiply and reciprocal
+#   tests/fructusmark/run.sh -mno-X      any -m option, to every compile, so a
+#                                        compiler change can be scored without it
 #   tests/fructusmark/run.sh --baseline  ... and make this run the baseline
 #   tests/fructusmark/run.sh -j 4        four benchmarks at once, not eight
 #
@@ -42,21 +44,24 @@ root=$(cd "$here/../.." && pwd)
 opt=-Os
 arch=-mmul
 write=
+extra=
 jobs=8
 while [ $# -gt 0 ]; do
   case $1 in
     -O*) opt=$1 ;;
     --no-mul) arch="" ;;
+    -m*) extra="$extra $1" ;;
     --baseline) write=1 ;;
     -j) jobs=$2; shift ;;
     -j*) jobs=${1#-j} ;;
-    *) echo "usage: tests/fructusmark/run.sh [-O2] [--no-mul] [--baseline] [-j N]" >&2; exit 2 ;;
+    *) echo "usage: tests/fructusmark/run.sh [-O2] [--no-mul] [-m...] [--baseline] [-j N]" >&2; exit 2 ;;
   esac
   shift
 done
 base=$here/baseline.txt
 out=$root/build/fructusmark
-run=$out/run$opt$arch
+arch="$arch$extra"
+run=$out/run$opt${arch// /}
 rm -rf "$run"
 mkdir -p "$run"
 res=$run/results.txt

@@ -9,6 +9,7 @@ tests/fructusmark/run.sh                # the score, -Os -mmul: a minute and a h
 tests/fructusmark/run.sh -O2            # the same programs at -O2
 tests/fructusmark/run.sh --no-mul       # on a core without mul and the reciprocal
 tests/fructusmark/run.sh -O2 --no-mul   # both
+tests/fructusmark/run.sh -mno-inc-skip  # any -m option goes to every compile
 just fructusmark                        # the same as the first
 ```
 
