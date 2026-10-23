@@ -11,12 +11,16 @@
    fructus_uart_ready says nothing has arrived - unless the program wrote the
    status word itself.
 
+   ITS STATUS AND THE BYTE RECEIVED ARE LOADED THROUGH fructus/io.h's window,
+   and only so: a plain load of __uart_status is the word last stored there.
+
    tools/fcc-run.mjs has the UART too: what it sends is printed, and
    `--input FILE' is what it receives, a byte as soon as the last is taken.  */
 #ifndef _FRUCTUS_UART_H
 #define _FRUCTUS_UART_H
 
 #include <stdint.h>
+#include <fructus/io.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -80,7 +84,7 @@ fructus_uart_divisor (uint16_t value)
 static inline void
 fructus_uart_putc (uint8_t c)
 {
-  while (__uart_status & FRUCTUS_UART_BUSY)
+  while (fructus_io_load (&__uart_status) & FRUCTUS_UART_BUSY)
     ;
   __console = c;
 }
@@ -88,7 +92,7 @@ fructus_uart_putc (uint8_t c)
 static inline int
 fructus_uart_ready (void)
 {
-  return (__uart_status & FRUCTUS_UART_RECEIVED) != 0;
+  return (fructus_io_load (&__uart_status) & FRUCTUS_UART_RECEIVED) != 0;
 }
 
 /* The byte received, once fructus_uart_ready says there is one.  Reading it
@@ -98,7 +102,7 @@ fructus_uart_getc (void)
 {
   while (!fructus_uart_ready ())
     ;
-  return __console;
+  return (uint8_t) fructus_io_load (&__console);
 }
 
 #ifdef __cplusplus

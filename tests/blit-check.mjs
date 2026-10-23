@@ -36,6 +36,9 @@
 //     program sets up: every word of B must afterwards be its old self or A's,
 //     and the line tables of every visible line - which the display must have
 //     fetched - must be A's;
+//   - the registers the hardware changes, read back in the window of the
+//     late bit alone, which leaves the memory map as it is; and outside it,
+//     a load of one is ram_lo's copy, what was last written there;
 //   - then the other way about, A shown and B the processor's: a blit-mode
 //     store before the next vertical sync is dropped, since B is still being
 //     copied into; after it, a load from B finds the copy of A's word, and a
@@ -226,7 +229,14 @@ wait2:  add  r3, r3, #-1
         mov  r3, #3000
 wait3:  add  r3, r3, #-1
         br   ne, r3, #0, wait3
-        mov  r1, #0x480            ; the registers, read back
+        mov  r1, #0x480            ; the registers, read back, in a window of
+        mov  r0, #8                ; the late bit alone
+        st8  r0, [r1]
+        nop                        ; a load sees the mode three instructions on
+        nop
+        mov  r2, #0x8000
+        ld   r3, [r2, #2]          ; late, unmapped: ram_hi's word 1
+        st   r3, [r4, #62]
         mov  r0, #0x3fe
         st   r0, [r1, #0x24]       ; the patterns' address, 0x3fe
         st   r0, [r1, #0x26]       ; and three pattern words: 0x3fe, 0x3ff, 0
@@ -252,16 +262,21 @@ vb1:    ld   r0, [r1, #4]          ; status, until vertical blank
 vb2:    ld   r0, [r1, #4]          ; and until the first visible line
         brset r0, #0x8000, vb2
         st   r0, [r4, #54]         ; line 0, not blank
-        ld   r3, [r1, #0]          ; the mode, through ram_lo: 0
+        ld   r3, [r1, #0]          ; the mode, through ram_lo: 8
         st   r3, [r4, #56]
         mov  r0, #2
         st8  r0, [r1]              ; blit on: loads take the late port
         ld   r3, [r1, #0x28]       ; still 6
         st   r3, [r4, #58]
-        ld   r3, [r1, #0]          ; the mode, 2, through lo_hold
+        ld   r3, [r1, #0]          ; the mode, 2, through the late port
         st   r3, [r4, #60]
         mov  r0, #0
         st8  r0, [r1]
+        nop                        ; a load sees the mode three instructions on
+        nop
+        nop
+        ld   r3, [r1, #0x28]       ; outside the window: ram_lo's copy, 5
+        st   r3, [r4, #64]
 ${EDGE.map(({ k, pad }, i) => `
         mov  r4, #${RESULT + 128 + 4 * i}
         mov  r0, #2${pad ? '\n        nop' : ''}
@@ -340,9 +355,11 @@ const results = [
   ['the attributes\' address, read by ld8',                   6],
   ['status: vertical blank seen',                              0x8000],
   ['status: the first visible line, line 0',                   0],
-  ['the mode reads back from ram_lo',                          0],
+  ['the mode reads back from ram_lo',                          8],
   ['blit mode: the attributes\' address, by the late port',   6],
   ['blit mode: the mode, from ram_lo by the late port',        2],
+  ['late bit alone: a load above 0x8000 is ram_hi\'s',        hiC(1)],
+  ['outside the window: the attributes\' address is ram_lo\'s copy', 5],
 ];
 const words = [
   ...results.map(([what, v], k) => ['lo', (RESULT >> 1) + k, v, what]),

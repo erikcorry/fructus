@@ -664,7 +664,10 @@ hardware as it does on the simulator: a byte stored is sent, and a load takes
 the byte received. The status word at 0x0422 has bit 0 `busy`, bit 1
 `received`, bit 2 `overrun`, bit 4 the enable of an interrupt on `received`
 and bit 5 of one while not `busy`, for a handler feeding a buffer out; both
-are ORed with the interrupt pin. A status of zero is idle, so
+are ORed with the interrupt pin. Its status and data, like the USB port's
+and the display's status, reach a load only while the mode's late bit is
+set (`docs/vga.md`, "Registers"); `crt/include/fructus/io.h` opens that
+window around a load, and the headers read through it. A status of zero is idle, so
 on a machine without the UART, where the word is plain memory, `putchar`'s
 wait for `busy` to clear never waits. `crt/include/fructus/uart.h` has
 `fructus_uart_getc()` and the rest; `tools/fcc-run.mjs --input FILE` is what

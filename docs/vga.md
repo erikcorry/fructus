@@ -433,8 +433,9 @@ rules:
   SPRAM to an operand flop instead of seven - and the system placed at 24.4
   MHz, below the pixel clock.
 
-**The mode** is the control register at 0x0480. Bit 2 says which buffer the
-display shows, and bits 1:0 what happens to the other one:
+**The mode** is the control register at 0x0480. Bit 3 is the late bit (see
+[Registers](#registers)), bit 2 says which buffer the display shows, and bits
+1:0 what happens to the other one:
 
 | bits 1:0 | the buffer not shown |
 |---|---|
@@ -888,30 +889,41 @@ address register and a data register: every write to the data register
 writes the entry the address names and increments the address, which wraps
 at the array's size. `tools/fpga-system.sv` implements them. The page is
 written through into RAM, so a register reads back as last written, and a
-CPU write reaches the registers a cycle after the store. The four words the
-hardware changes have a read path of their own: status and the three array
-addresses. An array's data register reads as the word last written to it
-and does not move the address, because the block RAMs' read ports are the
-display's.
+CPU write reaches the registers a cycle after the store. An array's data
+register reads as the word last written to it and does not move the
+address, because the block RAMs' read ports are the display's.
 
-THE READ PATH IS ON THE CPU'S `mem_data`, a port only its loads read. The
-same choice in front of `mem_rdata`, which decode reads as well, put a LUT
-level on the SPRAM-to-decode path and cost the system 1.8 MHz, 27.35 to
-25.58 over 16 seeds, with the slowest seed below the pixel clock. On
-`mem_data` it measured 27.64.
+THE WORDS THE HARDWARE CHANGES ARE READ ONLY THROUGH THE LATE BIT: status and
+the three array addresses, and the UART's and USB port's data and status. A
+load reads them only while the mode's bit 3 is set, which BLIT sets too;
+then every load takes its word on the CPU's late port, `mem_late`, a cycle
+later, as in BLIT. Without it a load of one of them is the RAM beneath, what
+was last written there, and a load of a data register takes no byte. A load
+sees a mode write from the third instruction after it, so the window is: set
+the bit, two instructions, the loads, put the mode back.
+`crt/include/fructus/io.h`'s `fructus_io_load` does that, and the headers
+for the display, the UART and USB read through it. An interrupt handler must
+leave the mode as it found it.
+
+The read path was once on the CPU's `mem_data`, the port its loads read on
+time. When `ld` came to write its register as its word arrives, that choice
+was on the load's bypass into decode: with the UART and USB, every seed's
+critical path, 24.04 MHz over 16 seeds, below the pixel clock. On the late
+port it measured 29.05. On `mem_rdata`, which decode reads as well, it had
+cost 1.8 MHz before that.
 
 | address | register | contents | access |
 |---|---|---|---|
-| 0x0480 | mode | bit 2 the buffer shown; bits 1:0 CPU, COPY, BLIT or WRITETHRU for the other | write |
+| 0x0480 | mode | bit 3 late; bit 2 the buffer shown; bits 1:0 CPU, COPY, BLIT or WRITETHRU for the other | write |
 | 0x0482 | font | the font's address, 15 bits; even for a 16-pixel font | write |
-| 0x0484 | status | bit 15 vertical blank, bits 9:0 the current line | read |
+| 0x0484 | status | bit 15 vertical blank, bits 9:0 the current line | read, late |
 | 0x0490-0x0496 | `timing_h` | `struct timing`, 4 words, 10 bits each | write only |
 | 0x0498-0x049e | `timing_v` | `struct timing`, 4 words, 10 bits each | write only |
-| 0x04a0 | palette address | 5 bits | read and write |
+| 0x04a0 | palette address | 5 bits | read late, and write |
 | 0x04a2 | palette data | 8 bits, through the EBR's second port | write |
-| 0x04a4 | pattern address | 10 bits: 16 sprites × 64 words | read and write |
+| 0x04a4 | pattern address | 10 bits: 16 sprites × 64 words | read late, and write |
 | 0x04a6 | pattern data | 16 bits, through the block RAMs' second ports | write |
-| 0x04a8 | attribute address | 6 bits: 16 sprites × 4 words | read and write |
+| 0x04a8 | attribute address | 6 bits: 16 sprites × 4 words | read late, and write |
 | 0x04aa | attribute data | 16 bits, through its block RAM's second port | write |
 
 The timing registers are write only because reading them back would need a

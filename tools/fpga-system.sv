@@ -68,18 +68,23 @@
 //
 // THE REGISTERS ARE WRITTEN THROUGH INTO ram_lo, so a register reads back as
 // what was last written to it from the memory itself, which is what keeps its
-// address decode off the memory's write enable.  Only the four words the
-// hardware changes have a read path: the status register and the arrays'
-// three addresses.  They are chosen in the cycle a load's word arrives, from
-// the processor's `mar', which then holds the address the word was read at,
-// and reach the processor on `mem_data', the port only its loads read, so
-// that the choice is not in front of decode - and on blit mode's late port,
-// through `lo_hold'.  Decoded from the processor's address a cycle earlier
-// instead, they were timed through the fetch's arms of its address mux: the
-// critical path of half the seeds, 28.59 MHz against 29.70 (28.2 .. 31.0),
-// 4461 cells against 4489, medians of sixteen.  An
-// array's data register reads as the word last written to it, and moves
-// nothing: the block RAMs' read ports are the display's.
+// address decode off the memory's write enable.  Only the words the hardware
+// changes have a read path: the status register, the arrays' three
+// addresses, and the UART's and the USB port's data and status.  They are
+// chosen in the cycle a load's word arrives, from the processor's `mar',
+// which then holds the address the word was read at, and reach the processor
+// ONLY ON THE LATE PORT, `mem_late', through `held': so a load reads them
+// only while the mode's LATE BIT, bit 3, is set - and blit mode sets it too.
+// Without it a load of one of them is ram_lo's, what was last written there,
+// and a load of a data register takes no byte.  On `mem_data' as well, the
+// port loads read on time, the choice was on the load's bypass into decode
+// once ld wrote its register as its word arrived (68fad41): every seed's
+// critical path with the UART and USB, 24.04 MHz, against 29.05 with the
+// late bit.  Decoded from the processor's address a cycle earlier instead,
+// they were timed through the fetch's arms of its address mux: 28.59 MHz
+// against 29.70 then.  An array's data register reads as the word last
+// written to it, and moves nothing: the block RAMs' read ports are the
+// display's.
 //
 // EVERY WRITE TO THE REGISTERS AND THE FRAME BUFFERS LANDS A CYCLE LATE, out of
 // flops (`addr_w`, `wword_w`, `we_w`), so nothing combinational joins the
@@ -93,10 +98,11 @@
 // Which one is a flop too; the processor picks the byte itself.  rtl/cpu.sv's
 // own header has why the word goes to a port of its own.
 //
-// CHANGING MODE NEEDS NO PADDING on the processor's side: the register is
-// written a cycle after the store's last byte, and a following load's decode
-// cycle, where its routine is chosen, is at least three cycles after that
-// byte.
+// A LOAD SEES A MODE WRITE FROM THE THIRD INSTRUCTION AFTER IT: the register
+// is written a cycle after the store's access, and the processor samples it
+// as a load dispatches, which may be a cycle after the store's own.  Nearer,
+// the load runs whole in the old mode.  So the late bit's window is: set it,
+// two instructions, the loads, clear it - crt/include/fructus/io.h.
 //
 // THE EXCEPTION VECTORS ARE THE PROCESSOR'S IN EVERY MODE.  Each, at the top
 // of memory, is a jump it fetches and executes rather than an address it
@@ -202,6 +208,9 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     // not shown.  `fb_st`: stores above 0x8000 go to it, and not to ram_hi -
     // BLIT and WRITETHRU, one flop so that ram_hi's write enable is one LUT.
     logic want_a = 1'b0, copy = 1'b0, blit = 1'b0, fb_st = 1'b0;
+    // `late': every load takes its word on the late port - bit 3, or blit
+    // mode.  It is the processor's `blit'.
+    logic late_m = 1'b0;
 
     // --- the processor's own 64 KB ----------------------------------------------
     wire [15:0] lo_word, hi_word;
@@ -222,21 +231,24 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     // `io_q': the word arriving is one of the registers with a read path, and
     // `io_word' is it; see the registers below.  Both are decoded from `ra`,
     // the processor's mar, which in the cycle a load's word arrives is the
-    // address it was read at.  Only a load's capture reads dword.
+    // address it was read at.  They reach only the late port.
     wire [15:0] ra; wire rld;          // rld: a load's word arrives
     wire io_q; wire [15:0] io_word;
     wire [15:0] rdata = src ? hi_word : lo_word;
-    wire [15:0] dword = io_q ? io_word : rdata;    // a load's: the processor's mem_data
+    wire [15:0] dword = rdata;         // a load's on time: the processor's mem_data
 
-    // --- blit mode's late reads ---------------------------------------------------
+    // --- the late reads: the late bit's, and blit mode's ------------------------
+    // A word of the processor's own memory, or a register, held a cycle; or
+    // in blit mode, above 0x8000, the buffer's.
     wire [15:0] fb_cpu_word;
-    logic hi1, hi2;
-    logic [15:0] lo_hold;
+    logic hi1, hi2, fbq;
+    logic [15:0] held;
     always_ff @(posedge clk) begin
         hi1 <= hi;  hi2 <= hi1;
-        lo_hold <= io_q ? io_word : lo_word;
+        held <= io_q ? io_word : rdata;
+        fbq <= blit;
     end
-    wire [15:0] late = hi2 ? fb_cpu_word : lo_hold;
+    wire [15:0] late = (hi2 & fbq) ? fb_cpu_word : held;
 
     wire halted, trapped; wire [15:0] result;
     // THE PROCESSOR IS SYNTHESISED AS A HIERARCHY OF ITS OWN.  Flattened into
@@ -250,7 +262,7 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     (* keep_hierarchy *)
     cpu u (.clk(clk), .rst(rst), .boot(boot), .mem_addr(addr), .mem_whi(whi), .mem_rmar(ra), .mem_rld(rld),
                 .mem_rdata(rdata),
-                .mem_wdata(wdata), .mem_we(lanes), .blit(blit), .mem_late(late), .mem_data(dword),
+                .mem_wdata(wdata), .mem_we(lanes), .blit(late_m), .mem_late(late), .mem_data(dword),
                 .irq(irq_s),
                 .halted(halted), .trapped(trapped), .result(result),
                 .retire(), .retire_pc());
@@ -301,6 +313,7 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
             fb_st <= wword_w[1];
             {blit, copy} <= wword_w[1:0] == 2'd1 ? {1'b0, wword_w[2]}
                           : wword_w[1:0] == 2'd2 ? 2'b10 : 2'b00;
+            late_m <= wword_w[3] || wword_w[1:0] == 2'd2;
         end
         if (addr_w[7:0] == 8'h82) font <= wword_w[14:0];
         if (addr_w[7:0] == 8'ha0) pal_i  <= wword_w[4:0];
@@ -364,7 +377,7 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
                       U_DIV  = `FRUCTUS_IO_UART_DIVISOR;
     wire uw = we_w && mask_w[0];
     wire [7:0] u_byte; wire [15:0] u_status;
-    wire u_rd = rld && ra[15:1] == U_DATA[15:1];
+    wire u_rd = rld && late_m && ra[15:1] == U_DATA[15:1];   // only in the window
     uart ser (.clk, .rst, .wr_data(uw && addr_w[15:1] == U_DATA[15:1]),
               .wr_status(uw && addr_w[15:1] == U_STAT[15:1]),
               .wr_div(uw && addr_w[15:1] == U_DIV[15:1]), .wword(wword_w),
@@ -381,7 +394,7 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     wire bw = we_w && mask_w[0];
     wire [7:0] b_byte; wire [15:0] b_status;
     wire b_dp_in, b_dm_in, b_dp_out, b_dm_out, b_oe;
-    wire b_rd = rld && ra[15:1] == B_DATA[15:1];
+    wire b_rd = rld && late_m && ra[15:1] == B_DATA[15:1];   // only in the window
     usb port (.clk, .rst, .wr_data(bw && addr_w[15:1] == B_DATA[15:1]),
               .wr_status(bw && addr_w[15:1] == B_STAT[15:1]),
               .wr_ctrl(bw && addr_w[15:1] == B_CTRL[15:1]),

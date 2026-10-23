@@ -141,7 +141,7 @@ exec 9>$B/crt/.lock
 command -v flock >/dev/null && flock 9
 stale=
 [ -f $lib ] || stale=1
-for s in $root/crt/crt0.s $root/crt/*.c $root/crt/*.cc $root/crt/include/*.h \
+for s in $root/crt/crt0.s $root/crt/*.c $root/crt/*.cc $root/crt/include/*.h $root/crt/include/*/*.h \
          $root/libc/*.s $B/gcc/gcc/cc1 \
          $B/gcc/gcc/cc1plus $B/binutils/gas/as-new; do
     [ $s -nt $lib ] && stale=1
