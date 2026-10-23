@@ -77,7 +77,10 @@ const src = `
         mov  r0, #0x7800
         mov  r1, #${io.shadow_isp}
         st   r0, [r1]              ; the interrupt stack
-        mov  r4, #${RESULT}
+        mov  r1, #0x480
+        mov  r0, #8
+        st   r0, [r1]              ; the late bit, on throughout: only so do
+        mov  r4, #${RESULT}        ; loads read the port's registers
         mov  r1, #${DATA}
         mov  r0, #${BIT - 1}
         st   r0, [r1, #${DIV}]

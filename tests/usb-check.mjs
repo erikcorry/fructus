@@ -319,7 +319,10 @@ const src = `
         mov  r0, #0x7800
         mov  r1, #${io.shadow_isp}
         st   r0, [r1]              ; the interrupt stack
-        mov  r4, #${RESULT}
+        mov  r1, #0x480
+        mov  r0, #8
+        st   r0, [r1]              ; the late bit, on throughout: only so do
+        mov  r4, #${RESULT}        ; loads read the port's registers
 ${TXB.map((w, k) => `        mov  r0, #${w}\n        st   r0, [r4, #${64 + 2 * k}]`).join('\n')}
         mov  r1, #${io.usb_data}
         mov  r0, #0x80

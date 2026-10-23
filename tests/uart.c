@@ -23,7 +23,7 @@ main (void)
   int n = 0;
   while (fructus_uart_ready ())
     {
-      uint16_t status = __uart_status;
+      uint16_t status = fructus_io_load (&__uart_status);
       uint8_t c = fructus_uart_getc ();
       if (status & FRUCTUS_UART_OVERRUN)
         return 2;
@@ -31,5 +31,5 @@ main (void)
       n++;
     }
   printf ("%d\n", n);
-  return __uart_status & (FRUCTUS_UART_RECEIVED | FRUCTUS_UART_BUSY);
+  return fructus_io_load (&__uart_status) & (FRUCTUS_UART_RECEIVED | FRUCTUS_UART_BUSY);
 }

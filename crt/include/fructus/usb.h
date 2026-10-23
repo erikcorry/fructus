@@ -27,11 +27,15 @@
 
    A STATUS OF ZERO IS IDLE.  On a machine without the port the words are
    plain memory, so nothing here waits, and nothing is ever received or
-   attached.  tools/fcc-run.mjs has no USB device.  */
+   attached.  tools/fcc-run.mjs has no USB device.
+
+   THE STATUS AND THE BYTE RECEIVED ARE LOADED THROUGH fructus/io.h's window,
+   and only so; __usb_ctrl is plain memory beneath, and reads as written.  */
 #ifndef _FRUCTUS_USB_H
 #define _FRUCTUS_USB_H
 
 #include <stdint.h>
+#include <fructus/io.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -116,7 +120,7 @@ fructus_usb_clear (uint16_t events)
 static inline int
 fructus_usb_attached (void)
 {
-  uint16_t s = __usb_status;
+  uint16_t s = fructus_io_load (&__usb_status);
   if ((s & (FRUCTUS_USB_DP | FRUCTUS_USB_DM)) == FRUCTUS_USB_DM)
     return FRUCTUS_USB_LOW_SPEED;
   if ((s & (FRUCTUS_USB_DP | FRUCTUS_USB_DM)) == FRUCTUS_USB_DP)
@@ -129,7 +133,7 @@ fructus_usb_attached (void)
 static inline void
 fructus_usb_send (uint8_t byte)
 {
-  while (__usb_status & FRUCTUS_USB_WAITING)
+  while (fructus_io_load (&__usb_status) & FRUCTUS_USB_WAITING)
     ;
   __usb_data = byte;
 }
@@ -138,7 +142,7 @@ fructus_usb_send (uint8_t byte)
 static inline void
 fructus_usb_send_last (uint8_t byte)
 {
-  while (__usb_status & FRUCTUS_USB_WAITING)
+  while (fructus_io_load (&__usb_status) & FRUCTUS_USB_WAITING)
     ;
   __usb_data = FRUCTUS_USB_LAST | byte;
 }
@@ -146,7 +150,7 @@ fructus_usb_send_last (uint8_t byte)
 static inline int
 fructus_usb_ready (void)
 {
-  return (__usb_status & FRUCTUS_USB_RECEIVED) != 0;
+  return (fructus_io_load (&__usb_status) & FRUCTUS_USB_RECEIVED) != 0;
 }
 
 /* The byte received, once fructus_usb_ready says there is one.  Reading it
@@ -156,7 +160,7 @@ fructus_usb_getc (void)
 {
   while (!fructus_usb_ready ())
     ;
-  return (uint8_t) __usb_data;
+  return (uint8_t) fructus_io_load (&__usb_data);
 }
 
 /* Having seen a DATA PID: the ACK's SYNC, waiting for the packet's end and

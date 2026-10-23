@@ -32,6 +32,7 @@
 #define _FRUCTUS_DISPLAY_H
 
 #include <stdint.h>
+#include <fructus/io.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,7 +60,9 @@ extern volatile struct display_registers __display;
 
 #define DISPLAY_MODE        __display.mode
 #define DISPLAY_FONT        __display.font
-#define DISPLAY_STATUS      __display.status
+/* The status, and the arrays' addresses read back, are the hardware's only
+   through fructus/io.h's window: DISPLAY_STATUS opens it.  */
+#define DISPLAY_STATUS      fructus_io_load (&__display.status)
 #define DISPLAY_TIMING_H(i) __display.timing_h[i]
 #define DISPLAY_TIMING_V(i) __display.timing_v[i]
 #define DISPLAY_PAL_ADDR    __display.pal_addr
@@ -75,6 +78,8 @@ extern volatile struct display_registers __display;
 #define DISPLAY_BLIT       2
 #define DISPLAY_WRITETHRU  3
 #define DISPLAY_SHOW_A     4
+#define DISPLAY_LATE       8   /* loads take the late port: see fructus/io.h.
+                                  DISPLAY_BLIT sets it as well.  */
 
 /* The status register.  */
 #define DISPLAY_VBLANK     0x8000              /* the line is not visible */

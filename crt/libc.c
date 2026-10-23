@@ -13,6 +13,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <fructus/io.h>
 
 extern volatile unsigned char __console;
 extern volatile unsigned short __uart_status;
@@ -204,8 +205,9 @@ int
 putchar (int c)
 {
   /* Bit 0 of the UART's status is `busy': zero, and never waited on, on the
-     simulator and on a machine without the UART.  */
-  while (__uart_status & 1)
+     simulator and on a machine without the UART.  The status is the
+     hardware's only through the late bit's window: fructus/io.h.  */
+  while (fructus_io_load (&__uart_status) & 1)
     ;
   __console = c;
   return (unsigned char) c;
