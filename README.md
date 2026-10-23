@@ -719,8 +719,8 @@ jpeg into one score. It is the geometric mean of the speedups over `-Os
 
 | | `-mmul` | without |
 |-|------:|--------:|
-| `-Os` | **125.9** | 93.5 |
-| `-O2` | 133.3 | 110.2 |
+| `-Os` | **126.9** | 94.3 |
+| `-O2` | 134.3 | 110.9 |
 
 `just fructusmark` scores `-Os -mmul` in about a minute and a half, and
 `-O2` and `--no-mul` select the other builds.
