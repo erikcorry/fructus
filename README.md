@@ -698,10 +698,10 @@ time, and the known CRCs for both the performance and validation seeds.
 
 | Build | Bytes | Cycles/iteration | CoreMark/MHz | CoreMark at 30 MHz | at 25.175 MHz |
 |---|---:|---:|---:|---:|---:|
-| `-Os` | 8778 | 1,761,815 | 0.568 | 17.03 | 14.29 |
-| `-Os -mmul` | 8365 | 847,192 | 1.180 | 35.41 | 29.72 |
-| `-O2` | 12141 | 1,664,095 | 0.601 | 18.03 | 15.13 |
-| `-O2 -mmul` | 11850 | 744,356 | 1.343 | 40.30 | 33.82 |
+| `-Os` | 8778 | 1,739,058 | 0.575 | 17.25 | 14.48 |
+| `-Os -mmul` | 8365 | 845,914 | 1.182 | 35.46 | 29.76 |
+| `-O2` | 12141 | 1,661,319 | 0.602 | 18.06 | 15.15 |
+| `-O2 -mmul` | 11850 | 744,332 | 1.343 | 40.30 | 33.82 |
 
 30 MHz is the processor alone on the iCE40; with the VGA frame buffers it
 runs at the 25.175 MHz pixel clock. Bytes are the whole image — `.text`,
@@ -719,8 +719,8 @@ jpeg into one score. It is the geometric mean of the speedups over `-Os
 
 | | `-mmul` | without |
 |-|------:|--------:|
-| `-Os` | **125.8** | 92.9 |
-| `-O2` | 133.2 | 110.0 |
+| `-Os` | **125.9** | 93.5 |
+| `-O2` | 133.3 | 110.2 |
 
 `just fructusmark` scores `-Os -mmul` in about a minute and a half, and
 `-O2` and `--no-mul` select the other builds.

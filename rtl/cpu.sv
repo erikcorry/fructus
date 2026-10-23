@@ -226,6 +226,13 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
+//     AN ra-JUMP GUESSED WITH ITS OWN BYTES IN       3435    29.70  28.6 .. 31.2
+//       2815 LUT4, and the row below rerun the same day, 30.01, 31.79 best.
+//       A ret, jmp r5 or call r5 with one word in the buffer, and jmp ra or
+//       call ra at an even pc, rather than waiting for two words: a ret at
+//       a branch's or jmp's target was unguessed.  FructusMark 125.8 to
+//       125.9 at -Os -mmul, 92.9 to 93.5 at -Os; CoreMark -Os 1.3% fewer
+//       cycles
 //     A STORE OF ONE REGISTER NOT STOPPING DISPATCH  3483    30.01  27.9 .. 31.8
 //       2860 LUT4 against 2819, and the row below rerun the same day, 30.80.
 //       Its register read through decode's borrowed port into aq in its ALU
@@ -670,7 +677,13 @@ module cpu (
     logic        d_rr, e_rr;          //   a ret, guessed from the return stack
     logic [9:0]  rix;
     logic        rconf;
-    wire prok = prr & ~d_rp & (nw >= 3'd2);
+    // THE GUESS NEEDS ONLY THE INSTRUCTION'S OWN BYTES, since its target is
+    // not among them - not the classifier's length.  jmp r5, call r5 and ret
+    // are one byte and the head word holds them; jmp ra and call ra are two,
+    // bit 7 the family's only long ones, and the head word holds both bytes
+    // but at an odd pc.  From flops, as gok is.
+    wire prfit = (nw >= 3'd2) | ((nw == 3'd1) & ~(pcl[0] & iw[0][15]));
+    wire prok = prr & ~d_rp & prfit;
     wire prj  = prok & slot;          // the fetch reads the guess
     // THE RETURN STACK: rtn its top, and the block the rest, 256 words in one
     // block RAM.  A call pushes where it returns to in its ALU stage - the old
@@ -849,6 +862,7 @@ module cpu (
     // a branch whether it is guessed taken and allowed (btk), all from flops,
     // so that only the opcode checks are in series in front of the fetch.
     wire        gok  = slot & ~aphase & (nw >= 3'd2);
+    wire        prg  = slot & ~aphase & prfit;                // an ra-jump's: its own bytes
     wire        pb   = pbr & btk & gok;                        // the fetch reads it
     logic       pbm;                            // it did: the pc goes there next
     wire        pjb  = pc[3] ^ pc[5];               // a jump's bit for gh
@@ -892,7 +906,7 @@ module cpu (
     // last.  No other arm can want the bus then - gok has slot, which a
     // redirect, a load's ALU cycle and the cycle after a pbq all clear, and
     // ~aphase - so they need no gating by the arms written after them.
-    wire        pjg   = (pjr & gok) | (prr & ~d_rp & gok);   // jmp, or an ra-jump
+    wire        pjg   = (pjr & gok) | (prr & ~d_rp & prg);   // jmp, or an ra-jump
     wire [15:0] jgt   = pjr ? ptgt : rgw;
     assign mem_addr = pb      ? {padd[15:1], 1'b0}
                     : pjg     ? {jgt[15:1], 1'b0}
