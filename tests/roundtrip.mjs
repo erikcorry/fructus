@@ -28,6 +28,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadSpec, root } from '../tools/isa.js';
 import { buildDecoder, decode, render } from '../tools/decode.js';
+import { dataBytes } from './data-bytes.mjs';
 
 const CA   = process.env.CUSTOMASM || 'customasm';
 const TMP  = process.env.TMPDIR_FRUCTUS || join(root, 'build');
@@ -39,18 +40,25 @@ function assemble(src, tag) {
   const inp = join(TMP, `_rt${tag}.asm`), out = join(TMP, `_rt${tag}.bin`);
   writeFileSync(inp, prelude + src);
   execFileSync(CA, ['-q', '-f', 'binary', '-o', out, inp]);
-  return readFileSync(out);
+  return { bin: readFileSync(out), data: dataBytes(CA, inp) };
 }
 
 let fail = 0;
 for (const f of process.argv.slice(2)) {
-  const bin = assemble(readFileSync(f, 'utf8'), 'a');
+  // Data - a `dw' table among the code - goes back out as `dw', a word at a
+  // time, little-endian.
+  const { bin, data } = assemble(readFileSync(f, 'utf8'), 'a');
   const mem = new Uint8Array(0x10000);
   mem.set(bin);
 
   const lines = [];
   let pc = 0, n = 0, broke = false;
   while (pc < bin.length) {
+    if (data.has(pc)) {
+      lines.push(`dw 0x${(mem[pc] | mem[pc + 1] << 8).toString(16)}`);
+      pc += 2;
+      continue;
+    }
     const d = decode(dec, mem, pc);
     if (!d) {
       console.log(`FAIL  ${f}: nothing decodes at 0x${pc.toString(16)} (first byte 0x${mem[pc].toString(16)})`);
@@ -65,7 +73,7 @@ for (const f of process.argv.slice(2)) {
   }
   if (broke) continue;
 
-  const bin2 = assemble(lines.join('\n') + '\n', 'b');
+  const { bin: bin2 } = assemble(lines.join('\n') + '\n', 'b');
   const same = bin.length === bin2.length && bin.every((b, i) => b === bin2[i]);
   if (same) {
     console.log(`ok    ${f}  ${bin.length} bytes, ${n} instructions, round trip identical`);

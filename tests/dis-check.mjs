@@ -30,6 +30,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadSpec, root } from '../tools/isa.js';
 import { buildDecoder, decode, render } from '../tools/decode.js';
+import { dataBytes } from './data-bytes.mjs';
 
 const CA  = process.env.CUSTOMASM || 'customasm';
 const TMP = process.env.TMPDIR_FRUCTUS || join(root, 'build');
@@ -60,18 +61,22 @@ for (const src of process.argv.slice(2)) {
   writeFileSync(inp, prelude + readFileSync(src, 'utf8'));
   execFileSync(CA, ['-q', '-f', 'binary', '-o', bin, inp]);
   const bytes = readFileSync(bin);
+  // A `dw' table among the code is no instruction: objdump is handed zeros
+  // in its place, brk a byte each, so it comes out in step at the far end.
+  const data = dataBytes(CA, inp);
+  const code = bytes.map((x, i) => (data.has(i) ? 0 : x));
 
   // Hand the same bytes to binutils as a .byte blob, so no assembler decision
   // can creep in between the two readings.
   const blob = join(TMP, '_dis-bytes.s'), obj = join(TMP, '_dis.o');
   let asm = '\t.text\n';
-  for (let i = 0; i < bytes.length; i += 12)
-    asm += '\t.byte ' + [...bytes.slice(i, i + 12)]
+  for (let i = 0; i < code.length; i += 12)
+    asm += '\t.byte ' + [...code.slice(i, i + 12)]
       .map((x) => '0x' + x.toString(16).padStart(2, '0')).join(',') + '\n';
   writeFileSync(blob, asm);
   execFileSync(AS, ['-o', obj, blob]);
 
-  const rows = execFileSync(OD, ['-d', obj], { encoding: 'utf8' })
+  const rows = execFileSync(OD, ['-d', '-z', obj], { encoding: 'utf8' })
     .split('\n')
     .map((l) => /^\s*([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*(.*)$/.exec(l))
     .filter(Boolean)
@@ -83,6 +88,7 @@ for (const src of process.argv.slice(2)) {
 
   let pc = 0, n = 0, bad = 0;
   for (const row of rows) {
+    if (data.has(row.addr) && row.addr === pc) { pc++; continue; }
     const d = decode(dec, mem, pc);
     if (!d) { console.log(`FAIL  ${src}: nothing decodes at 0x${pc.toString(16)}`); bad++; break; }
     if (row.addr !== pc) { console.log(`FAIL  ${src}: objdump is at 0x${row.addr.toString(16)}, we are at 0x${pc.toString(16)}`); bad++; break; }
