@@ -36,12 +36,13 @@
 ;
 ;       __udivdi3  __umoddi3  __udivmoddi4  __divdi3  __moddi3  __divmoddi4
 ;
-; With -mmul gcc calls `_mul' versions of every one of these instead:
-; __udivmodhi4_mul and its four wrappers, __udivmodsi4_mul and four 32-bit
-; helpers - so that 32-bit division is assembly too, there - and the six
-; 64-bit ones, all built on recip.  Like the products' `_mul' routines they
-; are separate names because this library is built once, without -mmul, and
-; has to run on a part with no multiplier.
+; With -mmul gcc calls `_mul' versions of the wider ones instead:
+; __udivmodsi4_mul and four 32-bit helpers - so that 32-bit division is
+; assembly too, there - and the six 64-bit ones, all built on __recip_mul.
+; Like the products' `_mul' routines they are separate names because this
+; library is built once, without -mmul, and has to run on a part with no
+; multiplier.  16 bits keeps __udivmodhi4 under -mmul: its loop beats a
+; reciprocal and its correction for any quotient under about 200.
 ;
 ; And the shifts by a variable count, at the end of the file:
 ;
@@ -666,59 +667,110 @@ __udivmodhi4:
         ret                             ; 5
 
 ; ============================================================================
-; __udivmodhi4_mul - 16 / 16 -> quotient and remainder, unsigned, -mmul version
+; __recip_mul - the 2/1 reciprocal of a divisor, made with mul
 ; ============================================================================
-;       a in r0, b in r1        ->      quotient in r0, remainder in r1
+;       d in r5, its top bit set        ->      v in r5
 ;
-; Two arguments and a 32-bit result, so by isa/abi.s this owns r0, r1 and r5
-; and must give back r2, r3 and r4.
-; This version is picked when using -mmul, which means the CPU has mul and
-; recip instructions.
+; Moller and Granlund's 2/1 reciprocal, v = floor((2^32 - 1) / d) - 2^16,
+; for the -mmul divisions below.  Every register but r5 and lr is kept, so a
+; division calls it with what it holds around it.  It replaced the recip
+; instruction, whose unit cost 204 cells, a block RAM and two DSPs, for about
+; 75 more cycles a 64-bit division.
 ;
-; The quotient estimate is never too big and at most one too small, over
-; every 16-bit a and b, so one unsigned compare finishes it.  Division by
-; zero returns junk and does not hang.
+; SIXTEEN STRAIGHT LINES AND ONE NEWTON STEP, then a count up.  Slot i, d's
+; bits 14:11, is the chord of v across its 2048 divisors, v0 = A - S * lo /
+; 2^14 with lo = d's bits 10:0: within 117 of v.  The step is v += E + v * E
+; / 2^16, E = floor(2^16 * (1 - x * y)), x = d / 2^16 and y = 1 + v / 2^16,
+; rounding down throughout, which leaves it 0 .. 2 under v for every d.  Then
+; the remainder 2^32 - 1 - (2^16 + v) * d says how many d it still holds, one
+; more v each.  Eight slots would leave 0 .. 4, thirty-two no better than
+; sixteen, and a straight line through the whole range needs two steps and
+; is 0 .. 6 under: 92 cycles against this one's fewer.
 ;
-; We make use of the fact that losing a bit of the reciprocal will never
-; put us in a situation where we need more than one fixup.  So making the
-; implicit top bit explicit is the easiest solution for this non-widening
-; div routine.  Throwing away this bit makes the result a tiny bit
-; smaller so we have to do a few more fixups, but the effect is small.
-__udivmodhi4_mul:
-        mov r5, #10                     ; Not one of the available immediates.
-        br eq, r1, r5, .ten             ; Common enough to special case.
-        ; Recip takes an argument that is normalized to have a 1 in the high
-        ; bit and returns its reciprocal, as defined by Möller and Granlund.
-        push lr                         ; 3   We need one more register
-        clz r5, r1                      ; 2   Bits to shift away
-        shl lr, r1, r5                  ; 1   Normalize
-        recip lr, lr                    ; 5   Reciprocal
-        lsr lr, lr, #1                  ; 1   The reciprocal has an implicit 1
-                                        ;     in bit 16, so shift down...
-        or lr, lr, #0x8000              ; 1   ... and make the top bit explicit
-        mulhu lr, lr, r0                ; 2   Multiply a by 1/b, get high part
-        rsb r5, r5, #15                 ; 1   We are going to shift 16-n, but
-                                        ;     one less because we lsr'ed 1.
-        lsr lr, lr, r5                  ; 1   Undo normalization
-        mul r5, lr, r1                  ; 2   Multiply answer with divisor
-        rsb r0, r5, r0                  ; 1   Remainder in r0: a is dead now
-        br hs, r0, r1, .adjust          ; 1   Unsigned, and rarely taken
-        mov r1, r0                      ; 1   Put remainder in r1
-        mov r0, lr                      ; 1   Put result in r0
-        pop lr                          ; 3
-        ret                             ; 5
-.adjust:
-        rsb r1, r1, r0                  ; 1   Subtract one divisor from remainder
-        add r0, lr, #1                  ; 1   Increase answer by one.
-        pop lr                          ; 3
-        ret                             ; 5
-.ten:
-        or      r1, r0, #0              ; 1
-        mov     r0, #0xcccd             ; 1 or 2
-        mulhu   r0, r1, r0              ; 2
-        lsr     r0, r0, #3              ; 1
-        mul     r5, r0, #10             ; 2
-        rsb     r1, r5, r1              ; 1
+; A CLEAR TOP BIT IS SET, so a division by zero gets junk and does not hang
+; or trap.
+__recip_mul:
+        push    r0, r1, r2              ; 4
+        push    r3, r4                  ; 3
+        or      r5, r5, #0x8000         ; 1   d
+        rsb     r0, r5, #0              ; 1   D' = 2^16 - d
+        lsr     r1, r5, #11             ; 1   (no wider and: an immediate that
+        and     r1, r1, #15             ; 1   does not fit goes through r5)
+        shl     r1, r1, #2              ; 1   the slot's offset
+        mov     r2, #.slots             ; 2
+        add     r1, r1, r2              ; 1
+        ld      r2, [r1, #2]            ; 2   S, a cycle more if odd
+        ld      r1, [r1, #0]            ; 2   A
+        shl     r3, r5, #5              ; 1
+        lsr     r3, r3, #3              ; 1   lo * 4
+        mulhu   r2, r2, r3              ; 2
+        rsb     r1, r2, r1              ; 1   v0 = A - S * lo / 2^14
+        ; the step: E may be either sign
+        mulhu   r2, r5, r1              ; 2   d * v, high
+        mul     r3, r5, r1              ; 2   and low
+        iseq    r3, r3, #0              ; 1
+        rsb     r2, r2, r0              ; 1   D' - high
+        add     r2, r2, r3              ; 1
+        sub     r2, r2, #1              ; 1   E, less one unless low is 0
+        mulhu   r3, r1, r2              ; 2   v * E / 2^16 with E unsigned ...
+        asr     r4, r2, #15             ; 1
+        and     r4, r4, r1              ; 1
+        rsb     r3, r4, r3              ; 1   ... and less v if it was not
+        add     r1, r1, r2              ; 1
+        add     r1, r1, r3              ; 1   v1, 0 .. 2 under v
+        ; R = 2^32 - 1 - (2^16 + v1) * d, in r2:r3
+        mulhu   r2, r5, r1              ; 2
+        mul     r3, r5, r1              ; 2
+        add     r2, r2, r5              ; 1
+        xor     r2, r2, #-1             ; 1
+        xor     r3, r3, #-1             ; 1
+.fix:
+        br      ne, r2, #0, .up         ; 1
+        br      lo, r3, r5, .done       ; 1
+.up:
+        add     r1, r1, #1              ; 1   R >= d: one more
+        islo    r4, r3, r5              ; 1   the borrow
+        rsb     r3, r5, r3              ; 1
+        rsb     r2, r4, r2              ; 1
+        jmp     .fix                    ; 4
+.slots: ; A and S for each slot, the chord from its first divisor to the next
+        ; slot's, S rounded up
+        dw      0xffff                  ; 0x8000  A
+        dw      0xf0f0                  ;         S
+        dw      0xe1e1                  ; 0x8800
+        dw      0xd628
+        dw      0xc71c                  ; 0x9000
+        dw      0xbfa0
+        dw      0xaf28                  ; 0x9800
+        dw      0xac78
+        dw      0x9999                  ; 0xa000
+        dw      0x9c08
+        dw      0x8618                  ; 0xa800
+        dw      0x8dd8
+        dw      0x745d                  ; 0xb000
+        dw      0x8188
+        dw      0x642c                  ; 0xb800
+        dw      0x76b8
+        dw      0x5555                  ; 0xc000
+        dw      0x6d38
+        dw      0x47ae                  ; 0xc800
+        dw      0x64d8
+        dw      0x3b13                  ; 0xd000
+        dw      0x5d58
+        dw      0x2f68                  ; 0xd800
+        dw      0x56b0
+        dw      0x2492                  ; 0xe000
+        dw      0x50b8
+        dw      0x1a7b                  ; 0xe800
+        dw      0x4b50
+        dw      0x1111                  ; 0xf000
+        dw      0x4678
+        dw      0x0842                  ; 0xf800
+        dw      0x4210
+.done:
+        mov     r5, r1                  ; 1
+        pop     r4, r3                  ; 3
+        pop     r2, r1, r0              ; 4
         ret                             ; 5
 
 ; ============================================================================
@@ -780,56 +832,7 @@ __modhi3:
         ret                             ; 5
 
 ; ============================================================================
-; The same four with recip, for -mmul
-; ============================================================================
-; The wrappers above, around __udivmodhi4_mul instead.  It uses r0, r1, r5
-; and a saved lr, so r2 is free to carry a sign across the call here too.
-
-__udivhi3_mul:
-        jmp     __udivmodhi4_mul        ; 5
-
-__umodhi3_mul:
-        push    lr                      ; 3
-        call    __udivmodhi4_mul        ; 5
-        mov     r0, r1                  ; 1   the remainder, pinned
-        pop     lr                      ; 3
-        ret                             ; 5
-
-__divhi3_mul:
-        push    lr, r2                  ; 4
-        xor     r2, r0, r1              ; 1   bit 15 is the quotient's sign
-        br      ge, r0, #0, .a_pos      ; 1, taken 6
-        rsb     r0, r0, #0              ; 1   |a|
-.a_pos:
-        br      ge, r1, #0, .b_pos      ; 1, taken 6
-        rsb     r1, r1, #0              ; 1   |b|
-.b_pos:
-        call    __udivmodhi4_mul        ; 5
-        br      ge, r2, #0, .pos        ; 1, taken 6
-        rsb     r0, r0, #0              ; 1
-.pos:
-        pop     r2, lr                  ; 4
-        ret                             ; 5
-
-__modhi3_mul:
-        push    lr, r2                  ; 4
-        mov     r2, r0                  ; 1   keep a, for its sign
-        br      ge, r0, #0, .a_pos      ; 1, taken 6
-        rsb     r0, r0, #0              ; 1   |a|
-.a_pos:
-        br      ge, r1, #0, .b_pos      ; 1, taken 6
-        rsb     r1, r1, #0              ; 1   |b|
-.b_pos:
-        call    __udivmodhi4_mul        ; 5
-        mov     r0, r1                  ; 1   the remainder, pinned
-        br      ge, r2, #0, .pos        ; 1, taken 6
-        rsb     r0, r0, #0              ; 1
-.pos:
-        pop     r2, lr                  ; 4
-        ret                             ; 5
-
-; ============================================================================
-; __udivmodsi4_mul - 32 / 32 -> quotient and remainder, unsigned, with recip
+; __udivmodsi4_mul - 32 / 32 -> quotient and remainder, unsigned, -mmul version
 ; ============================================================================
 ;       n in r0:r1, d in r2:r3          ->      quotient in r0:r1,
 ;                                               remainder in r2:r3
@@ -840,7 +843,7 @@ __modhi3_mul:
 ;
 ; IT IS LONG DIVISION IN BASE 65536, a quotient word per step, each step
 ; Moller and Granlund's division by an invariant integer: a multiply by the
-; divisor's reciprocal, which recip makes, and a correction.  The divisor is
+; divisor's reciprocal, which __recip_mul makes, and a correction.  The divisor is
 ; first shifted until its top bit is set, and the dividend with it.
 ;
 ; A DIVISOR UNDER 65536 is their 2/1 division, two steps: the dividend's high
@@ -856,7 +859,7 @@ __modhi3_mul:
 ;
 ; A DIVISOR OF 65536 OR MORE leaves a quotient of one word, which is their
 ; 3/2 division: one step, with the reciprocal of both of the divisor's words.
-; recip makes the 2/1 reciprocal of the high word, and their Algorithm 6
+; __recip_mul makes the 2/1 reciprocal of the high word, and their Algorithm 6
 ; folds the low word into it with one more product and two rare corrections;
 ; it needs three registers where two are free, so u0 waits on the stack.
 ; A high word of n below d's is a quotient of 0, and is tested first.
@@ -877,7 +880,9 @@ __udivmodsi4_mul:
         shl     r1, r1, r5              ; 1
         or      r1, r1, r3              ; 1   u1
         shl     r0, r0, r5              ; 1   u0
-        recip   r3, r2                  ; 5   v
+        mov     r5, r2                  ; 1   s is at [sp]
+        call    __recip_mul             ; 4
+        mov     r3, r5                  ; 1   v
         br      ne, r4, #0, .hi         ; 1   u2:u1 >= d: a high quotient
         br      hs, r1, r2, .hi         ; 1   word to make first
         mov     lr, #0                  ; 1   otherwise it is 0, and u1 is
@@ -954,7 +959,10 @@ __udivmodsi4_mul:
         shl     r0, r0, r5              ; 1   u0
 .go:    ; v, the 3/2 reciprocal: d1's, with d0 folded in - Algorithm 6
         push    r0                      ; 3   u0, for a register
-        recip   lr, r3                  ; 5   v from d1 alone
+.vr:    ; tests/libgcc-check.mjs runs the fold from here
+        mov     r5, r3                  ; 1   s is under u0
+        call    __recip_mul             ; 4
+        mov     lr, r5                  ; 1   v from d1 alone
         mul     r5, r3, lr              ; 2   p = d1 * v + d0, mod 65536
         add     r5, r5, r2              ; 1
         br      hs, r5, r2, .va         ; 1   no carry, 37%
@@ -1039,7 +1047,7 @@ __udivmodsi4_mul:
 
 
 ; ============================================================================
-; The 32-bit helpers GCC calls, with recip
+; The 32-bit helpers GCC calls, -mmul versions
 ; ============================================================================
 ; Four arguments, so r2 and r3 are the callee's: __udivsi3_mul is a tail
 ; call, and the signed pair carry their sign in r4, which they save.  The
@@ -1167,12 +1175,13 @@ __modsi3_mul:
 ; MEASURED, a full 64-bit dividend, mean cycles of __udivdi3
 ; ----------------------------------------------------------------------------
 ;       divisor bits        1-16       17-32      33-48      49-64
-;       here                1395-1500  2780-3160  1625-2025  720-1010
-;       -mmul, below        260-270    365-375    575-580    395-400
+;       here                1213-1332  2476-2816  1414-1761  611-891
+;       -mmul, below        288-302    363-369    527-534    392-402
 ;       libgcc2.c's         ~4100      ~3000      ~3300      1600-2600
 ;
-; The range is over the widths in each column, 30 dividends a width.  561
-; bytes for all six, and 928 for the six with recip below, where libgcc2.c's
+; The range is over the widths in each column, 30 dividends a width, on the
+; core with two-cycle loads.  552 bytes for all six, and 1016 for the six
+; with mul below and __recip_mul's 156 more, where libgcc2.c's
 ; were 2.3K to 3.2K EACH, before the 32-bit division, multiply and clz table
 ; they called.  libgcc2.c's row was measured on the core before the
 ; instruction buffer, where the first row was 1140-1200, 2740-3120, 1590-2010
@@ -1525,7 +1534,7 @@ __moddi3:
         ret                             ; 5
 
 ; ============================================================================
-; 64-bit division with recip, for -mmul
+; 64-bit division with the reciprocal, for -mmul
 ; ============================================================================
 ;       __udivdi3_mul  __umoddi3_mul  __udivmoddi4_mul      unsigned
 ;       __divdi3_mul   __moddi3_mul   __divmoddi4_mul       signed
@@ -1606,7 +1615,9 @@ __udivmoddi4_mul:
         ld      r1, [r5, #0]            ; 3   d
         clz     r5, r1                  ; 2
         shl     r1, r1, r5              ; 1   D, normalised
-        recip   r2, r1                  ; 5   v
+        mov     r5, r1                  ; 1   s is found again from d below
+        call    __recip_mul             ; 4
+        mov     r2, r5                  ; 1   v
         ld      r0, [sp, #8]            ; 3   R = u4, which is below D
         mov     lr, #6                  ; 1   u3's offset: the count too
 .nloop:
@@ -1743,7 +1754,9 @@ __udivmoddi4_mul:
         mul     r2, r2, r4              ; 2   D0
         mul     r3, r3, r4              ; 2
         or      r3, r3, lr              ; 1   D1
-        recip   r5, r3                  ; 5   v from D1, then D0 in, as in
+.ir:    ; tests/libgcc-check.mjs runs the fold from here
+        mov     r5, r3                  ; 1
+        call    __recip_mul             ; 4   v from D1, then D0 in, as in
         mul     lr, r3, r5              ; 2   __udivmodsi4_mul
         add     lr, lr, r2              ; 1
         br      hs, lr, r2, .ia         ; 1   no carry, 37%
@@ -1852,7 +1865,9 @@ __udivmoddi4_mul:
         mul     r0, r0, r4              ; 2   D0
         push    r3, r2, r1              ; 5
         push    r0                      ; 3
-        recip   r5, r3                  ; 5   v from D3, then D2 in, as in
+.jr:    ; tests/libgcc-check.mjs runs the fold from here
+        mov     r5, r3                  ; 1
+        call    __recip_mul             ; 4   v from D3, then D2 in, as in
         mul     lr, r3, r5              ; 2   __udivmodsi4_mul
         add     lr, lr, r2              ; 1
         br      hs, lr, r2, .ja         ; 1   no carry, 37%
