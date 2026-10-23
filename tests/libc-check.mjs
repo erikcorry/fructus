@@ -251,9 +251,11 @@ function dispatch(name, r, dest, src, n) {
   check('memcpy bulk cost', near(per, 1.87),
         `${per.toFixed(4)} cycles/byte, the file says about 1.87`);
 
-  // The tail's worst case is 15 bytes: every one of its four steps runs.
+  // The tail's worst case is 15 bytes: every one of its four steps runs,
+  // 17 cycles more than none - 19 until ld and ld8 took two cycles (68fad41),
+  // and the tail has one of each.
   const tail = (cost(15) - cost(0)) / 15;
-  check('memcpy tail cost', near(tail, 19 / 15), `${tail.toFixed(2)} cycles/byte`);
+  check('memcpy tail cost', near(tail, 17 / 15), `${tail.toFixed(2)} cycles/byte`);
   console.log(`ok    bulk loop ${per.toFixed(4)} cycles/byte, ` +
               `tail ${tail.toFixed(2)} for up to 15 bytes`);
 }
