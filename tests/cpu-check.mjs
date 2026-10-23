@@ -519,9 +519,9 @@ SOURCES.push([
 
 // AN INTERPRETER'S DISPATCH: handlers that end in a jmp through a register,
 // 0xb2's and jmp r5's, in an order that repeats, with forward branches
-// between, and calls through a register, call ra's and call r5's - so the
-// jmp ra predictor learns them, guesses right, and once in a while wrong,
-// where the branch inside h3 changes its mind.
+// between, and calls through a register, call ra's and call r5's, each
+// unguessed, behind and in front of branches the table learns, and where
+// the branch inside h3 changes its mind.
 SOURCES.push([
   'jmp  go',
   'f1:  add  r3, r3, #7', 'ret',
@@ -537,10 +537,10 @@ SOURCES.push([
   'halt',
 ].map((l) => '          ' + l).join('\n'));
 
-// A GUESSED JUMP IN A STORE'S WRITE CYCLE: ret, jmp ra and call ra each a
-// cycle after the instruction after a store - aligned, odd and a block - so
-// the guess is read late, through pjq or pjw, and the jmp ra's target
-// changes every other lap, so a late guess is sometimes wrong.
+// A JUMP IN A STORE'S WRITE CYCLE: ret, jmp ra and call ra each a cycle
+// after the instruction after a store - aligned, odd and a block - so a
+// ret's guess is read late, through pjq or pjw, and the jmp ra's target
+// changes every other lap.
 SOURCES.push([
   'mov  sp, #0x3100', 'mov  r4, #0x2001', 'mov  r3, #0', 'mov  r1, #12',
   'top: call g1', 'call g2', 'call g3',
@@ -559,7 +559,7 @@ SOURCES.push([
 // LOADS AND STORES WHERE A GUESS PUTS THEM, which the access check above
 // holds to the ones the program makes: behind a branch the table guesses
 // wrong, both ways - the laps alternate, then go in fours - behind a loop's
-// exit, at a jmp ra target guessed wrong, after a ret guessed wrong because
+// exit, at a jmp ra target, after a ret guessed wrong because
 // the function moved lr, and a call's target the same.  r1 points at
 // stand-ins for ports, which the bench cannot tell from memory; the check
 // is that nothing but these instructions reads or writes them, and only
@@ -583,20 +583,14 @@ SOURCES.push([
   'g:   ld   r2, [r1, #20]', 'ret',
 ].map((l) => '          ' + l).join('\n'));
 
-// A JUMP BEHIND A GUESS NOT YET FOUND WRONG.  A jmp through a register,
-// guessed from the table, whose target changes lap by lap among three
-// jumps of its own: a one-byte ret, a one-byte jmp r5 and a two-byte jmp
-// ra, chosen by a xorshift with no branch, so that the verdicts in the
-// table's index say nothing.  Each fits in the word the first guess read, so it dispatches in the
-// cycle the first jump is compared, the cycle before the squash - and is
-// guessed itself, since an ra-jump's guess needs only its own bytes, which
-// that word holds but for jmp ra at an odd address; the nops let the buffer
-// fill for the first jump's.  Nothing longer can
-// be there - a conditional branch's three bytes need the second
-// word, which comes as the squash does - and nothing behind a guessed call
-// ra, whose target dispatches a cycle later than jmp ra's.  Run twice, as
-// every source is, so jmp ra lands at both alignments; it fits only at an
-// even one.
+// A JUMP THROUGH A REGISTER WHOSE TARGET IS ANOTHER: a jmp whose target
+// changes lap by lap among three jumps of its own - a one-byte ret, a
+// one-byte jmp r5 and a two-byte jmp ra - chosen by a xorshift with no
+// branch.  It was written for a jmp ra guessed from a table, with the
+// second jump guessed behind it before the first was found wrong; jmp ra
+// is no longer guessed, and a guess behind a guess - a ret's - is the
+// squash bench's, below.  Run twice, as every source is, so jmp ra lands
+// at both alignments.
 // The targets come first, so that every mov of a label is of one already
 // placed: the assembler cannot settle a mov whose length its own target's
 // address decides.
@@ -612,6 +606,21 @@ SOURCES.push([
   'mov  r5, #back', 'mov  r3, #back', 'mov  lr, #back',
   'nop', 'nop', 'jmp  r2',
   'done: halt',
+].map((l) => '          ' + l).join('\n'));
+
+// A ret GUESSED BEHIND A ret GUESSED WRONG: inner moves lr before its ret,
+// whose guess is the return stack's top, B; the path guessed dispatches B's
+// own ret, guessed in turn, before the first is found wrong and squashed.
+// B is never reached on the right path.
+SOURCES.push([
+  'mov  r4, #12', 'jmp  top',
+  'inner: mov  lr, r1', 'nop', 'ret',
+  'outer: mov  r2, lr', 'call inner',
+  'b:   ret',
+  'c:   mov  lr, r2', 'ret',
+  'top: mov  r1, #c', 'call outer',
+  'add  r4, r4, #-1', 'br   ne, r4, #0, top',
+  'halt',
 ].map((l) => '          ' + l).join('\n'));
 
 // A LOAD STRAIGHT AFTER A STORE, AND A LOAD WHOSE BASE WAS JUST WRITTEN:
@@ -844,9 +853,8 @@ for (let p = 0; p < PROGRAMS; p++) {
       // A jump costs four cycles through a register - jmp ra, call ra, ret -
       // which goes through taken_q.  An absolute target is read as the
       // jump dispatches, so jmp's target dispatches two cycles after it, and
-      // call's three, when its ALU cycle has moved the pc.  jmp ra's and call
-      // ra's targets, guessed right, are read as they dispatch too: two, three;
-      // and ret's, from the return stack: two.
+      // call's three, when its ALU cycle has moved the pc.  ret's, guessed
+      // right from the return stack, is read as it dispatches too: two.
       const jm = JUMP_SEM.exec(d.insn.semantics ?? '');
       const jump = !jm ? 0 : jm[2] === 'target' ? (jm[1] ? 3 : 2)
                  : jm[1] ? 3 : 2;
@@ -934,7 +942,6 @@ ${BLIT_WIRING}
             u.shadow_sp = 0; u.shadow_lr = 0; u.shadow_isp = 0;
             // Nor is the predictor's table, which a new Machine starts empty.
             for (h = 0; h < 256; h = h + 1) u.bpm[h] = 0;
-            for (h = 0; h < 1024; h = h + 1) begin u.jtm[h] = 0; u.jcm[h] = 0; end
             mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
             mem[${GVECTOR}] = 8'h${HALT.toString(16).padStart(2, '0')};
             mem[${DVECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};

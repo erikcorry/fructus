@@ -266,14 +266,7 @@ export class Machine {
     this.rr      = 0;      // the way the next new entry goes in
     this.gh      = 0;      // the last eleven verdicts, the newest lowest
     this.ghLog   = [{ at: -Infinity, h: 0 }];   // gh's values, each with the edge that wrote it
-    // THE jmp ra PREDICTOR, rtl/cpu.sv's: see guessJra().  Its tables are not
-    // reset either; a reset clears its histories.
-    this.jtm     = new Int32Array(1024);   // targets
-    this.jcm     = new Uint8Array(1024);   // a confidence bit each
-    this.jq      = [];     // what the u stage does, still to land: { at, ix, ok, conf, tgt } or { at, v }
-    this.jh      = 0;      // the last five guessed jumps' target bits 8 .. 3, the newest lowest
-    this.jbh     = 0;      // the branches' verdicts since, the newest lowest
-    this.rpAt    = undefined;   // the cycle the last guessed jmp ra dispatched
+    this.rpAt    = undefined;   // the cycle the last guessed ret dispatched
     // THE RETURN STACK, rtl/cpu.sv's: see guessRet().  Its block is not
     // reset; its pointer and its top are.
     this.rsm     = new Uint16Array(256);   // what is below the top, rsm[rsp - 1] the next
@@ -568,8 +561,6 @@ export class Machine {
       pops:   /^base = sp; /.test(sem),
       block:  /^base = /.test(sem),
       viaReg: /\bpc = (lr|R\[[a-z]\])$/.test(sem),
-      callA:  /^lr = pc; pc = R\[a\]$/.test(sem),
-      jra:    /^pc = R\[[a-z]\]$/.test(sem),
       predict: /(^|; )pc = target$/.test(sem),
       calls:  /^lr = pc; /.test(sem),
       ret:    /^pc = lr$/.test(sem),
@@ -628,13 +619,6 @@ export class Machine {
     if (k.branch) {
       const t = this.fe.t, prior = this.cbrAt;
       this.cbrAt = t;
-      // Its verdict goes into the jmp ra predictor's history from the u stage.
-      // What the next guess would land lands now: a program with no jmp ra
-      // for millions of branches - compress - would queue them all, and
-      // drain them with a shift each.
-      const q = this.jq;
-      while (q.length && q[0].at <= t - 2) this.land(q.shift());
-      q.push({ at: t + 4, v: this.wrotePc ? 1 : 0 });
       if (this.predict(t, prior !== t - 2 && this.rpAt !== t - 2)) {
         if (this.wrotePc) return { hold: 1, redirect: 0, unpredicted: { hold: 3, redirect: 1 } };
         return { hold: 1 + this.penalty, redirect: this.penalty };
@@ -645,7 +629,7 @@ export class Machine {
     // predictor's history: see path().
     if (this.wrotePc && !k.branch) this.path(this.fe.t, at);
     // Every call pushes where it returns to, from its ALU stage - landing,
-    // as the jmp ra history does, what the next ret would.
+    // what the next ret would.
     if (this.wrotePc && k.calls) {
       const q = this.rsq;
       while (q.length && q[0].at <= this.fe.t) this.rsLand(q.shift());
@@ -658,13 +642,8 @@ export class Machine {
       // memory instruction's last access has the bus they read it a cycle on.
       return { hold: k.calls ? 3 : 1, redirect: 0, unpredicted: { hold: 3, redirect: 1 } };
     }
-    const g = this.wrotePc && (k.jra || k.callA) ? this.guessJra(this.fe.t)
-            : this.wrotePc && k.ret ? this.guessRet(this.fe.t) : null;
-    if (g && (k.jra || k.ret)) {
+    if (this.wrotePc && k.ret && this.guessRet(this.fe.t)) {
       return { hold: 1, redirect: 0, unpredicted: { hold: 3, redirect: 1 } };
-    } else if (g) {
-      // A call ra guessed right goes as a call to an absolute address.
-      return { hold: 3, redirect: 0, unpredicted: { hold: 3, redirect: 1 } };
     } else if (this.wrotePc) {
       // A JUMP OR CALL THROUGH A REGISTER, unguessed, stops dispatch behind
       // it, and its target, known in its ALU cycle, goes through taken_q a
@@ -734,36 +713,9 @@ export class Machine {
     return best ? best.h : 0;
   }
 
-  // A jmp ra's OR call ra's GUESS, dispatched in cycle t: whether it guessed
-  // right, and so goes on at its target at once, like jmp to an absolute
-  // address, or as call to one does.  The
-  // table, 1024 targets and a confidence bit each, is read every cycle, at
-  // jh's three ten-bit pieces XORed with jbh; the word read in cycle t - 2 is
-  // in flops at t.  None before the instruction is in the buffer - its
-  // target is not among its bytes, so it needs no more than they do - with a
-  // store's access on the bus, or straight behind a guessed jmp ra.
-  //
-  // What the jump teaches lands at the u stage's edge, t + 3, and is read
-  // from t + 4: the confidence bit becomes whether it was right, and a wrong
-  // guess without it puts the target in; the target's bits 8 .. 3 go into
-  // jh, and jbh is emptied.  A branch's verdict goes into jbh the same way.
-  // A wrong guess is redirected through taken_q, as an unguessed jmp ra is,
-  // and gh is put right at t + 3.
-  guessJra(t) {
-    const q = this.jq;
-    while (q.length && q[0].at <= t - 2) this.land(q.shift());
-    if (this.fe.nw < 1 || this.rpAt === t - 1) return false;
-    const jh = this.jh, ix = (jh ^ jh >>> 10 ^ jh >>> 20 ^ this.jbh) & 1023;
-    const ok = this.jtm[ix] === this.pc;
-    q.push({ at: t + 4, ix, ok, conf: this.jcm[ix], tgt: this.pc });
-    this.rpAt = t;
-    if (!ok) this.ghWrote(t + 3, this.gh, true);
-    return ok;
-  }
-
   // A ret's GUESS, dispatched in cycle t: the top of the return stack,
-  // rtq, under the jmp ra predictor's conditions, which it shares the path
-  // of.  The stack moves in a call's or a ret's ALU stage, two cycles after
+  // rtq.  None before the ret is in the buffer, or straight behind another
+  // guessed ret.  The stack moves in a call's or a ret's ALU stage, two cycles after
   // its dispatch: a push puts the return address on top and the old top in
   // the block, a pop takes the top from the word below it, which the block
   // reads always.  rtq follows the top a cycle later, with its word plus one
@@ -789,14 +741,6 @@ export class Machine {
       this.rsp = (this.rsp - 1) & 255;
       this.rtq = this.rsm[this.rsp];
     }
-  }
-
-  land(e) {
-    if (e.ix === undefined) { this.jbh = (this.jbh << 1 | e.v) & 0xff; return; }
-    this.jcm[e.ix] = e.ok ? 1 : 0;
-    if (!e.ok && !e.conf) this.jtm[e.ix] = e.tgt;
-    this.jh = (this.jh << 6 | e.tgt >> 3 & 63) & 0x3fffffff;
-    this.jbh = 0;
   }
 
   // A JUMP'S BIT: the history knows where the program went as well as which
@@ -881,11 +825,6 @@ export class Machine {
     }
     this.gh = this.rr = 0;
     this.ghLog = [{ at: -Infinity, h: 0 }];
-    for (const e of this.jq.splice(0)) if (e.ix !== undefined) {
-      this.jcm[e.ix] = e.ok ? 1 : 0;
-      if (!e.ok && !e.conf) this.jtm[e.ix] = e.tgt;
-    }
-    this.jh = this.jbh = 0;
     this.rpAt = undefined;
     for (const e of this.rsq.splice(0)) this.rsLand(e);
     this.rsp = this.rtq = 0;

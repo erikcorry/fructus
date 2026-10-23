@@ -230,8 +230,6 @@ function cycles(insn, info) {
   if (k.extra) return String(1 + k.extra);
   if (k.branch) return `1, taken 3, wrong ${spec.cpu.taken_branch_penalty + 2}`;
   if (k.predict) return k.calls ? '3' : '2';
-  if (k.jra) return '2, wrong 5';
-  if (k.callA) return '3, wrong 5 (lr: 4)';
   if (k.ret) return '2, wrong 5';
   if (/(^|;\s*)pc = /.test(sem)) return '5';
   return '1';

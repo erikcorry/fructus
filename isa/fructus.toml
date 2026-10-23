@@ -245,9 +245,9 @@ length_from_first_byte = true
 #       - guessed wrong, either way                  taken_branch_penalty + 2 = 5
 #     jmp to a target in its bytes                   2
 #     call to a target in its bytes                  3
-#     jmp ra, call ra, their target guessed right    2, 3
 #     ret, its target guessed right                  2
-#       - any of them unguessed or guessed wrong     5
+#       - unguessed or guessed wrong                 5
+#     jmp ra, call ra                                5
 #     mul, clz, popcount                             1 + extra_cycles = 2
 #     recip                                          1 + extra_cycles = 5
 #     a load of N accesses: ld8, ld                  N + 1
@@ -263,8 +263,8 @@ length_from_first_byte = true
 # two bytes at an odd address, or three at any.  A call that went straight to
 # its target does not: it holds dispatch two cycles after its target's word
 # is read, and the fetcher brings the second word in that time.  A branch
-# guessed taken, jmp and call to a target in their bytes, and jmp ra, call
-# ra and ret guessed, read their target a cycle late when a store's access
+# guessed taken, jmp and call to a target in their bytes, and ret guessed,
+# read their target a cycle late when a store's access
 # or a load's first address has the bus as they dispatch, and cost 3 - more
 # behind a block store whose next access has it too.  In a system built in blit mode, ld, ld8 and ldm
 # cost one more as well; see rtl/cpu.sv.
@@ -327,12 +327,12 @@ length_from_first_byte = true
 # dispatches: jmp moves the pc there too, two cycles, and call in its ALU
 # cycle, three, writing lr from the pc that is already past it.  Through a
 # register the target is known only in the ALU cycle and goes through a flop
-# before the fetch: five.  Unless the jmp ra predictor guessed it - a table of
-# 1024 targets, indexed by where the last few jumps went - and then jmp ra and
-# call ra go as the absolute forms do, and a wrong guess, caught against the
-# register in the ALU cycle, costs what no guess does.  A ret is guessed too,
-# from a return stack - its top in a flop, 256 entries below it in a block
-# RAM - and goes as a jmp ra guessed right does.  The stack moves in a call's
+# before the fetch: five.  But a ret is guessed, from a return stack - its
+# top in a flop, 256 entries below it in a block RAM - and goes as the
+# absolute jmp does, two cycles; a wrong guess, caught against lr in the ALU
+# cycle, costs what no guess does.  jmp ra and call ra were guessed too, from
+# a table of 1024 targets indexed by where the last few jumps went, for 0.8%
+# of FructusMark: it cost 354 cells, too many on the UP5K.  The stack moves in a call's
 # or a ret's ALU stage, and its top reaches the guess four cycles after the
 # call or ret dispatched: a ret sooner, as in a function that is nothing but
 # a ret, guesses the old top and costs five.  The stack's pointer wraps, so
@@ -340,7 +340,7 @@ length_from_first_byte = true
 # `call lr` is undefined: see the indirect call.
 #
 # jmp ra COSTS THE SAME IN ONE BYTE OR TWO: jmp r5 in one, any register in
-# two.  What it pays for is the register, or the guess of it, not the byte.
+# two.  What it pays for is the register, not the byte.
 #
 # A MEMORY INSTRUCTION STOPS DISPATCH TOO, and makes an access a cycle.  A
 # load's first address comes straight from the ALU's adder; a store
@@ -1132,9 +1132,9 @@ values = [15, 0, 1, 2, 3, 4, 6, 8]
 #   takes more than a cycle - memory, the stack, control flow, the exception
 #   and interrupt ones - and 1000_xxxx every one that takes one.  Within them
 #   the opcodes that do alike sit together: jmp r5 and call r5 are 0x02 and
-#   0x03, the same low bits as jmp ra and call ra at 0xb2 and 0xb3, so the
-#   processor's jmp ra predictor recognizes all four as x0xx_001x with
-#   bits 7, 5 and 4 equal; the four memory instructions are 0x04..0x07;
+#   0x03, the same low bits as jmp ra and call ra at 0xb2 and 0xb3, which
+#   let a jmp ra predictor, since removed, tell all four by a few bits; the
+#   four memory instructions are 0x04..0x07;
 #   the two three-register adds 0x80 and 0x81 differ in the destination bit
 #   only (add r1 has its sources swapped to make it so); mov r0..r3, #0 is
 #   0x88..0x8b, the register in the low two bits.
@@ -3555,9 +3555,8 @@ semantics = "pc = target"
 #
 # Nothing decodes worse for it: decode is a flat 256-entry table and always
 # was, so where the pc writers sit is a claim about how the map READS, not a
-# mask any hardware applies - but for the jmp ra predictor's, which picks out
-# jmp and call through a register, and ret, with a few bits: ret's bit 3, set
-# in none of the others, has its guess come from the return stack.
+# mask any hardware applies - but for the ret's guess, which picks out 0x08
+# whole.
 [[insn]]
 mnemonic = "call"
 summary  = "lr = pc of next instruction; pc = imm16"
@@ -3574,7 +3573,7 @@ semantics = "lr = pc; pc = target"
 # `call rX` is `call imm16` with the target coming from the register file
 # instead of the instruction stream: same lr write, same jump, a byte less to
 # fetch.  Two bytes.  Five cycles, as the target is known only in the ALU
-# cycle - or three, as `call imm16`, when the jmp ra predictor guessed it.
+# cycle.
 #
 # IT IS NOT OPTIONAL FOR C.  Before it existed, `ret` was the only transfer
 # that read a register, so a function pointer could be tail called - `mov lr,
@@ -3585,9 +3584,8 @@ semantics = "lr = pc; pc = target"
 #
 # `call lr` IS UNDEFINED.  The semantics write lr before they read R[a], so
 # taken literally it goes to the next instruction; the byte-serial core read
-# the old lr and went there.  Neither is worth a gate: the jmp ra predictor
-# guesses a call's target from where calls went, and the target of this one
-# would be the lr it writes.  gcc never emits it.
+# the old lr and went there.  Neither is worth a gate: the target of this
+# one would be the lr it writes.  gcc never emits it.
 #
 # AND `call r5` IS ONE BYTE, as `jmp r5` is.  r5 carries no argument and no
 # return value, so a call through a pointer with its arguments in r0-r3 can
@@ -3630,10 +3628,9 @@ semantics = "pc = lr"
 # IT TAKES ANY REGISTER, IN TWO BYTES, AND r5 IN ONE.  It was once one byte
 # with r5 pinned and nothing else, and the byte it saved was charged back in
 # register allocation: every indirect jump had to get its address into the one
-# register the assembler is also free to clobber.  Both forms cost the same -
-# two cycles with the target guessed right, five without - because what this
-# instruction pays for is the register, or the guess of it, not fetching a
-# byte.  With both, nothing has to move for the general case,
+# register the assembler is also free to clobber.  Both forms cost the same,
+# five cycles, because what this instruction pays for is the register, not
+# fetching a byte.  With both, nothing has to move for the general case,
 # and code that can choose r5 - a tail call through a pointer, which gcc
 # stages in r5 anyway, or an interpreter's dispatch - saves the byte.
 #
@@ -3645,8 +3642,8 @@ semantics = "pc = lr"
 # simpler for holding everything one byte long, that was the wrong trade.
 #
 # jmp r5 and call r5 are 0x02 and 0x03 for their low bits, which are jmp
-# ra's and call ra's at 0xb2 and 0xb3: the jmp ra predictor tells all four
-# from everything else with a few bits.  0x00 and 0x01 are brk and halt, so a
+# ra's and call ra's at 0xb2 and 0xb3: a jmp ra predictor, since removed,
+# told all four from everything else with a few bits.  0x00 and 0x01 are brk and halt, so a
 # wild jump into a zeroed page traps to a handler that can name the faulting
 # address rather than unwinding to wherever lr happened to point.
 [[insn]]
