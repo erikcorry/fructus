@@ -588,9 +588,10 @@ SOURCES.push([
 // jumps of its own: a one-byte ret, a one-byte jmp r5 and a two-byte jmp
 // ra, chosen by a xorshift with no branch, so that the verdicts in the
 // table's index say nothing.  Each fits in the word the first guess read, so it dispatches in the
-// cycle the first jump is compared, the cycle before the squash - unguessed
-// itself, since a guess needs two words in the buffer and it has the one;
-// the nops let the buffer fill for the first jump's.  Nothing longer can
+// cycle the first jump is compared, the cycle before the squash - and is
+// guessed itself, since an ra-jump's guess needs only its own bytes, which
+// that word holds but for jmp ra at an odd address; the nops let the buffer
+// fill for the first jump's.  Nothing longer can
 // be there - a conditional branch's three bytes need the second
 // word, which comes as the squash does - and nothing behind a guessed call
 // ra, whose target dispatches a cycle later than jmp ra's.  Run twice, as

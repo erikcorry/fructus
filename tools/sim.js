@@ -734,7 +734,8 @@ export class Machine {
   // address, or as call to one does.  The
   // table, 1024 targets and a confidence bit each, is read every cycle, at
   // jh's three ten-bit pieces XORed with jbh; the word read in cycle t - 2 is
-  // in flops at t.  None with fewer than two words in the buffer, with a
+  // in flops at t.  None before the instruction is in the buffer - its
+  // target is not among its bytes, so it needs no more than they do - with a
   // store's access on the bus, or straight behind a guessed jmp ra.
   //
   // What the jump teaches lands at the u stage's edge, t + 3, and is read
@@ -746,7 +747,7 @@ export class Machine {
   guessJra(t) {
     const q = this.jq;
     while (q.length && q[0].at <= t - 2) this.land(q.shift());
-    if (this.fe.nw < 2 || this.rpAt === t - 1) return false;
+    if (this.fe.nw < 1 || this.rpAt === t - 1) return false;
     const jh = this.jh, ix = (jh ^ jh >>> 10 ^ jh >>> 20 ^ this.jbh) & 1023;
     const ok = this.jtm[ix] === this.pc;
     q.push({ at: t + 4, ix, ok, conf: this.jcm[ix], tgt: this.pc });
@@ -767,7 +768,7 @@ export class Machine {
   guessRet(t) {
     while (this.rsq.length && this.rsq[0].at <= t) this.rsLand(this.rsq.shift());
     this.rsq.push({ at: t + 4 });
-    if (this.fe.nw < 2 || this.rpAt === t - 1) return false;
+    if (this.fe.nw < 1 || this.rpAt === t - 1) return false;
     this.rpAt = t;
     const ok = this.rtq === this.pc;
     if (!ok) this.ghWrote(t + 3, this.gh, true);
