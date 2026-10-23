@@ -5,7 +5,7 @@
 #
 #   tests/fructusmark/run.sh             the score: -Os -mmul, the standard
 #   tests/fructusmark/run.sh -O2         the same programs at -O2
-#   tests/fructusmark/run.sh --no-mul    without the multiply and reciprocal
+#   tests/fructusmark/run.sh --no-mul    without the multiply
 #   tests/fructusmark/run.sh -mno-X      any -m option, to every compile, so a
 #                                        compiler change can be scored without it
 #   tests/fructusmark/run.sh --baseline  ... and make this run the baseline

@@ -17,9 +17,6 @@
 // [cpu.vectors] io_guard: where a load or store that touches a guard goes.
 `define FRUCTUS_VECTOR_IO_GUARD 16'hffcc
 
-// [cpu.vectors] divide_by_zero: where a recip whose ra has bit 15 clear goes.
-`define FRUCTUS_VECTOR_DIVIDE_BY_ZERO 16'hffc8
-
 // [cpu.io]: the page, whose first and last 16 bytes are its guards.
 `define FRUCTUS_IO_PAGE 8'h04
 

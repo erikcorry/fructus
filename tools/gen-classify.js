@@ -43,10 +43,9 @@ const spec = loadSpec();
 
 // A unary operation with extra cycles takes two cycles in the ALU stage.
 // An instruction the ALU stage holds for its extra cycles: a unary operation,
-// or mul, mulhu or mulhs, which read the SB_MAC16s beside the ALU, or recip,
-// which reads rtl/recip.sv beside them.
+// or mul, mulhu or mulhs, which read the SB_MAC16s beside the ALU.
 const isTwo = (i) => i.extra_cycles > 0
-  && /^R\[d\] = (\w+\(R\[a\]\)|R\[a\] \* (R\[b\]|imm)|mulh[su]\(R\[a\], R\[b\]\)|recip\(R\[a\], (R\[b\]|imm)\))$/.test(i.semantics ?? '');
+  && /^R\[d\] = (\w+\(R\[a\]\)|R\[a\] \* (R\[b\]|imm)|mulh[su]\(R\[a\], R\[b\]\))$/.test(i.semantics ?? '');
 const isAlu = (i) => {
   const sem = i.semantics ?? '';
   return (!(i.extra_cycles > 0) || isTwo(i))
@@ -124,9 +123,8 @@ const LSEL = { 4: 0, 5: 1, 6: 2, 7: 3, 10: 4, 13: 5, 2: 6, 3: 7 };
 // THE PRODUCTS: mul, mulhu and mulhs - 14, 15 and 16 - reach it as 14, and
 // `lsel` says which halves to throw away.  Its bits are the OLOAD pins of the
 // SB_MAC16s, {signed high, unsigned high, low}: a 1 loads that half's output
-// register with zero, so the one 0 is the half kept.  recip, 17, zeroes all
-// three, and rtl/cpu.sv ORs in rtl/recip.sv's answer.
-const MSEL = { 14: 0b110, 15: 0b101, 16: 0b011, 17: 0b111 };
+// register with zero, so the one 0 is the half kept.
+const MSEL = { 14: 0b110, 15: 0b101, 16: 0b011 };
 // THE SUBTRACTOR: rsb and ishi - 1 and 18 - reach it as 1, and lsel[0] picks
 // the borrow, ishi's answer, over the difference.  An arm of its own for the
 // borrow, at the top of the carry chain, put the chain on every seed's
@@ -196,7 +194,7 @@ const cases = rows.map((r) => {
   // table: a cycle with none after one extra ALU cycle - mul, clz,
   // popcount - or after a store of one register, which never stops
   // dispatch (see tools/ucode.js); a stop after everything else that does
-  // not flow, and after more extra cycles than one - recip.
+  // not flow, and after more extra cycles than one, which nothing has now.
   const flows = k === KIND.alu || cbr;
   const st1 = !!mem && (!!mem.st || ld1) && mem.n === 1;
   const skp = (flows && ext === 1) || st1;
@@ -321,7 +319,7 @@ module classify (
     output logic       mpush,     //   downward, so its registers lie reversed
     output logic       useq,      // it runs a routine: a memory or exception instruction
     output logic [${ENTRY_BITS - 1}:0] uent,      // where its routine starts in rtl/ucode.sv
-    output logic [2:0] ext,       // extra cycles in the ALU stage: clz, popcount, mul, recip
+    output logic [2:0] ext,       // extra cycles in the ALU stage: clz, popcount, mul
 \`ifdef FRUCTUS_BLIT
     output logic       ulate,     // blit mode makes it late: ld, ld8 and ldm
 \`endif

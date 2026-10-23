@@ -231,6 +231,13 @@
 // and a median of eight are not comparable:
 //
 //                                                   cells     MHz   spread
+//     NO recip AND NO jmp ra TABLE                   3071    30.23  28.8 .. 30.9
+//       30.95 best.  ret alone guessed, from the return stack; the
+//       reciprocal libgcc's __recip_mul, made with mul.  The system with
+//       UART and USB fits, 5170 cells of 5280 against 5565, and places at
+//       24.04, 25.05 best: every seed's critical path mem_rmar to the
+//       register file or the ALU, the I/O read mux on the load's bypass.
+//       FructusMark -Os -mmul 138.4 to 137.4, all of it the table's
 //     AN ra-JUMP GUESSED WITH ITS OWN BYTES IN       3435    29.70  28.6 .. 31.2
 //       2815 LUT4, and the row below rerun the same day, 30.01, 31.79 best.
 //       A ret, jmp r5 or call r5 with one word in the buffer, and jmp ra or
@@ -573,13 +580,12 @@ module cpu (
     // preempted instruction's address and rti restarts it.
     // A GUARD TRAP IS ONE TOO, and not maskable: `gq', below, says a load or
     // store touched a guard of the I/O page, and the next dispatch is its brk.
-    // So is a divide by zero: `dq', a recip whose ra had bit 15 clear.
     wire       aphase;                         // the sequencer has the bus: below
     // OR A LOAD's FIRST ADDRESS DOES, in its ALU cycle, which may dispatch
     // now: a guess dispatched then reads its target a cycle on, as it does
     // while the sequencer has the bus.
     wire       abusy;
-    logic      gq, dq;
+    logic      gq;
     // A slot is a cycle that may dispatch; `take` needs only a byte in the
     // buffer, since brk has no bytes but its opcode, and it shifts nothing.
     // Not rst, which reaches everything from its corner: after its first
@@ -595,7 +601,7 @@ module cpu (
     // coincide; dispatch may go on before the access now.  `ieq` is ie with
     // that folded in, a flop, so take has no more inputs than it had.
     wire       ieq;                            // below, with ie
-    wire       take = slot & (nw != 3'd0) & ((ieq & irq) | gq | dq);
+    wire       take = slot & (nw != 3'd0) & ((ieq & irq) | gq);
     wire [7:0] op = ib0 & {8{~take}};
 
     wire [1:0] kind, len, c_cond, c_pcsrc, c_mn;
@@ -844,9 +850,9 @@ module cpu (
     wire        pjb  = pc[3] ^ pc[5];               // a jump's bit for gh
     // mul, clz AND popcount TAKE TWO CYCLES IN THE ALU STAGE, and leave a
     // cycle with no dispatch after them, `skip`: see the ALU stage.
-    // MORE THAN ONE EXTRA CYCLE - recip's four - STOPS DISPATCH, as a jump
-    // does, and `xrel` releases it when the ALU stage has two held cycles to
-    // come: the next instruction dispatches in the first and reaches decode
+    // MORE THAN ONE EXTRA CYCLE STOPS DISPATCH, as a jump does - no
+    // instruction has more since recip went - and `xrel` releases it when
+    // the ALU stage has two held cycles to come: the next instruction dispatches in the first and reaches decode
     // in the last, where it takes the result through the bypass.  So any
     // count from two up needs nothing more than the compare.
     // A STORE OF ONE REGISTER DOES NOT STOP DISPATCH: it reads its register
@@ -855,7 +861,7 @@ module cpu (
     // with the port free, and its own ALU cycle after the access.  So it is
     // a two-cycle instruction, a bubble behind it - three if it is a word at
     // an odd address.  Predecode's skp and stp columns say which, as they do
-    // for mul and recip.
+    // for mul.
 
     // The candidates for the next pc come off the pc flop in parallel, so the
     // classifier's length only picks one.
@@ -1186,10 +1192,9 @@ module cpu (
     // which the instruction then in decode takes through the bypass as usual.
     logic [2:0]  e_cnt;               // held cycles still to come
     logic        e_two;               // held: clz or popcount's unary arm reads q
-    logic        e_first;             // a held instruction's first ALU cycle
     wire         e_hold = e_cnt != 3'd0;
     wire         e_keep = e_hold & ~taken_q;   // held on; a squash ends it
-    assign       xrel   = e_cnt == 3'd2;       // dispatch's release, for recip: above
+    assign       xrel   = e_cnt == 3'd2;       // dispatch's release, for a long hold: above
     logic        e_valid;             // for the harness
     logic [15:0] e_pc;                // for the harness
     always_ff @(posedge clk) begin
@@ -1199,7 +1204,6 @@ module cpu (
         e_valid <= e_hold ? (e_cnt == 3'd1) & ~taken_q : (keep & (d_ext == 3'd0));   // the last cycle retires
         e_cnt   <= (rst | taken_q) ? 3'd0 : e_hold ? e_cnt - 3'd1 : keep ? d_ext : 3'd0;
         e_two   <= ~rst & (e_hold ? e_two : keep & (d_ext != 3'd0));
-        e_first <= ~rst & ~taken_q & ~e_hold & keep & (d_ext != 3'd0);
         // A write marked M is the arriving word's, not the ALU's: y keeps
         // one LUT to the operand flop, and the word joins the read's side.
         aq      <= (fwd_a & ~uM) ? y : fwd_a ? mcv : R[an_rd];
@@ -1672,37 +1676,19 @@ module cpu (
     // whole into ldq in the ALU cycle once measured 26.40 MHz: yosys pushed ldq
     // back into the popcount tree, and the flops it made there took a reset
     // from dispatch.)
-    // recip's answer is ORed in, zero but in its last held cycle, and an lsel
-    // of 111 has zeroed all three of mul's halves - rtl/recip.sv.
-    wire [15:0] mprod, rprod;
-    mul  mulu (.clk(clk), .a(aq), .b(bq), .z(e_lsel), .p(mprod));
-    assign prod = mprod | rprod;
-    // A module of its own, or abc maps decode a cell deeper: rtl/recip.sv.
-    wire rgo = e_op == 4'd14 && e_lsel == 3'b111;
-    (* keep_hierarchy *)
-    recip rcp (.clk(clk), .a(aq), .go(rgo), .cnt(e_cnt), .p(rprod));
+    mul  mulu (.clk(clk), .a(aq), .b(bq), .z(e_lsel), .p(prod));
     wire [15:0] lqsrc = (uLQ == 3'd1) ? pc
                       : (uLQ == 3'd2) ? shadow_sp
                       : (uLQ == 3'd3) ? shadow_lr : shadow_isp;
     assign urj    = uRJ != 2'd0;
     localparam [15:0] GVECTOR = `FRUCTUS_VECTOR_IO_GUARD;
-    localparam [15:0] DVECTOR = `FRUCTUS_VECTOR_DIVIDE_BY_ZERO;
-    assign rjaddr = (urj & uRJ[0]) ? (gent ? GVECTOR : dent ? DVECTOR : VECTOR) : aq;   // aq: rti's, or a register jump's
+    assign rjaddr = (urj & uRJ[0]) ? (gent ? GVECTOR : VECTOR) : aq;   // aq: rti's, or a register jump's
     // The guard trap: gq from the faulting access until its brk is taken;
     // gent through that brk's routine, which jumps to GVECTOR.
-    // THE DIVIDE BY ZERO is the same again, from recip's first ALU cycle,
-    // where aq is ra: dq until its brk is taken, dent through the routine.
-    // recip stops dispatch and releases it with three held cycles to come,
-    // so the next dispatch is two cycles after dq is set - never late.  A
-    // recip squashed behind a taken branch sets nothing.
-    logic        dent;
-    wire         dhit = e_first & rgo & ~aq[15] & ~taken_q;
     always_ff @(posedge clk) begin
         mldq <= ~rst & ((mstart & ldnow) | (aphase & ~mst));
         gq   <= ~rst & ~take & (gq | ghit);
         gent <= ~rst & (take ? gq | ghit : gent & ~(urj & uRJ[0]));
-        dq   <= ~rst & ~take & (dq | dhit);
-        dent <= ~rst & (take ? dq : dent & ~(urj & uRJ[0]));
     end
     assign wake   = halted & ie & irq;
     always_ff @(posedge clk) begin

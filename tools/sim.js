@@ -197,9 +197,6 @@ export const BUILTIN = {
   // any 32-bit product, where Math.imul would keep only the low half.
   mulhu:    (x, y) => Math.floor(((x & MASK) * (y & MASK)) / 0x10000),
   mulhs:    (x, y) => Math.floor((s16(x) * s16(y)) / 0x10000),
-  // Moller and Granlund's 2/1 v for the divisor x, its top bit set.  y is
-  // the instruction's immediate, which only #0 is defined for.
-  recip:    (x, y) => Math.floor(0xffffffff / ((x & MASK) | HALF)) - 0x10000,
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };
 
@@ -239,9 +236,6 @@ export class Machine {
     // it runs, `guardPending' until the next step enters io_guard.
     this.guardHit = this.guardPending = false;
     this.guardAt = 0;      // and the first cycle the trap may take a dispatch
-    // And a recip whose ra had bit 15 clear: [cpu.vectors] divide_by_zero,
-    // entered the same way.  Every machine has this one.
-    this.divHit = this.divPending = false;
     this.little = spec.cpu.endian === 'little';
     this.count  = 0;
     this.tmp    = {};      // scratch names, cleared at every instruction
@@ -419,7 +413,6 @@ export class Machine {
         const f = BUILTIN[node.fn];
         if (!f) throw new Error(`semantics: unknown builtin ${node.fn}`);
         const args = node.args.map((a) => this.ev(a, ops));
-        if (node.fn === 'recip' && !(args[0] & HALF)) this.divHit = true;
         return f(...args);
       }
       case 'un': {
@@ -485,7 +478,7 @@ export class Machine {
   // them means the address of the next instruction - which is what makes
   // `lr = pc` and `pc = pc + off` read the way the spec's summaries describe.
   step(trace = null) {
-    if (this.divPending || (this.guardPending && this.fe.t >= this.guardAt)) return this.guardTrap(trace);
+    if (this.guardPending && this.fe.t >= this.guardAt) return this.guardTrap(trace);
     const at = this.pc;
     const e = this.entry(at);
     if (!e) throw new Error(`no instruction at 0x${at.toString(16)} (first byte 0x${this.mem[at].toString(16)})`);
@@ -498,7 +491,6 @@ export class Machine {
     if (trace) trace(at, d, this);
     for (const s of e.body) this.exec(s, d.ops);
     if (this.guardHit) { this.guardHit = false; this.guardPending = true; }
-    if (this.divHit) { this.divHit = false; this.divPending = true; }
     this.cyc += this.advance(at, d.nbytes, this.timing(d, e.kind, this.xfer - xfer, at));
     this.count++;
     return d;
@@ -522,15 +514,13 @@ export class Machine {
   // [cpu.vectors] io_guard, a step of its own after the instruction that
   // touched a guard: a brk dispatched in that instruction's successor's
   // place, as an interrupt is, so lr is the successor's address.  Six cycles.
-  // divide_by_zero, after a recip, the same way.
   guardTrap(trace) {
     const at = this.pc, d = decode(this.dec, [0, 0, 0], 0);     // brk, opcode 0
     this.dispatch(at);
     if (trace) trace(at, d, this);
     const sp = this.named.sp, lr = this.named.lr;
-    const vectors = this.spec.cpu.vectors;
-    const vector = this.guardPending ? vectors.io_guard : vectors.divide_by_zero;
-    this.guardPending = this.divPending = false;
+    const vector = this.spec.cpu.vectors.io_guard;
+    this.guardPending = false;
     this.shadow_lr = this.R[lr];
     this.R[lr] = at;
     this.shadow_sp = this.R[sp];
@@ -602,7 +592,7 @@ export class Machine {
       if (!k.block && !this.blit) return { hold: moved + 1, busy };
       return { hold: moved + 2 + (this.blit && !k.pops ? 1 : 0), busy };
     }
-    // mul, clz, popcount and recip hold the ALU stage: `extra_cycles` more.
+    // mul, clz and popcount hold the ALU stage: `extra_cycles` more.
     if (k.extra) return { hold: 1 + k.extra };
     // A CONDITIONAL BRANCH FLOWS DOWN THE PIPELINE LIKE AN ALU INSTRUCTION,
     // with dispatch carrying on behind it.  TAKEN, the ALU stage decides it,
@@ -796,7 +786,7 @@ export class Machine {
   // flop, and anything ready before it dispatches as usual.
   ready(nw, t) {
     if (this.halted) return true;
-    if (this.divPending || (this.guardPending && t >= this.guardAt)) return nw >= 1;
+    if (this.guardPending && t >= this.guardAt) return nw >= 1;
     const len = this.entry(this.pc)?.d.nbytes ?? 1;
     return nw >= 2 || (nw === 1 && ((this.pc & 1) ? len === 1 : len !== 3));
   }

@@ -458,7 +458,7 @@ ${DEVICE.replace('DEVF', '1.01')}
     end
 endmodule
 `);
-const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare', 'recip', 'uart', 'usb', 'spiboot']
+const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare', 'uart', 'usb', 'spiboot']
   .map((m) => `${DIR}/${m}.sv`);
 const VIDEO = ['video', 'timing', 'background', 'foreground', 'sprites'].map((m) => `${DIR}/video/${m}.sv`);
 execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', '-DFRUCTUS_UART', '-DFRUCTUS_USB', '-DNO_ICE40_DEFAULT_ASSIGNMENTS',

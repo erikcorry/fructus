@@ -138,10 +138,6 @@ const oneByte = (mnemonic) => parseInt(spec.insn.find((i) => i.mnemonic === mnem
 const RTI = oneByte('rti'), VECTOR = spec.cpu.vectors.brk;
 // io_guard's vector holds a halt, so a guard trap ends the program there.
 const GVECTOR = spec.cpu.vectors.io_guard;
-// divide_by_zero's holds rti, so a recip of a divisor with bit 15 clear -
-// half of the random ones - is a round trip, and the program carries on
-// after it.
-const DVECTOR = spec.cpu.vectors.divide_by_zero;
 const excs = ['brk', 'sei', 'cli'].map((mn) => ({ op: oneByte(mn), nbytes: 1, b1s: [0] }));
 const EXC = /^(brk|rti|sei|cli)$/;
 // The least each takes: brk and rti redirect the fetch, and the target's
@@ -414,19 +410,9 @@ const SOURCES = [
           mov  r1, #0x3000
           ldm  r3, r3
           halt`,
-  // A DIVIDE BY ZERO, [cpu.vectors] divide_by_zero: a recip whose ra has
-  // bit 15 clear traps after writing its answer, and the rti at the vector
-  // comes back to the add after each.  Then one with the bit set, which does
-  // not.  The shifts' two-register imm10 forms come along.
-  `       mov  r1, #0x1234
-          recip r0, r1
-          add  r0, r0, #1
-          mov  r2, #0
-          mov  r3, #5
-          recip r4, r2
-          add  r4, r4, r0
-          mov  r1, #0x9234
-          recip r2, r1
+  // The shifts' two-register imm10 forms.
+  `       mov  r1, #0x9234
+          mov  r2, #0x5a3c
           lsr  r3, r2, #13
           shl  r5, r2, #11
           asr  r1, r1, #5
@@ -764,7 +750,6 @@ const BLIT_WIRING = `\`ifdef FRUCTUS_BLIT
 \`endif`;
 mkdirSync('build', { recursive: true });
 writeFileSync('build/cpu-zero.hex', '00\n'.repeat(65536));
-let dtraps = 0;                        // divide-by-zero traps the simulator took
 for (let p = 0; p < PROGRAMS; p++) {
   let bytes, draws = val;
   if (p < N_ALU) {
@@ -817,7 +802,6 @@ for (let p = 0; p < PROGRAMS; p++) {
   const m = new Machine(spec, { io }).load(bytes, 0);
   m.mem[VECTOR] = RTI;
   m.mem[GVECTOR] = HALT;
-  m.mem[DVECTOR] = RTI;
   reg.forEach((v, k) => { m.R[k] = v; });
   // AND ITS TWIN IN BLIT MODE, traced on its own: the same machine but for
   // its loads' timing, which changes what the fetcher has when - and so,
@@ -843,10 +827,8 @@ for (let p = 0; p < PROGRAMS; p++) {
     const trace = [], alog = logAccesses(m);
     for (let guard = 0; !m.halted && guard < 5000; guard++) {
       const pc = m.pc;
-      // A guard trap is a brk dispatched where the next instruction would be,
-      // and so is a divide by zero.
-      const trap = m.divPending || (m.guardPending && m.fe.t >= m.guardAt);
-      if (m.divPending && !m.blit) dtraps++;
+      // A guard trap is a brk dispatched where the next instruction would be.
+      const trap = m.guardPending && m.fe.t >= m.guardAt;
       const d = decode(dec, trap ? [0, 0, 0]
                                            : [m.mem[pc], m.mem[(pc + 1) & 0xffff], m.mem[(pc + 2) & 0xffff]], 0);
       const taken = branches.has(`${d.insn.mnemonic}/${d.form.name}@${m.mem[pc]}`) && takes(pc, d.nbytes);
@@ -944,7 +926,6 @@ ${BLIT_WIRING}
             for (h = 0; h < 256; h = h + 1) u.bpm[h] = 0;
             mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
             mem[${GVECTOR}] = 8'h${HALT.toString(16).padStart(2, '0')};
-            mem[${DVECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
             rst = 0; cyc = 0;
             while (!halted && !trapped && cyc < 20000) step;
             // AND ON A LITTLE: whatever stopped the machine must have stopped
@@ -959,7 +940,7 @@ ${BLIT_WIRING}
     end
 endmodule
 `);
-const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare', 'recip']
+const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare']
   .map((m) => `${process.env.FRUCTUS_RTL ?? 'rtl'}/${m}.sv`);
 execFileSync('iverilog', ['-g2012', '-o', 'build/cpu-tb.vvp', ...RTL, 'build/cpu-tb.sv'], { stdio: 'inherit' });
 const out = vvp('build/cpu-tb.vvp');
@@ -1135,7 +1116,6 @@ const finalOf = ({ bytes, reg, io }, exact, blit = false) => {
   const m = new Machine(spec, { io, blit }).load(bytes, 0);
   m.mem[VECTOR] = RTI;
   m.mem[GVECTOR] = HALT;
-  m.mem[DVECTOR] = RTI;
   m.ie = 1;
   reg.forEach((v, k) => { m.R[k] = v; });
   let cli = false;
@@ -1220,7 +1200,6 @@ ${BLIT_WIRING}
             $sformat(name, "build/cpu-reg-%0d.hex", p);  $readmemh(name, regs);
             mem[${VECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
             mem[${GVECTOR}] = 8'h${HALT.toString(16).padStart(2, '0')};
-            mem[${DVECTOR}] = 8'h${RTI.toString(16).padStart(2, '0')};
             irq = 0;
             rst = 1;
             repeat (3) begin #1 clk = 1; #1 clk = 0; end
@@ -1296,8 +1275,7 @@ if (bad === 0) {
             + `${taken} branches taken, ${jumped} jumps, ${moved} memory instructions, ${whole} a word at a time; `
             + `registers, memory, ${accesses} data accesses in order, dispatch cadence and tools/sim.js's cycle counts agree, `
             + `${cycles} cycles to halt, ${squashedMem} loads and stores dispatched and squashed; `
-            + `${gtraps} guard traps, ${gtraps - GUARD_PROGRAMS} of them random; `
-            + `${dtraps} divide-by-zero traps`);
+            + `${gtraps} guard traps, ${gtraps - GUARD_PROGRAMS} of them random`);
   for (const k of ['branch behind branch', 'guessed behind branch', 'guessed behind guessed'])
     if (!nested[k]) { console.log(`FAIL  rtl/cpu.sv: no ${k} squashed - the programs no longer reach it`); process.exit(1); }
   console.log(`ok    rtl/cpu.sv, two guesses deep, squashed: ` +
