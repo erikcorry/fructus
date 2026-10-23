@@ -37,6 +37,7 @@ export const FIELDS = [
   ['IE', 18, 2, 'ie: 1 cleared, 2 set'],
   ['RJ', 20, 2, 'the fetch goes to: 1 the vector, 2 aq, the register read the step before'],
   ['L',  22, 1, "C's byte is on mem_late, the word from two edges ago: blit mode"],
+  ['M',  23, 1, "W's register takes the word arriving now, not the ALU's result"],
 ];
 export const WORD_BITS = 32;
 
@@ -77,6 +78,13 @@ function memSteps({ st, blk, w2, n }, late = 0, aligned = 0) {
     // In step k the next access, access k, is made ready: register k / B,
     // half k % B.  Access 0 was made ready in the ALU cycle.
     for (let k = 1; k < N; k++) Object.assign(step[k], { WE: 1, KS: Math.floor(k / B), KH: k % B });
+  } else if (!blk && n === 1 && !late) {
+    // ld AND ld8 WRITE AS THE LAST BYTE ARRIVES, from the port itself, and
+    // never stop dispatch: the next instruction reaches decode in step N, the
+    // last, and takes the word through the bypass.
+    for (let k = 1; k <= N - 1; k++) step[k].A = 1;
+    for (let k = 1; k <= N; k++) step[k].C = 1;
+    Object.assign(step[N], { W: 1, M: 1, D: 1 });
   } else {
     for (let k = 1; k <= N - 1; k++) step[k].A = 1;
     for (let k = 1; k <= N; k++) Object.assign(step[k + late], late ? { C: 1, L: 1 } : { C: 1 });

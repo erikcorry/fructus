@@ -856,6 +856,8 @@ for (let p = 0; p < PROGRAMS; p++) {
       const memst = mem && /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(d.insn.semantics);
       // Blit mode makes every load but pop a cycle slower.
       const late = mem && !memst && !/^base = sp; /.test(d.insn.semantics);
+      // ld and ld8 - a load that is no block - write as their word arrives.
+      const ld1 = mem && !memst && !/^base = /.test(d.insn.semantics);
       const before = m.cycles(), xfer0 = m.xfer, a0 = alog.length;
       m.step();
       // WITHIN AN INSTRUCTION, ADDRESS ORDER: a block move goes up memory
@@ -866,7 +868,7 @@ for (let p = 0; p < PROGRAMS; p++) {
       // A memory instruction's accesses: an aligned word is one, a byte one.
       const acc = mem ? m.xfer - xfer0 : 0;
       const back = !!(m.mem[(pc + 2) & 0xffff] & 0x80);
-      if (!m.halted) trace.push({ pc, len: d.nbytes, taken, back, jump, mem, acc, memst, late, exc, cyc, R: Array.from(m.R) });
+      if (!m.halted) trace.push({ pc, len: d.nbytes, taken, back, jump, mem, acc, memst, late, ld1, exc, cyc, R: Array.from(m.R) });
     }
     return { trace, acc: alog, hash: fold(m.mem), gtrap: m.pc === ((GVECTOR + 1) & 0xffff) };
   };
@@ -1051,6 +1053,7 @@ function check(out, blit, what) {
       const want = prev.cyc;
       const floor = prev.exc ? prev.exc
                   : prev.memst ? Math.max(2, prev.acc)
+                  : prev.ld1 && !blit ? prev.acc + 1
                   : prev.mem ? prev.acc + 2 + (blit && prev.late ? 1 : 0)
                   : prev.jump ? prev.jump : prev.taken ? 2 : 1;
       if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) say(` dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
@@ -1121,8 +1124,8 @@ for (const f of ['build/cpu-tb.vvp', 'build/cpu-tb.sv']) rmSync(f, { force: true
 // dispatch the trap would otherwise have let one more instruction take.
 // So a program ends as the simulator's run does, or as one whose guard traps
 // are all taken a cycle before the simulator's.
-const finalOf = ({ bytes, reg, io }, exact) => {
-  const m = new Machine(spec, { io }).load(bytes, 0);
+const finalOf = ({ bytes, reg, io }, exact, blit = false) => {
+  const m = new Machine(spec, { io, blit }).load(bytes, 0);
   m.mem[VECTOR] = RTI;
   m.mem[GVECTOR] = HALT;
   m.mem[DVECTOR] = RTI;
@@ -1144,6 +1147,10 @@ const finalOf = ({ bytes, reg, io }, exact) => {
 };
 const finals = programs.map((q) => finalOf(q, false));
 const exacts = programs.map((q) => finalOf(q, true));
+// IN BLIT MODE a load's timing is the late one's, and a guard trap's place
+// among the instructions follows the timing, so its reference is its own.
+const blitFinals = programs.map((q) => finalOf(q, false, true));
+const blitExacts = programs.map((q) => finalOf(q, true, true));
 writeFileSync('build/cpu-irq-tb.sv', `module tb;
     logic clk = 0, rst = 1, irq = 0, drop;
     integer next, lfsr;
@@ -1184,7 +1191,7 @@ ${BLIT_WIRING}
     task tick(input integer raise);
         begin
             if (raise && cyc == next) irq = 1;
-            drop = u.take;
+            #0 drop = u.take;              // take follows irq: let it settle
             if (drop) takes = takes + 1;
             rl = rld; rm = rmar; wv = we; wa = addr; wd = wdata;
             #1 clk = 1; #1 clk = 0;
@@ -1243,8 +1250,9 @@ for (const blit of [false, true]) {
     const f = line.trim().split(/\s+/);
     if (f[0] !== 'IRQ') continue;
     const p = +f[1], R = f.slice(6, 14).map((x) => parseInt(x, 16));
-    const fin = +f[5] === exacts[p].hash && R.every((v, k) => v === exacts[p].R[k]) && +f[16] === exacts[p].acc
-              ? exacts[p] : finals[p];
+    const ex = blit ? blitExacts : exacts;
+    const fin = +f[5] === ex[p].hash && R.every((v, k) => v === ex[p].R[k]) && +f[16] === ex[p].acc
+              ? ex[p] : (blit ? blitFinals : finals)[p];
     irqSeen.add(p);
     if (!blit) irqTakes += +f[4];
     if (f[2] !== '1' || f[3] !== '0') complain(`program ${p}: ${f[3] === '1' ? 'trapped' : 'did not halt'} under interrupts${what}`);
@@ -1259,7 +1267,7 @@ for (const blit of [false, true]) {
   }
   if (irqSeen.size !== PROGRAMS) complain(`${PROGRAMS - irqSeen.size} programs printed nothing under interrupts${what}`);
 }
-for (const f of ['build/cpu-irq-tb.vvp', 'build/cpu-irq-tb.sv']) rmSync(f, { force: true });
+if (!process.env.CPU_KEEP) for (const f of ['build/cpu-irq-tb.vvp', 'build/cpu-irq-tb.sv']) rmSync(f, { force: true });
 if (!process.env.CPU_KEEP) for (let p = 0; p < PROGRAMS; p++) for (const f of [`build/cpu-prog-${p}.hex`, `build/cpu-reg-${p}.hex`]) rmSync(f, { force: true });
 if (!process.env.CPU_KEEP) for (let p = 0; p < PROGRAMS; p++) rmSync(`build/cpu-mem-${p}.hex`, { force: true });
 rmSync('build/cpu-zero.hex', { force: true });

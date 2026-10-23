@@ -1,0 +1,184 @@
+diff --git a/rtl/cpu.sv b/rtl/cpu.sv
+index 11443bd..a40ad41 100644
+--- a/rtl/cpu.sv
++++ b/rtl/cpu.sv
+@@ -916,7 +916,7 @@ module cpu (
+     assign mem_addr = pb      ? {padd[15:1], 1'b0}
+                     : pjg     ? {jgt[15:1], 1'b0}
+                     : redir   ? {tgt_q[15:1], 1'b0}
+-                    : ldnow   ? asum
++                    : ldnow   ? (e_pa ? aq : asum)
+                     : aphase  ? maddr
+                     :           {pbf ? pnq : fp, 1'b0};
+ 
+@@ -1149,7 +1149,10 @@ module cpu (
+     // the fields are in address order here for every block move.
+     wire [2:0] ml0_d = wn, ml1_d = ins[13:11], ml2_d = {ins[15:14], ins[0]};
+     wire [2:0] mN_d  = d_mw2 ? {d_mn, 1'b0} : {1'b0, d_mn};   // bytes: 1, 2, 4 or 6
+-    assign moff_d = d_mpush ? -{13'd0, mN_d} : 16'd0;         // a push starts 2n down
++    // A block load's is +2n: the ALU makes where its pointer ends, which it
++    // writes in its ALU cycle, and its first address is the pointer itself,
++    // aq - see THE MEMORY SEQUENCER.
++    assign moff_d = d_mpush ? -{13'd0, mN_d} : (d_mblk & ~d_mst) ? {13'd0, mN_d} : 16'd0;
+     // and its pointer ends there, where any other block move's ends 2n up -
+     // chosen here, so the ALU stage needs no mux after its adder.
+     wire [3:0] mstep_d = d_mpush ? -{1'b0, mN_d} : {1'b0, mN_d};
+@@ -1175,6 +1178,8 @@ module cpu (
+     // instruction after it may be in decode: the bypass takes that write too.
+     wire [7:0] fwe = e_we | (mwe & {8{mdone}});
+     wire        uM;                    // the write is the arriving word: below
++    wire        pnow;                  // a block load's pointer, in its ALU cycle
++    wire [15:0] ptrv;
+     wire [15:0] mcv;
+ `ifdef SYNTHESIS
+     wire fwd_a = fwe[an];
+@@ -1200,7 +1205,7 @@ module cpu (
+     logic [1:0]  e_bway, e_bctr;
+     logic [2:0]  e_code;
+     logic [15:0] e_tgt;
+-    logic        e_mem, e_mst, e_mw2, e_mblk, e_s1w, e_ld;
++    logic        e_mem, e_mst, e_mw2, e_mblk, e_s1w, e_ld, e_pw, e_pa;
+     logic [3:0]  e_mstep;
+     logic [2:0]  e_l0, e_l1, e_l2, e_ptr;
+     logic [4:0]  e_uent;               // where the microcode routine starts
+@@ -1252,8 +1257,14 @@ module cpu (
+         e_ucode <= d_ucode & ~taken_q;
+         e_mem   <= keep & d_mem;
+         e_ld    <= keep & d_mem & ~d_mst;   // e_mem & ~e_mst, a flop: ldnow
++        e_pa    <= d_mblk & ~d_mst;         // a block load: its address is aq
+         // A word load or store: sodd's.  A block's stopped dispatch anyway.
+         e_s1w   <= keep & d_mem & d_mw2;
++`ifdef FRUCTUS_BLIT
++        e_pw    <= d_mblk & ~d_mst & ~(blit & d_ulate);   // not a late routine's
++`else
++        e_pw    <= d_mblk & ~d_mst;     // a block load: its pointer in the ALU cycle
++`endif
+         {e_mst, e_mw2, e_mblk} <= {d_mst, d_mw2, d_mblk};
+         {e_mstep, e_l0, e_l1, e_l2, e_ptr} <= {mstep_d, ml0_d, ml1_d, ml2_d, an};
+ `ifdef FRUCTUS_BLIT
+@@ -1326,7 +1337,12 @@ module cpu (
+         pbw     <= ~rst & pbd & aphase & uw[7];
+         pjw     <= ~rst & (pjd | prd) & aphase & uw[7];
+         pbm     <= ~rst & pbd & ~abusy;
+-        for (int k = 0; k < 8; k++) if ((e_we[k] & ~taken_q) | mwe[k]) R[k] <= uM ? mcv : y;
++        // THE WRITE PORT HAS TWO SOURCES, y one LUT from the flops: the
++        // arriving word in a step marked M, and the ALU's result - which in
++        // a block load's ALU cycle is where its pointer ends.
++        for (int k = 0; k < 8; k++)
++            if ((e_we[k] & ~taken_q) | mwe[k] | (pnow & (e_ptr == 3'(k))))
++                R[k] <= uM ? mcv : y;
+     end
+     assign result = y;
+ 
+@@ -1476,13 +1492,20 @@ module cpu (
+     // the whole system, with rtl/spiboot.sv, 35 LUT4s and 27.19 against
+     // 26.74, spread 26.5 .. 28.0 against 25.4 .. 27.5 - noise, both.
+     wire mstart = e_useq & ~taken_q;
+-    wire [15:0] ea   = asum;
++    // A block load's first address is its pointer, aq, as the ALU makes
++    // where the pointer ends: their bit 0 is the same, since 2n is even.
++    wire [15:0] ea   = e_pa ? aq : asum;
+     wire        al   = e_mw2 & ~ea[0];     // a word instruction, aligned: bit 3
+     // A word store at an odd address in its ALU cycle: two accesses, so no
+     // dispatch in this cycle either.  Bit 0 of the address is aq[0] ^ bq[0],
+     // flops, and a block of more than one register has stopped dispatch.
+     assign sodd = e_s1w & (aq[0] ^ bq[0]);
+-    wire [15:0] ptrv = aq + {{12{e_mstep[3]}}, e_mstep};   // where the pointer ends
++    assign      ptrv = aq + {{12{e_mstep[3]}}, e_mstep};   // where the pointer ends
++    // A BLOCK LOAD WRITES ITS POINTER IN ITS ALU CYCLE, from y, before any
++    // word, so its words can all be written as they arrive; a loaded
++    // register that is the pointer is still not written, so the pointer
++    // ends as before.
++    assign pnow = mstart & e_pw;
+ 
+     logic       mact, mst, mw2, mblk, mlane, weq, mal, wsel;
+     logic [2:0] mu;                        // the step, less one
+diff --git a/tests/cpu-check.mjs b/tests/cpu-check.mjs
+index cea9204..f306653 100644
+--- a/tests/cpu-check.mjs
++++ b/tests/cpu-check.mjs
+@@ -856,8 +856,8 @@ for (let p = 0; p < PROGRAMS; p++) {
+       const memst = mem && /^(M(8|16)\[R|base = [a-z0-9]+; M16)/.test(d.insn.semantics);
+       // Blit mode makes every load but pop a cycle slower.
+       const late = mem && !memst && !/^base = sp; /.test(d.insn.semantics);
+-      // ld and ld8 - a load that is no block - write as their word arrives.
+-      const ld1 = mem && !memst && !/^base = /.test(d.insn.semantics);
++      // Every load writes as its word arrives - but late ones, in blit mode.
++      const ld1 = mem && !memst;
+       const before = m.cycles(), xfer0 = m.xfer, a0 = alog.length;
+       m.step();
+       // WITHIN AN INSTRUCTION, ADDRESS ORDER: a block move goes up memory
+@@ -1053,7 +1053,7 @@ function check(out, blit, what) {
+       const want = prev.cyc;
+       const floor = prev.exc ? prev.exc
+                   : prev.memst ? Math.max(2, prev.acc)
+-                  : prev.ld1 && !blit ? prev.acc + 1
++                  : prev.ld1 && !(blit && prev.late) ? prev.acc + 1
+                   : prev.mem ? prev.acc + 2 + (blit && prev.late ? 1 : 0)
+                   : prev.jump ? prev.jump : prev.taken ? 2 : 1;
+       if (ds[i].pc !== (trace[i]?.pc ?? ds[i].pc)) say(` dispatch ${i}: pc ${ds[i].pc.toString(16)}`);
+diff --git a/tools/gen-classify.js b/tools/gen-classify.js
+index 9f47924..4c5a634 100644
+--- a/tools/gen-classify.js
++++ b/tools/gen-classify.js
+@@ -186,11 +186,12 @@ const cases = rows.map((r) => {
+   // that cycle - or a store of two accesses, a block of two registers
+   // aligned, so that it reaches decode after the store's last read.  A store
+   // of one register never stops dispatch: see tools/ucode.js.
+-  // A load of one register that is no block - ld and ld8 - never stops
++  // A load of one register - ld, ld8, pop and ldm of one - never stops
+   // dispatch either: it writes its register as its word arrives, and the
+   // next instruction takes it through the bypass from the memory's port.
+-  const ld1 = !!mem && !mem.st && !mem.blk && mem.n === 1;
+-  const urs = (mem && !ld1 && (mem.st ? mem.blk && mem.n === 2 : mem.n === 1));
++  // One of two is released in its ALU cycle, if aligned.
++  const ld1 = !!mem && !mem.st && mem.n === 1;
++  const urs = (mem && mem.n === 2 && (!mem.st || mem.blk));
+   // WHAT DISPATCH DOES NEXT, from the opcode alone, so that rtl/cpu.sv's
+   // stop and skip take a column each and nothing worked out behind the
+   // table: a cycle with none after one extra ALU cycle - mul, clz,
+diff --git a/tools/sim.js b/tools/sim.js
+index 0a3a024..e837b8d 100644
+--- a/tools/sim.js
++++ b/tools/sim.js
+@@ -605,9 +605,10 @@ export class Machine {
+       const busy = [];
+       for (let i = 0; i < moved; i++) busy.push((k.stores ? 3 : 2) + i);
+       if (k.stores) return { hold: moved + 1, busy };
+-      // ld AND ld8 write their register as its last byte arrives, and the
+-      // next instruction takes it through the bypass: N + 1, as a store.
+-      if (!k.block && !this.blit) return { hold: moved + 1, busy };
++      // A LOAD writes each register as its last byte arrives, and the next
++      // instruction takes it through the bypass: N + 1, as a store - but
++      // blit mode's late loads, every one but pop.
++      if (!(this.blit && !k.pops)) return { hold: moved + 1, busy };
+       return { hold: moved + 2 + (this.blit && !k.pops ? 1 : 0), busy };
+     }
+     // mul, clz, popcount and recip hold the ALU stage: `extra_cycles` more.
+diff --git a/tools/ucode.js b/tools/ucode.js
+index 9a2394b..49923d7 100644
+--- a/tools/ucode.js
++++ b/tools/ucode.js
+@@ -78,13 +78,17 @@ function memSteps({ st, blk, w2, n }, late = 0, aligned = 0) {
+     // In step k the next access, access k, is made ready: register k / B,
+     // half k % B.  Access 0 was made ready in the ALU cycle.
+     for (let k = 1; k < N; k++) Object.assign(step[k], { WE: 1, KS: Math.floor(k / B), KH: k % B });
+-  } else if (!blk && n === 1 && !late) {
+-    // ld AND ld8 WRITE AS THE LAST BYTE ARRIVES, from the port itself, and
+-    // never stop dispatch: the next instruction reaches decode in step N, the
+-    // last, and takes the word through the bypass.
++  } else if (!late) {
++    // A LOAD WRITES EACH REGISTER AS ITS LAST BYTE ARRIVES, from the port
++    // itself, and the next instruction reaches decode in step N, the last,
++    // and takes the word through the bypass: released at N - 2, in the ALU
++    // cycle for two accesses, and not stopped at all for one.  A block's
++    // pointer was written in the ALU cycle, by rtl/cpu.sv: no P.
+     for (let k = 1; k <= N - 1; k++) step[k].A = 1;
+     for (let k = 1; k <= N; k++) step[k].C = 1;
+-    Object.assign(step[N], { W: 1, M: 1, D: 1 });
++    for (let i = 0; i < n; i++) Object.assign(step[(i + 1) * B], { W: i + 1, M: 1 });
++    if (N - 2 >= 1) step[N - 2].R = 1;
++    step[N].D = 1;
+   } else {
+     for (let k = 1; k <= N - 1; k++) step[k].A = 1;
+     for (let k = 1; k <= N; k++) Object.assign(step[k + late], late ? { C: 1, L: 1 } : { C: 1 });

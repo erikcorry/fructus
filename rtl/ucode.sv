@@ -56,6 +56,7 @@
 //     19:18  IE  ie: 1 cleared, 2 set
 //     21:20  RJ  the fetch goes to: 1 the vector, 2 aq, the register read the step before
 //     22     L   C's byte is on mem_late, the word from two edges ago: blit mode
+//     23     M   W's register takes the word arriving now, not the ALU's result
 // =============================================================================
 
 module ucode (
@@ -74,9 +75,9 @@ module ucode (
         rom[8'h05] = 32'h00000001;
         rom[8'h06] = 32'h00000000;
         rom[8'h07] = 32'h00000000;
-        rom[8'h08] = 32'h00000007;
-        rom[8'h09] = 32'h00000002;
-        rom[8'h0a] = 32'h00000018;
+        rom[8'h08] = 32'h00000003;
+        rom[8'h09] = 32'h0080001a;
+        rom[8'h0a] = 32'h00000000;
         rom[8'h0b] = 32'h00000000;
         rom[8'h0c] = 32'h00000000;
         rom[8'h0d] = 32'h00000000;
@@ -106,8 +107,8 @@ module ucode (
         rom[8'h25] = 32'h00000002;
         rom[8'h26] = 32'h00000038;
         rom[8'h27] = 32'h00000000;
-        rom[8'h28] = 32'h00000002;
-        rom[8'h29] = 32'h00000018;
+        rom[8'h28] = 32'h0080001a;
+        rom[8'h29] = 32'h00000000;
         rom[8'h2a] = 32'h00000000;
         rom[8'h2b] = 32'h00000000;
         rom[8'h2c] = 32'h00000000;
@@ -138,8 +139,8 @@ module ucode (
         rom[8'h45] = 32'h00000000;
         rom[8'h46] = 32'h00000000;
         rom[8'h47] = 32'h00000000;
-        rom[8'h48] = 32'h00000002;
-        rom[8'h49] = 32'h00000018;
+        rom[8'h48] = 32'h0080001a;
+        rom[8'h49] = 32'h00000000;
         rom[8'h4a] = 32'h00000000;
         rom[8'h4b] = 32'h00000000;
         rom[8'h4c] = 32'h00000000;
