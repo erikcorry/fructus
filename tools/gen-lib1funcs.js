@@ -77,7 +77,9 @@ for (const line of lines) {
     last = null;
   }
 
-  out.push(line);
+  // `dw' is the suite's own data directive, made from the spec's byte
+  // order; gas spells a little-endian 16-bit word `.2byte'.
+  out.push(line.replace(/^(\s*)dw(\s)/, '$1.2byte$2'));
 
   // Comments, blank lines and labels are not instructions; local labels do
   // not end a routine, so they leave the last instruction standing.

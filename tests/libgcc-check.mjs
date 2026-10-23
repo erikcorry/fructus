@@ -27,18 +27,9 @@ const check = (name, ok, detail) => {
 const m = machine();
 const { code, syms } = assemble('libgcc/lib1funcs.s');
 const RET = 0x8000, SP0 = 0xfffe, R4 = 0xe4e4;
-// [cpu.vectors] divide_by_zero, where a recip of a divisor of 0 traps.
-const DIV0 = m.spec.cpu.vectors.divide_by_zero;
-const RTI = parseInt(m.spec.insn.find((i) => i.mnemonic === 'rti').form[0].encoding.replace(/[\s_]/g, ''), 2);
-
-// With `handler', an rti at divide_by_zero, so a trap there carries on after
-// the recip, and `traps' counts them.
-function run(entry, regs, { handler = false } = {}) {
+function run(entry, regs) {
   m.mem.fill(0);
   m.load(code);
-  if (handler) m.mem[DIV0] = RTI;
-  let traps = 0;
-  const trace = handler ? (at) => { if (at === DIV0) traps++; } : null;
   m.R.fill(0);
   m.R[m.named.sp] = SP0;
   m.R[m.named.lr] = RET;
@@ -47,9 +38,9 @@ function run(entry, regs, { handler = false } = {}) {
   m.pc = syms.get(entry); m.halted = false; m.count = 0;
   m.reset();
   let why;
-  try { why = m.run({ max: 8000, stopAt: RET, trace }); }
+  try { why = m.run({ max: 8000, stopAt: RET }); }
   catch (e) { why = `ran off the rails: ${e.message}`; }
-  return { why, R: [...m.R], sp: m.R[m.named.sp], cycles: m.cycles(), traps };
+  return { why, R: [...m.R], sp: m.R[m.named.sp], cycles: m.cycles() };
 }
 
 // A signed 16-bit reading of a bit pattern.
@@ -402,57 +393,32 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   console.log(`ok    the four division helpers: ${signed.length} signed pairs, 2000 unsigned`);
 }
 
-// --- the same with recip, for -mmul ------------------------------------------
-// __udivmodhi4_mul's estimate comes from the divisor's reciprocal with its
-// bottom bit thrown away, and the claim is that one correction is always
-// enough.  Where that could fail is at particular divisors rather than at
-// random ones, so EVERY divisor is tried, against dividends spread over the
-// range and the edges, and ten - its own path - against every dividend.
+// --- __recip_mul, for the -mmul divisions ------------------------------------
+// The 2/1 reciprocal every wide -mmul division starts from: v = floor((2^32 -
+// 1) / d) - 2^16 for d with its top bit set.  Its table, Newton step and
+// count must land exactly for EVERY such d, so all 32768 are tried, with
+// every register but r5 and lr kept.  A clear top bit is set first, so a
+// divisor of 0 answers as 0x8000 does.
 {
-  const divmod = (a, b) => run('__udivmodhi4_mul', { 0: a, 1: b, 2: 0x2222, 3: 0x3333 });
-  let wrong = 0, eg = '', n = 0, cyc = 0;
-  const tally = (a, b) => {
-    const q = divmod(a, b);
-    n++; cyc += q.cycles;
-    if (q.why !== 'stopped' || q.R[0] !== Math.floor(a / b) || q.R[1] !== a % b || q.sp !== SP0
-        || q.R[2] !== 0x2222 || q.R[3] !== 0x3333 || q.R[4] !== R4) {
-      if (!wrong++) eg = `${a}/${b} = ${Math.floor(a / b)},${a % b}, got ${q.R[0]},${q.R[1]}`;
-    }
-  };
-  for (let a = 0; a <= 0xffff; a++) tally(a, 10);
-  for (let b = 1; b <= 0xffff; b++)
-    for (const a of [b - 1, b, 0xffff, (b * 7 + 12345) & 0xffff]) tally(a, b);
-  check('__udivmodhi4_mul', wrong === 0, `${wrong} of ${n} wrong, e.g. ${eg}`);
-  // BY ZERO IT TRAPS, to divide_by_zero, as recip does; and a handler that
-  // returns gets junk, but a return, with r4 kept.
-  const z = run('__udivmodhi4_mul', { 0: 1234, 1: 0 }, { handler: true });
-  check('__udivmodhi4_mul by zero traps once, then returns', z.traps === 1 && z.why === 'stopped' && z.R[4] === R4,
-        `dividing by zero trapped ${z.traps} times and ${z.why}`);
-
-  let cycG = 0;
-  for (let i = 0; i < 400; i++) cycG += divmod(r16(), r16() || 1).cycles;
-  console.log(`ok    __udivmodhi4_mul: every divisor, every dividend by ten, ${n} in all; ` +
-              `${(cycG / 400).toFixed(0)} cycles for a random divisor`);
-
-  let wrongW = 0, egW = '';
-  for (let i = 0; i < 3000; i++) {
-    const a = s16(r16()), b = s16(r16() >>> (i % 16)) || 3;
-    const ua = a & 0xffff, ub = b & 0xffff;
-    for (const [name, want] of [
-      ['__divhi3_mul', Math.trunc(a / b) & 0xffff], ['__modhi3_mul', (a % b) & 0xffff],
-      ['__udivhi3_mul', Math.floor(ua / ub)], ['__umodhi3_mul', ua % ub]]) {
-      const q = run(name, { 0: ua, 1: ub, 2: 0x2222, 3: 0x3333 });
-      if (q.why !== 'stopped' || q.R[0] !== want || q.sp !== SP0
-          || q.R[2] !== 0x2222 || q.R[3] !== 0x3333 || q.R[4] !== R4) {
-        if (!wrongW++) egW = `${name}(${a}, ${b}) = ${want}, got ${q.R[0]}`;
-      }
+  const want = (d) => Math.floor(0xffffffff / d) - 0x10000;
+  const keep = { 0: 0x1111, 1: 0x2222, 2: 0x3333, 3: 0x4444 };
+  let wrong = 0, eg = '', cyc = 0, worst = 0;
+  for (let d = 0x8000; d <= 0xffff; d++) {
+    const q = run('__recip_mul', { ...keep, 5: d });
+    cyc += q.cycles; worst = Math.max(worst, q.cycles);
+    if (q.why !== 'stopped' || q.R[5] !== want(d) || q.sp !== SP0 || q.R[4] !== R4
+        || [0, 1, 2, 3].some((k) => q.R[k] !== keep[k])) {
+      if (!wrong++) eg = `d 0x${d.toString(16)}: want 0x${want(d).toString(16)}, got ${q.why !== 'stopped' ? q.why : '0x' + q.R[5].toString(16)}`;
     }
   }
-  check('the four division helpers with recip', wrongW === 0, `${wrongW} wrong, e.g. ${egW}`);
-  console.log('ok    the four division helpers with recip: 3000 pairs each, r2 and r3 kept');
+  check('__recip_mul', wrong === 0, `${wrong} of 32768 wrong, e.g. ${eg}`);
+  const z = run('__recip_mul', { 5: 0 });
+  check('__recip_mul of 0 is 0x8000\'s', z.why === 'stopped' && z.R[5] === want(0x8000), `it gave ${z.R[5]} and ${z.why}`);
+  console.log(`ok    __recip_mul: every divisor with its top bit set, exact; ` +
+              `${(cyc / 32768).toFixed(1)} cycles on average, ${worst} at worst`);
 }
 
-// --- 32-bit division with recip ----------------------------------------------
+// --- 32-bit division with __recip_mul ----------------------------------------------
 // __udivmodsi4_mul returns the quotient in r0:r1 and the remainder in r2:r3,
 // and is the libfunc gcc -mmul calls for both of a 32-bit / and %.  The cases
 // reach every divisor width - the width picks between the two-step 2/1 path
@@ -485,9 +451,8 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
     }
   }
   check('__udivmodsi4_mul', wrong === 0, `${wrong} of ${cases.length} wrong, e.g. ${eg}`);
-  const z = run('__udivmodsi4_mul', { 0: 1234, 1: 5678 }, { handler: true });
-  check('__udivmodsi4_mul by zero traps once, then returns', z.traps === 1 && z.why === 'stopped' && z.R[4] === R4,
-        `dividing by zero trapped ${z.traps} times and ${z.why}`);
+  const z = run('__udivmodsi4_mul', { 0: 1234, 1: 5678 });
+  check('__udivmodsi4_mul by zero returns', z.why === 'stopped' && z.R[4] === R4, `dividing by zero ${z.why}`);
 
   let wrongW = 0, egW = '';
   for (const [a0, b0] of cases)
@@ -505,19 +470,19 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
         }
       }
     }
-  check('the four 32-bit helpers with recip', wrongW === 0, `${wrongW} wrong, e.g. ${egW}`);
+  check('the four 32-bit helpers with mul', wrongW === 0, `${wrongW} wrong, e.g. ${egW}`);
   console.log(`ok    __udivmodsi4_mul and its four helpers: ${cases.length} pairs; ` +
               `${(cyc.narrow[0] / cyc.narrow[1]).toFixed(0)} / ${(cyc.wide[0] / cyc.wide[1]).toFixed(0)} ` +
               `cycles for a divisor under / over 65536`);
 }
 
-// --- the 3/2 reciprocal, made from recip's 2/1 one ----------------------------
+// --- the 3/2 reciprocal, made from the 2/1 one -------------------------------
 // A divisor of 65536 or more wants the 3/2 reciprocal of both its words, and
-// recip makes the 2/1 reciprocal of the high word alone: __udivmodsi4_mul's
+// __recip_mul makes the 2/1 reciprocal of the high word alone: __udivmodsi4_mul's
 // .wide and __udivmoddi4_mul's m = 2 and m = 3, 4 fold the low word in with
 // Moller and Granlund's Algorithm 6, three copies of it.  The arithmetic is
 // checked over all 2^31 normalised divisors, as the copies do it; then each
-// copy is run from its recip to the fold's end on divisors from every path
+// copy is run from its __recip_mul call to the fold's end on divisors from every path
 // through it - all of the rarest, where p == d1 and t0 decides, about two in
 // a million - against the exact reciprocal.  The paths' shares are printed,
 // since the copies are laid out for the common ones to fall through.
@@ -567,19 +532,17 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   }
   check('Algorithm 6 against the exact reciprocal', wrongA === 0, `${wrongA} wrong, e.g. ${egA}`);
 
-  // Each copy: from its recip, the first one after its entry, to its fold's
-  // last label, with d's high word in r3 and its low word in r2.
-  const enc = m.spec.insn.find((i) => i.mnemonic === 'recip').form[0].encoding.replace(/[\s_]/g, '');
-  const RECIP = parseInt(enc.slice(0, 8), 2);
-  const copies = [['__udivmodsi4_mul', 'vc', 'lr'], ['__udivmoddi4_mul', 'ic', 5], ['__udivmoddi4_mul', 'jc', 5]];
+  // Each copy: from its call of __recip_mul, at the label before it, to its
+  // fold's last label, with d's high word in r3 and its low word in r2.
+  const copies = [['__udivmodsi4_mul', 'vr', 'vc', 'lr'], ['__udivmoddi4_mul', 'ir', 'ic', 5],
+                  ['__udivmoddi4_mul', 'jr', 'jc', 5]];
   let wrongC = 0, egC = '', runs = 0;
-  for (const [fn, end, vreg] of copies) {
+  for (const [fn, from, end, vreg] of copies) {
     const stop = syms.get(`${fn}.${end}`);
-    // the last recip before the fold's end: the copy's own
-    let at = stop;
-    while (at > syms.get(fn) && !(code[at] === RECIP && code[at + 1] === ((3 << 3) | (vreg === 'lr' ? m.named.lr : vreg)))) at--;
+    const at = syms.get(`${fn}.${from}`);
     const vr = vreg === 'lr' ? m.named.lr : vreg;
-    // The fold neither loads nor stores, so the memory is loaded once.
+    // Only __recip_mul's pushes and pops touch memory, below SP0, so the
+    // memory is loaded once.
     m.mem.fill(0); m.load(code);
     for (const k of pick)
       for (const [d1, d0] of k) {
@@ -594,7 +557,7 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   }
   check('the three copies of Algorithm 6', wrongC === 0, `${wrongC} wrong, e.g. ${egC}`);
   const share = [...count].map((n, k) => n && `${NAME(k)} ${(100 * n / 2 ** 31).toFixed(n < 1e5 ? 4 : 1)}%`).filter(Boolean).join(', ');
-  console.log(`ok    the 3/2 reciprocal from recip's 2/1: Algorithm 6 over 2^31 divisors, ${runs} runs of its three copies; paths ${share}`);
+  console.log(`ok    the 3/2 reciprocal from the 2/1: Algorithm 6 over 2^31 divisors, ${runs} runs of its three copies; paths ${share}`);
 }
 
 // --- the 64-bit divisions ----------------------------------------------------
@@ -705,9 +668,9 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
                (r64() >> BigInt(64 - bits)) | (1n << BigInt(bits - 1)), 0).cycles;
     return (t / 30).toFixed(0);
   };
-  console.log(`ok    the six 64-bit divisions and their six with recip: ${cases.length} pairs each against BigInt; ` +
+  console.log(`ok    the six 64-bit divisions and their six with mul: ${cases.length} pairs each against BigInt; ` +
               `${cost(10)} / ${cost(32)} / ${cost(48)} / ${cost(64)} cycles ` +
-              `for a 10 / 32 / 48 / 64-bit divisor, and with recip ` +
+              `for a 10 / 32 / 48 / 64-bit divisor, and with mul ` +
               `${cost(10, '__udivdi3_mul')} / ${cost(32, '__udivdi3_mul')} / ` +
               `${cost(48, '__udivdi3_mul')} / ${cost(64, '__udivdi3_mul')}`);
 }

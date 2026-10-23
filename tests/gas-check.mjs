@@ -57,7 +57,9 @@ for (const src of process.argv.slice(2)) {
   }
 
   const gs = join(TMP, '_gas.s'), go = join(TMP, '_gas.o');
-  writeFileSync(gs, '\t.text\n' + text);
+  // `dw', the suite's data directive, is gas's `.2byte': tools/gen-lib1funcs.js
+  // rewrites it so too.
+  writeFileSync(gs, '\t.text\n' + text.replace(/^(\s*)dw(\s)/gm, '$1.2byte$2'));
   try {
     execFileSync(AS, ['-o', go, gs], { stdio: 'pipe' });
   } catch {
