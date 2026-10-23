@@ -99,10 +99,11 @@
 // routine's last use of decode's port: a load a step before its last access,
 // a store two, since it reads each register a step ahead of writing it.  The
 // bus is the sequencer's whenever it wants it, and the fetcher's in every
-// other cycle.  N accesses cost N + 2 cycles from one dispatch to the next
-// for a load, N + 1 for a store: 3 for ld8, and for ld and a one-register pop
-// aligned, 4 for them at an odd address, 5 for three registers aligned and 8
-// odd; a store one fewer.  See THE MEMORY SEQUENCER below.
+// other cycle.  N accesses cost N + 1 cycles from one dispatch to the next
+// for ld, ld8 and a store, N + 2 for pop and ldm: 2 for ld8 and an aligned
+// ld, 3 for ld at an odd address and for a one-register pop aligned, 5 for
+// three registers aligned and 8 odd; a store as ld.  ld, ld8 and a store of
+// one register do not stop dispatch at all: see THE MEMORY SEQUENCER below.
 //
 // BLIT MODE, ONLY WHEN `FRUCTUS_BLIT IS DEFINED.  A system whose data can come
 // from memory at the far side of the die - the display's frame buffers,
@@ -144,7 +145,9 @@
 // the edge that ends the cycle, so its result is not yet in the register file.
 // Decode knows that instruction's destination - it latched it itself, one-hot,
 // a cycle earlier - and takes the result in place of the read when the numbers
-// match.  Anything older has already landed.
+// match.  Anything older has already landed.  AND ONE FROM THE MEMORY'S PORT:
+// ld and ld8 write their register in the cycle its last byte arrives, while
+// the next instruction decodes, which takes the byte or word from the port.
 //
 // THE INSTRUCTION BUFFER.  A fetcher with a word pointer of its own, `fp`,
 // reads a word in every cycle the sequencer and the redirects leave the bus
@@ -570,6 +573,10 @@ module cpu (
     // store touched a guard of the I/O page, and the next dispatch is its brk.
     // So is a divide by zero: `dq', a recip whose ra had bit 15 clear.
     wire       aphase;                         // the sequencer has the bus: below
+    // OR A LOAD's FIRST ADDRESS DOES, in its ALU cycle, which may dispatch
+    // now: a guess dispatched then reads its target a cycle on, as it does
+    // while the sequencer has the bus.
+    wire       abusy;
     logic      gq, dq;
     // A slot is a cycle that may dispatch; `take` needs only a byte in the
     // buffer, since brk has no bytes but its opcode, and it shifts nothing.
@@ -861,8 +868,8 @@ module cpu (
     // the fetch may go - a slot, the bus, the whole instruction in - and for
     // a branch whether it is guessed taken and allowed (btk), all from flops,
     // so that only the opcode checks are in series in front of the fetch.
-    wire        gok  = slot & ~aphase & (nw >= 3'd2);
-    wire        prg  = slot & ~aphase & prfit;                // an ra-jump's: its own bytes
+    wire        gok  = slot & ~abusy & (nw >= 3'd2);
+    wire        prg  = slot & ~abusy & prfit;                // an ra-jump's: its own bytes
     wire        pb   = pbr & btk & gok;                        // the fetch reads it
     logic       pbm;                            // it did: the pc goes there next
     wire        pjb  = pc[3] ^ pc[5];               // a jump's bit for gh
@@ -891,6 +898,7 @@ module cpu (
     wire        mrestart;                  // the memory sequencer, below
     logic [15:0] mar;
     wire        ldnow;                     // a load's first address: the ALU's result
+    assign      abusy = aphase | ldnow;
     wire [15:0] maddr;
     wire        urj;                       // the microcode redirects the fetch
     wire [15:0] rjaddr;
@@ -952,7 +960,7 @@ module cpu (
             nw <= 3'd0; finq <= 1'b1;
         end else begin
             // a jmp read late, through pjq: what the buffer holds is behind it
-            nw <= ((pjd | prd) & aphase) ? 3'd0 : nw + {2'b0, finq} - {1'b0, sel};
+            nw <= ((pjd | prd) & abusy) ? 3'd0 : nw + {2'b0, finq} - {1'b0, sel};
             finq <= keepw;
         end
     end
@@ -1006,8 +1014,16 @@ module cpu (
         end else if (go) begin
             pcb     <= pch;
             {pcc, pcl} <= pcs;
+`ifdef FRUCTUS_BLIT
+            // A late ld or ld8 stops dispatch, as before: its byte comes a
+            // cycle after the bypass could take it.  Its late routine
+            // releases.  ldm stopped already.
+            skip    <= c_skp & ~(blit & c_useq & c_ulate);
+            stop    <= c_stp | pbok | (blit & c_useq & c_ulate);
+`else
             skip    <= c_skp;
             stop    <= c_stp | pbok;   // a predicted branch: tgt_q next
+`endif
         end else begin
             skip    <= 1'b0;
         end
@@ -1161,6 +1177,8 @@ module cpu (
     // A load's last register is written in its routine's last step, when the
     // instruction after it may be in decode: the bypass takes that write too.
     wire [7:0] fwe = e_we | (mwe & {8{mdone}});
+    wire        uM;                    // the write is the arriving word: below
+    wire [15:0] mcv;
 `ifdef SYNTHESIS
     wire fwd_a = fwe[an];
     wire fwd_b = use_reg & fwe[bn];
@@ -1185,7 +1203,7 @@ module cpu (
     logic [1:0]  e_bway, e_bctr;
     logic [2:0]  e_code;
     logic [15:0] e_tgt;
-    logic        e_mem, e_mst, e_mw2, e_mblk, e_s1w;
+    logic        e_mem, e_mst, e_mw2, e_mblk, e_s1w, e_ld;
     logic [3:0]  e_mstep;
     logic [2:0]  e_l0, e_l1, e_l2, e_ptr;
     logic [4:0]  e_uent;               // where the microcode routine starts
@@ -1212,8 +1230,10 @@ module cpu (
         e_cnt   <= (rst | taken_q) ? 3'd0 : e_hold ? e_cnt - 3'd1 : keep ? d_ext : 3'd0;
         e_two   <= ~rst & (e_hold ? e_two : keep & (d_ext != 3'd0));
         e_first <= ~rst & ~taken_q & ~e_hold & keep & (d_ext != 3'd0);
-        aq      <= fwd_a ? y : R[an_rd];
-        bq      <= fwd_b ? y : rb;
+        // A write marked M is the arriving word's, not the ALU's: y keeps
+        // one LUT to the operand flop, and the word joins the read's side.
+        aq      <= (fwd_a & ~uM) ? y : fwd_a ? mcv : R[an_rd];
+        bq      <= (fwd_b & ~uM) ? y : fwd_b ? mcv : rb;
         if (!e_keep) e_we <= (keep & d_wen) ? 8'd1 << wn : 8'd0;
         // The sequencer holds the ALU on its word: the fast group's member 5.
         if (!e_keep) e_op <= mhold ? 4'd4 : d_alu;
@@ -1234,7 +1254,9 @@ module cpu (
         e_tgt   <= (d_rp & jreg) ? rg : tgt;   // a guessed call ra's pc, if right
         e_ucode <= d_ucode & ~taken_q;
         e_mem   <= keep & d_mem;
-        e_s1w   <= keep & d_mem & d_mst & d_mw2;   // a word store: sodd's
+        e_ld    <= keep & d_mem & ~d_mst;   // e_mem & ~e_mst, a flop: ldnow
+        // A word load or store: sodd's.  A block's stopped dispatch anyway.
+        e_s1w   <= keep & d_mem & d_mw2;
         {e_mst, e_mw2, e_mblk} <= {d_mst, d_mw2, d_mblk};
         {e_mstep, e_l0, e_l1, e_l2, e_ptr} <= {mstep_d, ml0_d, ml1_d, ml2_d, an};
 `ifdef FRUCTUS_BLIT
@@ -1301,13 +1323,13 @@ module cpu (
         // which does wait for that, reads it; and while the sequencer has
         // the bus the ALU stage holds no branch whose e_tgt it would need.
         tgt_q   <= (urj | jrq) ? rjaddr : (pbw | pjw) ? tgt_q
-                 : pbd ? padd : ((pjr | prr) & aphase) ? jgt : e_tgt;
-        pbq     <= ~rst & ((pbd & aphase & ~uw[7]) | pbw);
-        pjq     <= ~rst & (((pjd | prd) & aphase & ~uw[7]) | pjw);
+                 : pbd ? padd : ((pjr | prr) & abusy) ? jgt : e_tgt;
+        pbq     <= ~rst & ((pbd & abusy & ~uw[7]) | pbw);
+        pjq     <= ~rst & (((pjd | prd) & abusy & ~uw[7]) | pjw);
         pbw     <= ~rst & pbd & aphase & uw[7];
         pjw     <= ~rst & (pjd | prd) & aphase & uw[7];
-        pbm     <= ~rst & pbd & ~aphase;
-        for (int k = 0; k < 8; k++) if ((e_we[k] & ~taken_q) | mwe[k]) R[k] <= y;
+        pbm     <= ~rst & pbd & ~abusy;
+        for (int k = 0; k < 8; k++) if ((e_we[k] & ~taken_q) | mwe[k]) R[k] <= uM ? mcv : y;
     end
     assign result = y;
 
@@ -1417,8 +1439,32 @@ module cpu (
     // a load's FIRST, with any loaded register that is the pointer left
     // unwritten - the semantics end with the pointer's own value - and a
     // store's LAST, so that a stored register that is the pointer is still read
-    // as it was.  Every write lands before the next instruction reaches decode,
-    // so nothing needs the bypass.
+    // as it was.  Every such write lands before the next instruction reaches
+    // decode, so nothing needs the bypass.
+    //
+    // BUT ld AND ld8 WRITE AS THE WORD ARRIVES, from the port itself - `mcv`,
+    // what a capture would take - in the step whose word says M, the last.
+    // They never stop dispatch: predecode skips a cycle after them, as after a
+    // store of one register, so the next instruction dispatches in the
+    // load's ALU cycle and decodes in that last step, taking the word
+    // through the bypass.  An odd word stops that dispatch, as `sodd` does a
+    // store's.  N + 1, as a store: 2 cycles for an aligned ld or any ld8.
+    // The ALU stage is empty in that step, so the write port's only new
+    // source is the word, a LUT after y; the bypass takes it on the read's
+    // side, so y still reaches the operand flops through one.  It cost 0.21
+    // MHz of median over 64 seeds, 29.41 against 29.62 the same day, 31.82
+    // best against 32.38, and 73 LUT4s; FructusMark -Os -mmul 128.1 to 138.4,
+    // -O2 -mmul 135.3 to 146.5, every program 6 - 9% fewer cycles.  The
+    // shadows' selects had to be decoded a cycle early, into flops, and the
+    // load's ALU cycle `ldnow' made a flop of its own, or the critical paths
+    // ran from mar and e_mst into the register file and the address pins.
+    //
+    // pop AND ldm COULD DO THE SAME, and were measured doing it: the ALU
+    // makes where the pointer ends, written in the ALU cycle, and the first
+    // address is aq.  FructusMark gained only 0.15%, for 0.15 MHz of median
+    // and 54 LUT4s - a pop is nearly always followed by ret, whose guessed
+    // target cannot be read while the pop still has the bus, so the cycle
+    // the pop saves the ret loses.  See ideas/two-cycle-pop.md.
     //
     // WHICH STEP DOES WHAT IS MICROCODE: rtl/ucode.sv, a block RAM
     // generated by tools/gen-ucode.js, whose header has the rules and the
@@ -1472,7 +1518,7 @@ module cpu (
     logic [15:0] mpc;
 
     // A load puts its first address out in its ALU cycle, from the adder.
-    assign ldnow = e_mem & ~e_mst;
+    assign ldnow = e_ld;
 
     // THE ROUTINE'S ENTRY IS PREDECODE'S, a column of rtl/classify.sv
     // carried here like any other field, so any opcode can start anywhere.
@@ -1501,6 +1547,7 @@ module cpu (
     wire   [1:0] uWX = uw[17:16];
     wire   [1:0] uIE = uw[19:18];
     wire   [1:0] uRJ = uw[21:20];
+    assign       uM  = uw[23];
     // THE SHADOWS' WORDS IN THE I/O PAGE, isa/fructus.toml's [cpu.io].  At a
     // load's capture `mar' is the address whose word is arriving - it went
     // out the cycle before, and mar moves only with an address - and a
@@ -1544,10 +1591,22 @@ module cpu (
             wrapq[2] <= cycles[7:0] == 8'hfe && &cycles[15:8];
             wrapq[3] <= cycles[7:0] == 8'hfe && &cycles[23:8];
         end
-    wire         cy     = mar[15:2] == CYC[15:2];
-    wire  [15:0] shword = sh_sp ? shadow_sp : sh_lr ? shadow_lr : sh_isp ? shadow_isp
+    // A LOAD'S CHOICE IS DECODED A CYCLE EARLY, from the address mar is
+    // about to take, so that only flops choose in front of a word written
+    // as it arrives: mar's compares put three LUTs before it, and placed
+    // they ended at the register file.  A store's lanes still use the
+    // compares on mar itself, above.
+    wire  [15:0] mar_n  = rst ? 16'd0 : mstart ? ea : aphase ? mar + {14'd0, mal, ~mal} : mar;
+    logic        q_sp, q_lr, q_isp, shrd;
+    always_ff @(posedge clk) begin
+        q_sp  <= mar_n[15:1] == SH_SP[15:1];
+        q_lr  <= mar_n[15:1] == SH_LR[15:1];
+        q_isp <= mar_n[15:1] == SH_ISP[15:1];
+        shrd  <= mar_n[15:1] == SH_SP[15:1] || mar_n[15:1] == SH_LR[15:1]
+              || mar_n[15:1] == SH_ISP[15:1] || mar_n[15:2] == CYC[15:2];
+    end
+    wire  [15:0] shword = q_sp ? shadow_sp : q_lr ? shadow_lr : q_isp ? shadow_isp
                         : mar[1] ? cycles[31:16] : cycles[15:0];
-    wire         shrd   = sh_sp | sh_lr | sh_isp | cy;
     // THE GUARDS, the I/O page's first and last 16 bytes: a load or store
     // that touches one enters [cpu.vectors] io_guard, as an interrupt would,
     // at the first dispatch once `gq' is set - two cycles after a load's
@@ -1590,6 +1649,10 @@ module cpu (
     wire  [15:0] mword = mdw;
     wire   [7:0] mbyte = mlane ? mdw[15:8] : mdw[7:0];
 `endif
+
+    // WHAT A CAPTURE TAKES, and what a step marked M writes as it arrives:
+    // the aligned word, or the byte that completes the register.
+    assign mcv = mal ? mword : mw2 ? {mbyte, ldq[15:8]} : {8'h00, mbyte};
 
     // A loaded register that is the pointer is not written: the pointer's own
     // value is the one the semantics end with.
@@ -1643,7 +1706,7 @@ module cpu (
         end else begin
             mu  <= mu + 3'd1;
             if (aphase) begin mar <= mar + {14'd0, mal, ~mal}; mlane <= maddr[0]; end
-            if (mcap)   ldq <= mal ? mword : mw2 ? {mbyte, ldq[15:8]} : {8'h00, mbyte};
+            if (mcap)   ldq <= mcv;
             else if (uLQ != 3'd0) ldq <= lqsrc;
             wsel <= khalf;
             weq <= uWE;

@@ -566,6 +566,7 @@ export class Machine {
       extra:  insn.extra_cycles ?? 0,
       branch: /^if /.test(sem) && this.relative.get(insn),
       pops:   /^base = sp; /.test(sem),
+      block:  /^base = /.test(sem),
       viaReg: /\bpc = (lr|R\[[a-z]\])$/.test(sem),
       callA:  /^lr = pc; pc = R\[a\]$/.test(sem),
       jra:    /^pc = R\[[a-z]\]$/.test(sem),
@@ -595,7 +596,8 @@ export class Machine {
     // access, and makes an access a cycle from its ALU cycle on, two after
     // its dispatch: a word when it is aligned, a byte when not.  A load's
     // first address is the ALU's own, and the next instruction may dispatch
-    // N + 2 cycles after it - in blit mode, but for pop, one more.  A store
+    // N + 2 cycles after it - in blit mode, but for pop, one more - or N + 1
+    // after ld and ld8, which write as their word arrives.  A store
     // registers its address first, a cycle later, but reads each register
     // a step ahead of writing it, so the next may dispatch N + 1 cycles
     // after it: a store of one register does not stop dispatch at all, it
@@ -604,6 +606,9 @@ export class Machine {
       const busy = [];
       for (let i = 0; i < moved; i++) busy.push((k.stores ? 3 : 2) + i);
       if (k.stores) return { hold: moved + 1, busy };
+      // ld AND ld8 write their register as its last byte arrives, and the
+      // next instruction takes it through the bypass: N + 1, as a store.
+      if (!k.block && !this.blit) return { hold: moved + 1, busy };
       return { hold: moved + 2 + (this.blit && !k.pops ? 1 : 0), busy };
     }
     // mul, clz, popcount and recip hold the ALU stage: `extra_cycles` more.

@@ -41,10 +41,14 @@
 //            is 0, and none for one register, which never stops dispatch;
 //            done at N, a block's pointer written then - last, so a stored
 //            register that is the pointer is read as it was
-//     load   address 1 .. N - 1 - the first went out in the ALU cycle;
-//            bytes arrive 1 .. N; register i written at 1 + (i + 1) B;
-//            release at N - 1; done at N + 1; a block's pointer written at 1,
-//            first, and a loaded register that is the pointer not written
+//     ld,    address 1 .. N - 1; byte k arrives in step k; the register is
+//     ld8    written from the port as its last arrives, M, in step N, done;
+//            no release - dispatch never stopped, see rtl/cpu.sv
+//     pop,   address 1 .. N - 1 - the first went out in the ALU cycle;
+//     ldm,   bytes arrive 1 .. N; register i written at 1 + (i + 1) B;
+//     late   release at N - 1; done at N + 1; a block's pointer written at 1,
+//            first, and a loaded register that is the pointer not written;
+//            blit mode's late copies a step later from the first arrival
 //
 // THE EXCEPTION ROUTINES - brk, rti, sei, cli - move registers and shadows
 // through the same two paths: a register is read through decode's borrowed

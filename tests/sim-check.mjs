@@ -256,11 +256,13 @@ const m = machine();
   };
   const top = io.page + 0x100 - io.guard_bytes;
   const traps = [         // ... and how many of the nops after it run first
-    ['ld8 from the first guard byte', io.page, 'ld8  r0, [r1, #0]', 1],
+    // ld and ld8 let the next instruction dispatch in their ALU cycle, as a
+    // store of one register does, so their traps come as late as its.
+    ['ld8 from the first guard byte', io.page, 'ld8  r0, [r1, #0]', 2],
     ['st8 to the last bottom guard byte', io.page + io.guard_bytes - 1, 'st8  r0, [r1, #0]', 2],
-    ['ld from the first top guard word', top, 'ld   r0, [r1, #0]', 1],
+    ['ld from the first top guard word', top, 'ld   r0, [r1, #0]', 2],
     ['st to the last top guard word', io.page + 0xfe, 'st   r0, [r1, #0]', 2],
-    ['an odd ld whose high byte is the guard', top - 1, 'ld   r0, [r1, #0]', 1],
+    ['an odd ld whose high byte is the guard', top - 1, 'ld   r0, [r1, #0]', 2],
     ['an odd st whose low byte is the guard', io.page + io.guard_bytes - 1, 'st   r0, [r1, #0]', 1],
   ];
   for (const [what, addr, insn, late] of traps) {

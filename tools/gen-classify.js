@@ -186,7 +186,11 @@ const cases = rows.map((r) => {
   // that cycle - or a store of two accesses, a block of two registers
   // aligned, so that it reaches decode after the store's last read.  A store
   // of one register never stops dispatch: see tools/ucode.js.
-  const urs = (mem && (mem.st ? mem.blk && mem.n === 2 : mem.n === 1));
+  // A load of one register that is no block - ld and ld8 - never stops
+  // dispatch either: it writes its register as its word arrives, and the
+  // next instruction takes it through the bypass from the memory's port.
+  const ld1 = !!mem && !mem.st && !mem.blk && mem.n === 1;
+  const urs = (mem && !ld1 && (mem.st ? mem.blk && mem.n === 2 : mem.n === 1));
   // WHAT DISPATCH DOES NEXT, from the opcode alone, so that rtl/cpu.sv's
   // stop and skip take a column each and nothing worked out behind the
   // table: a cycle with none after one extra ALU cycle - mul, clz,
@@ -194,7 +198,7 @@ const cases = rows.map((r) => {
   // dispatch (see tools/ucode.js); a stop after everything else that does
   // not flow, and after more extra cycles than one - recip.
   const flows = k === KIND.alu || cbr;
-  const st1 = !!mem && !!mem.st && mem.n === 1;
+  const st1 = !!mem && (!!mem.st || ld1) && mem.n === 1;
   const skp = (flows && ext === 1) || st1;
   const stp = (!flows && !st1) || ext > 1;
   if (mem) memRows++;

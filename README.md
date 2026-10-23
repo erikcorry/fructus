@@ -493,10 +493,10 @@ five; `jmp` and `call` to an absolute address two and three; through a
 register five, or two and three when the guess of the target is right, and
 `ret` five, or two when the return stack's guess is right; any of them one
 more when the instruction at the target spans two words, except a call that
-went straight to its target; a load of N accesses N + 2 and a store N + 1,
-where an access is a byte or a whole word at an even address, so `ld` is three
-aligned and four not, `st` two and three, and a three-register `push` four with
-sp even and seven with it odd;
+went straight to its target; `ld`, `ld8` and a store of N accesses N + 1, and
+`pop` and `ldm` N + 2, where an access is a byte or a whole word at an even
+address, so `ld` and `st` are two aligned and three not, and a three-register
+`push` four with sp even and seven with it odd;
 mul, mulhu, mulhs, clz and popcount two, and recip five. A taken branch is what
 makes a longer unrolled loop worth anything once the instruction mix is fixed,
 and a memory instruction is the slowest thing a program does often. The
