@@ -23,7 +23,8 @@
 // rtl/uart.sv, and the rest of the UART is here too, as far as a program
 // polling it can tell: its status at 0x0422 is never busy, and says a byte
 // was received while --input FILE has bytes left; a load of 0x0420 takes the
-// next.  Sending takes no time, and the receive interrupt is not modelled,
+// next.  Both only in the late bit's window, as tools/gpu.js says; outside
+// it they are the memory beneath.  Sending takes no time, and the receive interrupt is not modelled,
 // as the interrupt pin is not.
 //
 // The cycle counter at 0x0424 (`__cycles') is the I/O page's own, in
@@ -81,6 +82,7 @@ let taken = 0;
 const peek = m.peek.bind(m);
 m.peek = (a) => {
   a &= 0xffff;
+  if (!gpu.late()) return peek(a);
   if (a === STATUS) return (peek(a) & 0x30) | (input && taken < input.length ? 2 : 0);
   if (a === STATUS + 1) return 0;
   if (a === CONSOLE) return input && taken < input.length ? input[taken++] : 0;
