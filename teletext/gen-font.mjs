@@ -14,11 +14,15 @@
 // subpixels, and every 2x2 clump of dots holding a lone diagonal gets the two
 // subpixels in its inner corners - the chip's rule, as bedstead's header draws
 // it - giving 10x18 subpixels in a 12x20 cell.  Rows are taken whole: the
-// glyph is lines 0-17 and line 18 is blank, where the chip's blank dot row
-// was, so a descender ends one line above the next row's capitals.  Columns
+// glyph is lines 1-18 and line 0 is blank, so a descender ends one line above
+// the next row's capitals.  The chip's blank dot row was at the bottom; at
+// the top, capitals and ascenders, which are commoner than descenders, stand
+// clear of the edge of a coloured background.  Columns
 // go 10 subpixels to 14 pixels, the dots 3,3,2,3,3 wide - symmetric, so the
-// stems of A, M and W match - with a blank column each side.  25 rows of 19
-// lines are 475, inside 480.
+// stems of A, M and W match - with a blank column each side.  A narrow glyph,
+// one that leaves an edge column of dots empty, moves the 2 there: 3,3,3,3,2
+// or 2,3,3,3,3, so the middle stroke of l, i, 1 or ! is 3 wide and not 2.
+// 25 rows of 19 lines are 475, inside 480.
 //
 // THE FONT IS ROW-MAJOR, 256 GLYPHS TO A ROW (docs/vga.md, "Fonts"): a row is
 // 512 bytes, 4 of font_line's 128-byte steps, and font row r is at F + 512 r.
@@ -86,14 +90,29 @@ function rounded(rows) {
   return s;
 }
 
-// The subpixel column each of pixels 1-14 shows: dots 1-5 are subpixels 2-11.
-const XMAP = [0, 1, 1, 2, 3, 3, 4, 5, 6, 6, 7, 8, 8, 9].map((c) => c + 2);
+// The subpixel column each of pixels 1-14 shows, for each place of the
+// narrow dot: dots 1-5 are subpixels 2-11.  A 3-pixel dot left of the middle
+// shows its first subpixel once and its second twice, right of it the other
+// way, so that the left-right mirror of a glyph is drawn mirrored.
+const XMAP = {
+  middle: [0, 1, 1, 2, 3, 3, 4, 5, 6, 6, 7, 8, 8, 9],
+  right: [0, 1, 1, 2, 3, 3, 4, 5, 5, 6, 7, 7, 8, 9],
+  left: [0, 1, 2, 2, 3, 4, 4, 5, 6, 6, 7, 8, 8, 9],
+};
+for (const k in XMAP) XMAP[k] = XMAP[k].map((c) => c + 2);
+
+// Where a glyph's narrow dot goes: an edge column it never lights, the right
+// one first, or the middle.  Dot columns 0-4 are bits 4-0 of a row.
+function narrow(rows) {
+  const used = rows.reduce((a, r) => a | r, 0);
+  return !(used & 0x01) ? 'right' : !(used & 0x10) ? 'left' : 'middle';
+}
 
 function cell(rows) {
-  const s = rounded(rows);
+  const s = rounded(rows), map = XMAP[narrow(rows)];
   const out = Array(H).fill(0);
   for (let y = 0; y < GLYPH_LINES; y++)
-    XMAP.forEach((sx, i) => { if (s[y][sx]) out[y] |= 0x8000 >> (1 + i); });
+    map.forEach((sx, i) => { if (s[y][sx]) out[1 + y] |= 0x8000 >> (1 + i); });
   return out;
 }
 
