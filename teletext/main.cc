@@ -22,9 +22,10 @@ using namespace teletext;
 
 namespace {
 
-// Flashing: 0.75 Hz, on 3 parts to off 1 - on a second, off a third - at
-// the display's clock.
-constexpr uint32_t CLOCK = 25175000, FLASH_ON = CLOCK, FLASH_OFF = CLOCK / 3;
+// Flashing: 0.75 Hz, on 3 parts to off 1 - on a second, off a third.  The
+// processor runs on the pixel clock, which is the UART's too: 25.125 MHz
+// from the PLL, the nearest it comes to VGA's 25.175.
+constexpr uint32_t CLOCK = FRUCTUS_UART_CLOCK_HZ, FLASH_ON = CLOCK, FLASH_OFF = CLOCK / 3;
 
 bool show_a;   // which buffer is shown; WRITETHRU writes the other
 
