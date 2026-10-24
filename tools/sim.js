@@ -151,6 +151,130 @@ function isRelativeBranch(st) {
       && mentionsPc(st.value);
 }
 
+// THE SEMANTICS ARE COMPILED, not walked: each instruction becomes a
+// JavaScript function of the machine and its operands, made the first time
+// it runs.  Walking the tree at every step was over a third of the
+// simulator's time.  A number operand is read from `o', the decoded
+// instruction's operands by slot - see slotOf - and a string one, a branch's
+// condition, is put in as a constant, so there is a function for each
+// condition; one for each set of operands was thousands of functions, each
+// too cold for V8 to compile well.  The language stays
+// what it was; this is only its JavaScript reading, and it has to read every
+// construct exactly as walking it did:
+//
+//   - a name is, in order, pc, halted, ie, vector, a shadow, a register or
+//     its alias, an operand, or a scratch value an earlier statement set;
+//   - an assignment evaluates its value before its address, and && and ||
+//     evaluate both sides - a memory read counts bus cycles and places a
+//     guard's access, so the order of reads is visible;
+//   - values are unbounded until they are stored: a register, the pc, a
+//     shadow and a scratch value keep the low sixteen bits.
+const SPECIAL = new Set(['pc', 'halted', 'ie', 'vector', 'shadow_sp', 'shadow_isp', 'shadow_lr']);
+const lit = (v) => typeof v === 'number' ? `(${v})` : JSON.stringify(v);
+
+function compileSemantics(body, ops, named, nregs, builtin, slotOf) {
+  const scratch = new Set();
+  const operand = (v, n) => typeof v === 'number' ? `o[${slotOf(n)}]` : lit(v);
+  const name = (n) => {
+    if (SPECIAL.has(n)) return n === 'halted' || n === 'ie' ? `(m.${n} ? 1 : 0)` : `m.${n}`;
+    if (n in named) return `R[${named[n]}]`;
+    if (n in ops)   return operand(ops[n], n);
+    if (scratch.has(n)) return `t_${n}`;
+    throw new Error(`semantics: unknown name '${n}'`);
+  };
+  const e = (x) => {
+    switch (x.n) {
+      case 'num':  return lit(x.v);
+      case 'var':  return name(x.name);
+      case 'part': return operand(ops[x.name][x.part], `${x.name}.${x.part}`);
+      case 'mem':
+        if (x.space === 'R')   return `R[${e(x.addr)} & ${nregs - 1}]`;
+        if (x.space === 'M8')  return `m.rd8(${e(x.addr)})`;
+        if (x.space === 'M16') return `m.rd16(${e(x.addr)})`;
+        throw new Error(`semantics: unknown space ${x.space}`);
+      case 'call': {
+        if (!builtin[x.fn]) throw new Error(`semantics: unknown builtin ${x.fn}`);
+        // A branch's test, its condition and width known: one comparison.
+        const c = x.fn === 'test' && x.args[3].n === 'num' && x.args[3].v === 16
+          ? (x.args[0].n === 'part' ? ops[x.args[0].name][x.args[0].part] : ops[x.args[0].name]) : undefined;
+        if (typeof c === 'string' && c in TEST16) return `L.${c}(${e(x.args[1])}, ${e(x.args[2])})`;
+        return `B.${x.fn}(${x.args.map(e).join(', ')})`;
+      }
+      case 'un':
+        return x.op === '!' ? `(${e(x.e)} ? 0 : 1)` : `(${x.op}${e(x.e)})`;
+      case 'cond': return `(${e(x.c)} ? ${e(x.a)} : ${e(x.b)})`;
+      case 'bin': {
+        const a = e(x.l), b = e(x.r);
+        switch (x.op) {
+          case '+': case '-': case '*': case '&': case '|': case '^': case '<<': case '>>': case '%':
+            return `(${a} ${x.op} ${b})`;
+          case '/':  return `((${a} / ${b}) | 0)`;
+          case '<': case '<=': case '>': case '>=':
+            return `(${a} ${x.op} ${b} ? 1 : 0)`;
+          case '==': return `(${a} === ${b} ? 1 : 0)`;
+          case '!=': return `(${a} !== ${b} ? 1 : 0)`;
+          case '&&': return `L.and(${a}, ${b})`;
+          case '||': return `L.or(${a}, ${b})`;
+        }
+        throw new Error(`semantics: unknown operator ${x.op}`);
+      }
+    }
+    throw new Error(`semantics: unknown node ${x.n}`);
+  };
+  const s = (x) => {
+    if (x.n === 'if') return `if (${e(x.c)}) { ${s(x.body)} }`;
+    const t = x.target, v = e(x.value);
+    if (t.n === 'mem') {
+      if (t.space === 'R')   return `{ const v = ${v}; R[${e(t.addr)} & ${nregs - 1}] = v; }`;
+      if (t.space === 'M8')  return `{ const v = ${v}; m.wr8(${e(t.addr)}, v); }`;
+      if (t.space === 'M16') return `{ const v = ${v}; m.wr16(${e(t.addr)}, v); }`;
+      throw new Error(`semantics: cannot assign to ${t.space}`);
+    }
+    if (t.n !== 'var') throw new Error(`semantics: cannot assign to ${JSON.stringify(t)}`);
+    const n = t.name;
+    if (n === 'pc')     return `m.pc = ${v} & 0xffff; m.wrotePc = true;`;
+    if (n === 'halted' || n === 'ie') return `m.${n} = !!${v};`;
+    // THESE MUST BE TESTED BEFORE THE SCRATCH FALLBACK BELOW.  An unknown
+    // name becomes a per-instruction temporary, so a misspelling here would
+    // not fail - `brk` would assign its shadow to a value that is discarded
+    // at the end of the instruction and the interrupt would silently lose
+    // the interrupted code's sp.  `vector` is deliberately absent: it is a
+    // chip constant and nothing may assign to it.
+    if (n.startsWith('shadow_') && SPECIAL.has(n)) return `m.${n} = ${v} & 0xffff;`;
+    if (n in named) return `R[${named[n]}] = ${v};`;
+    // ANY OTHER NAME IS A SCRATCH VALUE that lives for this instruction only.
+    // push, pop, stm and ldm use one to hold the pointer they were entered
+    // with, so that every address they compute is an offset from it and the
+    // pointer's own update can come last - which is what the hardware does
+    // and what makes `pop sp` mean something definite.  See isa/fructus.toml.
+    scratch.add(n);
+    return `t_${n} = ${v} & 0xffff;`;
+  };
+  const code = body.map(s).join('\n');
+  const decl = [...scratch].map((n) => `let t_${n};`).join(' ');
+  return new Function('B', 'L', `return function (m, o) { const R = m.R; ${decl}\n${code} };`)(builtin, LOGIC);
+}
+
+// What compileSemantics() calls besides the builtins: && and || with both
+// sides evaluated, and test() at width 16 by condition, as test() reads it.
+const sx16 = (v) => ((v & 0xffff) ^ 0x8000) - 0x8000;
+const ovf16 = (x, y) => { const d = sx16(x) - sx16(y); return d < -0x8000 || d >= 0x8000; };
+const TEST16 = {
+  eq: (x, y) => ((x & 0xffff) === (y & 0xffff) ? 1 : 0),
+  ne: (x, y) => ((x & 0xffff) !== (y & 0xffff) ? 1 : 0),
+  lt: (x, y) => (sx16(x) <  sx16(y) ? 1 : 0),
+  le: (x, y) => (sx16(x) <= sx16(y) ? 1 : 0),
+  gt: (x, y) => (sx16(x) >  sx16(y) ? 1 : 0),
+  ge: (x, y) => (sx16(x) >= sx16(y) ? 1 : 0),
+  lo: (x, y) => ((x & 0xffff) <  (y & 0xffff) ? 1 : 0),
+  ls: (x, y) => ((x & 0xffff) <= (y & 0xffff) ? 1 : 0),
+  hi: (x, y) => ((x & 0xffff) >  (y & 0xffff) ? 1 : 0),
+  hs: (x, y) => ((x & 0xffff) >= (y & 0xffff) ? 1 : 0),
+  vs: (x, y) => (ovf16(x, y) ? 1 : 0),
+  vc: (x, y) => (ovf16(x, y) ? 0 : 1),
+};
+const LOGIC = { ...TEST16, and: (a, b) => ((a && b) ? 1 : 0), or: (a, b) => ((a || b) ? 1 : 0) };
+
 // =============================================================================
 // The machine
 // =============================================================================
@@ -200,6 +324,9 @@ export const BUILTIN = {
   test:     (c, x, y, w) => (test(c, x, y, w) ? 1 : 0),
 };
 
+// Operand names a machine can tell apart: see slots().
+const SLOTS = 32;
+
 // See ioByte: the cycle counter's lead over the dispatch's cycle at a load's capture.
 const CYCLES_SKEW = 3;
 
@@ -238,7 +365,6 @@ export class Machine {
     this.guardAt = 0;      // and the first cycle the trap may take a dispatch
     this.little = spec.cpu.endian === 'little';
     this.count  = 0;
-    this.tmp    = {};      // scratch names, cleared at every instruction
 
     // THE COST MODEL.  See [cpu] in the spec, which is where it is defined, and
     // rtl/cpu.sv, whose dispatch cadence tests/cpu-check.mjs holds this to,
@@ -256,17 +382,24 @@ export class Machine {
     // THE BRANCH PREDICTOR, rtl/cpu.sv's: see predict().  Its table is not
     // reset, as the RAM is not; a reset clears the history.
     this.bpm     = new Uint16Array(256);
-    this.bpq     = [];     // writes still to land: { at, ix, way, v }
+    // writes still to land: see bpPush()
+    this.bqAt = new Float64Array(64); this.bqIx = new Uint8Array(64);
+    this.bqWay = new Int8Array(64); this.bqV = new Uint8Array(64);
+    this.bqHead = this.bqTail = 0;
     this.rr      = 0;      // the way the next new entry goes in
     this.gh      = 0;      // the last eleven verdicts, the newest lowest
-    this.ghLog   = [{ at: -Infinity, h: 0 }];   // gh's values, each with the edge that wrote it
+    // gh's values, each with the edge that wrote it: see ghWrote()
+    this.ghAt = new Float64Array(33); this.ghH = new Uint16Array(33); this.ghFix = new Uint8Array(33);
+    this.ghClear();
     this.rpAt    = undefined;   // the cycle the last guessed ret dispatched
     // THE RETURN STACK, rtl/cpu.sv's: see guessRet().  Its block is not
     // reset; its pointer and its top are.
     this.rsm     = new Uint16Array(256);   // what is below the top, rsm[rsp - 1] the next
     this.rsp     = 0;
     this.rtq     = 0;      // the top, which a ret guesses
-    this.rsq     = [];     // pushes and pops still to land: { at, v } or { at }
+    // pushes and pops still to land: see rsPush()
+    this.rqAt = new Float64Array(64); this.rqV = new Int32Array(64);
+    this.rqHead = this.rqTail = 0;
 
     // WHICH INSTRUCTIONS PAY IT COMES FROM THE SEMANTICS, not from a list here
     // that would have to be kept in step.  An instruction is a relative branch
@@ -302,6 +435,15 @@ export class Machine {
     // overwritten - by a store, by load(), or by a test poking `mem' directly -
     // is decoded afresh, and nothing has to remember to invalidate it.
     this.icache = new Array(this.mem.length);
+    this.fns = new Map();          // insn object -> string operands' JSON -> compiled semantics
+    const slot = new Map();
+    this.slotOf = (n) => {
+      if (!slot.has(n)) {
+        if (slot.size === SLOTS) throw new Error(`semantics: more than ${SLOTS} operand names`);
+        slot.set(n, slot.size);
+      }
+      return slot.get(n);
+    };
   }
 
   load(bytes, addr = 0) { this.mem.set(bytes, addr); return this; }
@@ -383,97 +525,6 @@ export class Machine {
     this.mem[a] = v & 0xff;
   }
 
-  // --- evaluating one instruction's semantics --------------------------------
-  ev(node, ops) {
-    switch (node.n) {
-      case 'num':  return node.v;
-      case 'var': {
-        const n = node.name;
-        if (n === 'pc')     return this.pc;
-        if (n === 'halted') return this.halted ? 1 : 0;
-        if (n === 'ie')     return this.ie ? 1 : 0;
-        if (n === 'vector') return this.vector;
-        if (n === 'shadow_sp')  return this.shadow_sp;
-        if (n === 'shadow_isp') return this.shadow_isp;
-        if (n === 'shadow_lr')  return this.shadow_lr;
-        if (n in this.named) return this.R[this.named[n]];
-        if (n in ops)       return ops[n];
-        if (n in this.tmp)  return this.tmp[n];
-        throw new Error(`semantics: unknown name '${n}'`);
-      }
-      case 'part': return ops[node.name][node.part];
-      case 'mem': {
-        const a = this.ev(node.addr, ops);
-        if (node.space === 'R')   return this.R[a & (this.R.length - 1)];
-        if (node.space === 'M8')  return this.rd8(a);
-        if (node.space === 'M16') return this.rd16(a);
-        throw new Error(`semantics: unknown space ${node.space}`);
-      }
-      case 'call': {
-        const f = BUILTIN[node.fn];
-        if (!f) throw new Error(`semantics: unknown builtin ${node.fn}`);
-        const args = node.args.map((a) => this.ev(a, ops));
-        return f(...args);
-      }
-      case 'un': {
-        const v = this.ev(node.e, ops);
-        return node.op === '-' ? -v : node.op === '~' ? ~v : (v ? 0 : 1);
-      }
-      case 'cond': return this.ev(node.c, ops) ? this.ev(node.a, ops) : this.ev(node.b, ops);
-      case 'bin': {
-        const a = this.ev(node.l, ops), b = this.ev(node.r, ops);
-        switch (node.op) {
-          case '+': return a + b;   case '-': return a - b;
-          case '*': return a * b;   case '/': return (a / b) | 0;
-          case '%': return a % b;
-          case '&': return a & b;   case '|': return a | b;   case '^': return a ^ b;
-          case '<<': return a << b; case '>>': return a >> b;
-          case '<': return a < b ? 1 : 0;   case '<=': return a <= b ? 1 : 0;
-          case '>': return a > b ? 1 : 0;   case '>=': return a >= b ? 1 : 0;
-          case '==': return a === b ? 1 : 0; case '!=': return a !== b ? 1 : 0;
-          case '&&': return (a && b) ? 1 : 0; case '||': return (a || b) ? 1 : 0;
-        }
-        throw new Error(`semantics: unknown operator ${node.op}`);
-      }
-    }
-    throw new Error(`semantics: unknown node ${node.n}`);
-  }
-
-  exec(node, ops) {
-    if (node.n === 'if') { if (this.ev(node.c, ops)) this.exec(node.body, ops); return; }
-    const v = this.ev(node.value, ops), t = node.target;
-    if (t.n === 'mem') {
-      const a = this.ev(t.addr, ops);
-      if (t.space === 'R')        this.R[a & (this.R.length - 1)] = u16(v);
-      else if (t.space === 'M8')  this.wr8(a, v);
-      else if (t.space === 'M16') this.wr16(a, v);
-      else throw new Error(`semantics: cannot assign to ${t.space}`);
-      return;
-    }
-    if (t.n === 'var') {
-      if (t.name === 'pc')     { this.pc = u16(v); this.wrotePc = true; return; }
-      if (t.name === 'halted') { this.halted = !!v; return; }
-      // THESE MUST BE TESTED BEFORE THE SCRATCH FALLBACK BELOW.  An unknown
-      // name becomes a per-instruction temporary, so a misspelling here would
-      // not fail - `brk` would assign its shadow to a value that is discarded
-      // at the end of the instruction and the interrupt would silently lose
-      // the interrupted code's sp.  `vector` is deliberately absent: it is a
-      // chip constant and nothing may assign to it.
-      if (t.name === 'ie')         { this.ie = !!v; return; }
-      if (t.name === 'shadow_sp')  { this.shadow_sp  = u16(v); return; }
-      if (t.name === 'shadow_isp') { this.shadow_isp = u16(v); return; }
-      if (t.name === 'shadow_lr')  { this.shadow_lr  = u16(v); return; }
-      if (t.name in this.named) { this.R[this.named[t.name]] = u16(v); return; }
-      // ANY OTHER NAME IS A SCRATCH VALUE that lives for this instruction only.
-      // push, pop, stm and ldm use one to hold the pointer they were entered
-      // with, so that every address they compute is an offset from it and the
-      // pointer's own update can come last - which is what the hardware does
-      // and what makes `pop sp` mean something definite.  See isa/fructus.toml.
-      this.tmp[t.name] = u16(v); return;
-    }
-    throw new Error(`semantics: cannot assign to ${JSON.stringify(t)}`);
-  }
-
   // One instruction.  `pc` is advanced BEFORE the semantics run, so `pc` inside
   // them means the address of the next instruction - which is what makes
   // `lr = pc` and `pc = pc + off` read the way the spec's summaries describe.
@@ -487,11 +538,11 @@ export class Machine {
     this.pc = u16(at + d.nbytes);
     const xfer = this.xfer0 = this.xfer;
     this.wrotePc = false;
-    this.tmp = {};           // no scratch name outlives its instruction
     if (trace) trace(at, d, this);
-    for (const s of e.body) this.exec(s, d.ops);
+    (e.run ??= this.compiled(d))(this, e.o);
     if (this.guardHit) { this.guardHit = false; this.guardPending = true; }
-    this.cyc += this.advance(at, d.nbytes, this.timing(d, e.kind, this.xfer - xfer, at));
+    this.timing(d, e.kind, this.xfer - xfer, at);
+    this.cyc += this.advance(at, d.nbytes);
     this.count++;
     return d;
   }
@@ -505,10 +556,33 @@ export class Machine {
       const d = decode(this.dec, mem, at);
       if (!d) return null;
       e = { d, bytes, mask: (1 << (8 * d.nbytes)) - 1,
-            body: this.sem.get(d.insn), kind: this.kind.get(d.insn) };
+            body: this.sem.get(d.insn), kind: this.kind.get(d.insn), run: null, o: this.slots(d.ops) };
       this.icache[at] = e;
     }
     return e;
+  }
+
+  // The instruction's semantics as a function of the machine and its number
+  // operands, shared by every copy of the instruction with the same strings.
+  compiled(d) {
+    let byOps = this.fns.get(d.insn);
+    if (!byOps) this.fns.set(d.insn, byOps = new Map());
+    const key = JSON.stringify(d.ops, (k, v) => typeof v === 'number' ? undefined : v);
+    let f = byOps.get(key);
+    if (!f) byOps.set(key, f = compileSemantics(this.sem.get(d.insn), d.ops, this.named, this.R.length, BUILTIN, this.slotOf));
+    return f;
+  }
+
+  // The number operands by slot: `k.imm' for a part.  The slots are the
+  // machine's, given out as names are first seen.
+  slots(ops) {
+    const o = new Int32Array(SLOTS);
+    for (const [n, v] of Object.entries(ops)) {
+      if (typeof v === 'number') o[this.slotOf(n)] = v;
+      else if (v && typeof v === 'object')
+        for (const [p, w] of Object.entries(v)) if (typeof w === 'number') o[this.slotOf(`${n}.${p}`)] = w;
+    }
+    return o;
   }
 
   // [cpu.vectors] io_guard, a step of its own after the instruction that
@@ -528,7 +602,8 @@ export class Machine {
     this.ie = false;
     this.pc = vector;
     // brk's routine; it has no bytes of its own, so it moves nothing out.
-    this.cyc += this.advance(at, 0, { hold: 6, redirect: 5 });
+    this.cost(6, 5);
+    this.cyc += this.advance(at, 0);
     this.count++;
     return d;
   }
@@ -571,8 +646,8 @@ export class Machine {
   timing(d, k, moved, at) {
     // brk AND rti are routines that redirect the fetch from their third step,
     // through taken_q; sei and cli release dispatch from their first.
-    if (k.fixed === 7) return { hold: 6, redirect: 5 };
-    if (k.fixed) return { hold: k.fixed };
+    if (k.fixed === 7) return this.cost(6, 5);
+    if (k.fixed) return this.cost(k.fixed);
     // A MEMORY INSTRUCTION STOPS DISPATCH until a step before its last
     // access, and makes an access a cycle from its ALU cycle on, two after
     // its dispatch: a word when it is aligned, a byte when not.  A load's
@@ -584,16 +659,15 @@ export class Machine {
     // after it: a store of one register does not stop dispatch at all, it
     // skips a cycle, or two for a word at an odd address.
     if (k.memory) {
-      const busy = [];
-      for (let i = 0; i < moved; i++) busy.push((k.stores ? 3 : 2) + i);
-      if (k.stores) return { hold: moved + 1, busy };
+      const from = k.stores ? 3 : 2;
+      if (k.stores) return this.cost(moved + 1, -1, false, from, moved);
       // ld AND ld8 write their register as its last byte arrives, and the
       // next instruction takes it through the bypass: N + 1, as a store.
-      if (!k.block && !this.blit) return { hold: moved + 1, busy };
-      return { hold: moved + 2 + (this.blit && !k.pops ? 1 : 0), busy };
+      if (!k.block && !this.blit) return this.cost(moved + 1, -1, false, from, moved);
+      return this.cost(moved + 2 + (this.blit && !k.pops ? 1 : 0), -1, false, from, moved);
     }
     // mul, clz and popcount hold the ALU stage: `extra_cycles` more.
-    if (k.extra) return { hold: 1 + k.extra };
+    if (k.extra) return this.cost(1 + k.extra);
     // A CONDITIONAL BRANCH FLOWS DOWN THE PIPELINE LIKE AN ALU INSTRUCTION,
     // with dispatch carrying on behind it.  TAKEN, the ALU stage decides it,
     // the instructions behind it are squashed, and its target is read the
@@ -610,10 +684,10 @@ export class Machine {
       const t = this.fe.t, prior = this.cbrAt;
       this.cbrAt = t;
       if (this.predict(t, prior !== t - 2 && this.rpAt !== t - 2)) {
-        if (this.wrotePc) return { hold: 1, redirect: 0, unpredicted: { hold: 3, redirect: 1 } };
-        return { hold: 1 + this.penalty, redirect: this.penalty };
+        if (this.wrotePc) return this.cost(1, 0, true);
+        return this.cost(1 + this.penalty, this.penalty);
       }
-      if (this.wrotePc) return { hold: 1 + this.penalty, redirect: this.penalty };
+      if (this.wrotePc) return this.cost(1 + this.penalty, this.penalty);
     }
     // Every jump, call and return puts a bit of its own address in the
     // predictor's history: see path().
@@ -621,27 +695,36 @@ export class Machine {
     // Every call pushes where it returns to, from its ALU stage - landing,
     // what the next ret would.
     if (this.wrotePc && k.calls) {
-      const q = this.rsq;
-      while (q.length && q[0].at <= this.fe.t) this.rsLand(q.shift());
-      q.push({ at: this.fe.t + 4, v: this.R[this.named.lr] });
+      this.rsDrain(this.fe.t);
+      this.rsPush(this.fe.t + 4, this.R[this.named.lr]);
     }
     if (this.wrotePc && k.predict) {
       // jmp AND call TO AN ABSOLUTE ADDRESS read their target's word as they
       // dispatch.  jmp moves the pc there too, so the target dispatches once
       // its word has arrived; call moves it in its ALU cycle.  While a
       // memory instruction's last access has the bus they read it a cycle on.
-      return { hold: k.calls ? 3 : 1, redirect: 0, unpredicted: { hold: 3, redirect: 1 } };
+      return this.cost(k.calls ? 3 : 1, 0, true);
     }
     if (this.wrotePc && k.ret && this.guessRet(this.fe.t)) {
-      return { hold: 1, redirect: 0, unpredicted: { hold: 3, redirect: 1 } };
+      return this.cost(1, 0, true);
     } else if (this.wrotePc) {
       // A JUMP OR CALL THROUGH A REGISTER, unguessed, stops dispatch behind
       // it, and its target, known in its ALU cycle, goes through taken_q a
       // cycle later.  `call lr` is undefined: its target would be the lr it
       // writes.
-      return { hold: 4, redirect: 3 };
+      return this.cost(4, 3);
     }
-    return { hold: 1 };
+    return this.cost(1);
+  }
+
+  // timing()'s answer, kept in the machine rather than made afresh at every
+  // step: `hold' and `redirect' as above, `busy' as `n' cycles from `from'
+  // on, and `unpredicted' that a guess read while a store's last access has
+  // the bus is no guess - hold 3, redirect 1, as a jump through a register
+  // that knows its target a cycle early.
+  cost(hold, redirect = -1, unpredicted = false, from = 0, n = 0) {
+    this.tHold = hold; this.tRedirect = redirect; this.tUnpredicted = unpredicted;
+    this.tBusy = ((1 << n) - 1) << from;
   }
 
   // A CONDITIONAL BRANCH'S GUESS, dispatched in cycle t: whether it is
@@ -664,13 +747,7 @@ export class Machine {
   // pattern in way rr, the ways in turn, its counter weak - at the word and
   // tag it looked at, which the branch carries down the pipeline.
   predict(t, free) {
-    const q = this.bpq;
-    while (q.length && q[0].at <= t - 3) {
-      const { ix, way, v } = q.shift();
-      const w = way < 0 ? this.rr : way;
-      if (way < 0) this.rr = (this.rr + 1) % 3;
-      this.bpm[ix] = (this.bpm[ix] & ~(31 << 5 * w)) | (v << 5 * w);
-    }
+    this.bpDrain(t - 3);
     const gh = this.gh;
     const ix = this.ghRead(t - 2) >> 3, tag = this.ghIn(t - 1) & 7, word = this.bpm[ix];
     let way = -1;
@@ -679,9 +756,9 @@ export class Machine {
     const guess = free && way >= 0 && ctr >= 2;
     const verdict = this.wrotePc;
     if (way >= 0)
-      q.push({ at: t + 3, ix, way, v: tag << 2 | (verdict ? Math.min(3, ctr + 1) : Math.max(0, ctr - 1)) });
+      this.bpPush(t + 3, ix, way, tag << 2 | (verdict ? Math.min(3, ctr + 1) : Math.max(0, ctr - 1)));
     else if (guess !== verdict)
-      q.push({ at: t + 3, ix, way: -1, v: tag << 2 | (verdict ? 2 : 1) });
+      this.bpPush(t + 3, ix, -1, tag << 2 | (verdict ? 2 : 1));
     this.gh = (gh << 1 | (verdict ? 1 : 0)) & 0x7ff;
     if (guess === verdict) this.ghWrote(t, this.gh);
     else { this.ghWrote(t, (gh << 1 | (guess ? 1 : 0)) & 0x7ff); this.ghWrote(t + 3, this.gh, true); }
@@ -690,17 +767,54 @@ export class Machine {
 
   // gh's history: `at` the cycle whose closing edge wrote h, `fix` a
   // misprediction's righting, which the table's read takes at that edge.
+  // The log is three arrays, oldest first, `ghN` long: when it passes 32
+  // the oldest 16 go.
   ghWrote(at, h, fix = false) {
-    this.ghLog.push({ at, h, fix });
-    if (this.ghLog.length > 32) this.ghLog.splice(0, 16);
+    const n = this.ghN++;
+    this.ghAt[n] = at; this.ghH[n] = h; this.ghFix[n] = fix ? 1 : 0;
+    if (this.ghN > 32) {
+      this.ghAt.copyWithin(0, 16, this.ghN); this.ghH.copyWithin(0, 16, this.ghN);
+      this.ghFix.copyWithin(0, 16, this.ghN); this.ghN -= 16;
+    }
   }
-  // gh in cycle c, and the history the table reads at the edge closing c.
-  ghIn(c) { return this.ghAt_((e) => e.at <= c - 1); }
-  ghRead(c) { return this.ghAt_((e) => e.at <= c - 1 || (e.at === c && e.fix)); }
-  ghAt_(ok) {
-    let best = null;
-    for (const e of this.ghLog) if (ok(e) && (!best || e.at >= best.at)) best = e;
-    return best ? best.h : 0;
+  ghClear() { this.ghN = 0; this.ghWrote(-Infinity, 0); }
+  // gh in cycle c, and the history the table reads at the edge closing c:
+  // the latest write that had landed, the later of two at the same edge.
+  //
+  // THE SEARCH GOES BACKWARDS AND STOPS EARLY.  Every write is made in a
+  // dispatch cycle t, for an edge from t to t + 3, and t only grows until
+  // dispatch() clears the log; so a write older than one for edge `a' is for
+  // an edge at most a + 3, and once that is no later than the best found, no
+  // older write can be better.
+  ghIn(c) { return this.ghFind(c - 1, NaN); }
+  ghRead(c) { return this.ghFind(c - 1, c); }
+  // The latest write for an edge up to `upTo', or a righting at `fixAt'.
+  ghFind(upTo, fixAt) {
+    const at = this.ghAt, fix = this.ghFix;
+    let best = -1, bestAt = -Infinity, oldest = Infinity;
+    for (let i = this.ghN - 1; i >= 0; i--) {
+      const a = at[i];
+      if (oldest + 3 <= bestAt) break;
+      if (a < oldest) oldest = a;
+      if (a > bestAt && (a <= upTo || (a === fixAt && fix[i]))) { best = i; bestAt = a; }
+    }
+    return best < 0 ? 0 : this.ghH[best];
+  }
+
+  // THE TABLE'S WRITES STILL TO LAND, a ring in the order they were made,
+  // which is the order of their `at': write k lands when a look at t sees
+  // at <= t.  A way of -1 is a new entry, in way rr.
+  bpPush(at, ix, way, v) {
+    const k = this.bqTail++ & 63;
+    this.bqAt[k] = at; this.bqIx[k] = ix; this.bqWay[k] = way; this.bqV[k] = v;
+  }
+  bpDrain(upTo) {
+    while (this.bqHead !== this.bqTail && this.bqAt[this.bqHead & 63] <= upTo) {
+      const k = this.bqHead++ & 63, ix = this.bqIx[k], way = this.bqWay[k], v = this.bqV[k];
+      const w = way < 0 ? this.rr : way;
+      if (way < 0) this.rr = (this.rr + 1) % 3;
+      this.bpm[ix] = (this.bpm[ix] & ~(31 << 5 * w)) | (v << 5 * w);
+    }
   }
 
   // A ret's GUESS, dispatched in cycle t: the top of the return stack,
@@ -713,8 +827,8 @@ export class Machine {
   // before then guesses what rtq held.  The pointer wraps, so a deeper stack loses
   // its oldest entries, and those rets are guessed wrong.
   guessRet(t) {
-    while (this.rsq.length && this.rsq[0].at <= t) this.rsLand(this.rsq.shift());
-    this.rsq.push({ at: t + 4 });
+    this.rsDrain(t);
+    this.rsPush(t + 4, -1);
     if (this.fe.nw < 1 || this.rpAt === t - 1) return false;
     this.rpAt = t;
     const ok = this.rtq === this.pc;
@@ -722,11 +836,18 @@ export class Machine {
     return ok;
   }
 
-  rsLand(e) {
-    if (e.v !== undefined) {
+  // Pushes and pops still to land, a ring in the order of their `at': v the
+  // address a push puts on top, -1 a pop.
+  rsPush(at, v) { const k = this.rqTail++ & 63; this.rqAt[k] = at; this.rqV[k] = v; }
+  rsDrain(upTo) {
+    while (this.rqHead !== this.rqTail && this.rqAt[this.rqHead & 63] <= upTo)
+      this.rsLand(this.rqV[this.rqHead++ & 63]);
+  }
+  rsLand(v) {
+    if (v >= 0) {
       this.rsm[this.rsp] = this.rtq;
       this.rsp = (this.rsp + 1) & 255;
-      this.rtq = e.v;
+      this.rtq = v;
     } else {
       this.rsp = (this.rsp - 1) & 255;
       this.rtq = this.rsm[this.rsp];
@@ -754,21 +875,26 @@ export class Machine {
   //
   // advance() runs it from this instruction's dispatch, cycle by cycle,
   // until the next one dispatches, and returns the cycles between.
-  advance(at, len, timing) {
+  //
+  // timing() HAS SAID what this instruction holds: see cost().  The fetcher's
+  // `busy' is the cycles the bus is the sequencer's, bit c for its cycle
+  // fe.t + c; no instruction keeps it for long, so a word holds them.
+  advance(at, len) {
     const fe = this.fe;
-    let { hold, busy = [], redirect = -1 } =
-      timing.unpredicted && fe.busy.includes(fe.t) ? timing.unpredicted : timing;
+    let hold = this.tHold, redirect = this.tRedirect, busy = fe.busy;
     // A guess read late waits for the bus: a block store's last access may
     // be the cycle after the one it dispatched in.
-    if (timing.unpredicted && fe.busy.includes(fe.t))
-      while (fe.busy.includes(fe.t + redirect)) { redirect++; hold++; }
-    for (const b of busy) fe.busy.push(fe.t + b);
-    let { nw, finq } = fe;
+    if (this.tUnpredicted && (busy & 1)) {
+      hold = 3; redirect = 1;
+      while (busy >>> redirect & 1) { redirect++; hold++; }
+    }
+    busy |= this.tBusy;
+    let nw = fe.nw, finq = fe.finq;
     for (let c = 0; ; c++) {
       const t = fe.t + c;
       if (c >= hold && this.ready(nw, t)) {
-        fe.busy = fe.busy.filter((b) => b >= t);
-        Object.assign(fe, { nw, finq, t, pc: this.pc });
+        fe.busy = c < 32 ? busy >>> c : 0;
+        fe.nw = nw; fe.finq = finq; fe.t = t; fe.pc = this.pc;
         // Starved: beyond the least it could cost - after a redirect, its
         // target's word arriving and dispatching at once.
         this.starve += c - Math.max(hold, redirect + 2);
@@ -776,7 +902,7 @@ export class Machine {
       }
       if (c === redirect) { nw = 0; finq = 1; continue; }
       const stay = nw + finq - (c === 0 ? ((at & 1) + len) >> 1 : 0);
-      finq = stay <= 2 && !fe.busy.includes(t) ? 1 : 0;
+      finq = stay <= 2 && !(c < 32 && (busy >>> c & 1)) ? 1 : 0;
       nw = stay;
     }
   }
@@ -787,14 +913,15 @@ export class Machine {
   ready(nw, t) {
     if (this.halted) return true;
     if (this.guardPending && t >= this.guardAt) return nw >= 1;
+    if (nw !== 1) return nw >= 2;
     const len = this.entry(this.pc)?.d.nbytes ?? 1;
-    return nw >= 2 || (nw === 1 && ((this.pc & 1) ? len === 1 : len !== 3));
+    return (this.pc & 1) ? len === 1 : len !== 3;
   }
 
   // AS IF THE FETCHER HAD KEPT UP: the buffer full at the next dispatch, for
   // a test that pins an instruction's own cost.
   prime() {
-    this.fe = { nw: 3, finq: 0, t: this.fe?.t ?? 0, pc: this.pc, busy: [] };
+    this.fe = { nw: 3, finq: 0, t: this.fe?.t ?? 0, pc: this.pc, busy: 0 };
     return this;
   }
 
@@ -805,20 +932,17 @@ export class Machine {
   dispatch(at) {
     if (this.fe?.pc === at) return;
     const starve = this.starve;
-    this.fe = { nw: 0, finq: 0, t: 0, pc: at, busy: [] };
+    this.fe = { nw: 0, finq: 0, t: 0, pc: at, busy: 0 };
     this.cbrAt = undefined;
     // As from reset: the history cleared, the table's writes landed.
-    for (const { ix, way, v } of this.bpq.splice(0)) {
-      const w = way < 0 ? this.rr : way;
-      if (way < 0) this.rr = (this.rr + 1) % 3;
-      this.bpm[ix] = (this.bpm[ix] & ~(31 << 5 * w)) | (v << 5 * w);
-    }
+    this.bpDrain(Infinity);
     this.gh = this.rr = 0;
-    this.ghLog = [{ at: -Infinity, h: 0 }];
+    this.ghClear();
     this.rpAt = undefined;
-    for (const e of this.rsq.splice(0)) this.rsLand(e);
+    this.rsDrain(Infinity);
     this.rsp = this.rtq = 0;
-    this.advance(at, 0, { hold: 0 });
+    this.cost(0);
+    this.advance(at, 0);
     this.starve = starve;
   }
 
