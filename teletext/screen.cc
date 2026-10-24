@@ -19,7 +19,6 @@ constexpr int BANDS = 5;
 
 constexpr uint16_t MODE = DISPLAY_4BPP | DISPLAY_WIDTH(8) | DISPLAY_WIDE_FONT;
 constexpr uint8_t SPACE = 0x20, GRID = 0xe0, GRID_DOUBLE = 0xe1, DOUBLE = 0x60;
-constexpr uint8_t FLASHING = 8;
 
 // The band each line of a row is in, cut at 6, 7, 12 and 13.
 constexpr uint8_t band(int line) {
@@ -41,19 +40,13 @@ constexpr uint8_t COLOURS_RGB[8] = {
 
 uint16_t *line_mode(int line) { return DISPLAY_LINEMODE + line; }
 
+bool flashes;   // draw_row saw a flashing cell, for draw_page
+
 }  // namespace
 
 void setup_display() {
   DISPLAY_FONT = (uint16_t) (uintptr_t) teletext_font;
   display_set_palette(0, COLOURS_RGB, 8);
-  set_flash(true);
-}
-
-void set_flash(bool on) {
-  static const uint8_t off[8] = { DISPLAY_RGB(0, 0, 0), DISPLAY_RGB(0, 0, 0), DISPLAY_RGB(0, 0, 0),
-    DISPLAY_RGB(0, 0, 0), DISPLAY_RGB(0, 0, 0), DISPLAY_RGB(0, 0, 0), DISPLAY_RGB(0, 0, 0),
-    DISPLAY_RGB(0, 0, 0) };
-  display_set_palette(FLASHING, on ? COLOURS_RGB : off, 8);
 }
 
 void setup_buffer() {
@@ -78,10 +71,10 @@ void setup_buffer() {
     }
   }
   static const uint8_t spaces[40] = {};
-  for (int row = 0; row < 25; row++) draw_row(row, spaces, false);
+  for (int row = 0; row < 25; row++) draw_row(row, spaces, false, true);
 }
 
-bool draw_row(int row, const uint8_t *text, bool bottom) {
+bool draw_row(int row, const uint8_t *text, bool bottom, bool flash_on) {
   uint8_t *codes = CODES + 40 * row, *colours = COLOURS + 40 * row;
   uint8_t *background = BACKGROUND + 40 * BANDS * row;
 
@@ -123,9 +116,11 @@ bool draw_row(int row, const uint8_t *text, bool bottom) {
       held = shown;
       held_separated = sep;
     }
-    if (conceal || (bottom && !double_height)) shown = SPACE, graphic = false;
+    if (graphic || shown != SPACE) flashes |= flash;
+    if (conceal || (bottom && !double_height) || (flash && !flash_on))
+      shown = SPACE, graphic = false;
 
-    uint8_t ink = fg + (flash ? FLASHING : 0);
+    uint8_t ink = fg;
     uint8_t paper = bg | bg << 4;
     if (!graphic) {
       codes[c] = double_height && shown != SPACE ? shown + DOUBLE : shown;
@@ -164,9 +159,11 @@ bool draw_row(int row, const uint8_t *text, bool bottom) {
   return any_double;
 }
 
-void draw_page(const uint8_t (*text)[40]) {
+bool draw_page(const uint8_t (*text)[40], bool flash_on) {
+  flashes = false;
   bool bottom = false;
-  for (int row = 0; row < 25; row++) bottom = draw_row(row, text[row], bottom) && !bottom;
+  for (int row = 0; row < 25; row++) bottom = draw_row(row, text[row], bottom, flash_on) && !bottom;
+  return flashes;
 }
 
 }  // namespace teletext

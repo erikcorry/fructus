@@ -25,9 +25,12 @@
 // its own.  A mosaic cell's glyph is a space, or with separated graphics the
 // grid, 0xe0 or 0xe1, in the background colour over the blocks.
 //
-// THE PALETTE: 0-7 black, red, green, yellow, blue, magenta, cyan, white;
-// 8-15 the same, flashing.  A flashing colour is entry 8 + c, and
-// set_flash(false) shows those black for the off phase.
+// THE PALETTE: 0-7 black, red, green, yellow, blue, magenta, cyan, white.
+//
+// FLASHING IS DRAWN, not a palette trick: a flashing cell shows its
+// background in the off phase, and any foreground can flash against any
+// background, 56 pairs, where the palette has 32 entries.  So the page is
+// drawn again when the phase changes; draw_page says whether it needs to.
 #ifndef TELETEXT_SCREEN_H
 #define TELETEXT_SCREEN_H
 
@@ -49,16 +52,14 @@ void setup_buffer();
 
 // Row 0-24 from its 40 bytes, into the buffer not shown.  bottom: this is the
 // lower row of double height, showing the bottom halves of its own double
-// height characters and nothing of its single height ones.  Returns whether
+// height characters and nothing of its single height ones.  flash_on: the
+// flash's phase, flashing cells shown or their background.  Returns whether
 // the row has double height, so the next row is its lower one.
-bool draw_row(int row, const uint8_t *text, bool bottom);
+bool draw_row(int row, const uint8_t *text, bool bottom, bool flash_on);
 
 // Every row, the lower rows of double height worked out on the way.
-void draw_page(const uint8_t (*text)[40]);
-
-// Flashing colours on or off.  Palette writes show at once: call it in the
-// vertical blank.
-void set_flash(bool on);
+// Returns whether anything flashes, and so needs drawing at the next phase.
+bool draw_page(const uint8_t (*text)[40], bool flash_on);
 
 }  // namespace teletext
 
