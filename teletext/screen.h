@@ -57,7 +57,8 @@ void setup_buffer();
 // the row has double height, so the next row is its lower one.
 bool draw_row(int row, const uint8_t *text, bool bottom, bool flash_on);
 
-// Every row, the lower rows of double height worked out on the way.
+// Every row, the lower rows of double height worked out on the way and drawn
+// from the row above, whatever their own bytes are.
 // Returns whether anything flashes, and so needs drawing at the next phase.
 bool draw_page(const uint8_t (*text)[40], bool flash_on);
 

@@ -162,7 +162,12 @@ bool draw_row(int row, const uint8_t *text, bool bottom, bool flash_on) {
 bool draw_page(const uint8_t (*text)[40], bool flash_on) {
   flashes = false;
   bool bottom = false;
-  for (int row = 0; row < 25; row++) bottom = draw_row(row, text[row], bottom, flash_on) && !bottom;
+  // The lower row of double height is drawn from the row above, as a
+  // broadcast decoder does: what is sent in it is ignored.  The BBC's
+  // SAA5050 drew it from its own bytes, so BBC pages repeat the row - which
+  // comes to the same thing.
+  for (int row = 0; row < 25; row++)
+    bottom = draw_row(row, text[bottom ? row - 1 : row], bottom, flash_on) && !bottom;
   return flashes;
 }
 
