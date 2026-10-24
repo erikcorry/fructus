@@ -19,12 +19,6 @@
 // no "in progress" flag beside it.  A page that arrives before the main
 // program takes the last is written over it: the main program gets the
 // newest whole page, never a mix.
-//
-// DIRTY IS AGAINST THE OTHER PAGE.  As each byte arrives the handler
-// compares it with the same byte of the page the main program holds, the
-// page before, so after a flip dirty[r] says row r differs from what was
-// rendered last time.  Only rows: a row's attributes run to its end, and
-// double height reaches the row below, which is the renderer's to add.
 #ifndef TELETEXT_RX_H
 #define TELETEXT_RX_H
 
@@ -37,7 +31,6 @@ constexpr uint8_t END_OF_PAGE = 0;
 
 struct Page {
   uint8_t text[ROWS][COLUMNS];
-  uint8_t dirty[ROWS];        // 1: the row differs from the other page's
 };
 
 extern Page pages[2];
@@ -52,7 +45,7 @@ inline void interrupts_on() { __asm__ volatile ("sei" ::: "memory"); }
 void rx_start();
 
 // The newest whole page, if one has come since the last call: the page to
-// render, with its dirty rows, or nullptr.
+// render, or nullptr.
 inline const Page *take_page() {
   interrupts_off();
   const Page *p = nullptr;

@@ -5,9 +5,8 @@
 // Each page that comes is drawn into the buffer not shown, which is then
 // shown at the next vertical sync, and the other buffer is drawn next time.
 // A page with flashing in it is drawn again at each change of the flash's
-// phase.  Every page is drawn whole: what that costs is printed with
-// -DTELETEXT_TIMING, and the dirty rows rx.cc keeps are there if it is too
-// much.
+// phase.  Every page is drawn whole, 9-14 ms of a 16.7 ms frame: what that
+// costs is printed with -DTELETEXT_TIMING.
 //
 // -DTELETEXT_POLL feeds the handler by brk, for tools/fcc-run.mjs, which
 // models the UART but not its interrupt.

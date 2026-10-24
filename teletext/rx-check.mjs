@@ -9,13 +9,14 @@
 // ld/fructus-writethru.ld and runs it under tools/fcc-run.mjs with this
 // input, a brk for each byte:
 //
-//   - page A: taken, every row dirty against the empty page before it;
-//   - page B, A with one byte of row 3 changed: only row 3 dirty;
+//   - page A, taken into buffer 0;
+//   - page B, A with one byte of row 3 changed, into buffer 1;
 //   - a page of 10 bytes and one of 1001: both dropped;
-//   - page C, B with 0x9d at the end of row 24: only row 24 dirty, and the
-//     byte stored as 0x1d - while the dropped pages were written into the
-//     same buffer, so the dirty rows are against B and not against them;
+//   - page C, B with 0x9d at the end of row 24, into buffer 0 over the
+//     dropped pages' bytes, and the 0x9d stored as 0x1d;
 //   - and at the end nothing more to take.
+//
+// Each page is checked by its buffer and the sum of its bytes.
 //
 // Skips when the compiler is not built.
 // =============================================================================
@@ -42,9 +43,9 @@ writeFileSync('build/_teletext-rx.in', input);
 
 const sum = (page) => page.reduce((s, v) => (s + (v & 0x7f)) & 0xffff, 0);
 const expected = [
-  `page 0 dirty ${[...Array(25).keys()].join(' ')} sum ${sum(a)}`,
-  `page 1 dirty 3 sum ${sum(b)}`,
-  `page 0 dirty 24 sum ${sum(c)}`,
+  `page 0 sum ${sum(a)}`,
+  `page 1 sum ${sum(b)}`,
+  `page 0 sum ${sum(c)}`,
   'none',
   'overruns 0',
 ];

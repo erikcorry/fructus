@@ -15,10 +15,8 @@ volatile uint16_t rx_overruns;
 namespace {
 
 // Where the next byte goes.  pos counts the page's bytes and runs on past
-// 1000, so a long page is told from a whole one; row and column are pos's,
-// kept as counters because there is no divide.
+// 1000, so a long page is told from a whole one.
 uint16_t pos;
-uint8_t row, column;
 
 // vectors.s's stub saves r0, r1, r5 and lr, which a void (void) function
 // may clobber; the rest are callee saved.  This needs little: 64 bytes.
@@ -47,22 +45,11 @@ extern "C" void teletext_rx_interrupt() {
   if (byte == END_OF_PAGE) {
     if (pos == PAGE_BYTES) rx_complete = 1;
     pos = 0;
-    row = column = 0;
     return;
   }
 
   if (pos == 0) rx_complete = 0;   // overwriting it from here on
-  if (pos < PAGE_BYTES) {
-    Page &in = pages[rx_page];
-    const Page &shown = pages[rx_page ^ 1];
-    byte &= 0x7f;
-    if (column == 0) in.dirty[row] = 0;
-    in.text[row][column] = byte;
-    if (byte != shown.text[row][column]) in.dirty[row] = 1;
-    if (++column == COLUMNS) {
-      column = 0;
-      row++;
-    }
-  }
+  // The page as bytes, row after row: text[0][pos] would index past row 0.
+  if (pos < PAGE_BYTES) ((uint8_t *) &pages[rx_page])[pos] = byte & 0x7f;
   pos++;
 }

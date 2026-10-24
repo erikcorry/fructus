@@ -5,10 +5,10 @@
 // After every byte that leaves a page complete, and once at the end, it
 // prints what take_page gives:
 //
-//     page N dirty R R ... sum S
+//     page N sum S
 //
-// N the page's index, the R its dirty rows, S the sum of its 1000 bytes;
-// "none" when there is no page to take.  Then "overruns N".
+// N the page's index, S the sum of its 1000 bytes; "none" when there is no
+// page to take.  Then "overruns N".
 #include "rx.h"
 
 #include <fructus/uart.h>
@@ -34,12 +34,6 @@ static void report() {
   }
   put("page ");
   number(p - pages);
-  put(" dirty");
-  for (int r = 0; r < ROWS; r++)
-    if (p->dirty[r]) {
-      put(" ");
-      number(r);
-    }
   uint16_t sum = 0;
   for (int r = 0; r < ROWS; r++)
     for (int c = 0; c < COLUMNS; c++) sum += p->text[r][c];
