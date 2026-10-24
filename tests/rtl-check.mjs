@@ -158,39 +158,49 @@ const unaryOps = () => {
 // Every value of insn[23:11] - the five-bit field, the imm3 index's high bits
 // and the whole of imm10 - in every column, with byte 1's low bits and the rest
 // of the opcode varied beneath, because a circuit reading them would otherwise
-// pass.
+// pass.  Whether +0 is condimm5 is the opcode's: the packed branch's, from the
+// spec, and any other +0 opcode as imm5.
+const CIMM_OPS = spec.insn.flatMap((insn) => (insn.form ?? [])
+  .filter((f) => Object.values(f.fields ?? {}).some((v) => /:condimm5$/.test(v)))
+  .map((f) => parseInt(f.encoding.replace(/_/g, '').split(/\s+/)[0], 2)));
 const vecs = [];
 for (let sel = 0; sel <= 5; sel++)
-  for (const cimm of [0, 1])
+  for (const cimm of sel === 0 ? [0, 1] : [0])
     for (let top = 0; top < 8192; top++) {
-      const insn = (top << 11) | ((((top * 157) ^ (top >> 5)) & 0xff) << 3) | sel;
+      let insn = (top << 11) | ((((top * 157) ^ (top >> 5)) & 0xff) << 3) | sel;
+      if (cimm) insn = (insn & ~0xff) | CIMM_OPS[top % CIMM_OPS.length];
+      else if (CIMM_OPS.includes(insn & 0xff)) continue;
       // A free condimm5 index encodes no instruction, so immgen may say
       // anything there - its table leaves those rows don't-care.
       if (want(insn, cimm) === undefined) continue;
-      vecs.push(`${hex6(insn)} ${cimm} ${hex4(want(insn, cimm))}`);
+      vecs.push(`${hex6(insn)} ${hex4(want(insn, cimm))}`);
     }
 
 mkdirSync('build', { recursive: true });
 writeFileSync('build/immgen-vectors.txt', vecs.join('\n') + '\n');
+// immgen is a ROM read at dispatch: the opcode and byte 1 go in at an edge,
+// and the immediate is out after it, with the whole instruction - imm10's
+// byte 2 - as decode has it.
 writeFileSync('build/immgen-tb.sv', `module tb;
-    logic [23:0] insn;
+    logic        clk = 0;
+    logic [23:0] insn, dins;
     logic [15:0] expect_, got;
-    logic cimm;
     integer f, n = 0, bad = 0, r;
-    immgen u (.insn(insn), .cimm(cimm), .imm(got));
+    immgen u (.clk(clk), .op(insn[7:0]), .b1(insn[15:8]), .insn(dins), .imm(got));
     initial begin
         f = $fopen("build/immgen-vectors.txt", "r");
         if (f == 0) begin $display("FAIL cannot open vectors"); $finish; end
         while (!$feof(f)) begin
-            r = $fscanf(f, "%h %d %h\\n", insn, cimm, expect_);
-            if (r == 3) begin
-                #1;
+            r = $fscanf(f, "%h %h\\n", insn, expect_);
+            if (r == 2) begin
+                #1 clk = 1;
+                dins = insn;
+                #1 clk = 0;
                 n = n + 1;
                 if (got !== expect_) begin
                     bad = bad + 1;
                     if (bad < 6)
-                        $display("  MISMATCH insn=%h cimm=%0d want=%h got=%h",
-                                 insn, cimm, expect_, got);
+                        $display("  MISMATCH insn=%h want=%h got=%h", insn, expect_, got);
                 end
             end
         end

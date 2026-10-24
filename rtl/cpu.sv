@@ -1079,7 +1079,7 @@ module cpu (
     wire use_imm = rk & (rc == 3'd3 | rc == 3'd4);
     wire [2:0]  bn = rk ? {ins[15:14], ins[0]} : rc;
     wire [15:0] imm;
-    immgen g (.insn(ins), .cimm(rk & rc == 3'd4), .imm(imm));
+    immgen g (.clk(clk), .op(op), .b1(ib1), .insn(ins), .imm(imm));   // a ROM, read at dispatch
     wire [15:0] konst = {{13{rc[2]}}, rc};
     // Code 2 is a call's return address, the next pc, which lr takes through
     // the ALU's pass-through.  Code 3 is a block move's offset from its
