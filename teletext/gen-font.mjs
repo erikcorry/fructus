@@ -22,6 +22,9 @@
 // stems of A, M and W match - with a blank column each side.  A narrow glyph,
 // one that leaves an edge column of dots empty, moves the 2 there: 3,3,3,3,2
 // or 2,3,3,3,3, so the middle stroke of l, i, 1 or ! is 3 wide and not 2.
+// A wide glyph with a stem in the middle column and no upright stroke at the
+// edges - T, +, *, ?, the arrows - is 2,3,3,3,2, 13 pixels: the stem is 3
+// and the glyph is symmetric about it, half a pixel left of the cell's middle.
 // 25 rows of 19 lines are 475, inside 480.
 //
 // THE FONT IS ROW-MAJOR, 256 GLYPHS TO A ROW (docs/vga.md, "Fonts"): a row is
@@ -98,21 +101,27 @@ const XMAP = {
   middle: [0, 1, 1, 2, 3, 3, 4, 5, 6, 6, 7, 8, 8, 9],
   right: [0, 1, 1, 2, 3, 3, 4, 5, 5, 6, 7, 7, 8, 9],
   left: [0, 1, 2, 2, 3, 4, 4, 5, 6, 6, 7, 8, 8, 9],
+  stem: [0, 1, 2, 3, 3, 4, [4, 5], 5, 6, 6, 7, 8, 9],
 };
-for (const k in XMAP) XMAP[k] = XMAP[k].map((c) => c + 2);
+for (const k in XMAP) XMAP[k] = XMAP[k].map((c) => [c].flat().map((c) => c + 2));
 
 // Where a glyph's narrow dot goes: an edge column it never lights, the right
-// one first, or the middle.  Dot columns 0-4 are bits 4-0 of a row.
+// one first, or both edges for a middle stem (the middle dot's centre pixel
+// shows either subpixel, so the arrows mirror), or the middle.  Dot columns
+// 0-4 are bits 4-0 of a row.
 function narrow(rows) {
   const used = rows.reduce((a, r) => a | r, 0);
-  return !(used & 0x01) ? 'right' : !(used & 0x10) ? 'left' : 'middle';
+  if (!(used & 0x01)) return 'right';
+  if (!(used & 0x10)) return 'left';
+  const edge = (bit) => rows.some((r, y) => y > 0 && r & rows[y - 1] & bit);
+  return rows.some((r) => (r & 0x0e) === 0x04) && !edge(0x10) && !edge(0x01) ? 'stem' : 'middle';
 }
 
 function cell(rows) {
   const s = rounded(rows), map = XMAP[narrow(rows)];
   const out = Array(H).fill(0);
   for (let y = 0; y < GLYPH_LINES; y++)
-    map.forEach((sx, i) => { if (s[y][sx]) out[1 + y] |= 0x8000 >> (1 + i); });
+    map.forEach((sx, i) => { if (sx.some((x) => s[y][x])) out[1 + y] |= 0x8000 >> (1 + i); });
   return out;
 }
 
