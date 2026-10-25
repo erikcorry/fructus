@@ -163,9 +163,15 @@ bool draw_page(const uint8_t (*text)[40], bool flash_on) {
   flashes = false;
   bool bottom = false;
   // The lower row of double height is drawn from the row above, as a
-  // broadcast decoder does: what is sent in it is ignored.  The BBC's
-  // SAA5050 drew it from its own bytes, so BBC pages repeat the row - which
-  // comes to the same thing.
+  // broadcast decoder does: what is sent in it is ignored, its colours and
+  // modes too, so they are the upper row's.  The BBC's SAA5050 kept no row
+  // but the one it drew, and drew the lower row from its own bytes, so BBC
+  // pages repeat the row - which comes to the same thing.  Where the lower
+  // row is not a copy the two part: Teefax leaves it empty, which a BBC shows
+  // as the top halves alone, and a BBC page can put other text there, the
+  // top of one character over the bottom of another, which no TV shows.
+  // A lower row starts no pair of its own, on either, so double height on
+  // every row is upper, lower, upper, lower.
   for (int row = 0; row < 25; row++)
     bottom = draw_row(row, text[bottom ? row - 1 : row], bottom, flash_on) && !bottom;
   return flashes;
