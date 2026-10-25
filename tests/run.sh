@@ -337,6 +337,45 @@ if [ -x build/gcc/gcc/xgcc ] && [ -x build/cross-bin/fructus-elf-as ]; then
     fi
     rm -f build/_heap build/_heap.bin
 
+    # --- dispatch bytes -------------------------------------------------------
+    # tests/dispatch.s writes `.byte dispatch(sym)' against handlers defined at
+    # the ends of their range; R_FRUCTUS_8_DISPATCH must place the byte the
+    # dispatch turns into each address.  Then what must fail: an address
+    # between two handlers and one below the range are link errors, and a
+    # constant out of the range is gas's.
+    handlers="-Wl,--defsym=h_low=0xf010 -Wl,--defsym=h_high=0xfff0"
+    for o in -O2 -O0; do
+        if tools/fcc $o $handlers tests/dispatch.c tests/dispatch.s -o build/_disp \
+               2>build/_err \
+           && node tools/fcc-run.mjs build/_disp.bin; then
+            printf 'ok    dispatch bytes at %s\n' "$o"
+        else
+            printf 'FAIL  dispatch bytes at %s (check %s)\n' "$o" "$?"
+            head -10 build/_err; fail=1
+        fi
+    done
+    for bad in "h_low + 8:dispatch to an address no handler is at" \
+               "h_low - 16:relocation truncated to fit"; do
+        printf '\t.section .rodata\n\t.globl stream\nstream:\n\t.byte dispatch(%s)\n' \
+            "${bad%%:*}" > build/_dispbad.s
+        if tools/fcc $handlers tests/dispatch.c build/_dispbad.s -o build/_disp \
+               2>build/_err; then
+            printf 'FAIL  a dispatch to %s linked\n' "${bad%%:*}"; fail=1
+        elif grep -q "${bad#*:}" build/_err; then
+            printf 'ok    a dispatch to %s is a link error\n' "${bad%%:*}"
+        else
+            printf 'FAIL  a dispatch to %s failed, but not for that\n' "${bad%%:*}"
+            head -5 build/_err; fail=1
+        fi
+    done
+    printf '\t.byte dispatch(0xf008)\n' > build/_dispbad.s
+    if build/cross-bin/fructus-elf-as -o build/_dispbad.o build/_dispbad.s 2>/dev/null; then
+        printf 'FAIL  gas placed a dispatch byte that no handler has\n'; fail=1
+    else
+        printf 'ok    gas refuses a dispatch to a constant no handler is at\n'
+    fi
+    rm -f build/_disp build/_disp.bin build/_dispbad.s build/_dispbad.o
+
     # --- gas pads code with nop, not brk ------------------------------------
     # gas's default fill for a .p2align in code is 0x00, which is brk, so a
     # loop that -falign-loops padded and the program fell into trapped.

@@ -138,6 +138,28 @@ for (const [name, t] of Object.entries(types)) {
       }
       continue;
     }
+    if (r.shift !== undefined) {
+      // The dispatch byte's: an unsigned absolute 8, with its shift and the
+      // lowest handler written into bfd by hand.
+      if (r.bits !== 8 || r.signed || r.pcrel)
+        err(`reloc ${r.name}: a dispatch relocation must be the unsigned absolute 8`);
+      if (0x10000 - (255 << r.shift) !== r.low)
+        err(`reloc ${r.name}: byte 255 is 0x${(0x10000 - (255 << r.shift)).toString(16)}, `
+          + `not low 0x${r.low.toString(16)}`);
+      const h = join(root, 'vendor/binutils-gdb/include/elf/fructus.h');
+      if (existsSync(h)) {
+        const src = readFileSync(h, 'utf8');
+        const shift = /#define\s+FRUCTUS_DISPATCH_SHIFT\s+(0x[0-9a-f]+|\d+)/i.exec(src);
+        const low = /#define\s+FRUCTUS_DISPATCH_LOW\s+(0x[0-9a-f]+|\d+)/i.exec(src);
+        if (!shift || Number(shift[1]) !== r.shift)
+          err(`reloc ${r.name}: shift ${r.shift}, but include/elf/fructus.h's `
+            + `FRUCTUS_DISPATCH_SHIFT is ${shift ? shift[1] : 'missing'}`);
+        if (!low || Number(low[1]) !== r.low)
+          err(`reloc ${r.name}: low 0x${r.low.toString(16)}, but include/elf/fructus.h's `
+            + `FRUCTUS_DISPATCH_LOW is ${low ? low[1] : 'missing'}`);
+      }
+      continue;
+    }
     if (![8, 16].includes(r.bits))
       err(`reloc ${r.name}: ${r.bits} bits, but every Fructus field is 8 or 16`);
     if (r.pcrel && !r.signed)

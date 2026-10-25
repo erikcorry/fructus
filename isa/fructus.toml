@@ -668,6 +668,30 @@ signed = false
 tag    = 1
 used_by = "tag1(sym) in .short, .2byte and .hword, and #tag1(sym) in mov rd, #imm16"
 
+# A DISPATCH BYTE is the sixth: an interpreter's opcode, when its handlers are
+# 16-aligned in the top 4K and it dispatches with
+#
+#     ld8     r0, [pc]
+#     shl     r0, r0, #4
+#     rsb     r5, r0, #0               ; imm3, so not tied: any register
+#     jmp     r5                       ; and r5's form is one byte
+#
+# The handler for byte B is at 0x10000 - 16 * B, and which handler a byte
+# names is up to the compiler's layout, so a bytecode stream, which a
+# compiler emits as a gas file, names the handler and the linker places the
+# byte: `.byte dispatch(sym)' is (0x10000 - (S + A)) >> shift.  An S + A
+# that is not 16-aligned, or not in low..0xfff0, which bytes 1 to 255
+# reach, is refused.  Byte 0 would be 0x10000, and a handler at 0xffc0 or
+# above has the vectors in its 16 bytes.
+[[reloc]]
+name   = "BFD_RELOC_FRUCTUS_8_DISPATCH"
+bits   = 8
+pcrel  = false
+signed = false
+shift  = 4
+low    = 0xf010
+used_by = "dispatch(sym) in .byte"
+
 
 # =============================================================================
 # Operand types
