@@ -7,7 +7,7 @@
 //
 // Builds teletext/rx-check.cc with rx.cc and vectors.s on
 // ld/fructus-writethru.ld and runs it under tools/fcc-run.mjs with this
-// input, a brk for each byte:
+// input, sent at 115200 baud into the receive interrupt:
 //
 //   - page A, taken into buffer 0;
 //   - page B, A with one byte of row 3 changed, into buffer 1;
@@ -51,7 +51,7 @@ const expected = [
 ];
 
 const out = execFileSync('node', ['tools/fcc-run.mjs', 'build/_teletext-rx.bin',
-  '--input', 'build/_teletext-rx.in', '--max', '20000000'], { encoding: 'utf8' });
+  '--input', 'build/_teletext-rx.in', '--paced', '--max', '20000000'], { encoding: 'utf8' });
 const got = out.trimEnd().split('\n');
 let fails = 0;
 for (let i = 0; i < Math.max(got.length, expected.length); i++)

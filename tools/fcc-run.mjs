@@ -3,7 +3,7 @@
 // fcc-run.mjs - run a compiled C program on the simulator
 // =============================================================================
 //
-//   node tools/fcc-run.mjs prog.bin [--max N] [--stats] [--input FILE] [--frames DIR] [--x11 [--scale N]]
+//   node tools/fcc-run.mjs prog.bin [--max N] [--stats] [--input FILE [--paced]] [--frames DIR] [--x11 [--scale N]]
 //
 // prog.bin is the flat image tools/fcc writes: ld/fructus-sim.ld linked at 0,
 // objcopied to binary.  The program starts at 0, where crt/crt0.s has put a
@@ -24,8 +24,19 @@
 // polling it can tell: its status at 0x0422 is never busy, and says a byte
 // was received while --input FILE has bytes left; a load of 0x0420 takes the
 // next.  Both only in the late bit's window, as tools/gpu.js says; outside
-// it they are the memory beneath.  Sending takes no time, and the receive interrupt is not modelled,
-// as the interrupt pin is not.
+// it they are the memory beneath.  Sending takes no time.
+//
+// --paced SENDS THE INPUT AT THE LINE'S RATE instead: a byte every ten bits,
+// a bit being the divisor at 0x0428 plus one cycles, 217 + 1 if the program
+// never set it - 2,180 cycles at 115200 baud.  The line starts when the
+// program first looks at the receiver, by its status or by enabling its
+// interrupt.  As in rtl/uart.sv, one byte is held: one arriving while it
+// waits is lost and sets `overrun', and fcc-run says how many were.
+//
+// THE RECEIVE INTERRUPT is modelled, status bit 4: the line, tools/sim.js's
+// irq, is high while it is enabled and a byte waits.  The transmitter's,
+// bit 5, is not.  Without --paced a byte waits whenever input is left, so a
+// handler is entered again and again until it is all taken.
 //
 // The cycle counter at 0x0424 (`__cycles') is the I/O page's own, in
 // tools/sim.js and rtl/cpu.sv alike; crt/include/fructus/cycles.h reads it.
@@ -47,18 +58,19 @@ import { png } from './png.js';
 import { openWindow } from './x11.js';
 
 const args = process.argv.slice(2);
-let file = null, max = 5e7, stats = false, frames = null, x11 = false, scale = 1, input = null;
+let file = null, max = 5e7, stats = false, frames = null, x11 = false, scale = 1, input = null, paced = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--max') max = Number(args[++i]);
   else if (args[i] === '--stats') stats = true;
   else if (args[i] === '--input') input = readFileSync(args[++i]);
+  else if (args[i] === '--paced') paced = true;
   else if (args[i] === '--frames') frames = args[++i];
   else if (args[i] === '--x11') x11 = true;
   else if (args[i] === '--scale') scale = Number(args[++i]);
   else file = args[i];
 }
 if (!file) {
-  console.error('usage: node tools/fcc-run.mjs prog.bin [--max N] [--stats] [--input FILE] [--frames DIR] [--x11 [--scale N]]');
+  console.error('usage: node tools/fcc-run.mjs prog.bin [--max N] [--stats] [--input FILE [--paced]] [--frames DIR] [--x11 [--scale N]]');
   process.exit(2);
 }
 
@@ -74,20 +86,50 @@ m.wr8 = (a, v) => {
   if ((a & 0xffff) === CONSOLE) { m.bus += 1; process.stdout.write(String.fromCharCode(v & 0xff)); }
   else wr8(a, v);
 };
-// The UART's receiving side: `received' while input is left, and a load of
-// the data register's even byte takes it.  The status's bits 4 and 5, the
-// interrupts' enables, are memory's, written through as the hardware's are.
-const STATUS = spec.cpu.io.uart_status;
-let taken = 0;
+// The UART's receiving side: `held' is the byte waiting, -1 for none, and
+// a load of the data register's even byte takes it.  The status's bits 4
+// and 5, the interrupts' enables, are memory's, written through as the
+// hardware's are.
+const STATUS = spec.cpu.io.uart_status, DIVISOR = spec.cpu.io.uart_divisor;
 const peek = m.peek.bind(m);
+const word = (a) => (m.little ? peek(a) | peek(a + 1) << 8 : peek(a) << 8 | peek(a + 1));
+let next = 0, held = -1, overrun = false, lost = 0, due = -1;
+function arrive() {
+  if (!input) return;
+  if (!paced) {
+    if (held < 0 && next < input.length) held = input[next++];
+    return;
+  }
+  if (due < 0) due = m.cyc;
+  while (next < input.length && m.cyc >= due) {
+    if (held >= 0) { overrun = true; lost++; }
+    else held = input[next];
+    next++;
+    due += 10 * ((word(DIVISOR) || 217) + 1);
+  }
+}
 m.peek = (a) => {
   a &= 0xffff;
   if (!gpu.late()) return peek(a);
-  if (a === STATUS) return (peek(a) & 0x30) | (input && taken < input.length ? 2 : 0);
+  if (a === STATUS) {
+    arrive();
+    return (peek(a) & 0x30) | (held >= 0 ? 2 : 0) | (overrun ? 4 : 0);
+  }
   if (a === STATUS + 1) return 0;
-  if (a === CONSOLE) return input && taken < input.length ? input[taken++] : 0;
+  if (a === CONSOLE) {
+    arrive();
+    const v = Math.max(held, 0);
+    held = -1;
+    overrun = false;
+    return v;
+  }
   if (a === CONSOLE + 1) return 0;
   return peek(a);
+};
+m.irq = () => {
+  if (!(peek(STATUS) & 0x10)) return false;
+  arrive();
+  return held >= 0;
 };
 
 const win = x11 ? await openWindow({ title: file, scale }) : null;
@@ -121,6 +163,8 @@ if (why === 'stopped') {
 }
 if (stats)
   console.error(`${m.count} instructions, ${m.cycles()} cycles, r0 = ${m.R[0]}`);
+if (input && (stats || lost))
+  console.error(`fcc-run: ${next} of ${input.length} bytes of input sent, ${lost} lost to overrun`);
 if (why !== 'halted') {
   console.error(`fcc-run: ${why} after ${m.count} instructions, pc 0x${m.pc.toString(16)}`);
   process.exit(125);

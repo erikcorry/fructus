@@ -312,6 +312,46 @@ const m = machine();
   console.log(`ok    the I/O page: ${traps.length + 1} guard traps, its edges, the shadows by word and byte`);
 }
 
+// --- the interrupt line -------------------------------------------------------
+// tools/sim.js's irq, which tools/fcc-run.mjs's UART drives: while ie is set
+// and the line is high, the next step enters [cpu.vectors] brk as brk does,
+// lr the instruction it took the place of; rti goes back to it.  The line is
+// a level, dropped here when the handler stores to its source.  With ie
+// clear nothing happens.
+{
+  const hex = (v) => `0x${v.toString(16)}`;
+  const SRC = 0x2000;
+  const run = (sei) => {
+    writeFileSync('build/_irq.s', `start:  mov  r0, #0\n        mov  r1, #0\n        mov  r4, #20\n` +
+      (sei ? '        sei\n' : '') +
+      'loop:   add  r0, r0, #1\n        br   ne, r0, r4, loop\ndone:   halt\n' +
+      `handler: add r1, r1, #1\n        mov  r2, #${SRC}\n        st8  r1, [r2, #0]\n` +
+      '        st   lr, [r2, #2]\n        st   sp, [r2, #4]\n        rti\n');
+    const { code, syms } = assemble('build/_irq.s');
+    const mach = new Machine(spec, { io: true });
+    mach.load(code); mach.pc = 0; mach.R[mach.named.sp] = 0x1000; mach.shadow_isp = 0x3000;
+    mach.vector = syms.get('handler');     // the entry, rather than a jmp at 0xfff8
+    mach.irq = (mm) => mm.count >= 8 && mm.mem[SRC] === 0;
+    mach.run({ max: 500 });
+    return { mach, syms, word: (a) => mach.mem[a] | mach.mem[a + 1] << 8 };
+  };
+  {
+    const { mach } = run(false);
+    check('ie clear: no interrupt', mach.halted && mach.R[0] === 20 && mach.R[1] === 0, `r0=${mach.R[0]} r1=${mach.R[1]}`);
+  }
+  {
+    const { mach, syms, word } = run(true);
+    const lr = word(SRC + 2);
+    check('the line enters the handler once', mach.R[1] === 1, `entries ${mach.R[1]}`);
+    check('and the loop runs out after rti', mach.halted && mach.R[0] === 20, `r0=${mach.R[0]} halted=${mach.halted}`);
+    check('lr is an instruction of the loop', lr >= syms.get('loop') && lr <= syms.get('done'), `lr=${hex(lr)}`);
+    check('the handler runs on the interrupt stack', word(SRC + 4) === 0x3000, `sp=${hex(word(SRC + 4))}`);
+    check('rti puts back sp', mach.R[mach.named.sp] === 0x1000, `sp=${hex(mach.R[mach.named.sp])}`);
+  }
+  rmSync('build/_irq.s', { force: true });
+  console.log('ok    the interrupt line: taken with ie set, once while its source is unserved, not with ie clear');
+}
+
 // --- iseq / isset: the row that is two instructions --------------------------
 // Which comparator a column gets is hard-wired to the low three bits, so the
 // thing that can go wrong is a column wired to the wrong one - and that is

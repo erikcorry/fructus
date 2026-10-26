@@ -363,6 +363,11 @@ export class Machine {
     // it runs, `guardPending' until the next step enters io_guard.
     this.guardHit = this.guardPending = false;
     this.guardAt = 0;      // and the first cycle the trap may take a dispatch
+    // THE INTERRUPT LINE, a function of the machine the environment gives -
+    // tools/fcc-run.mjs's UART - or null for none.  While ie is set and it
+    // says the line is high, the next step enters [cpu.vectors] brk instead.
+    // It is asked before every step with ie set, so it should be cheap.
+    this.irq = null;
     this.little = spec.cpu.endian === 'little';
     this.count  = 0;
 
@@ -530,6 +535,7 @@ export class Machine {
   // `lr = pc` and `pc = pc + off` read the way the spec's summaries describe.
   step(trace = null) {
     if (this.guardPending && this.fe.t >= this.guardAt) return this.guardTrap(trace);
+    if (this.ie && this.irq !== null && this.irq(this)) return this.trap(trace, this.vector);
     const at = this.pc;
     const e = this.entry(at);
     if (!e) throw new Error(`no instruction at 0x${at.toString(16)} (first byte 0x${this.mem[at].toString(16)})`);
@@ -589,12 +595,19 @@ export class Machine {
   // touched a guard: a brk dispatched in that instruction's successor's
   // place, as an interrupt is, so lr is the successor's address.  Six cycles.
   guardTrap(trace) {
+    this.guardPending = false;
+    return this.trap(trace, this.spec.cpu.vectors.io_guard);
+  }
+
+  // A brk with no bytes of its own, in place of the instruction at pc, to
+  // `vector': a guard trap's, or the interrupt line's.  The line's is taken
+  // at an instruction's boundary, as the guard's is, which may be a cycle or
+  // so from where rtl/cpu.sv takes it.
+  trap(trace, vector) {
     const at = this.pc, d = decode(this.dec, [0, 0, 0], 0);     // brk, opcode 0
     this.dispatch(at);
     if (trace) trace(at, d, this);
     const sp = this.named.sp, lr = this.named.lr;
-    const vector = this.spec.cpu.vectors.io_guard;
-    this.guardPending = false;
     this.shadow_lr = this.R[lr];
     this.R[lr] = at;
     this.shadow_sp = this.R[sp];

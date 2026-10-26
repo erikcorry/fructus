@@ -1,9 +1,9 @@
-// rx-check.cc - rx.cc's handler, fed by brk; teletext/rx-check.mjs runs it.
+// rx-check.cc - rx.cc's handler, fed by the UART's interrupt;
+// teletext/rx-check.mjs runs it.
 //
-// The simulator models the UART but not its interrupt, so each byte waiting
-// gets a brk: the same vector, stub, handler and rti the line would take.
-// After every byte that leaves a page complete, and once at the end, it
-// prints what take_page gives:
+// tools/fcc-run.mjs --paced sends the bytes at 115200 baud and raises the
+// interrupt line for each.  Whenever a page is complete, three times, and
+// once more at the end, it prints what take_page gives:
 //
 //     page N sum S
 //
@@ -44,11 +44,11 @@ static void report() {
 
 int main() {
   rx_start();
-  interrupts_off();   // nothing raises the line here, and take_page turns them on
-  while (fructus_uart_ready()) {
-    __asm__ volatile ("brk" ::: "memory");
-    if (rx_complete) report();
-  }
+  for (int pages = 0; pages < 3;)
+    if (rx_complete) {
+      report();
+      pages++;
+    }
   report();
   put("overruns ");
   number(rx_overruns);
