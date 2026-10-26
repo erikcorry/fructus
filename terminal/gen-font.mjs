@@ -43,9 +43,11 @@
 // accent, since a cell has one mark.
 //
 // UNDERLINE IS IN THE FONT, on line 14, in the text's colour: an underlined
-// cell shows UNDERLINED[code] in EDGE for its code.  The line stops a pixel
-// short of any ink on line 14 either side - a descender, an ogonek - so the
-// stroke crosses it with a gap each side.  At most it doubles EDGE's codes.
+// cell shows UNDERLINED[code] in EDGE for its code.  The line is cut from a
+// pixel left of the glyph's leftmost ink below the baseline, lines 13-15, to
+// a pixel right of its rightmost, so a descender crosses it with a gap each
+// side and the hollow of a hook - g's, j's, y's - is left clear too.  At most
+// it doubles EDGE's codes.
 //
 // THE FONT is the display's 8-pixel font, 256 glyphs a font row, one font
 // row per line of the cell: font_line = 4 x line.  Font row L, code k, is
@@ -351,8 +353,11 @@ OVERRIDES.sort((a, b) => a.base - b.base || a.mark - b.mark);
 const UNDER_LINE = 14;
 const UNDERLINED = [...Array(256).keys()];
 for (const c of slices[EDGE].map((g, c) => (g ? c : -1)).filter((c) => c >= 0)) {
-  const g = slices[EDGE][c].slice(), ink = g[UNDER_LINE];
-  g[UNDER_LINE] = (0xff & ~(ink | ink << 1 | ink >> 1)) | ink;
+  const g = slices[EDGE][c].slice(), below = g[13] | g[14] | g[15];
+  let span = 0;
+  for (let x = 0; x < W; x++)
+    if (below & ~(0xff >> (x + 1)) & 0xff && below & 0xff >> x) span |= 0x80 >> x;   // ink at or left, at or right
+  g[UNDER_LINE] = (0xff & ~(span | span << 1 | span >> 1)) | g[UNDER_LINE];
   UNDERLINED[c] = code(EDGE, g);
 }
 for (let c = 0; c < 256; c++) if (!slices[EDGE][c]) UNDERLINED[c] = UNDERLINED[BLANK];
