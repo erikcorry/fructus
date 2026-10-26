@@ -49,6 +49,8 @@
 ;       __ashlsi3  __lshrsi3  __ashrsi3     32-bit <<, unsigned >>, signed >>
 ;       __ashldi3  __lshrdi3  __ashrdi3     the same for 64 bits
 ;
+; and __ucmpsi2, the 32-bit unsigned compare a switch on a long calls.
+;
 ; ONE ROUTINE SERVES SIGNED AND UNSIGNED for everything that is not widening.
 ; The low n bits of a two's complement product do not depend on the signedness
 ; of the operands, so __mulhi3 is the signed helper as well.  Only the widening
@@ -2338,4 +2340,38 @@ __ashrdi3:
         asr     r3, r3, r5              ; 1   only the top word is signed
         pop     lr, r4                  ; 4
 .done:
+        ret                             ; 5
+
+
+; ============================================================================
+; __ucmpsi2 - 32-bit unsigned compare, as a value                    14 bytes
+; ============================================================================
+;       r0:r1  a, then the result: 0 if a < b, 1 if equal, 2 if a > b
+;       r2:r3  b                           r3, r4 and lr untouched
+;
+; GCC CALLS THIS FOR A COMPARE IT HAS NO PATTERN FOR, which a 32-bit one is:
+; there is no cbranchsi4, and most of the time do_compare_rtx_and_jump splits
+; the compare into words itself.  Not on every path - switch lowering's range
+; test goes straight to emit_cmp_and_jump_insns, which falls back to the
+; libfunc, so a switch on a long calls this.  A signed switch too: the index
+; is biased by the lowest case first, and the range test is unsigned.  The
+; 64-bit __ucmpdi2 is libgcc2.c's; this one is not, because libgcc2.c is built
+; with 32-bit words and only makes the double-word routines.
+;
+; THE RESULT IS BIASED, 0/1/2 rather than -1/0/1 - TARGET_LIB_INT_CMP_BIASED
+; is left at its default, so the caller tests it against 1.
+;
+; THE HIGH HALVES DECIDE UNLESS THEY ARE EQUAL, and then the low ones do.
+; Either way it is one pair of words, so the branch only picks which pair goes
+; into r0 and r2, and the answer is 1 + (a > b) - (a < b) on that pair.
+
+__ucmpsi2:
+        br      eq, r1, r3, .low        ; 1   the low halves decide
+        mov     r0, r1                  ; 1   pinned
+        mov     r2, r3                  ; 1
+.low:
+        ishi    r1, r0, r2              ; 1   a > b
+        islo    r0, r0, r2              ; 1   a < b
+        rsb     r0, r0, #1              ; 1   1 - (a < b)
+        add     r0, r0, r1              ; 1   pinned
         ret                             ; 5

@@ -743,5 +743,36 @@ for (let i = 0; i < 2500; i++) pairs.push([r16(), r16()]);
   }
 }
 
+// --- __ucmpsi2 ---------------------------------------------------------------
+// 0, 1 or 2 for below, equal and above, against plain JavaScript.  The cases
+// that matter most are the ones where only one half differs, and where the two
+// halves disagree - a high half above and a low half below - so the edge values
+// are crossed with each other half by half.  r3 is an argument here and could
+// be clobbered, but the routine promises not to, and r4 is callee saved.
+{
+  const R3 = 0x3e3e;
+  const halves = [0, 1, 0x7fff, 0x8000, 0xfffe, 0xffff];
+  const cases = [];
+  for (const ah of halves) for (const al of halves) for (const bh of halves) for (const bl of halves)
+    cases.push([ah * 65536 + al, bh * 65536 + bl]);
+  for (let i = 0; i < 2000; i++) {
+    const a = r32();
+    cases.push([a, r32()], [a, a], [a, (a ^ (1 << (r32() % 32))) >>> 0]);
+  }
+  let wrong = 0, eg = '', worst = 0;
+  for (const [a, b] of cases) {
+    const q = run('__ucmpsi2', { 0: a, 1: a >>> 16, 2: b, 3: b >>> 16 });
+    const want = a < b ? 0 : a === b ? 1 : 2;
+    const ok = q.why === 'stopped' && q.R[0] === want && q.R[4] === R4 && q.sp === SP0
+             && q.R[3] === (b >>> 16);
+    if (!ok && !wrong++)
+      eg = `0x${a.toString(16)} vs 0x${b.toString(16)} = ${want}, got ` +
+           (q.why !== 'stopped' ? q.why : `${q.R[0]}`);
+    worst = Math.max(worst, q.cycles);
+  }
+  check('__ucmpsi2', wrong === 0, `${wrong} of ${cases.length} wrong, e.g. ${eg}`);
+  console.log(`ok    __ucmpsi2: ${cases.length} compares, at most ${worst} cycles`);
+}
+
 console.log(`${checks} checks, ${fails} failures`);
 process.exit(fails ? 1 : 0);
