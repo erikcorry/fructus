@@ -76,8 +76,9 @@
 // zone it goes in is blank but for it, so it has one code whatever the
 // letter: MARK_GLYPH.  The pairs where the letter has ink in that zone get a
 // code of their own, an OVERRIDE; and Ľ ľ ť's caron is an apostrophe beside
-// the stem.  ď is a base of its own: its stem is at the right edge, so the
-// whole letter moves a column left.  See font.h for the rule as C.
+// the stem.  Latvian's cedilla, under Ģ Ķ Ļ Ņ Ŗ and ķ ļ ņ ŗ, is a comma below,
+// as Latvian type has it.  ď is a base of its own: its stem is at the right
+// edge, so the whole letter moves a column left.  See font.h for the rule as C.
 // =============================================================================
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -382,9 +383,10 @@ for (const [lo, hi] of [[0xc0, 0x250], [0x1e00, 0x1f00]])
     if (codeOf.has(b)) pairs.push([codeOf.get(b), m]);
   }
 const APOSTROPHE = { L: 4, l: 6, t: 6 };      // Ľ ľ ť: the column right of the stem
+const LATVIAN = 'GKLNRklnr';                   // Ģ Ķ ķ ...: the cedilla drawn as a comma
 for (const [base, m] of pairs) {
-  let g = ideal(base, m);
   const ch = bases[base].ch;
+  let g = ideal(base, m === 0x327 && LATVIAN.includes(ch) ? 0x326 : m);
   if (m === 0x30c && ch in APOSTROPHE) {
     g = bases[base].glyph.slice();
     const col = APOSTROPHE[ch];
