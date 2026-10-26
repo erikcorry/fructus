@@ -86,7 +86,7 @@ int main() {
     while (end > 0 && r.base[end - 1] == ' ' && !(r.mark[end - 1] & MARK)) end--;
     out(' ');
     for (int i = 0; i < end; i++) {
-      unsigned mark = r.mark[i] & MARK ? 0x2ff + (r.mark[i] & MARK) : 0;
+      unsigned mark = (r.mark[i] & MARK) == TONOS ? 0x301 : r.mark[i] & MARK ? 0x2ff + (r.mark[i] & MARK) : 0;
       if ((r.mark[i] & MARK) == SECOND) {
         utf8(unicode(SECOND_SET | r.base[i]));
         continue;

@@ -28,8 +28,9 @@
 // no mark: those 9x15 draws pixel for pixel the same, and Β, μ, і, ј, у,
 // which are the same letter drawn a little differently.  And a letter of
 // either that is a lookalike and one of our marks is the Latin letter and
-// the mark: Ё as Ë, ї as ï, Ќ as Ḱ.  The rest of the two alphabets is not in
-// the font.
+// the mark: Ё as Ë, ї as ï, Ќ as Ḱ.  But a Greek capital's tonos, Ά and the
+// rest, is font.h's TONOS, not the acute: it goes at the letter's left.  The
+// rest of the two alphabets is not in the font.
 //
 // SPACING ACCENTS: no-break space is a space, soft hyphen a hyphen, and
 // Latin-1's ¨ ¯ ´ and the modifier letters ˆ ˇ ˘ ˙ ˛ ˜ ˝ are a space with
@@ -69,6 +70,7 @@ const LOOKALIKES = {
   'Т': 'T', 'Х': 'X', 'Ѕ': 'S', 'І': 'I', 'Ј': 'J',
   'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x', 'ѕ': 's', 'і': 'i', 'ј': 'j',
 };
+const TONOS = 0x7e;     // font.h's
 const latin = (c) => LOOKALIKES[String.fromCodePoint(c)]?.codePointAt(0) ?? c;
 
 // [base, mark] for a code point, or null.
@@ -78,6 +80,7 @@ function split(cp) {
   if (LOOKALIKES[String.fromCodePoint(cp)]) return [latin(cp), 0];
   const d = [...String.fromCodePoint(cp).normalize('NFD')].map((c) => c.codePointAt(0));
   if (d.length !== 2 || latin(d[0]) > 0xff || !isMark(d[1])) return null;
+  if (d[1] === 0x301 && cp >= 0x386 && cp <= 0x38f) return [latin(d[0]), 0x2ff + TONOS];
   return [latin(d[0]), d[1]];
 }
 
@@ -92,8 +95,8 @@ for (let cp = 0xa0; cp < 0x180; cp++) {
 for (const [lo, hi] of [[0x180, 0x250], [0x2b0, 0x300], [0x370, 0x530], [0x1e00, 0x1f00]])
   for (let cp = lo; cp < hi; cp++) {
     const s = split(cp);
-    if (s && (!s[1] || ours.has(s[1])) && (lo !== 0x370 || /\p{L}/u.test(String.fromCodePoint(s[0]))))
-      entries.push([cp, ...s]);
+    if (!s || !(!s[1] || ours.has(s[1]) || s[1] === 0x2ff + TONOS)) continue;
+    if (lo !== 0x370 || /\p{L}/u.test(String.fromCodePoint(s[0]))) entries.push([cp, ...s]);
   }
 
 const hex = (v, n) => `0x${v.toString(16).padStart(n, '0')}`;

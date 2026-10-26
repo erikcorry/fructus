@@ -23,7 +23,10 @@
 // zone.
 //
 // A MARK, U+0300-U+036F less 0x2ff as the cell keeps it, changes one zone,
-// see glyphs().  The mark SECOND, past them, says the base is from the
+// see glyphs().  TONOS, past them, is a Greek capital's: an acute that
+// Unicode does not tell from Á's, drawn at the letter's top left: a tick in
+// the riser beside it, or above it where a stem would meet the tick - Ά Έ Ή
+// Ί Ό Ύ, from decompose.cc, by OVERRIDES.  The mark SECOND, past them, says the base is from the
 // second set, SECOND_GLYPH: symbols and a few letters that take no accent.
 // So a base is in all 9 bits, and base_of gives them as 0x100 | the base.
 //
@@ -42,6 +45,7 @@ enum : uint8_t { EDGE, RISER, X_TOP, X_BOTTOM };
 
 constexpr uint8_t BLANK = 0x20;         // the blank slice, in every zone
 constexpr uint8_t SECOND = 0x7f;        // the mark of the second set's bases
+constexpr uint8_t TONOS = 0x7e;         // Greek capitals' accent, at their left
 constexpr uint16_t SECOND_SET = 0x100;  // base_of's flag for them
 constexpr uint8_t DOTLESS_I = 0x69;
 extern const uint8_t DOTTED_I, DOTLESS_J, FALLBACK;  // i for į, ȷ, and �
@@ -49,7 +53,7 @@ extern const uint8_t DOTTED_I, DOTLESS_J, FALLBACK;  // i for į, ȷ, and �
 extern const uint8_t FONT[LINES * 256];
 extern const uint8_t ZONE_OF_LINE[LINES];
 extern const uint8_t GLYPH[ZONES][256];
-extern const uint8_t MARK_GLYPH[2][113];   // EDGE and RISER, BLANK for none
+extern const uint8_t MARK_GLYPH[2][TONOS + 1];   // EDGE and RISER, BLANK for none
 extern const uint8_t UNDERLINED[256];      // an EDGE code underlined
 extern const uint8_t SECOND_GLYPH[][ZONES];
 extern const int SECOND_COUNT;

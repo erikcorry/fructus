@@ -79,6 +79,9 @@ const cases = [
   // takes an accent in its place.  Б has no lookalike.
   ['lookalikes', '\u0391\u0392\u0393 \u0410\u0431\u0432 \u0456\u0457\u0456\u0301 \u0401\u03cc',
     ['AB\ufffd A\ufffd\ufffd i\u0131\u0308\u0131\u0301 E\u0308o\u0301'], [14, 0]],
+  // A Greek capital's tonos is its own mark, at the letter's left; the dump
+  // shows it as the acute it is in Unicode.
+  ['tonos', '\u0386\u0389\u00c1', ['A\u0301H\u0301A\u0301'], [3, 0]],
   // Claude Code's others, aliases into the second set among them.
   ['Claude Code', '\u23fa \u23bf \u276f \u23f8 \u26a0 \u29c9 \u23f5 \u2714\u2718',
     ['\u25cf \u23bf \u276f \u23f8 \u26a0 \u29c9 \u25ba \u2713\u2717'], [16, 0]],

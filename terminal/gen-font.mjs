@@ -103,6 +103,7 @@ const ZONES = [
 ];
 const EDGE = 0, RISER = 1;
 const SECOND = 0x7f;           // the mark of a base from the second set
+const TONOS = 0x7e;            // Greek capitals' accent, font.h says how
 const zoneOf = Array(H);
 ZONES.forEach((z, i) => z.lines.forEach((l) => { zoneOf[l] = i; }));
 
@@ -382,7 +383,7 @@ ZONES.forEach((_, z) => code(z, blank(), BLANK));
 const GLYPH = ZONES.map(() => Array(256).fill(BLANK));
 bases.forEach((b, c) => { if (b) ZONES.forEach((_, z) => { GLYPH[z][c] = code(z, b.glyph, c); }); });
 
-const MARK_GLYPH = [EDGE, RISER].map(() => Array(113).fill(BLANK));
+const MARK_GLYPH = [EDGE, RISER].map(() => Array(TONOS + 1).fill(BLANK));
 for (const [m, gs] of markSlices) gs.forEach((g, z) => { if (g) MARK_GLYPH[z][m - 0x2ff] = code(z, g); });
 
 // The rule, as font.h has it in C: the zone codes of a cell.
@@ -427,11 +428,21 @@ for (const [lo, hi] of [[0xc0, 0x250], [0x1e00, 0x1f00]])
     if (accents.get(m).above && (b === 'i' || b === 'j')) b = b === 'i' ? 'ı' : 'ȷ';
     if (codeOf.has(b)) pairs.push([codeOf.get(b), m]);
   }
+// Ά Έ Ή Ί Ό Ύ: the letter, and the tonos a tick beside its top in the first
+// column - or where a stem is next to it, Έ Ή Ύ, an acute above that column,
+// which a tick would only thicken.
+function tonos(letter) {
+  const g = letter.slice();
+  if ((g[3] | g[4]) & 0x40) g[0] |= 0x20, g[1] |= 0x40, g[2] |= 0x80;
+  else g[3] |= 0x80, g[4] |= 0x80;
+  return g;
+}
+for (const ch of 'AEHIOY') pairs.push([codeOf.get(ch), 0x2ff + TONOS]);
 const APOSTROPHE = { L: 4, l: 6, t: 6 };      // Ľ ľ ť: the column right of the stem
 const LATVIAN = 'GKLNRklnr';                   // Ģ Ķ ķ ...: the cedilla drawn as a comma
 for (const [base, m] of pairs) {
   const ch = bases[base].ch;
-  let g = ideal(base, m === 0x327 && LATVIAN.includes(ch) ? 0x326 : m);
+  let g = m === 0x2ff + TONOS ? tonos(bases[base].glyph) : ideal(base, m === 0x327 && LATVIAN.includes(ch) ? 0x326 : m);
   if (m === 0x30c && ch in APOSTROPHE) {
     g = bases[base].glyph.slice();
     const col = APOSTROPHE[ch];
@@ -495,7 +506,7 @@ if (rules) {
   const out = [];
   const line = (base, m) => `${base} ${m} ${rule(base, m, OVERRIDES).join(' ')} ${UNDERLINED[rule(base, m, OVERRIDES)[EDGE]]}`;
   bases.forEach((b, base) => {
-    if (b) for (const m of [0, ...[...accents.keys()].map((m) => m - 0x2ff)]) out.push(line(base, m));
+    if (b) for (const m of [0, ...[...accents.keys()].map((m) => m - 0x2ff), TONOS]) out.push(line(base, m));
   });
   second.forEach((_, i) => out.push(line(i, SECOND)));
   process.stdout.write(out.join('\n') + '\n');
@@ -590,7 +601,7 @@ const uint8_t UNDERLINED[256] = {
 ${table(UNDERLINED, '  ')}
 };
 
-const uint8_t MARK_GLYPH[2][113] = {
+const uint8_t MARK_GLYPH[2][TONOS + 1] = {
 ${MARK_GLYPH.map((g, z) => `  { /* ${ZONES[z].name} */\n${table(g, '    ')}\n  },`).join('\n')}
 };
 
