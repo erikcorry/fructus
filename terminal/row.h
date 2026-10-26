@@ -1,13 +1,13 @@
 // row.h - a text row as the frame buffer holds it.
 //
-// Each text row has five arrays of 80 bytes in the frame buffer, and the
+// Each text row has six arrays of 80 bytes in the frame buffer, and the
 // line table points each of its 17 lines at three of them:
 //
-//     code[EDGE], code[RISER], code[X]   the character codes: line L's
-//                                        pointer is code[ZONE_OF_LINE[L]]
-//     fg                                 every line's foreground colours
-//     bg                                 the background, 8 bits a pixel,
-//                                        pixels 8 wide: one byte a cell
+//     code[EDGE] ... code[X_BOTTOM]   the character codes, one array a zone:
+//                                     line L's pointer is code[ZONE_OF_LINE[L]]
+//     fg                              every line's foreground colours
+//     bg                              the background, 8 bits a pixel,
+//                                     pixels 8 wide: one byte a cell
 //
 // The underline is in the font (font.h), so it needs no array of its own.
 //

@@ -70,6 +70,7 @@ const cases = [
   // The second set: a symbol takes no accent, but is underlined.
   ['second set', `\u2713\u0301\u2200x\u2208${CSI}4m\u221e${CSI}0m\u0138`,
     ['\u2713\u2200x\u2208\u221e\u0138'], [6, 0], [], { 0: '0-3 fg b3 bg 20 4-4 fg b3 bg 20 u 5-79 fg b3 bg 20' }],
+  ['second set past the x-height split', '\u211d\u2083\u2612\u21a6\u25b3', ['\u211d\u2083\u2612\u21a6\u25b3'], [5, 0]],
   ['strings and CAN', `${E}]0;title\x07A${E}]2;t${E}\\B${CSI}3\x18C`, ['ABC'], [3, 0]],
   ['alignment', `x${E}#8`, ['E'.repeat(80), 'E'.repeat(80)], [0, 0]],
 ];

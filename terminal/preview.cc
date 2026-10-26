@@ -5,7 +5,7 @@
 //       -o build/terminal-preview
 //   build/terminal-preview < bytes > screen.ppm
 //
-// For the host.  Each text row goes through draw_row into its five arrays,
+// For the host.  Each text row goes through draw_row into its six arrays,
 // and each of the 476 lines is drawn from them as the display reads them:
 // the code from the array of the line's zone, the glyph's bits from the font
 // row of the line, fg for a 1 and bg for a 0.  The cursor is not drawn.
@@ -37,7 +37,7 @@ int main() {
   static uint8_t code[ROWS][ZONES][COLUMNS], fg[ROWS][COLUMNS], bg[ROWS][COLUMNS];
   for (int y = 0; y < ROWS; y++)
     draw_row(screen->rows[screen->line[y]],
-             { { code[y][0], code[y][1], code[y][2] }, fg[y], bg[y] });
+             { { code[y][0], code[y][1], code[y][2], code[y][3] }, fg[y], bg[y] });
 
   printf("P6\n%d %d\n255\n", 8 * COLUMNS, LINES * ROWS);
   for (int y = 0; y < LINES * ROWS; y++) {

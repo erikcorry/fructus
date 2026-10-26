@@ -30,18 +30,20 @@
 // middlemost - an arrow's shaft - or failing that the right one (the
 // generator lists those).
 //
-// THREE ZONES.  The display reads each line's character codes from its line
+// FOUR ZONES.  The display reads each line's character codes from its line
 // table's pointer, so each zone has an array of 80 codes a text row and its
 // own 256 codes: a code in one zone means nothing in another.
 //
-//     EDGE    lines 0-2 and 13-16, above the capitals and below the baseline
-//     RISER   lines 3-5
-//     X       lines 6-12
+//     EDGE      lines 0-2 and 13-16, above the capitals and below the baseline
+//     RISER     lines 3-5
+//     X_TOP     lines 6-8, the top of the x-height
+//     X_BOTTOM  lines 9-12, down to the baseline
 //
 // A zone needs a code for each different slice of the glyphs over its
-// lines, not one for each glyph.  X holds one slice a base at most, so it
-// never runs out while the bases fit a byte; RISER and EDGE are mostly blank,
-// box drawing's strokes and accents.  EDGE's two parts never both hold an
+// lines, not one for each glyph.  The x-height is where glyphs differ most:
+// as one zone of 7 lines it ran out at 256, but halves are shared - the tops
+// of a c e o s, the bottoms of a d q - so it is two.  RISER and EDGE are
+// mostly blank, box drawing's strokes and accents.  EDGE's two parts never both hold an
 // accent, since a cell has one mark.
 //
 // UNDERLINE IS IN THE FONT, on line 14, in the text's colour: an underlined
@@ -63,8 +65,8 @@
 // THE SECOND SET is more bases, which take no accent: a cell whose mark is
 // SECOND, 0x7f - past the 112 marks there are - has a base from it, so a
 // base is 9 bits in all.  SECOND_REPERTOIRE is in order of use, mostly
-// Markus Kuhn's SECS; as many go in as every zone has room for, X being the
-// one that fills, and the generator lists the rest.
+// Markus Kuhn's SECS; as many go in as every zone has room for, and the
+// generator lists any left out.
 //
 // ACCENTS are 9x15's spacing ones, ´ ` ˆ and so on, never its precomposed
 // letters, whose capitals are squashed to make room.  An accent above goes in
@@ -95,7 +97,8 @@ const W = 8, H = 17;
 const ZONES = [
   { name: 'EDGE', lines: [0, 1, 2, 13, 14, 15, 16] },
   { name: 'RISER', lines: [3, 4, 5] },
-  { name: 'X', lines: [6, 7, 8, 9, 10, 11, 12] },
+  { name: 'X_TOP', lines: [6, 7, 8] },
+  { name: 'X_BOTTOM', lines: [9, 10, 11, 12] },
 ];
 const EDGE = 0, RISER = 1;
 const SECOND = 0x7f;           // the mark of a base from the second set
