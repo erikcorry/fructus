@@ -138,7 +138,7 @@ const SECOND_REPERTOIRE = [
   // Greek and Cyrillic that look like no Latin letter (gen-decompose.mjs's
   // LOOKALIKES are the rest), the accented ones whole.
   'ΓΔΘΛΞΠΣΦΨΩΏαβγδεζηθικλξρςστυφχψωάέήίύώϊϋΐΰϑϕϖϱ',
-  'ЂЃЄЉЊЋЎЏБГДЖЗИЙЛПУФЦЧШЩЪЫЬЭЮЯҐбвгджзийклмнптфцчшщъыьэюяђѓєљњћќџґ',
+  'ЂЃЄЉЊЋЎЏБГДЖЗИЙЛПУФЦЧШЩЪЫЬЭЮЯҐЍбвгджзийклмнптфцчшщъыьэюяђѓєљњћќџґѝ',
 ].join('');
 
 // Characters drawn as a base that is another's, of either set: the same
@@ -295,6 +295,12 @@ function glyphOf(ch) {
   case '⚠': return drawn(4, ['...#...', '..#.#..', '..#.#..', '.#.#.#.', '.#.#.#.', '#..#..#',
                              '#.....#', '#..#..#', '#######']);
   case '⧉': return drawn(5, ['#####..', '#...#..', '#.#####', '#.#.#.#', '#####.#', '..#...#', '..#####']);
+  // Ukrainian's Ґ ґ: 9x15's upturn is a pixel, so Г г at a glance; two.
+  case 'Ґ': case 'ґ': {
+    const g = x11(ch.codePointAt(0)), top = g.findIndex((r) => r);
+    g[top - 1] = g[top];
+    return g;
+  }
   // Zero with a dot in its middle, to tell it from O.
   case '0': {
     const g = x11(0x30), ink = g.map((r, l) => (r ? l : -1)).filter((l) => l >= 0);
