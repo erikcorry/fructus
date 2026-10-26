@@ -24,8 +24,9 @@
 // over for it (gen-font.mjs).  Ľ, ľ and ť's apostrophes fit beside their
 // stems, and they are letters and a caron, which the font draws so.
 //
-// LATIN-1'S SPACING ACCENTS: no-break space is a space, soft hyphen a hyphen,
-// and ¨ ¯ ´ are a space with the mark - their NFKD, not their NFD.
+// SPACING ACCENTS: no-break space is a space, soft hyphen a hyphen, and
+// Latin-1's ¨ ¯ ´ and the modifier letters ˆ ˇ ˘ ˙ ˛ ˜ ˝ are a space with
+// the mark - their NFKD, not their NFD.
 //
 // THE i RULE IS THE TERMINAL'S, not the table's: i with a mark above is a
 // dotless ı with the mark, and j likewise ȷ.  The table says i; terminal.cc
@@ -48,7 +49,11 @@ const BELOW = [
 const below = (m) => BELOW.some(([a, b]) => m >= a && m <= b);
 
 const OWN = new Set([0x10f]);
-const SPACING = { 0xa0: [0x20, 0], 0xa8: [0x20, 0x308], 0xad: [0x2d, 0], 0xaf: [0x20, 0x304], 0xb4: [0x20, 0x301] };
+const SPACING = {
+  0xa0: [0x20, 0], 0xa8: [0x20, 0x308], 0xad: [0x2d, 0], 0xaf: [0x20, 0x304], 0xb4: [0x20, 0x301],
+  0x2c6: [0x20, 0x302], 0x2c7: [0x20, 0x30c], 0x2d8: [0x20, 0x306], 0x2d9: [0x20, 0x307],
+  0x2db: [0x20, 0x328], 0x2dc: [0x20, 0x303], 0x2dd: [0x20, 0x30b],
+};
 
 // [base, mark] for a code point, or null.
 function split(cp) {
@@ -67,7 +72,7 @@ for (let cp = 0xa0; cp < 0x180; cp++) {
   entries.push([cp, ...s]);
   if (s[1]) ours.add(s[1]);
 }
-for (const [lo, hi] of [[0x180, 0x250], [0x1e00, 0x1f00]])
+for (const [lo, hi] of [[0x180, 0x250], [0x2b0, 0x300], [0x1e00, 0x1f00]])
   for (let cp = lo; cp < hi; cp++) {
     const s = split(cp);
     if (s && ours.has(s[1])) entries.push([cp, ...s]);
@@ -79,7 +84,7 @@ for (let i = 0; i < entries.length; i += 4)
   lines.push('  ' + entries.slice(i, i + 4)
     .map(([cp, b, m]) => `{ ${hex(cp, 4)}, ${hex(b, 2)}, ${m ? hex(m - 0x2ff, 2) : '0'} },`).join(' '));
 
-const bits = Array(14).fill(0);
+const bits = Array(16).fill(0);
 for (let m = MARKS_FIRST; m <= MARKS_LAST; m++)
   if (below(m)) bits[(m - 0x2ff) >> 3] |= 1 << ((m - 0x2ff) & 7);
 
@@ -96,8 +101,9 @@ const Decomposition DECOMPOSITIONS[${entries.length}] = {
 ${lines.join('\n')}
 };
 
-// Bit m of the bitmap: mark m, as a cell stores it, is drawn below.
-const uint8_t MARK_BELOW[14] = { ${bits.map((b) => hex(b, 2)).join(', ')} };
+// Bit m of the bitmap: mark m, as a cell stores it, is drawn below; 0-127,
+// every value the field holds.
+const uint8_t MARK_BELOW[16] = { ${bits.map((b) => hex(b, 2)).join(', ')} };
 
 }  // namespace terminal
 `);

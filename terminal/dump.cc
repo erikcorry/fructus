@@ -45,6 +45,7 @@ static void number(unsigned v, int base = 10, int digits = 1) {
 
 // A base's code point: the font's code, unless the font moved it.
 static unsigned unicode(uint8_t base) {
+  if (base >= 0x20 && base < 0x7f && base != DOTLESS_I) return base;
   for (int i = 0; i < UNICODE_COUNT; i++)
     if (UNICODE[i].base == base) return UNICODE[i].code;
   return base;

@@ -622,16 +622,27 @@ void codepoint(uint32_t c) {
 
 }  // namespace
 
-uint8_t base_of(uint32_t c) {
-  if (c >= 0x20 && c < 0x7f && c != 'i') return c;
-  int lo = 0, hi = UNICODE_COUNT - 1;
+namespace {
+
+// The base for c in a sorted table, or -1.
+int find(const Unicode *table, int count, uint32_t c) {
+  int lo = 0, hi = count - 1;
   while (lo <= hi) {
     int mid = (lo + hi) / 2;
-    if (UNICODE[mid].code == c) return UNICODE[mid].base;
-    if (UNICODE[mid].code < c) lo = mid + 1;
+    if (table[mid].code == c) return table[mid].base;
+    if (table[mid].code < c) lo = mid + 1;
     else hi = mid - 1;
   }
-  return FALLBACK;
+  return -1;
+}
+
+}  // namespace
+
+uint8_t base_of(uint32_t c) {
+  if (c >= 0x20 && c < 0x7f && c != 'i') return c;
+  int b = find(UNICODE, UNICODE_COUNT, c);
+  if (b < 0) b = find(ALIASES, ALIAS_COUNT, c);
+  return b < 0 ? FALLBACK : b;
 }
 
 void reset() {

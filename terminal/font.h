@@ -63,6 +63,10 @@ struct Unicode {
 extern const Unicode UNICODE[];
 extern const int UNICODE_COUNT;
 
+// Code points drawn as another's base - ʼ as ’, − as - - sorted likewise.
+extern const Unicode ALIASES[];
+extern const int ALIAS_COUNT;
+
 // The base for a code point, FALLBACK if the font has none.
 uint8_t base_of(uint32_t c);
 

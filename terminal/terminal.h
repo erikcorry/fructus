@@ -94,7 +94,7 @@ struct Decomposition {
 };
 extern const Decomposition DECOMPOSITIONS[];
 extern const int DECOMPOSITION_COUNT;
-extern const uint8_t MARK_BELOW[14];
+extern const uint8_t MARK_BELOW[16];
 
 }  // namespace terminal
 
