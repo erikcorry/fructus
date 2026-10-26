@@ -60,6 +60,10 @@ const cases = [
   ['SGR', `${CSI}1mA${CSI}22;31mB${CSI}1mC${CSI}38;5;196mD${CSI}38;2;0;255;0mE${CSI}0;7mF${CSI}0;4mG`,
     ['ABCDEFG'], [7, 0], [],
     { 0: '0-0 fg fe bg 20 1-1 fg 30 bg 20 2-2 fg 7b bg 20 3-3 fg 3a bg 20 4-4 fg e0 bg 20 5-5 fg 20 bg b3 6-6 fg b3 bg 20 u 7-79 fg b3 bg 20' }],
+  // Colon sub-parameters: 4:3 curly is underline, 4:0 is off, and 58's
+  // colour, in either form, is dropped whole - its 0s are not resets.
+  ['underline styles and colour', `${CSI}31;4:3mA${CSI}58:2::0:0:0mB${CSI}58;2;0;0;0mC${CSI}4:0mD${CSI}38:2::255:0:0mE`,
+    ['ABCDE'], [5, 0], [], { 0: '0-2 fg 30 bg 20 u 3-3 fg 30 bg 20 4-4 fg 3a bg 20 5-79 fg b3 bg 20' }],
   ['strings and CAN', `${E}]0;title\x07A${E}]2;t${E}\\B${CSI}3\x18C`, ['ABC'], [3, 0]],
   ['alignment', `x${E}#8`, ['E'.repeat(80), 'E'.repeat(80)], [0, 0]],
 ];

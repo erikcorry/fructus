@@ -7,7 +7,7 @@
 // frame buffer and its own 256 codes:
 //
 //     EDGE    lines 0-2 and 13-16: accents over capitals, descenders and the
-//             accents below, the ends of box drawing
+//             accents below, the underline, the ends of box drawing
 //     RISER   lines 3-5: capitals and ascenders above the x-height, and the
 //             accents over small letters
 //     X       lines 6-12: the x-height
@@ -23,6 +23,10 @@
 //
 // A MARK, U+0300-U+036F less 0x2ff as the cell keeps it, changes one zone,
 // see glyphs().
+//
+// THE UNDERLINE is in the font, on line 14 with a line's gap under the
+// baseline, in the text's colour: an underlined cell's EDGE code is
+// UNDERLINED[code].  It stops a pixel short of a descender either side.
 #ifndef TERMINAL_FONT_H
 #define TERMINAL_FONT_H
 
@@ -30,7 +34,7 @@
 
 namespace terminal {
 
-constexpr int LINES = 17, ZONES = 3;
+constexpr int LINES = 17, ZONES = 3, UNDERLINE_LINE = 14;
 enum : uint8_t { EDGE, RISER, X };
 
 constexpr uint8_t BLANK = 0x20;         // the blank slice, in every zone
@@ -41,6 +45,7 @@ extern const uint8_t FONT[LINES * 256];
 extern const uint8_t ZONE_OF_LINE[LINES];
 extern const uint8_t GLYPH[ZONES][256];
 extern const uint8_t MARK_GLYPH[2][113];   // EDGE and RISER, BLANK for none
+extern const uint8_t UNDERLINED[256];      // an EDGE code underlined
 
 // The pairs whose letter has ink where the mark goes: a code of their own
 // in each zone that differs.  Sorted by base and mark.

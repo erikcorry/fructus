@@ -160,6 +160,7 @@ uint8_t state, inter, priv;
 constexpr int MAX_PARAMS = 16;
 uint16_t params[MAX_PARAMS];
 uint8_t param;                          // the one being read
+uint16_t sub;                           // bit i: params[i] came after a colon
 
 uint32_t code;                          // UTF-8: the code point so far, and
 uint8_t need;                           // the bytes still to come
@@ -390,9 +391,40 @@ void set_mode(unsigned m, bool on) {
   }
 }
 
+// The colour in the n parameters after 38, 48 or 58 at i: 5 and an index,
+// or 2 and red, green and blue - with a colour space's id between in the
+// colon form, 2::r:g:b, so the last three.  NONE if neither.
+constexpr uint16_t NONE = 0xffff;
+uint16_t extended(int i, int n) {
+  if (n >= 2 && params[i + 1] == 5) return params[i + 2] & 0xff;
+  if (n < 4 || params[i + 1] != 2) return NONE;
+  auto v = [&](int k) { return params[i + n - 2 + k] > 255 ? 255u : params[i + n - 2 + k]; };
+  return DIRECT | rgb888(v(0), v(1), v(2));
+}
+
+// SGR.  A parameter's colon sub-parameters are its own: 4:0 to 4:5 are
+// underline styles, all drawn as one but for 4:0, off, and 38:5:n and
+// 38:2::r:g:b are colours.  The semicolon forms 38;5;n and 38;2;r;g;b take
+// as many.  58 and 59, the underline's own colour, are read and dropped: it
+// is the text's.
 void sgr() {
   for (int i = 0; i <= param; i++) {
     unsigned p = params[i];
+    int n = 0;
+    while (i + n < param && sub >> (i + n + 1) & 1) n++;
+    if (p == 38 || p == 48 || p == 58) {
+      if (!n) n = i < param && params[i + 1] == 5 ? 2 : i < param && params[i + 1] == 2 ? 4 : 0;
+      if (n > param - i) n = param - i;
+      uint16_t c = extended(i, n);
+      if (c != NONE && p != 58) (p == 38 ? pen.fg : pen.bg) = c;
+      i += n;
+      continue;
+    }
+    if (n) {
+      if (p == 4) pen.flags = params[i + 1] ? pen.flags | UNDER : pen.flags & ~UNDER;
+      i += n;
+      continue;
+    }
     if (p == 0) pen = { DEFAULT, DEFAULT, 0 };
     else if (p == 1) pen.flags |= BOLD;
     else if (p == 4) pen.flags |= UNDER;
@@ -408,20 +440,6 @@ void sgr() {
     else if (p == 49) pen.bg = DEFAULT;
     else if (p >= 90 && p <= 97) pen.fg = p - 90 + 8;
     else if (p >= 100 && p <= 107) pen.bg = p - 100 + 8;
-    else if (p == 38 || p == 48) {
-      uint16_t c;
-      if (i + 2 <= param && params[i + 1] == 5) {
-        c = params[i + 2] & 0xff;
-        i += 2;
-      } else if (i + 4 <= param && params[i + 1] == 2) {
-        auto v = [&](int k) { return params[i + k] > 255 ? 255u : params[i + k]; };
-        c = DIRECT | rgb888(v(2), v(3), v(4));
-        i += 4;
-      } else {
-        break;
-      }
-      (p == 38 ? pen.fg : pen.bg) = c;
-    }
   }
   resolve();
 }
@@ -535,6 +553,7 @@ void escape(uint8_t c) {
   case '[':
     param = 0;
     params[0] = 0;
+    sub = 0;
     priv = inter = 0;
     state = CSI;
     break;
@@ -560,7 +579,10 @@ void csi_byte(uint32_t c) {
   if (c >= '0' && c <= '9') {
     if (params[param] < 1000) params[param] = params[param] * 10 + (c - '0');
   } else if (c == ';' || c == ':') {
-    if (param < MAX_PARAMS - 1) params[++param] = 0;
+    if (param < MAX_PARAMS - 1) {
+      params[++param] = 0;
+      if (c == ':') sub |= 1 << param;
+    }
   } else if (c >= '<' && c <= '?') {
     priv = c;
   } else if (c >= 0x20 && c <= 0x2f) {

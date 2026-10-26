@@ -40,7 +40,9 @@
 //   modes  4 insert; ?6 origin, ?7 autowrap, ?25 cursor, ?47 ?1047 ?1049
 //          the alternate screen
 //   SGR    0 1 4 7 8 22 24 27 28, 30-37 39 40-47 49 90-97 100-107,
-//          38/48 with 5;n or 2;r;g;b
+//          38/48 with 5;n or 2;r;g;b or their colon forms, 4:0-4:5 as
+//          underline off or on; 58 and 59, the underline's colour, ignored:
+//          it is the text's
 //   OSC, DCS, PM, APC  read to their end and ignored
 //
 // Bold is a brighter colour: ideas/vt100.md keeps the brightest levels back

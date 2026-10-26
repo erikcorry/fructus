@@ -5,11 +5,10 @@
 //       -o build/terminal-preview
 //   build/terminal-preview < bytes > screen.ppm
 //
-// For the host.  Each text row goes through draw_row into its six arrays,
+// For the host.  Each text row goes through draw_row into its five arrays,
 // and each of the 476 lines is drawn from them as the display reads them:
 // the code from the array of the line's zone, the glyph's bits from the font
-// row of the line, fg for a 1 and for a 0 the background, line 13's from the
-// underline array.  The cursor is not drawn.
+// row of the line, fg for a 1 and bg for a 0.  The cursor is not drawn.
 #include <stdio.h>
 
 #include "row.h"
@@ -35,20 +34,19 @@ int main() {
   reset();
   for (int c; (c = getchar()) != EOF;) put(c);
 
-  static uint8_t code[ROWS][ZONES][COLUMNS], fg[ROWS][COLUMNS], bg[ROWS][COLUMNS], under[ROWS][COLUMNS];
+  static uint8_t code[ROWS][ZONES][COLUMNS], fg[ROWS][COLUMNS], bg[ROWS][COLUMNS];
   for (int y = 0; y < ROWS; y++)
     draw_row(screen->rows[screen->line[y]],
-             { { code[y][0], code[y][1], code[y][2] }, fg[y], bg[y], under[y] });
+             { { code[y][0], code[y][1], code[y][2] }, fg[y], bg[y] });
 
   printf("P6\n%d %d\n255\n", 8 * COLUMNS, LINES * ROWS);
   for (int y = 0; y < LINES * ROWS; y++) {
     int row = y / LINES, line = y % LINES;
-    const uint8_t *background = line == UNDERLINE_LINE ? under[row] : bg[row];
     for (int c = 0; c < COLUMNS; c++) {
       uint8_t bits = FONT[256 * line + code[row][ZONE_OF_LINE[line]][c]];
       for (int x = 0; x < 8; x++) {
         uint8_t p[3];
-        rgb(bits & 0x80 >> x ? fg[row][c] : background[c], p);
+        rgb(bits & 0x80 >> x ? fg[row][c] : bg[row][c], p);
         fwrite(p, 1, 3, stdout);
       }
     }

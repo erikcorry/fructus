@@ -19,7 +19,7 @@
 //            small letters: the riser
 //     6-12   the x-height; the baseline is under line 12
 //    13-15   descenders, and the accents below: cedilla, ogonek, comma.
-//            Line 13 is the underline's too, which the background draws
+//            Line 14 is the underline's, a line's gap under the baseline
 //    16      blank but for box drawing and blocks
 //
 // 9x15's row r is line r + 1: its 12 rows above the baseline are lines 1-12,
@@ -41,6 +41,11 @@
 // never runs out while the bases fit a byte; RISER and EDGE are mostly blank,
 // box drawing's strokes and accents.  EDGE's two parts never both hold an
 // accent, since a cell has one mark.
+//
+// UNDERLINE IS IN THE FONT, on line 14, in the text's colour: an underlined
+// cell shows UNDERLINED[code] in EDGE for its code.  The line stops a pixel
+// short of any ink on line 14 either side - a descender, an ogonek - so the
+// stroke crosses it with a gap each side.  At most it doubles EDGE's codes.
 //
 // THE FONT is the display's 8-pixel font, 256 glyphs a font row, one font
 // row per line of the cell: font_line = 4 x line.  Font row L, code k, is
@@ -341,11 +346,23 @@ for (const [base, m] of pairs) {
 }
 OVERRIDES.sort((a, b) => a.base - b.base || a.mark - b.mark);
 
+// Each EDGE code's slice underlined.  A code no slice has maps to the
+// blank's; an underlined slice's own entry is never used, and is itself.
+const UNDER_LINE = 14;
+const UNDERLINED = [...Array(256).keys()];
+for (const c of slices[EDGE].map((g, c) => (g ? c : -1)).filter((c) => c >= 0)) {
+  const g = slices[EDGE][c].slice(), ink = g[UNDER_LINE];
+  g[UNDER_LINE] = (0xff & ~(ink | ink << 1 | ink >> 1)) | ink;
+  UNDERLINED[c] = code(EDGE, g);
+}
+for (let c = 0; c < 256; c++) if (!slices[EDGE][c]) UNDERLINED[c] = UNDERLINED[BLANK];
+
 // --- the font -----------------------------------------------------------------
 
 const FONT = Array.from({ length: H }, (_, l) => slices[zoneOf[l]].map((g) => (g ? g[l] : 0)));
-const shown = (base, mark) => {
+const shown = (base, mark, under) => {
   const c = rule(base, mark, OVERRIDES);
+  if (under) c[EDGE] = UNDERLINED[c[EDGE]];
   return FONT.map((row, l) => row[c[zoneOf[l]]]);
 };
 
@@ -361,37 +378,44 @@ if (rules) {
   const out = [];
   bases.forEach((b, base) => {
     if (b) for (const m of [0, ...[...accents.keys()].map((m) => m - 0x2ff)])
-      out.push(`${base} ${m} ${rule(base, m, OVERRIDES).join(' ')}`);
+      out.push(`${base} ${m} ${rule(base, m, OVERRIDES).join(' ')} ${UNDERLINED[rule(base, m, OVERRIDES)[EDGE]]}`);
   });
   process.stdout.write(out.join('\n') + '\n');
   process.exit(0);
 }
 
 if (sheet) {
-  // With --text, its lines as the terminal shows them, cells touching.
+  // With --text, its lines as the terminal shows them, cells touching; a
+  // character followed by U+0332, combining low line, underlined.
   const lines = text && readFileSync(text, 'utf8').replace(/\n$/, '').split('\n');
-  const SCALE = 3, GAP = lines ? 0 : 2, COLS = lines ? Math.max(...lines.map((l) => [...l].length)) : 32;
+  const width_ = (l) => [...l.replace(/\u0332/g, '')].length;
+  const SCALE = 3, GAP = lines ? 0 : 2, COLS = lines ? Math.max(...lines.map(width_)) : 32;
   let cells = bases.map((b, c) => (b ? [c, 0] : null)).filter(Boolean);
   for (const [b, m] of pairs) cells.push([b, m - 0x2ff]);
   cells.push([0x69, 0x307 - 0x2ff]);
   if (lines) {
     cells = [];
     for (const l of lines) {
-      const row = [...l].map((ch) => {
+      const row = [];
+      for (const ch of l) {
+        if (ch === '\u0332') {
+          row[row.length - 1][2] = true;
+          continue;
+        }
         const [b, m] = codeOf.has(ch) ? [ch] : [...ch.normalize('NFD')];
         const mark = m ? m.codePointAt(0) : b === 'i' ? 0x307 : 0;
         const dotless = mark && accents.get(mark)?.above && (b === 'i' || b === 'j');
         const base = codeOf.get(dotless ? (b === 'i' ? 'ı' : 'ȷ') : b) ?? codeOf.get('\ufffd');
-        return [base, mark ? mark - 0x2ff : 0];
-      });
-      while (row.length < COLS) row.push([0x20, 0]);
+        row.push([base, mark ? mark - 0x2ff : 0, false]);
+      }
+      while (row.length < COLS) row.push([0x20, 0, false]);
       cells.push(...row);
     }
   }
   const width = COLS * (W + GAP) * SCALE, height = Math.ceil(cells.length / COLS) * (H + GAP) * SCALE;
   const rgb = Buffer.alloc(width * height * 3, 0x40);
-  cells.forEach(([b, m], i) => {
-    const g = shown(b, m), cx = (i % COLS) * (W + GAP), cy = Math.floor(i / COLS) * (H + GAP);
+  cells.forEach(([b, m, under], i) => {
+    const g = shown(b, m, under), cx = (i % COLS) * (W + GAP), cy = Math.floor(i / COLS) * (H + GAP);
     for (let y = 0; y < H; y++)
       for (let x = 0; x < W; x++)
         for (let d = 0; d < SCALE * SCALE; d++) {
@@ -430,6 +454,10 @@ const uint8_t DOTTED_I = ${hex(codeOf.get('i'))}, DOTLESS_J = ${hex(codeOf.get('
 
 const uint8_t GLYPH[ZONES][256] = {
 ${GLYPH.map((g, z) => `  { /* ${ZONES[z].name} */\n${table(g, '    ')}\n  },`).join('\n')}
+};
+
+const uint8_t UNDERLINED[256] = {
+${table(UNDERLINED, '  ')}
 };
 
 const uint8_t MARK_GLYPH[2][113] = {

@@ -8,10 +8,10 @@ void draw_row(const Row &r, const RowArrays &out) {
   for (int c = 0; c < COLUMNS; c++) {
     uint8_t mark = r.mark[c] & MARK;
     glyphs(r.base[c], mark, MARK_BELOW[mark >> 3] >> (mark & 7) & 1, codes);
+    if (r.mark[c] & UNDERLINE) codes[EDGE] = UNDERLINED[codes[EDGE]];
     for (int z = 0; z < ZONES; z++) out.code[z][c] = codes[z];
     out.fg[c] = r.fg[c];
     out.bg[c] = r.bg[c];
-    out.under[c] = r.mark[c] & UNDERLINE ? r.fg[c] : r.bg[c];
   }
 }
 

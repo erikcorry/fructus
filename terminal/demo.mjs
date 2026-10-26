@@ -14,6 +14,7 @@ const lines = [
   'Zażółć gęślą jaźń. Příliš žluťoučký kůň úpěl ďábelské ódy. Ľúbostný ťava.',
   'Æble Øre Åben, ß ẞ, Œuvre, Ģirts Ķemers, Ștefan Țară, Ð Þ ð þ, Ísland.',
   '€ ‘quote’ “quote” „Gänse“ «guillemets» – — … • ← ↑ → ↓ ≤ ≥ ≠ π ° ± ½ ©',
+  `${E}4mUnderlined: gjpqy Typography, ząę ţş, (brackets) [ok]; ┃│▒${E}0m and ${E}1;4;32mgreen gjpqy${E}0m`,
   '',
   '┌──────────┬─────────┐ ╔══════════╦═════════╗ ┏━━━━━━━━━┓ ╭─────────╮',
   '│ light    │ box     │ ║ double   ║ box     ║ ┃ heavy   ┃ │ rounded │',

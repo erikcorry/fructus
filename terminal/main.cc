@@ -12,8 +12,7 @@
 //     0x9100   the codes, 80 a text row: EDGE's 28 rows, RISER's, X's
 //     0xa480   the foreground colours, 28 rows of 80
 //     0xad40   the background, a byte a cell: 8 bits a pixel, 8 wide
-//     0xb600   line 13's background, the underline's: row.h
-//     0xbec0   80 bytes of black, for the lines off the text
+//     0xb600   80 bytes of black, for the lines off the text
 //     0xf000   the line tables
 //
 // THE ROWS IN THE BUFFER ARE THE TERMINAL'S ROWS[], not the lines of the
@@ -46,13 +45,12 @@ constexpr uint16_t MODE = DISPLAY_8BPP | DISPLAY_WIDTH(8);
 // at run time, and ld/fructus-writethru.ld runs no constructors.
 constexpr uint16_t ROW_BYTES = ROWS * COLUMNS;
 constexpr uint16_t CODES_AT = 0x8000 + LINES * 256, FG_AT = CODES_AT + ZONES * ROW_BYTES;
-constexpr uint16_t BG_AT = FG_AT + ROW_BYTES, UNDER_AT = BG_AT + ROW_BYTES, BLACK_AT = UNDER_AT + ROW_BYTES;
+constexpr uint16_t BG_AT = FG_AT + ROW_BYTES, BLACK_AT = BG_AT + ROW_BYTES;
 static_assert(BLACK_AT + COLUMNS <= 0xf000, "the arrays run into the line tables");
 
 #define CODES ((uint8_t *) CODES_AT)
 #define FG ((uint8_t *) FG_AT)
 #define BG ((uint8_t *) BG_AT)
-#define UNDER ((uint8_t *) UNDER_AT)
 #define BLACK ((uint8_t *) BLACK_AT)
 
 uint16_t address(const uint8_t *p) { return (uint16_t) (uintptr_t) p; }
@@ -75,7 +73,7 @@ void line_tables() {
       int line = TOP + LINES * y + l;
       DISPLAY_CHARS[line] = address(CODES + (ZONE_OF_LINE[l] * ROWS + r) * COLUMNS);
       DISPLAY_COLOURS[line] = address(FG + r * COLUMNS);
-      DISPLAY_BACKGROUND[line] = address((l == UNDERLINE_LINE ? UNDER : BG) + r * COLUMNS);
+      DISPLAY_BACKGROUND[line] = address(BG + r * COLUMNS);
     }
   }
 }
@@ -83,7 +81,7 @@ void line_tables() {
 void draw(int r) {
   draw_row(screen->rows[r], { { CODES + r * COLUMNS, CODES + (ROWS + r) * COLUMNS,
                                 CODES + (2 * ROWS + r) * COLUMNS },
-                              FG + r * COLUMNS, BG + r * COLUMNS, UNDER + r * COLUMNS });
+                              FG + r * COLUMNS, BG + r * COLUMNS });
 }
 
 // The cursor's cell with its colours swapped.
@@ -91,7 +89,6 @@ void draw_cursor(int r, int x) {
   const Row &row = screen->rows[r];
   FG[r * COLUMNS + x] = row.bg[x];
   BG[r * COLUMNS + x] = row.fg[x];
-  UNDER[r * COLUMNS + x] = row.mark[x] & UNDERLINE ? row.bg[x] : row.fg[x];
 }
 
 // The parts that never change: the font, the modes, the black outside the
