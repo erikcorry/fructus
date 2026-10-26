@@ -121,6 +121,7 @@ uint32_t decompose(uint32_t c, uint8_t &mark) {
     int mid = (lo + hi) / 2;
     const Decomposition &d = DECOMPOSITIONS[mid];
     if (d.code == c) {
+      if (!d.mark) return decompose(d.base, mark);   // Cyrillic і is i, dot and all
       mark = d.mark;
       return mark && !below(mark) ? dotless(d.base) : d.base;
     }
