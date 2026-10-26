@@ -327,7 +327,9 @@ void print(uint32_t c) {
   if (in(c, ZERO_WIDTH)) return;
   int width = in(c, WIDE) ? 2 : 1;
   uint8_t mark = 0;
-  uint8_t base = width == 2 || c > 0xffff ? FALLBACK : base_of(decompose(c, mark));
+  uint16_t b = width == 2 || c > 0xffff ? FALLBACK : base_of(decompose(c, mark));
+  uint8_t base = b;
+  if (b & SECOND_SET) mark = SECOND;
 
   if (pending) {
     x = 0;
@@ -638,7 +640,7 @@ int find(const Unicode *table, int count, uint32_t c) {
 
 }  // namespace
 
-uint8_t base_of(uint32_t c) {
+uint16_t base_of(uint32_t c) {
   if (c >= 0x20 && c < 0x7f && c != 'i') return c;
   int b = find(UNICODE, UNICODE_COUNT, c);
   if (b < 0) b = find(ALIASES, ALIAS_COUNT, c);

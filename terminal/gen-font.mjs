@@ -26,7 +26,9 @@
 // capitals 3-12 and the x-height 6-12, and its 3 below are 13-15.  Its
 // glyphs are 9 wide with a blank column each side, and the right one goes;
 // where the right one has ink and the left none the glyph moves left, and
-// where both have ink the right is lost (the generator lists them).
+// where both have ink a column the same as the one beside it goes, the
+// middlemost - an arrow's shaft - or failing that the right one (the
+// generator lists those).
 //
 // THREE ZONES.  The display reads each line's character codes from its line
 // table's pointer, so each zone has an array of 80 codes a text row and its
@@ -57,6 +59,12 @@
 // for 0x69, which is a dotless ı - the terminal keeps i as ı and a dot above,
 // so an accent can take the dot's place.  The rest are REPERTOIRE's, in the
 // codes left, 0x00-0x1f and 0x7f-0xff, in order.
+//
+// THE SECOND SET is more bases, which take no accent: a cell whose mark is
+// SECOND, 0x7f - past the 112 marks there are - has a base from it, so a
+// base is 9 bits in all.  SECOND_REPERTOIRE is in order of use, mostly
+// Markus Kuhn's SECS; as many go in as every zone has room for, X being the
+// one that fills, and the generator lists the rest.
 //
 // ACCENTS are 9x15's spacing ones, ´ ` ˆ and so on, never its precomposed
 // letters, whose capitals are squashed to make room.  An accent above goes in
@@ -90,6 +98,7 @@ const ZONES = [
   { name: 'X', lines: [6, 7, 8, 9, 10, 11, 12] },
 ];
 const EDGE = 0, RISER = 1;
+const SECOND = 0x7f;           // the mark of a base from the second set
 const zoneOf = Array(H);
 ZONES.forEach((z, i) => z.lines.forEach((l) => { zoneOf[l] = i; }));
 
@@ -107,12 +116,20 @@ const REPERTOIRE = [
   '█▀▄▌▐░▒▓▖▗▘▙▚▛▜▝▞▟▁▂▃▅▆▇',
 ].join('');
 
+const SECOND_REPERTOIRE = [
+  '✓✗■□▲▼►◄○↔↕⇐⇒⇔',                 // marks and status
+  '™†‡‰′″№',                          // typography
+  '∞√≈≡∑∂∫∀∃∈∅∧∨∩∪⌈⌉⌊⌋',               // maths
+  'ĸƏəƒ',                             // letters: Greenlandic, Azerbaijani, florin
+  '△‴ⁿ⁰₀₁₂₃∏∇∆⇑⇓⇕⊂⊃☐☑☒♪☺ℕℤℝℚℂ↤↥↦↧',  // if there is room
+].join('');
+
 // Characters drawn as a base that is another's: the same shape, or near
 // enough.  base_of finds them after UNICODE; nothing maps a base back to
 // them.  Groff's man pages use the hyphens, the minus and the spaces.
 const ALIASES = {
   'ʼ': '’', 'ʽ': '‘', '―': '—', '‐': '-', '‑': '-', '−': '-', '∙': '·', '⋅': '·', '∼': '~',
-  '〈': '‹', '〉': '›',
+  '\u2329': '‹', '\u232a': '›',   // 〈 〉, the technical ones
   '\u2002': ' ', '\u2003': ' ', '\u2004': ' ', '\u2005': ' ', '\u2006': ' ', '\u2007': ' ',
   '\u2008': ' ', '\u2009': ' ', '\u200a': ' ',
 };
@@ -127,9 +144,21 @@ function x11(cp) {
   if (!g) throw new Error(`9x15 has no U+${cp.toString(16)}`);
   if (g.width !== 9 || g.ascent !== 12 || g.descent !== 3) throw new Error(`U+${cp.toString(16)} is not 9x15`);
   const right = g.rows.some((r) => r & 1), left = g.rows.some((r) => r & 0x100);
-  if (right) (left ? lost : moved).push(String.fromCodePoint(cp));
   const out = blank();
-  g.rows.forEach((r, y) => { out[y + 1] = (right && !left ? r : r >> 1) & 0xff; });
+  if (right && left) {
+    // Column x is bit 8 - x.  Drop x where it equals x + 1, nearest the middle.
+    const column = (x) => g.rows.map((r) => (r >> (8 - x)) & 1).join('');
+    const same = [3, 4, 2, 5, 1, 6, 0, 7].find((x) => column(x) === column(x + 1));
+    if (same === undefined) lost.push(String.fromCodePoint(cp));
+    const drop = same ?? 8;
+    g.rows.forEach((r, y) => {
+      const high = r >> (9 - drop) << (8 - drop), low = r & ((1 << (8 - drop)) - 1);
+      out[y + 1] = high | low;
+    });
+    return out;
+  }
+  if (right) moved.push(String.fromCodePoint(cp));
+  g.rows.forEach((r, y) => { out[y + 1] = (right ? r : r >> 1) & 0xff; });
   return out;
 }
 
@@ -223,6 +252,13 @@ function glyphOf(ch) {
   }
   case 'ȷ': return x11(0x6a).map((r, l) => (l < 6 ? 0 : r));    // 9x15 has none
   case '◆': return pattern((x, y) => Math.abs(x - CX) + Math.abs(y - CY) <= 3);
+  // Triangles 7 wide, about the middle as ◆ is: ▲ ▼ 8 lines of 1, 1, 3, 3,
+  // 5, 5, 7, 7, and ► ◄ 7 columns of 7, 7, 5, 5, 3, 3, 1 lines.
+  case '▲': return pattern((x, y) => y >= 5 && y <= 12 && Math.abs(x - CX) <= (y - 5) >> 1);
+  case '▼': return pattern((x, y) => y >= 5 && y <= 12 && Math.abs(x - CX) <= (12 - y) >> 1);
+  case '△': return pattern((x, y) => y >= 5 && y <= 12 && (Math.abs(x - CX) === (y - 5) >> 1 || y === 12 && x >= 1));
+  case '►': return pattern((x, y) => x >= 1 && Math.abs(y - CY) <= (7 - x) >> 1);
+  case '◄': return pattern((x, y) => x >= 1 && Math.abs(y - CY) <= (x - 1) >> 1);
   }
   return x11(ch.codePointAt(0));
 }
@@ -302,6 +338,7 @@ for (const [m, gs] of markSlices) gs.forEach((g, z) => { if (g) MARK_GLYPH[z][m 
 
 // The rule, as font.h has it in C: the zone codes of a cell.
 function rule(base, mark, overrides) {
+  if (mark === SECOND) return second[base].codes.slice();
   const c = ZONES.map((_, z) => GLYPH[z][base]);
   if (!mark) return c;
   const os = overrides.filter((o) => o.base === base && o.mark === mark);
@@ -360,6 +397,19 @@ OVERRIDES.sort((a, b) => a.base - b.base || a.mark - b.mark);
 
 // Each EDGE code's slice underlined.  A code no slice has maps to the
 // blank's; an underlined slice's own entry is never used, and is itself.
+// --- the second set -----------------------------------------------------------
+
+// Each zone must have a candidate's slice or room for it, and EDGE stay at
+// 128 or under, so that its underlined slices fit beside it.
+const second = [], leftOut = [];
+for (const ch of SECOND_REPERTOIRE) {
+  const g = glyphOf(ch);
+  const fits = ZONES.every((_, z) => codes[z].has(key(g, z)) ||
+    (z === EDGE ? codes[z].size < 128 : slices[z].includes(null)));
+  if (!fits || second.length === 256) leftOut.push(ch);
+  else second.push({ ch, glyph: g, codes: ZONES.map((_, z) => code(z, g)) });
+}
+
 const UNDER_LINE = 14;
 const UNDERLINED = [...Array(256).keys()];
 for (const c of slices[EDGE].map((g, c) => (g ? c : -1)).filter((c) => c >= 0)) {
@@ -384,6 +434,8 @@ const shown = (base, mark, under) => {
 const counts = ZONES.map((z, i) => `${z.name} ${codes[i].size}`).join(', ');
 process.stderr.write(`${bases.filter(Boolean).length} bases; codes in each zone: ${counts}; ` +
   `${OVERRIDES.length} overrides of ${pairs.length} accented letters\n`);
+process.stderr.write(`second set ${second.length} of ${SECOND_REPERTOIRE.length}` +
+  (leftOut.length ? `; no room for ${leftOut.join('')}` : '') + '\n');
 if (moved.length) process.stderr.write(`moved a column left: ${moved.join('')}\n`);
 if (lost.length) process.stderr.write(`ink in both edge columns, the right one lost: ${lost.join('')}\n`);
 
@@ -391,10 +443,11 @@ if (lost.length) process.stderr.write(`ink in both edge columns, the right one l
 // rule gives, for check.mjs to hold font.h's glyphs() to.
 if (rules) {
   const out = [];
+  const line = (base, m) => `${base} ${m} ${rule(base, m, OVERRIDES).join(' ')} ${UNDERLINED[rule(base, m, OVERRIDES)[EDGE]]}`;
   bases.forEach((b, base) => {
-    if (b) for (const m of [0, ...[...accents.keys()].map((m) => m - 0x2ff)])
-      out.push(`${base} ${m} ${rule(base, m, OVERRIDES).join(' ')} ${UNDERLINED[rule(base, m, OVERRIDES)[EDGE]]}`);
+    if (b) for (const m of [0, ...[...accents.keys()].map((m) => m - 0x2ff)]) out.push(line(base, m));
   });
+  second.forEach((_, i) => out.push(line(i, SECOND)));
   process.stdout.write(out.join('\n') + '\n');
   process.exit(0);
 }
@@ -407,6 +460,7 @@ if (sheet) {
   const SCALE = 3, GAP = lines ? 0 : 2, COLS = lines ? Math.max(...lines.map(width_)) : 32;
   let cells = bases.map((b, c) => (b ? [c, 0] : null)).filter(Boolean);
   for (const [b, m] of pairs) cells.push([b, m - 0x2ff]);
+  second.forEach((_, i) => cells.push([i, SECOND]));
   cells.push([0x69, 0x307 - 0x2ff]);
   if (lines) {
     cells = [];
@@ -415,6 +469,11 @@ if (sheet) {
       for (const ch of l) {
         if (ch === '\u0332') {
           row[row.length - 1][2] = true;
+          continue;
+        }
+        const s = second.findIndex((s) => s.ch === ch);
+        if (s >= 0) {
+          row.push([s, SECOND, false]);
           continue;
         }
         const [b, m] = codeOf.has(ch) ? [ch] : [...ch.normalize('NFD')];
@@ -452,6 +511,7 @@ const table = (a, indent) => {
 };
 const unicode = bases.map((b, c) => [b && b.ch.codePointAt(0), c])
   .filter(([u, c]) => u !== undefined && u !== null && !(u === c && c !== 0x69))
+  .concat(second.map((s, i) => [s.ch.codePointAt(0), 0x100 | i]))
   .sort((a, b) => a[0] - b[0]);
 const aliases = Object.entries(ALIASES).map(([from, to]) => {
   if (!codeOf.has(to)) throw new Error(`the alias ${from} is of ${to}, not a base`);
@@ -483,6 +543,11 @@ const uint8_t MARK_GLYPH[2][113] = {
 ${MARK_GLYPH.map((g, z) => `  { /* ${ZONES[z].name} */\n${table(g, '    ')}\n  },`).join('\n')}
 };
 
+extern const int SECOND_COUNT = ${second.length};
+const uint8_t SECOND_GLYPH[${second.length}][ZONES] = {
+${second.map((s) => `  { ${s.codes.map(hex).join(', ')} },  // ${s.ch}`).join('\n')}
+};
+
 extern const int OVERRIDE_COUNT = ${OVERRIDES.length};
 const Override OVERRIDES[${OVERRIDES.length}] = {
 ${OVERRIDES.map((o) => `  { ${hex(o.base)}, ${hex(o.mark)}, ${o.zone}, ${hex(o.code)} },  // ${(bases[o.base].ch + String.fromCodePoint(o.mark + 0x2ff)).normalize('NFC')}`).join('\n')}
@@ -490,7 +555,7 @@ ${OVERRIDES.map((o) => `  { ${hex(o.base)}, ${hex(o.mark)}, ${o.zone}, ${hex(o.c
 
 extern const int UNICODE_COUNT = ${unicode.length};
 const Unicode UNICODE[${unicode.length}] = {
-${unicode.map(([u, c]) => `  { 0x${u.toString(16).padStart(4, '0')}, ${hex(c)} },`).join('\n')}
+${unicode.map(([u, c]) => `  { 0x${u.toString(16).padStart(4, '0')}, ${c > 0xff ? `0x${c.toString(16)}` : hex(c)} },`).join('\n')}
 };
 
 extern const int ALIAS_COUNT = ${aliases.length};

@@ -43,8 +43,9 @@ static void number(unsigned v, int base = 10, int digits = 1) {
   while (n) out(d[--n]);
 }
 
-// A base's code point: the font's code, unless the font moved it.
-static unsigned unicode(uint8_t base) {
+// A base's code point: the font's code, unless the font moved it.  base is
+// 9 bits, SECOND_SET for the second set.
+static unsigned unicode(uint16_t base) {
   if (base >= 0x20 && base < 0x7f && base != DOTLESS_I) return base;
   for (int i = 0; i < UNICODE_COUNT; i++)
     if (UNICODE[i].base == base) return UNICODE[i].code;
@@ -86,6 +87,10 @@ int main() {
     out(' ');
     for (int i = 0; i < end; i++) {
       unsigned mark = r.mark[i] & MARK ? 0x2ff + (r.mark[i] & MARK) : 0;
+      if ((r.mark[i] & MARK) == SECOND) {
+        utf8(unicode(SECOND_SET | r.base[i]));
+        continue;
+      }
       // ı and its dot are i again, to read.
       bool i_dot = r.base[i] == DOTLESS_I && mark == 0x307;
       utf8(i_dot ? 'i' : unicode(r.base[i]));
