@@ -9,14 +9,20 @@
 // glyphs() must give the codes gen-font.mjs's rule does, for every base with
 // every mark.
 //
+// And main.cc itself, on the simulator with its display: bytes sent at
+// 115200 baud into its receive interrupt, the demo and a screenful scrolled
+// many times over, none lost, and its last frame what terminal/preview.cc
+// draws on the host from the same bytes, pixel for pixel.
+//
 // Each case is bytes in and what terminal/dump.cc should say: the first lines
 // of the screen, the cursor, the answers sent, and for some a line of colour
 // runs.  Every case runs on the host, built with g++, and on Fructus under
 // tools/fcc-run.mjs, which is skipped when the compiler is not built.
 // =============================================================================
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { inflateSync } from 'node:zlib';
 
 const SOURCES = ['terminal/dump.cc', 'terminal/terminal.cc', 'terminal/decompose.cc', 'terminal/font.cc'];
 const E = '\x1b', CSI = E + '[';
@@ -126,6 +132,55 @@ if (existsSync(NINE)) {
   }
 }
 
+// A PNG of tools/png.js's - truecolour, every row filter 0 - as its rows' bytes.
+function pngPixels(file) {
+  const f = readFileSync(file), idat = [];
+  for (let o = 8; o < f.length;) {
+    const n = f.readUInt32BE(o);
+    if (f.toString('latin1', o + 4, o + 8) === 'IDAT') idat.push(f.subarray(o + 8, o + 8 + n));
+    o += 12 + n;
+  }
+  const raw = inflateSync(Buffer.concat(idat)), w = f.readUInt32BE(16), h = f.readUInt32BE(20);
+  const out = Buffer.alloc(w * h * 3);
+  for (let y = 0; y < h; y++) raw.copy(out, y * w * 3, y * (1 + 3 * w) + 1, (y + 1) * (1 + 3 * w));
+  return out;
+}
+
+if (runners.length > 1) {
+  const MAIN = ['terminal/main.cc', 'terminal/terminal.cc', 'terminal/decompose.cc', 'terminal/font.cc',
+                'terminal/row.cc', 'terminal/vectors.s'];
+  execFileSync('tools/fcc', ['-Os', '-T', 'ld/fructus-writethru.ld', '-Iterminal', ...MAIN, '-o', 'build/_terminal-main'],
+               { stdio: 'inherit' });
+  execFileSync('g++', ['-std=c++17', '-O2', '-Wall', '-Iterminal', 'terminal/preview.cc', ...MAIN.slice(1, 5),
+                       '-o', 'build/_terminal-preview']);
+  let scroll = '';
+  for (let i = 0; i < 100; i++) scroll += `${String(i).padStart(3)} ${'the quick brown fox '.repeat(4)}\r\n`;
+  const inputs = [['the demo', execFileSync('node', ['terminal/demo.mjs'])],
+                  ['100 lines scrolled', Buffer.from(scroll)]];
+  for (const [name, data] of inputs) {
+    writeFileSync('build/_terminal-main.in', data);
+    rmSync('build/_terminal-frames', { recursive: true, force: true });
+    const run = spawnSync('node', ['tools/fcc-run.mjs', 'build/_terminal-main.bin', '--input', 'build/_terminal-main.in',
+                                   '--paced', '--stats', '--frames', 'build/_terminal-frames',
+                                   '--max', String(data.length * 2500 + 3e6)], { encoding: 'utf8' });
+    const sent = run.stderr.match(/(\d+) of (\d+) bytes of input sent, (\d+) lost/);
+    const last = readdirSync('build/_terminal-frames').sort().at(-1);
+    const want = execFileSync('build/_terminal-preview', { input: data, maxBuffer: 1 << 21 });
+    const got = pngPixels(`build/_terminal-frames/${last}`);
+    const wrong = [];
+    if (!sent || sent[1] !== sent[2] || sent[3] !== '0') wrong.push(`the line: ${sent ? sent[0] : run.stderr.trim()}`);
+    const px = want.subarray(want.length - got.length);
+    let differ = 0;
+    for (let i = 0; i < got.length; i += 3) if (got[i] !== px[i] || got[i + 1] !== px[i + 1] || got[i + 2] !== px[i + 2]) differ++;
+    if (px.length !== got.length || differ) wrong.push(`${differ} pixels of the last frame differ from the preview's`);
+    if (wrong.length) {
+      fails++;
+      console.log(`  FAIL main.cc, ${name}: ${wrong.join('; ')}`);
+    }
+  }
+  rmSync('build/_terminal-frames', { recursive: true, force: true });
+}
+
 for (const [name, input, lines, cursor, sends = [], runs = {}] of cases) {
   const data = Buffer.isBuffer(input) ? input : Buffer.from(input, 'utf8');
   const path = 'build/_terminal.in';
@@ -143,5 +198,6 @@ for (const [name, input, lines, cursor, sends = [], runs = {}] of cases) {
     }
   }
 }
-console.log(`${fails ? 'FAIL' : 'ok  '}  terminal/check.mjs: ${cases.length} cases on ${runners.map((r) => r[0]).join(' and ')}`);
+console.log(`${fails ? 'FAIL' : 'ok  '}  terminal/check.mjs: ${cases.length} cases on ${runners.map((r) => r[0]).join(' and ')}` +
+            (runners.length > 1 ? ', main.cc paced at 115200 against the preview' : ''));
 process.exit(fails ? 1 : 0);

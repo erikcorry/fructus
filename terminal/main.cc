@@ -3,7 +3,7 @@
 //   tools/fcc -Os -T ld/fructus-writethru.ld -Iterminal terminal/main.cc
 //     terminal/terminal.cc terminal/decompose.cc terminal/font.cc
 //     terminal/row.cc terminal/vectors.s -o build/terminal
-//   node tools/fcc-run.mjs build/terminal.bin --input bytes --x11 --scale 2
+//   node tools/fcc-run.mjs build/terminal.bin --input bytes --paced --x11 --scale 2
 //
 // THE BUFFER, as the processor addresses it in WRITETHRU (docs/vga.md):
 //
@@ -27,8 +27,13 @@
 // of rows to draw, of whether its line tables are out of date, and of where
 // it drew the cursor, which is the cell's colours swapped.
 //
-// The serial line is polled: tools/fcc-run.mjs models the UART but not its
-// interrupt.
+// THE SERIAL LINE FILLS A RING, from the UART's receive interrupt
+// (vectors.s's shim calls rx_interrupt), and each pass empties it.  The UART
+// holds one byte, and at 115200 baud the next comes 2,180 cycles later, but a
+// pass - drawing every row and waiting for the flip's vertical sync - takes
+// up to 830,000.  The ring holds what comes meanwhile: a frame's worth, 193
+// bytes, at most in terminal/check.mjs's runs, and two frames' is 386.  The handler alone moves the head and the pass
+// alone the tail, each a word stored at once, so neither stops the other.
 #include "row.h"
 
 #include <fructus/display.h>
@@ -56,6 +61,14 @@ static_assert(BLACK_AT + COLUMNS <= 0xf000, "the arrays run into the line tables
 #define BLACK ((uint8_t *) BLACK_AT)
 
 uint16_t address(const uint8_t *p) { return (uint16_t) (uintptr_t) p; }
+
+// The ring, the interrupt's stack, and the bytes lost to a full ring.
+constexpr uint16_t RING = 1024;
+uint8_t ring[RING];
+volatile uint16_t ring_head;    // the interrupt's
+uint16_t ring_tail;             // the pass's
+volatile uint16_t ring_lost;
+uint8_t interrupt_stack[128];
 
 bool show_a;   // which buffer is shown; WRITETHRU writes the other
 
@@ -122,6 +135,23 @@ Behind behind[2] = { { 0, false, -1, 0 }, { 0, false, -1, 0 } };
 
 }  // namespace
 
+extern "C" volatile uint16_t __shadow_isp;
+
+// A byte from the UART into the ring.  The store of the head comes after
+// the byte's.
+extern "C" void rx_interrupt() {
+  if (!fructus_uart_ready()) return;
+  uint8_t c = (uint8_t) fructus_io_load(&__console);
+  uint16_t h = ring_head;
+  if ((uint16_t) (h - ring_tail) == RING) {
+    ring_lost = ring_lost + 1;
+    return;
+  }
+  ring[h % RING] = c;
+  __asm__ volatile("" ::: "memory");
+  ring_head = h + 1;
+}
+
 void terminal::send(const char *s) {
   while (*s) fructus_uart_putc(*s++);
 }
@@ -136,8 +166,14 @@ int main() {
   flip();             // B shown, A written
   setup_buffer();
 
+  __shadow_isp = address(interrupt_stack + sizeof interrupt_stack);
+  __uart_status = FRUCTUS_UART_RX_INTERRUPT;
+  __asm__ volatile("sei" ::: "memory");
+
   for (;;) {
-    for (int n = 0; n < 4096 && fructus_uart_ready(); n++) put(fructus_uart_getc());
+    uint16_t head = ring_head;
+    __asm__ volatile("" ::: "memory");
+    for (; ring_tail != head; ring_tail++) put(ring[ring_tail % RING]);
     for (Behind &b : behind) {
       b.rows |= dirty;
       b.tables |= moved;
