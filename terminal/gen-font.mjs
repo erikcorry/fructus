@@ -248,6 +248,13 @@ function block(ch) {
   return shade ? pattern(shade) : null;
 }
 
+// A glyph from rows of # and ., the first on line `top`.
+function drawn(top, rows) {
+  const g = blank();
+  rows.forEach((r, i) => { g[top + i] = parseInt(r.padEnd(W, '.').replace(/#/g, '1').replace(/\./g, '0'), 2); });
+  return g;
+}
+
 function glyphOf(ch) {
   if (ARMS[ch]) return box(...ARMS[ch]);
   if ('╭╮╯╰'.includes(ch)) return rounded(ch);
@@ -260,6 +267,14 @@ function glyphOf(ch) {
     return g;
   }
   case 'ȷ': return x11(0x6a).map((r, l) => (l < 6 ? 0 : r));    // 9x15 has none
+  // 9x15's are 9 wide with ink at both edges and no column to spare: drawn
+  // again, the faces 8 wide and the sun 7, in its lines 3-11.
+  case '☺': return drawn(4, ['..####..', '.#....#.', '#.#..#.#', '#......#', '#......#',
+                             '#.#..#.#', '#..##..#', '.#....#.', '..####..']);
+  case '☻': return drawn(4, ['..####..', '.######.', '##.##.##', '########', '########',
+                             '##.##.##', '###..###', '.######.', '..####..']);
+  case '☼': return drawn(4, ['...#...', '#..#..#', '.##.##.', '.#...#.', '##...##',
+                             '.#...#.', '.##.##.', '#..#..#', '...#...']);
   // Zero with a dot in its middle, to tell it from O.
   case '0': {
     const g = x11(0x30), ink = g.map((r, l) => (r ? l : -1)).filter((l) => l >= 0);
