@@ -136,6 +136,9 @@ const SECOND_REPERTOIRE = [
 const ALIASES = {
   'ʼ': '’', 'ʽ': '‘', '―': '—', '‐': '-', '‑': '-', '−': '-', '∙': '·', '⋅': '·', '∼': '~',
   '\u2329': '‹', '\u232a': '›',   // 〈 〉, the technical ones
+  '⋯': '…',
+  // Stars, as Claude Code's spinner turns through them with · between.
+  '✢': '*', '✳': '*', '✶': '*', '✻': '*', '✽': '*',
   '\u2002': ' ', '\u2003': ' ', '\u2004': ' ', '\u2005': ' ', '\u2006': ' ', '\u2007': ' ',
   '\u2008': ' ', '\u2009': ' ', '\u200a': ' ',
 };
@@ -257,6 +260,15 @@ function glyphOf(ch) {
     return g;
   }
   case 'ȷ': return x11(0x6a).map((r, l) => (l < 6 ? 0 : r));    // 9x15 has none
+  // Zero with a dot in its middle, to tell it from O.
+  case '0': {
+    const g = x11(0x30), ink = g.map((r, l) => (r ? l : -1)).filter((l) => l >= 0);
+    const cols = g.reduce((a, r) => a | r, 0);
+    const x = (Math.clz32(cols) - 24 + 7 - (31 - Math.clz32(cols & -cols))) >> 1;   // leftmost and rightmost ink
+    const mid = (ink[0] + ink.at(-1)) >> 1;
+    g[mid] |= 0x80 >> x, g[mid + 1] |= 0x80 >> x;
+    return g;
+  }
   // The integral's halves stack, so their stems reach the cell's edge.
   case '⌠': return x11(0x2320).map((r, l, g) => (l === 16 ? g[15] : r));
   case '⌡': return x11(0x2321).map((r, l, g) => (l === 0 ? g[1] : r));

@@ -73,6 +73,8 @@ const cases = [
   // Spacing accents are a space and the mark; aliases are another's base.
   ['spacing accents and aliases', '\u02c7\u02db \u2212x \u2010y \u02bc\u2015\u2009z',
     [' \u030c \u0328 -x -y \u2019\u2014 z'], [13, 0]],
+  // Claude Code's spinner: its stars are *, and · stays between them.
+  ['spinner stars', '\u2722\u00b7\u2733\u2736\u273b\u273d \u22ef', ['*\u00b7**** \u2026'], [8, 0]],
   // The second set: a symbol takes no accent, but is underlined.
   ['second set', `\u2713\u0301\u2200x\u2208${CSI}4m\u221e${CSI}0m\u0138`,
     ['\u2713\u2200x\u2208\u221e\u0138'], [6, 0], [], { 0: '0-3 fg b3 bg 20 4-4 fg b3 bg 20 u 5-79 fg b3 bg 20' }],
