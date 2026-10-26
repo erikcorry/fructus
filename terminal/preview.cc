@@ -41,9 +41,11 @@ int main() {
   for (int c; (c = getchar()) != EOF;) put(c);
 
   static uint8_t code[ROWS][ZONES][COLUMNS], fg[ROWS][COLUMNS], bg[ROWS][COLUMNS];
-  for (int y = 0; y < ROWS; y++)
-    draw_row(screen->rows[screen->line[y]],
-             { { code[y][0], code[y][1], code[y][2], code[y][3] }, fg[y], bg[y] });
+  for (int y = 0; y < ROWS; y++) {
+    RowArrays out = { {}, fg[y], bg[y] };
+    for (int z = 0; z < ZONES; z++) out.code[z] = code[y][z];
+    draw_row(screen->rows[screen->line[y]], out);
+  }
 
   if (cursor_shown) {
     int y = cursor_y, x = cursor_x;

@@ -3,15 +3,16 @@
 // terminal/gen-font.mjs makes font.cc from X11's 9x15 and says how; this is
 // what the C side needs.
 //
-// A CELL IS 8x17 in four zones, each with its own array of codes in the
+// A CELL IS 8x17 in five zones, each with its own array of codes in the
 // frame buffer and its own 256 codes:
 //
 //     EDGE    lines 0-2 and 13-16: accents over capitals, descenders and the
 //             accents below, the underline, the ends of box drawing
 //     RISER   lines 3-5: capitals and ascenders above the x-height, and the
 //             accents over small letters
-//     X_TOP   lines 6-8: the top of the x-height
-//     X_BOTTOM lines 9-12: the rest, down to the baseline
+//     X_TOP   lines 6-7: the top of the x-height
+//     X_MIDDLE lines 8-9
+//     X_BOTTOM lines 10-12: the rest, down to the baseline
 //
 // FONT is one font row a line, 256 bytes each: line L of a cell shows
 // FONT[256 L + code], code from the zone ZONE_OF_LINE[L]'s array.  So the
@@ -40,8 +41,8 @@
 
 namespace terminal {
 
-constexpr int LINES = 17, ZONES = 4, UNDERLINE_LINE = 14;
-enum : uint8_t { EDGE, RISER, X_TOP, X_BOTTOM };
+constexpr int LINES = 17, ZONES = 5, UNDERLINE_LINE = 14;
+enum : uint8_t { EDGE, RISER, X_TOP, X_MIDDLE, X_BOTTOM };
 
 constexpr uint8_t BLANK = 0x20;         // the blank slice, in every zone
 constexpr uint8_t SECOND = 0x7f;        // the mark of the second set's bases

@@ -30,11 +30,11 @@
 // either that is a lookalike and one of our marks is the Latin letter and
 // the mark: Ё as Ë, ї as ï, Ќ as Ḱ.  But a Greek capital's tonos, Ά and the
 // rest, is font.h's TONOS, not the acute: it goes at the letter's left.  The
-// rest of the two alphabets is not in the font.
+// rest of the two alphabets are gen-font.mjs's second set, whole.
 //
 // SPACING ACCENTS: no-break space is a space, soft hyphen a hyphen, and
-// Latin-1's ¨ ¯ ´ and the modifier letters ˆ ˇ ˘ ˙ ˛ ˜ ˝ are a space with
-// the mark - their NFKD, not their NFD.
+// Latin-1's ¨ ¯ ´, the modifier letters ˆ ˇ ˘ ˙ ˛ ˜ ˝ and Greek's ΄ are a
+// space with the mark - their NFKD, not their NFD.
 //
 // THE i RULE IS THE TERMINAL'S, not the table's: i with a mark above is a
 // dotless ı with the mark, and j likewise ȷ.  The table says i; terminal.cc
@@ -60,7 +60,7 @@ const OWN = new Set([0x10f]);
 const SPACING = {
   0xa0: [0x20, 0], 0xa8: [0x20, 0x308], 0xad: [0x2d, 0], 0xaf: [0x20, 0x304], 0xb4: [0x20, 0x301],
   0x2c6: [0x20, 0x302], 0x2c7: [0x20, 0x30c], 0x2d8: [0x20, 0x306], 0x2d9: [0x20, 0x307],
-  0x2db: [0x20, 0x328], 0x2dc: [0x20, 0x303], 0x2dd: [0x20, 0x30b],
+  0x2db: [0x20, 0x328], 0x2dc: [0x20, 0x303], 0x2dd: [0x20, 0x30b], 0x384: [0x20, 0x301],
 };
 
 const LOOKALIKES = {
@@ -96,7 +96,7 @@ for (const [lo, hi] of [[0x180, 0x250], [0x2b0, 0x300], [0x370, 0x530], [0x1e00,
   for (let cp = lo; cp < hi; cp++) {
     const s = split(cp);
     if (!s || !(!s[1] || ours.has(s[1]) || s[1] === 0x2ff + TONOS)) continue;
-    if (lo !== 0x370 || /\p{L}/u.test(String.fromCodePoint(s[0]))) entries.push([cp, ...s]);
+    if (lo !== 0x370 || SPACING[cp] || /\p{L}/u.test(String.fromCodePoint(s[0]))) entries.push([cp, ...s]);
   }
 
 const hex = (v, n) => `0x${v.toString(16).padStart(n, '0')}`;

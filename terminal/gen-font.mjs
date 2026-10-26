@@ -30,19 +30,21 @@
 // middlemost - an arrow's shaft - or failing that the right one (the
 // generator lists those).
 //
-// FOUR ZONES.  The display reads each line's character codes from its line
+// FIVE ZONES.  The display reads each line's character codes from its line
 // table's pointer, so each zone has an array of 80 codes a text row and its
 // own 256 codes: a code in one zone means nothing in another.
 //
 //     EDGE      lines 0-2 and 13-16, above the capitals and below the baseline
 //     RISER     lines 3-5
-//     X_TOP     lines 6-8, the top of the x-height
-//     X_BOTTOM  lines 9-12, down to the baseline
+//     X_TOP     lines 6-7, the top of the x-height
+//     X_MIDDLE  lines 8-9
+//     X_BOTTOM  lines 10-12, down to the baseline
 //
 // A zone needs a code for each different slice of the glyphs over its
 // lines, not one for each glyph.  The x-height is where glyphs differ most:
-// as one zone of 7 lines it ran out at 256, but halves are shared - the tops
-// of a c e o s, the bottoms of a d q - so it is two.  RISER and EDGE are
+// as one zone of 7 lines it ran out at 256, but parts are shared - the tops
+// of a c e o s, the bottoms of a d q.  In two, 6-8 and 9-12, it ran out
+// again with Greek and Cyrillic; in three it has room.  RISER and EDGE are
 // mostly blank, box drawing's strokes and accents.  EDGE's two parts never both hold an
 // accent, since a cell has one mark.
 //
@@ -98,8 +100,9 @@ const W = 8, H = 17;
 const ZONES = [
   { name: 'EDGE', lines: [0, 1, 2, 13, 14, 15, 16] },
   { name: 'RISER', lines: [3, 4, 5] },
-  { name: 'X_TOP', lines: [6, 7, 8] },
-  { name: 'X_BOTTOM', lines: [9, 10, 11, 12] },
+  { name: 'X_TOP', lines: [6, 7] },
+  { name: 'X_MIDDLE', lines: [8, 9] },
+  { name: 'X_BOTTOM', lines: [10, 11, 12] },
 ];
 const EDGE = 0, RISER = 1;
 const SECOND = 0x7f;           // the mark of a base from the second set
@@ -132,6 +135,10 @@ const SECOND_REPERTOIRE = [
   // Claude Code's: its bullets, the result's corner, the prompt, plan mode's
   // pause, warnings, and the IDE's selection.
   '●⎿❯⏸⚠⧉',
+  // Greek and Cyrillic that look like no Latin letter (gen-decompose.mjs's
+  // LOOKALIKES are the rest), the accented ones whole.
+  'ΓΔΘΛΞΠΣΦΨΩΏαβγδεζηθικλξρςστυφχψωάέήίύώϊϋΐΰϑϕϖϱ',
+  'ЂЃЄЉЊЋЎЏБГДЖЗИЙЛПУФЦЧШЩЪЫЬЭЮЯҐбвгджзийклмнптфцчшщъыьэюяђѓєљњћќџґ',
 ].join('');
 
 // Characters drawn as a base that is another's, of either set: the same

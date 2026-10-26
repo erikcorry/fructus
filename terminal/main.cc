@@ -10,10 +10,10 @@
 //     0x8000   the font, font.cc's FONT: .font is linked there, so setup
 //              copies it with p[i] = p[i]; 17 font rows of 256
 //     0x9100   the codes, 80 a text row: EDGE's 28 rows, RISER's, X_TOP's,
-//              X_BOTTOM's
-//     0xb400   the foreground colours, 28 rows of 80
-//     0xbcc0   the background, a byte a cell: 8 bits a pixel, 8 wide
-//     0xc580   80 bytes of black, for the lines off the text
+//              X_MIDDLE's, X_BOTTOM's
+//     0xbcc0   the foreground colours, 28 rows of 80
+//     0xc580   the background, a byte a cell: 8 bits a pixel, 8 wide
+//     0xce40   80 bytes of black, for the lines off the text
 //     0xf000   the line tables
 //
 // THE ROWS IN THE BUFFER ARE THE TERMINAL'S ROWS[], not the lines of the
@@ -52,7 +52,7 @@ constexpr uint16_t MODE = DISPLAY_8BPP | DISPLAY_WIDTH(8);
 constexpr uint16_t ROW_BYTES = ROWS * COLUMNS;
 constexpr uint16_t CODES_AT = 0x8000 + LINES * 256, FG_AT = CODES_AT + ZONES * ROW_BYTES;
 constexpr uint16_t BG_AT = FG_AT + ROW_BYTES, BLACK_AT = BG_AT + ROW_BYTES;
-static_assert(FG_AT == 0xb400 && BLACK_AT == 0xc580, "the map above is out of date");
+static_assert(FG_AT == 0xbcc0 && BLACK_AT == 0xce40, "the map above is out of date");
 static_assert(BLACK_AT + COLUMNS <= 0xf000, "the arrays run into the line tables");
 
 #define CODES ((uint8_t *) CODES_AT)
@@ -94,9 +94,9 @@ void line_tables() {
 }
 
 void draw(int r) {
-  draw_row(screen->rows[r], { { CODES + r * COLUMNS, CODES + (ROWS + r) * COLUMNS,
-                                CODES + (2 * ROWS + r) * COLUMNS, CODES + (3 * ROWS + r) * COLUMNS },
-                              FG + r * COLUMNS, BG + r * COLUMNS });
+  RowArrays out = { {}, FG + r * COLUMNS, BG + r * COLUMNS };
+  for (int z = 0; z < ZONES; z++) out.code[z] = CODES + (z * ROWS + r) * COLUMNS;
+  draw_row(screen->rows[r], out);
 }
 
 // The cursor's cell with its colours swapped.
