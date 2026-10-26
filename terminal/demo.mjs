@@ -17,6 +17,7 @@ const lines = [
   '¿Qué tal, señor Muñoz? ¡Pingüino! Ação, coração, você, avô. Guaraní: ẽ ĩ ũ ỹ g̃',
   '✓ passed ✗ failed ■□▲▼►◄○ ↔↕⇐⇒⇔ ™†‡‰′″№ ∀x∈A: ∑∂∫√∞≈≡ ∅∧∨∩∪ ⌈x⌉⌊y⌋ ĸƏəƒ',
   'xⁿ⁰ a₀₁₂₃ ∏∇∆ ⇑⇓⇕ A⊂B⊃C ☐☑☒ ♪☺ ℕℤℝℚℂ ↤↥↦ △',
+  '‗₧∁∄∉∋∌∓∘∝∟∡∤∥∦∮ ≃≅≉≙≟≢≪≫ ⊄⊅⊆⊇⊈⊉⊊⊋⊕⊗⊤⊥⊦⊧⋂⋃ ⌀⌐⌕⌠⌡ ☻☼♀♂♫♭♮♯',
   `${E}4mUnderlined: gjpqy Typography, ząę ţş, (brackets) [ok]; ┃│▒${E}0m and ${E}1;4;32mgreen gjpqy${E}0m`,
   '',
   '┌──────────┬─────────┐ ╔══════════╦═════════╗ ┏━━━━━━━━━┓ ╭─────────╮',

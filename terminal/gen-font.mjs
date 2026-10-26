@@ -125,7 +125,9 @@ const SECOND_REPERTOIRE = [
   '™†‡‰′″№',                          // typography
   '∞√≈≡∑∂∫∀∃∈∅∧∨∩∪⌈⌉⌊⌋',               // maths
   'ĸƏəƒ',                             // letters: Greenlandic, Azerbaijani, florin
-  '△‴ⁿ⁰₀₁₂₃∏∇∆⇑⇓⇕⊂⊃☐☑☒♪☺ℕℤℝℚℂ↤↥↦↧',  // if there is room
+  '△‴ⁿ⁰₀₁₂₃∏∇∆⇑⇓⇕⊂⊃☐☑☒♪☺ℕℤℝℚℂ↤↥↦↧',
+  // The rest of SECS.
+  '‗₧∁∄∉∋∌∓∘∝∟∡∤∥∦∮≃≅≉≙≟≢≪≫⊄⊅⊆⊇⊈⊉⊊⊋⊕⊗⊤⊥⊦⊧⋂⋃⌀⌐⌕⌠⌡☻☼♀♂♫♭♮♯',
 ].join('');
 
 // Characters drawn as a base that is another's: the same shape, or near
@@ -255,6 +257,10 @@ function glyphOf(ch) {
     return g;
   }
   case 'ȷ': return x11(0x6a).map((r, l) => (l < 6 ? 0 : r));    // 9x15 has none
+  // The integral's halves stack, so their stems reach the cell's edge.
+  case '⌠': return x11(0x2320).map((r, l, g) => (l === 16 ? g[15] : r));
+  case '⌡': return x11(0x2321).map((r, l, g) => (l === 0 ? g[1] : r));
+  case '‗': return blank().map((_, l) => (l === 13 || l === 15 ? 0xff : 0));   // joins, as _ does
   case '◆': return pattern((x, y) => Math.abs(x - CX) + Math.abs(y - CY) <= 3);
   // Triangles 7 wide, about the middle as ◆ is: ▲ ▼ 8 lines of 1, 1, 3, 3,
   // 5, 5, 7, 7, and ► ◄ 7 columns of 7, 7, 5, 5, 3, 3, 1 lines.
