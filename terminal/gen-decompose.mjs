@@ -19,9 +19,10 @@
 // stays a base of its own.  So are the letters that do not decompose at all:
 // Æ, Ø, ß, Ł, Œ, ı and the like are their own bases already.
 //
-// OWN BASES, though NFD splits them: Ď's small letter, Ľ, ľ and ť.  Their
-// caron is the apostrophe-like one beside the stem, not above it, so it is
-// drawn as part of the glyph and not as an accent.
+// AN OWN BASE, though NFD splits it: ď.  Its caron is an apostrophe beside
+// the stem, and the stem is at the cell's right edge, so the letter moves
+// over for it (gen-font.mjs).  Ľ, ľ and ť's apostrophes fit beside their
+// stems, and they are letters and a caron, which the font draws so.
 //
 // LATIN-1'S SPACING ACCENTS: no-break space is a space, soft hyphen a hyphen,
 // and ¨ ¯ ´ are a space with the mark - their NFKD, not their NFD.
@@ -46,7 +47,7 @@ const BELOW = [
 ];
 const below = (m) => BELOW.some(([a, b]) => m >= a && m <= b);
 
-const OWN = new Set([0x10f, 0x13d, 0x13e, 0x165]);
+const OWN = new Set([0x10f]);
 const SPACING = { 0xa0: [0x20, 0], 0xa8: [0x20, 0x308], 0xad: [0x2d, 0], 0xaf: [0x20, 0x304], 0xb4: [0x20, 0x301] };
 
 // [base, mark] for a code point, or null.

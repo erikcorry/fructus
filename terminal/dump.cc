@@ -1,9 +1,9 @@
 // dump.cc - terminal.cc's screen as text, after all of its input.
 //
-//   g++ -O2 -Iterminal terminal/dump.cc terminal/terminal.cc terminal/decompose.cc -o build/terminal-dump
+//   g++ -O2 -Iterminal terminal/dump.cc terminal/terminal.cc terminal/decompose.cc terminal/font.cc -o build/terminal-dump
 //   build/terminal-dump < bytes
 //
-//   tools/fcc -Os -Iterminal terminal/dump.cc terminal/terminal.cc terminal/decompose.cc -o build/terminal-dump
+//   tools/fcc -Os -Iterminal terminal/dump.cc terminal/terminal.cc terminal/decompose.cc terminal/font.cc -o build/terminal-dump
 //   node tools/fcc-run.mjs build/terminal-dump.bin --input bytes
 //
 // On the host the bytes come from stdin; on Fructus from the UART, until no
@@ -17,6 +17,7 @@
 //
 // and the terminal's answers to the host first, each as "send" and its
 // bytes with ESC as \e.
+#include "font.h"
 #include "terminal.h"
 
 #ifdef __fructus__
@@ -40,6 +41,13 @@ static void number(unsigned v, int base = 10, int digits = 1) {
   int n = 0;
   do d[n++] = "0123456789abcdef"[v % base]; while ((v /= base) || n < digits);
   while (n) out(d[--n]);
+}
+
+// A base's code point: the font's code, unless the font moved it.
+static unsigned unicode(uint8_t base) {
+  for (int i = 0; i < UNICODE_COUNT; i++)
+    if (UNICODE[i].base == base) return UNICODE[i].code;
+  return base;
 }
 
 static void utf8(unsigned c) {
@@ -78,9 +86,9 @@ int main() {
     for (int i = 0; i < end; i++) {
       unsigned mark = r.mark[i] & MARK ? 0x2ff + (r.mark[i] & MARK) : 0;
       // ı and its dot are i again, to read.
-      if (r.base[i] == 0x131 && mark == 0x307) utf8('i');
-      else utf8(r.base[i]);
-      if (mark && !(r.base[i] == 0x131 && mark == 0x307)) utf8(mark);
+      bool i_dot = r.base[i] == DOTLESS_I && mark == 0x307;
+      utf8(i_dot ? 'i' : unicode(r.base[i]));
+      if (mark && !i_dot) utf8(mark);
     }
     out('\n');
   }

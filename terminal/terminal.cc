@@ -1,6 +1,8 @@
 // terminal.cc - bytes to cells: see terminal.h.
 #include "terminal.h"
 
+#include "font.h"
+
 namespace terminal {
 
 const Screen *screen;
@@ -12,7 +14,6 @@ bool moved;
 namespace {
 
 constexpr uint32_t ALL_ROWS = ((uint32_t) 1 << ROWS) - 1;
-constexpr uint16_t DOTLESS_I = 0x131, DOTLESS_J = 0x237;
 constexpr uint8_t DOT = 0x307 - 0x2ff;
 
 // --- colours ------------------------------------------------------------------
@@ -100,16 +101,19 @@ constexpr uint16_t GRAPHICS[32] = {
 
 bool below(uint8_t mark) { return MARK_BELOW[mark >> 3] >> (mark & 7) & 1; }
 
-uint16_t dotless(uint16_t base) {
-  return base == 'i' ? DOTLESS_I : base == 'j' ? DOTLESS_J : base;
+// i and j under an accent above lose their dots: as code points, and as
+// bases.
+uint32_t dotless(uint32_t c) { return c == 'i' ? 0x131 : c == 'j' ? 0x237 : c; }
+uint8_t dotless_base(uint8_t base) {
+  return base == DOTTED_I ? DOTLESS_I : base == 'j' ? DOTLESS_J : base;
 }
 
-// c as a base, and in mark its accent or 0.
-uint16_t decompose(uint32_t c, uint8_t &mark) {
+// c as a base's code point, and in mark its accent or 0.
+uint32_t decompose(uint32_t c, uint8_t &mark) {
   mark = 0;
   if (c == 'i') {
     mark = DOT;
-    return DOTLESS_I;
+    return 0x131;
   }
   if (c < DECOMPOSITIONS[0].code || c > DECOMPOSITIONS[DECOMPOSITION_COUNT - 1].code) return c;
   int lo = 0, hi = DECOMPOSITION_COUNT - 1;
@@ -289,7 +293,7 @@ void restore() {
 
 // --- characters ---------------------------------------------------------------
 
-void cell(int col, uint16_t base, uint8_t mark) {
+void cell(int col, uint8_t base, uint8_t mark) {
   Row &r = row(y);
   r.base[col] = base;
   r.mark[col] = mark | under;
@@ -305,13 +309,13 @@ void combine(uint32_t c) {
   int col = pending ? x : x - 1;
   Row &r = row(y);
   uint8_t m = c - 0x2ff, had = r.mark[col] & MARK;
-  uint16_t &base = r.base[col];
+  uint8_t &base = r.base[col];
   if (base == DOTLESS_I && had == DOT) {
-    if (below(m)) base = 'i';
+    if (below(m)) base = DOTTED_I;
     had = 0;
   }
   if (had) return;
-  if (!below(m)) base = dotless(base);
+  if (!below(m)) base = dotless_base(base);
   r.mark[col] = (r.mark[col] & UNDERLINE) | m;
   touch(y);
 }
@@ -322,7 +326,7 @@ void print(uint32_t c) {
   if (in(c, ZERO_WIDTH)) return;
   int width = in(c, WIDE) ? 2 : 1;
   uint8_t mark = 0;
-  uint16_t base = c > 0xffff ? 0xfffd : decompose(c, mark);
+  uint8_t base = width == 2 || c > 0xffff ? FALLBACK : base_of(decompose(c, mark));
 
   if (pending) {
     x = 0;
@@ -595,6 +599,18 @@ void codepoint(uint32_t c) {
 }
 
 }  // namespace
+
+uint8_t base_of(uint32_t c) {
+  if (c >= 0x20 && c < 0x7f && c != 'i') return c;
+  int lo = 0, hi = UNICODE_COUNT - 1;
+  while (lo <= hi) {
+    int mid = (lo + hi) / 2;
+    if (UNICODE[mid].code == c) return UNICODE[mid].base;
+    if (UNICODE[mid].code < c) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return FALLBACK;
+}
 
 void reset() {
   pen = { DEFAULT, DEFAULT, 0 };

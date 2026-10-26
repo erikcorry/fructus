@@ -5,6 +5,10 @@
 //
 //   node terminal/check.mjs
 //
+// The generated tables must be what their generators make, and font.h's
+// glyphs() must give the codes gen-font.mjs's rule does, for every base with
+// every mark.
+//
 // Each case is bytes in and what terminal/dump.cc should say: the first lines
 // of the screen, the cursor, the answers sent, and for some a line of colour
 // runs.  Every case runs on the host, built with g++, and on Fructus under
@@ -12,9 +16,9 @@
 // =============================================================================
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
-const SOURCES = ['terminal/dump.cc', 'terminal/terminal.cc', 'terminal/decompose.cc'];
+const SOURCES = ['terminal/dump.cc', 'terminal/terminal.cc', 'terminal/decompose.cc', 'terminal/font.cc'];
 const E = '\x1b', CSI = E + '[';
 const a80 = 'a'.repeat(80);
 
@@ -35,11 +39,12 @@ const cases = [
   ['erase in the background', `${CSI}44m${CSI}2J`, [''], [0, 0], [], { 0: '0-79 fg b3 bg 23' }],
   ['insert mode', `abc\r${CSI}4hX`, ['Xabc'], [1, 0]],
   ['accents', 'iíįéíįÅǰľé̂',
-    ['iı́įéı́įÅȷ̌ľé'], [10, 0]],
+    ['iı́įéı́įÅȷ̌ľé'], [10, 0]],
   ['mark after a pending wrap', a80 + '́', ['a'.repeat(79) + 'á'], [79, 0]],
   ['bad UTF-8', Buffer.from([0x61, 0xff, 0x62, 0xc3, 0x28, 0x63, 0xc0, 0xaf]),
     ['a�b�(c��'], [8, 0]],
-  ['wide at the edge', 'x'.repeat(79) + '中', ['x'.repeat(79), '中'], [2, 1]],
+  // Wide, and not in the font.
+  ['wide at the edge', 'x'.repeat(79) + '中', ['x'.repeat(79), '�'], [2, 1]],
   ['past U+FFFF', '\u{1f600}!', ['� !'], [3, 0]],
   ['line drawing', `${E}(0lq\x0eq\x0fq${E}(Bq`, ['┌─q─q'], [5, 0]],
   ['tabs', `a\tb${CSI}3g\tc`, ['a       b' + ' '.repeat(70) + 'c'], [79, 0]],
@@ -84,6 +89,32 @@ if (existsSync('build/gcc/gcc/xgcc') && existsSync('build/cross-bin/fructus-elf-
 }
 
 let fails = 0;
+
+// The generated tables are what their generators make now, if 9x15 is here.
+const NINE = '/usr/share/fonts/X11/misc/9x15.pcf.gz';
+const generated = [['terminal/gen-decompose.mjs', 'terminal/decompose.cc']];
+if (existsSync(NINE)) generated.push(['terminal/gen-font.mjs', 'terminal/font.cc']);
+else console.log(`skip  terminal/check.mjs's font.cc: no ${NINE}`);
+for (const [gen, file] of generated)
+  if (execFileSync('node', [gen], { stdio: ['ignore', 'pipe', 'ignore'] }).toString() !== readFileSync(file, 'utf8')) {
+    fails++;
+    console.log(`  FAIL ${file} is not what ${gen} makes`);
+  }
+
+// font.h's glyphs() against the generator's rule, every base and mark.
+if (existsSync(NINE)) {
+  const want = execFileSync('node', ['terminal/gen-font.mjs', '--rules'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+  execFileSync('g++', ['-std=c++17', '-O2', '-Wall', '-Iterminal', 'terminal/rules-check.cc',
+    'terminal/font.cc', 'terminal/decompose.cc', '-o', 'build/_terminal-rules']);
+  const got = execFileSync('build/_terminal-rules', { input: want }).toString();
+  const w = want.split('\n'), g = got.split('\n');
+  const bad = w.filter((l, i) => l !== g[i]);
+  if (bad.length) {
+    fails++;
+    console.log(`  FAIL glyphs() and gen-font.mjs disagree on ${bad.length} pairs, first ${bad[0]}`);
+  }
+}
+
 for (const [name, input, lines, cursor, sends = [], runs = {}] of cases) {
   const data = Buffer.isBuffer(input) ? input : Buffer.from(input, 'utf8');
   const path = 'build/_terminal.in';

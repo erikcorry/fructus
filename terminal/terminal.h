@@ -4,26 +4,27 @@
 // No display here; what draws the cells into the frame buffer reads them.
 // Plain C++ with nothing of the board, so it builds for the host too.
 //
-// A CELL IS 40 BITS (ideas/vt100.md):
+// A CELL IS 32 BITS:
 //
-//     base   16 bits   the character, its accent split off: é is e + U+0301
+//     base    8 bits   the character, its accent split off - é is e and
+//                      U+0301 - as its code in the font, font.h
 //     mark    7 bits   that accent, U+0300-U+036F as its code point less
 //                      0x2ff, so 0 is none
 //     under   1 bit    underlined, the mark byte's top bit
 //     fg, bg  8 bits   each a colour in the display's 8-bit pixel format,
 //                      reverse video and bold already applied
 //
-// kept as a row's four arrays, not as 5-byte structs: 400 bytes a row,
-// 11,200 a screen, and every field aligned.
+// kept as a row's four arrays: 320 bytes a row, 8,960 a screen.
+// ideas/vt100.md had a 16-bit Unicode base; the font's 256 bases are a byte.
 //
 // DECOMPOSITION, terminal/gen-decompose.mjs's table: a precomposed Latin
 // letter is its base and one mark, so the font needs only bases and accents.
 // i is always a dotless ı and the dot, so an accent over an i replaces the
 // dot, and ȷ likewise for j.  A letter with two marks, or none that splits,
 // is a base of its own; a combining mark after a letter goes on its cell if
-// the cell has none.  Code points past U+FFFF are U+FFFD, and wide ones -
-// CJK, emoji - take two cells, the second a space, so the program that sent
-// them agrees with us about the columns.
+// the cell has none.  A character the font lacks is its FALLBACK, �, and
+// wide ones - CJK, emoji - take two cells, the second a space, so the
+// program that sent them agrees with us about the columns.
 //
 // SCROLLING MOVES NO CELLS.  line[y] is the row of rows[] shown at line y,
 // and a scroll turns line[] round inside the region and clears what came in.
@@ -55,7 +56,7 @@ constexpr int COLUMNS = 80, ROWS = 28;
 constexpr uint8_t MARK = 0x7f, UNDERLINE = 0x80;
 
 struct Row {
-  uint16_t base[COLUMNS];
+  uint8_t base[COLUMNS];        // font.h's codes
   uint8_t mark[COLUMNS];        // MARK and UNDERLINE
   uint8_t fg[COLUMNS], bg[COLUMNS];
 };
