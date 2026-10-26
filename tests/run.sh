@@ -142,6 +142,8 @@ if node tests/video-check.mjs; then :; else fail=1; fi
 if node tests/display-check.mjs; then :; else fail=1; fi
 # teletext/rx.h's protocol, its handler fed by brk; skips without the compiler.
 if node teletext/rx-check.mjs; then :; else fail=1; fi
+# terminal/terminal.cc, bytes to cells, on the host and on Fructus.
+if node terminal/check.mjs; then :; else fail=1; fi
 
 # --- the binutils opcode table, if the submodule is checked out --------------
 # opcodes/ is what gas and the disassembler SHARE, so a stale table would make
