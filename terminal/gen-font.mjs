@@ -139,6 +139,8 @@ const SECOND_REPERTOIRE = [
   // LOOKALIKES are the rest), the accented ones whole.
   'ΓΔΘΛΞΠΣΦΨΩΏαβγδεζηθικλξρςστυφχψωάέήίύώϊϋΐΰϑϕϖϱ',
   'ЂЃЄЉЊЋЎЏБГДЖЗИЙЛПУФЦЧШЩЪЫЬЭЮЯҐЍбвгджзийклмнптфцчшщъыьэюяђѓєљњћќџґѝ',
+  // Skolt Sámi's: ezh, and with a caron, and the g with a stroke.
+  'ƷǮʒǯǤǥ',
 ].join('');
 
 // Characters drawn as a base that is another's, of either set: the same
@@ -148,7 +150,7 @@ const SECOND_REPERTOIRE = [
 const ALIASES = {
   'ʼ': '’', 'ʽ': '‘', '―': '—', '‐': '-', '‑': '-', '−': '-', '∙': '·', '⋅': '·', '∼': '~',
   '\u2329': '‹', '\u232a': '›',   // 〈 〉, the technical ones
-  '⋯': '…',
+  '⋯': '…', 'ʹ': '′',   // Skolt Sámi's palatalisation mark
   '⏺': '●', '⏵': '►', '✔': '✓', '✘': '✗',
   // Stars, as Claude Code's spinner turns through them with · between.
   '✢': '*', '✳': '*', '✶': '*', '✻': '*', '✽': '*',
@@ -301,6 +303,9 @@ function glyphOf(ch) {
     g[top - 1] = g[top];
     return g;
   }
+  // 9x15's Ǯ is squashed for its caron: Ʒ and the caron as Č has it.
+  case 'Ǯ': return accented(x11(0x1b7), 0x30c);
+  case 'ǯ': return accented(x11(0x292), 0x30c);
   // Zero with a dot in its middle, to tell it from O.
   case '0': {
     const g = x11(0x30), ink = g.map((r, l) => (r ? l : -1)).filter((l) => l >= 0);
@@ -421,8 +426,9 @@ function rule(base, mark, overrides) {
 
 // What a pair should look like: the accent ORed into the letter where the
 // rule would put it if the zone were blank.
-function ideal(base, m) {
-  const g = bases[base].glyph.slice(), a = accents.get(m);
+const ideal = (base, m) => accented(bases[base].glyph, m);
+function accented(letter, m) {
+  const g = letter.slice(), a = accents.get(m);
   const [edge, riser] = markSlices.get(m);
   const pick = a.above ? (empty(g, RISER) ? riser : edge) : (ZONES[EDGE].lines.slice(3).every((l) => !g[l]) ? edge : riser);
   if (pick) pick.forEach((r, l) => { g[l] |= r; });
