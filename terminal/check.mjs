@@ -75,6 +75,9 @@ const cases = [
     [' \u030c \u0328 -x -y \u2019\u2014 z'], [13, 0]],
   // Claude Code's spinner: its stars are *, and · stays between them.
   ['spinner stars', '\u2722\u00b7\u2733\u2736\u273b\u273d \u22ef', ['*\u00b7**** \u2026'], [8, 0]],
+  // Claude Code's others, aliases into the second set among them.
+  ['Claude Code', '\u23fa \u23bf \u276f \u23f8 \u26a0 \u29c9 \u23f5 \u2714\u2718',
+    ['\u25cf \u23bf \u276f \u23f8 \u26a0 \u29c9 \u25ba \u2713\u2717'], [16, 0]],
   // The second set: a symbol takes no accent, but is underlined.
   ['second set', `\u2713\u0301\u2200x\u2208${CSI}4m\u221e${CSI}0m\u0138`,
     ['\u2713\u2200x\u2208\u221e\u0138'], [6, 0], [], { 0: '0-3 fg b3 bg 20 4-4 fg b3 bg 20 u 5-79 fg b3 bg 20' }],
