@@ -219,22 +219,27 @@ function x11(cp) {
   const g = source.glyph(cp);
   if (!g) throw new Error(`9x15 has no U+${cp.toString(16)}`);
   if (g.width !== 9 || g.ascent !== 12 || g.descent !== 3) throw new Error(`U+${cp.toString(16)} is not 9x15`);
-  const right = g.rows.some((r) => r & 1), left = g.rows.some((r) => r & 0x100);
+  return eight(g.rows, cp);
+}
+
+// 9x15's 15 rows of 9 bits as one of our glyphs.
+function eight(rows, cp) {
+  const right = rows.some((r) => r & 1), left = rows.some((r) => r & 0x100);
   const out = blank();
   if (right && left) {
     // Column x is bit 8 - x.  Drop x where it equals x + 1, nearest the middle.
-    const column = (x) => g.rows.map((r) => (r >> (8 - x)) & 1).join('');
+    const column = (x) => rows.map((r) => (r >> (8 - x)) & 1).join('');
     const same = [3, 4, 2, 5, 1, 6, 0, 7].find((x) => column(x) === column(x + 1));
     if (same === undefined) lost.push(String.fromCodePoint(cp));
     const drop = same ?? 8;
-    g.rows.forEach((r, y) => {
+    rows.forEach((r, y) => {
       const high = r >> (9 - drop) << (8 - drop), low = r & ((1 << (8 - drop)) - 1);
       out[y + 1] = high | low;
     });
     return out;
   }
   if (right) moved.push(String.fromCodePoint(cp));
-  g.rows.forEach((r, y) => { out[y + 1] = (right ? r : r >> 1) & 0xff; });
+  rows.forEach((r, y) => { out[y + 1] = (right ? r : r >> 1) & 0xff; });
   return out;
 }
 
@@ -889,6 +894,7 @@ if (!bdf) process.stdout.write(fontCc);
 //     one of our marks as the terminal puts it, or 9x15's marks - the rows
 //     above its letter, which it squashes for them, Vietnamese's side by
 //     side - or ours stacked.  Where none fit, 9x15's.
+//   - Persian's ی and ژ, which 9x15 lacks, from its own letters.
 //   - 9x15's, made 8 wide as x11() does.  Its connectors, ⎜ ⎪ and the like,
 //     reach line 0 too.
 //   - The terminal's alias.
@@ -929,6 +935,16 @@ if (bdf) {
     if (c >= 0x2300 && c <= 0x23ff && source.glyph(c).rows[0]) g[0] = g[1];
     return g;
   }
+
+  // Persian's ی is ى, which is its isolated and final form - 9x15's U+FBFC
+  // and U+FBFD wrongly have ي's two dots below.  ژ is ز with ش's three dots
+  // for its one, a column left over the isolated form and as they are over
+  // the final, where its dot is.
+  const nine = (c) => source.glyph(c).rows;
+  const dots = nine(0x634).slice(0, 6);
+  const zhe = nine(0x632).map((r, y) => (y >= 1 && y <= 6 ? (dots[y - 1] << 1) & 0x1ff : r));
+  const PERSIAN = new Map([[0x6cc, nine(0x649)], [0xfbfc, nine(0xfeef)], [0xfbfd, nine(0xfef0)],
+    [0x698, zhe], [0xfb8a, zhe], [0xfb8b, nine(0xfeb0).map((r, y) => (y < 6 ? dots[y] : r))]]);
 
   // Marks below, canonical combining classes 202, 220 and 233, as
   // gen-decompose.mjs's BELOW; the horn is on the letter, at its right.
@@ -1007,14 +1023,17 @@ if (bdf) {
     return rows && over(own, rows);
   }
 
-  const glyph = new Map(), from = { box: 0, terminal: 0, stacked: 0, '9x15': 0, alias: 0 }, lostBefore = lost.length;
+  const glyph = new Map(), from = { box: 0, terminal: 0, stacked: 0, Persian: 0, '9x15': 0, alias: 0 };
+  const lostBefore = lost.length;
   const take = (c, g, kind) => { glyph.set(c, g); from[kind]++; };
-  const all = [...new Set([...terminal.keys(), ...source.codes(), ...Array.from({ length: 0xa0 }, (_, i) => 0x2500 + i)])];
+  const all = [...new Set([...terminal.keys(), ...source.codes(), ...PERSIAN.keys(),
+    ...Array.from({ length: 0xa0 }, (_, i) => 0x2500 + i)])];
   for (const c of all.sort((a, b) => a - b)) {
     if (c < 0x20 || (c >= 0x7f && c < 0xa0)) continue;
     const ch = String.fromCodePoint(c), s = c >= 0x2500 && c <= 0x259f ? null : stacked(c);
     if (c >= 0x2500 && c <= 0x259f) take(c, drawnHere(ch), 'box');
     else if (terminal.has(c) && !(ch in ALIASES)) take(c, terminal.get(c), 'terminal');
+    else if (PERSIAN.has(c)) take(c, cut(eight(PERSIAN.get(c), c)), 'Persian');
     else if (s) take(c, s, 'stacked');
     else if (source.glyph(c)) take(c, fixed(c), '9x15');
     else take(c, terminal.get(c), 'alias');
