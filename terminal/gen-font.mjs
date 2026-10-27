@@ -79,7 +79,8 @@
 // a point onto its letter.  Then Tatar's Cyrillic letters that look like no
 // other: җ ң ө ү and their capitals.  And letters that take no accent, which
 // would fill the first two sets' last codes: Catalan's ŀ Ŀ, the long ſ, and
-// Mohawk's ʌ Ʌ.
+// Mohawk's ʌ Ʌ.  Last the left eighths, ▔ ▕, dashed box drawing and the half
+// lines; box drawing mixing light and heavy is an alias of the light.
 //
 // ACCENTS are 9x15's spacing ones, ´ ` ˆ and so on, never its precomposed
 // letters, whose capitals are squashed to make room.  An accent above goes in
@@ -164,13 +165,18 @@ const SECOND_REPERTOIRE = [
 
 const THIRD_REPERTOIRE = [
   'אבגדהוזחטיךכלםמןנסעףפץצקרשת',
-  '׳״־₪',
+  '׳״־₪׀׃',
   // Yiddish: the ligatures, and the pointed letters as presentation forms
   // - אַ אָ בֿ וּ יִ ײַ כּ פּ פֿ שׂ תּ.
   'װױײ',
   '\ufb2e\ufb2f\ufb4c\ufb35\ufb1d\ufb1f\ufb3b\ufb44\ufb4e\ufb2b\ufb4a',
   'җҖңҢөӨүҺ',          // Tatar
   'ŀĿſʌɅ',
+  // Blocks: the left eighths, and the upper and right one eighth.
+  '▏▎▍▋▊▉▔▕',
+  // Box drawing: dashed, and the half lines.
+  '╌╍╎╏┄┅┆┇┈┉┊┋',
+  '╴╵╶╷╸╹╺╻',
 ].join('');
 
 // Characters drawn as a base that is another's, of either set: the same
@@ -220,7 +226,8 @@ function x11(cp) {
 
 // Box drawing from its arms: up, down, left, right, each 0 none, 1 light,
 // 2 heavy, 3 double.  The middle is column 4, line 8.  A heavy arm is 3
-// wide and reaches one past the middle, so corners are solid.  A double arm
+// wide and reaches one past the middle to meet a heavy arm across it, so
+// corners are solid; a light arm across it is met at the middle.  A double arm
 // is a heavy one with its middle line taken out from the edge in, which
 // leaves its two lines; it reaches past the middle only to meet a double arm
 // across it.  A light arm crosses a double one across it to its far line.
@@ -235,13 +242,13 @@ function box(up, down, left, right) {
     { w: right, vertical: false, from: W - 1, dir: -1 },
   ];
   const centre = (a) => (a.vertical ? CY : CX);
-  const across = (a) => arms.some((b) => b.vertical !== a.vertical && b.w === 3);
+  const across = (a, w = 3) => arms.some((b) => b.vertical !== a.vertical && b.w === w);
   const line = (a, offset, to, v = 1) => {
     for (let p = a.from; a.dir > 0 ? p <= to : p >= to; p += a.dir)
       a.vertical ? set(CX + offset, p, v) : set(p, CY + offset, v);
   };
   for (const a of arms) {
-    if (a.w === 2) for (const o of [-1, 0, 1]) line(a, o, centre(a) + a.dir);
+    if (a.w === 2) for (const o of [-1, 0, 1]) line(a, o, centre(a) + (across(a, 2) ? a.dir : 0));
     if (a.w === 3) for (const o of [-1, 0, 1]) line(a, o, centre(a) + (across(a) ? a.dir : 0));
   }
   for (const a of arms) if (a.w === 3) line(a, 0, centre(a), 0);
@@ -264,7 +271,30 @@ const ARMS = {
   '╤': [0, 1, 3, 3], '╥': [0, 3, 1, 1], '╦': [0, 3, 3, 3], '╧': [1, 0, 3, 3],
   '╨': [3, 0, 1, 1], '╩': [3, 0, 3, 3], '╪': [1, 1, 3, 3], '╫': [3, 3, 1, 1],
   '╬': [3, 3, 3, 3],
+  // The half lines.
+  '╴': [0, 0, 1, 0], '╵': [1, 0, 0, 0], '╶': [0, 0, 0, 1], '╷': [0, 1, 0, 0],
+  '╸': [0, 0, 2, 0], '╹': [2, 0, 0, 0], '╺': [0, 0, 0, 2], '╻': [0, 2, 0, 0],
 };
+
+// Light and heavy mixed are aliases of the light ones with the same arms:
+// ┍ as ┌, ╂ as ┼.
+const MIXED = {
+  '┍': [0, 1, 0, 2], '┎': [0, 2, 0, 1], '┑': [0, 1, 2, 0], '┒': [0, 2, 1, 0],
+  '┕': [1, 0, 0, 2], '┖': [2, 0, 0, 1], '┙': [1, 0, 2, 0], '┚': [2, 0, 1, 0],
+  '┝': [1, 1, 0, 2], '┞': [2, 1, 0, 1], '┟': [1, 2, 0, 1], '┠': [2, 2, 0, 1],
+  '┡': [2, 1, 0, 2], '┢': [1, 2, 0, 2], '┥': [1, 1, 2, 0], '┦': [2, 1, 1, 0],
+  '┧': [1, 2, 1, 0], '┨': [2, 2, 1, 0], '┩': [2, 1, 2, 0], '┪': [1, 2, 2, 0],
+  '┭': [0, 1, 2, 1], '┮': [0, 1, 1, 2], '┯': [0, 1, 2, 2], '┰': [0, 2, 1, 1],
+  '┱': [0, 2, 2, 1], '┲': [0, 2, 1, 2], '┵': [1, 0, 2, 1], '┶': [1, 0, 1, 2],
+  '┷': [1, 0, 2, 2], '┸': [2, 0, 1, 1], '┹': [2, 0, 2, 1], '┺': [2, 0, 1, 2],
+  '┽': [1, 1, 2, 1], '┾': [1, 1, 1, 2], '┿': [1, 1, 2, 2], '╀': [2, 1, 1, 1],
+  '╁': [1, 2, 1, 1], '╂': [2, 2, 1, 1], '╃': [2, 1, 2, 1], '╄': [2, 1, 1, 2],
+  '╅': [1, 2, 2, 1], '╆': [1, 2, 1, 2], '╇': [2, 1, 2, 2], '╈': [1, 2, 2, 2],
+  '╉': [2, 2, 2, 1], '╊': [2, 2, 1, 2], '╼': [0, 0, 1, 2], '╽': [1, 2, 0, 0],
+  '╾': [0, 0, 2, 1], '╿': [2, 1, 0, 0],
+};
+for (const [ch, arms] of Object.entries(MIXED))
+  ALIASES[ch] = Object.keys(ARMS).find((b) => ARMS[b].join() === arms.map((w) => (w ? 1 : 0)).join());
 
 // The rounded corners: a light corner whose elbow is a diagonal step.
 function rounded(ch) {
@@ -276,8 +306,20 @@ function rounded(ch) {
   return g;
 }
 
+// Dashed lines, light or heavy, of 2, 3 or 4 dashes: each dash ends with a
+// gap, so the cells' dashes are spaced alike across the edges between them.
+const DASHES = { '╌': [1, 0, 2], '╍': [2, 0, 2], '╎': [1, 1, 2], '╏': [2, 1, 2],
+  '┄': [1, 0, 3], '┅': [2, 0, 3], '┆': [1, 1, 3], '┇': [2, 1, 3],
+  '┈': [1, 0, 4], '┉': [2, 0, 4], '┊': [1, 1, 4], '┋': [2, 1, 4] };
+function dashed(ch) {
+  const [w, vertical, k] = DASHES[ch], n = vertical ? H : W;
+  const gaps = new Set([...Array(k).keys()].map((i) => Math.round((i + 1) * n / k) - 1));
+  const wide = w === 2 ? [-1, 0, 1] : [0];
+  return pattern((x, y) => (vertical ? !gaps.has(y) && wide.includes(x - CX) : !gaps.has(x) && wide.includes(y - CY)));
+}
+
 // Blocks.  The lower k eighths are round(17 k / 8) lines, so ▄ is 9 and ▀
-// the 8 above it; the left half is 4 columns.
+// the 8 above it; the left k eighths are k columns, the left half 4.
 const lower = (k) => Math.round(H * k / 8);
 const pattern = (f) => Array.from({ length: H }, (_, y) =>
   [...Array(W).keys()].reduce((v, x) => v | (f(x, y) ? 0x80 >> x : 0), 0));
@@ -286,6 +328,10 @@ const QUADRANTS = { '▀': 12, '▌': 10, '▐': 5, '▖': 2, '▗': 1, '▘': 8
 function block(ch) {
   const eighths = '▁▂▃▄▅▆▇█'.indexOf(ch);
   if (eighths >= 0) return pattern((x, y) => y >= H - lower(eighths + 1));
+  const left = '▏▎▍▌▋▊▉'.indexOf(ch);
+  if (left >= 0) return pattern((x) => x <= left);
+  if (ch === '▔') return pattern((x, y) => y < lower(1));
+  if (ch === '▕') return pattern((x) => x === W - 1);
   if (ch in QUADRANTS) {
     const q = QUADRANTS[ch];
     return pattern((x, y) => q >> ((y < H - lower(4) ? 2 : 0) + (x < 4 ? 1 : 0)) & 1);
@@ -305,6 +351,7 @@ function drawn(top, rows) {
 function glyphOf(ch) {
   if (ARMS[ch]) return box(...ARMS[ch]);
   if ('╭╮╯╰'.includes(ch)) return rounded(ch);
+  if (DASHES[ch]) return dashed(ch);
   const b = block(ch);
   if (b) return b;
   switch (ch) {
@@ -519,19 +566,31 @@ for (const [base, m] of pairs) {
 }
 OVERRIDES.sort((a, b) => a.base - b.base || a.mark - b.mark);
 
-// Each EDGE code's slice underlined.  A code no slice has maps to the
-// blank's; an underlined slice's own entry is never used, and is itself.
+// A slice underlined: line 14 but where it would touch ink below the baseline.
+const UNDER_LINE = 14;
+function underlined(slice) {
+  const g = slice.slice(), below = g[13] | g[14] | g[15];
+  let span = 0;
+  for (let x = 0; x < W; x++)
+    if (below & ~(0xff >> (x + 1)) & 0xff && below & 0xff >> x) span |= 0x80 >> x;   // ink at or left, at or right
+  g[UNDER_LINE] = (0xff & ~(span | span << 1 | span >> 1)) | g[UNDER_LINE];
+  return g;
+}
+
 // --- the second and third sets -------------------------------------------------
 
-// Each zone must have a candidate's slice or room for it, and EDGE stay at
-// 128 or under, so that its underlined slices fit beside it.
+// Each zone must have a candidate's slice or room for it, and EDGE room for
+// its underlined slice as well as every other's.
 const leftOut = [];
+function edgeRoom(g) {
+  const have = new Set(slices[EDGE].filter(Boolean).flatMap((s) => [key(s, EDGE), key(underlined(s), EDGE)]));
+  return have.size + new Set([g, underlined(g)].map((s) => key(s, EDGE)).filter((k) => !have.has(k))).size <= 256;
+}
 function fill(repertoire) {
   const set = [];
   for (const ch of repertoire) {
     const g = glyphOf(ch);
-    const fits = ZONES.every((_, z) => codes[z].has(key(g, z)) ||
-      (z === EDGE ? codes[z].size < 128 : slices[z].includes(null)));
+    const fits = ZONES.every((_, z) => (z === EDGE ? edgeRoom(g) : codes[z].has(key(g, z)) || slices[z].includes(null)));
     if (!fits || set.length === 256) leftOut.push(ch);
     else set.push({ ch, glyph: g, codes: ZONES.map((_, z) => code(z, g)) });
   }
@@ -583,8 +642,10 @@ const mirrorPairs = (pairs, mirrored) => pairs.flatMap((p) => {
 }).sort((x, y) => x[0] - y[0]);
 const MIRRORS = mirrorPairs(['()', '<>', '[]', '{}', '«»', '‹›', '≤≥', '≪≫', '⌈⌉', '⌊⌋',
                              '⊂⊃', '⊆⊇', '⊄⊅', '⊈⊉', '⊊⊋', '∈∋', '∉∌'], true);
-const BOX_MIRRORS = mirrorPairs(['┌┐', '└┘', '├┤', '┏┓', '┗┛', '┣┫', '╒╕', '╓╖', '╔╗', '╘╛',
-                                 '╙╜', '╚╝', '╞╡', '╟╢', '╠╣', '╭╮', '╰╯'], false);
+// Box drawing's: each base with another's arms, left and right swapped.
+const boxed = Object.keys(ARMS).filter((ch) => codeOf.has(ch) || ofSets(ch));
+const swapped = (ch) => boxed.find((b) => b < ch && ARMS[b].join() === [ARMS[ch][0], ARMS[ch][1], ARMS[ch][3], ARMS[ch][2]].join());
+const BOX_MIRRORS = mirrorPairs([...boxed.filter(swapped).map((ch) => swapped(ch) + ch), '╭╮', '╰╯'], false);
 
 // Each base's class, and font.h's BIDI_MIRRORED and BIDI_BOX_MIRRORED if it
 // has a pair, so that bidi.cc looks for one only then.
@@ -593,16 +654,11 @@ const classes = (set, flag) => set.map((b, i) => BIDI.indexOf(bidiClass(b ? b.ch
   (b && inPairs(MIRRORS, flag | i) ? 0x08 : 0) | (b && inPairs(BOX_MIRRORS, flag | i) ? 0x10 : 0));
 const BIDI_CLASS = classes(bases, 0), SECOND_BIDI = classes(second, 0x100), THIRD_BIDI = classes(third, 0x200);
 
-const UNDER_LINE = 14;
+// Each EDGE code's slice underlined.  A code no slice has maps to the
+// blank's; an underlined slice's own entry is never used, and is itself.
 const UNDERLINED = [...Array(256).keys()];
-for (const c of slices[EDGE].map((g, c) => (g ? c : -1)).filter((c) => c >= 0)) {
-  const g = slices[EDGE][c].slice(), below = g[13] | g[14] | g[15];
-  let span = 0;
-  for (let x = 0; x < W; x++)
-    if (below & ~(0xff >> (x + 1)) & 0xff && below & 0xff >> x) span |= 0x80 >> x;   // ink at or left, at or right
-  g[UNDER_LINE] = (0xff & ~(span | span << 1 | span >> 1)) | g[UNDER_LINE];
-  UNDERLINED[c] = code(EDGE, g);
-}
+for (const c of slices[EDGE].map((g, c) => (g ? c : -1)).filter((c) => c >= 0))
+  UNDERLINED[c] = code(EDGE, underlined(slices[EDGE][c]));
 for (let c = 0; c < 256; c++) if (!slices[EDGE][c]) UNDERLINED[c] = UNDERLINED[BLANK];
 
 // --- the font -----------------------------------------------------------------
