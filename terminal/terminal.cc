@@ -375,6 +375,7 @@ void print(uint32_t c) {
   uint8_t base = b;
   if (b & SECOND_SET) mark = SECOND;
   else if (b & THIRD_SET) mark = THIRD;
+  else if (b & BRAILLE_SET) mark = BRAILLE;
 
   if (pending) wrap();
   if (x + width > COLUMNS) {
@@ -705,6 +706,7 @@ int find(const Unicode *table, int count, uint32_t c) {
 
 uint16_t base_of(uint32_t c) {
   if (c >= 0x20 && c < 0x7f && c != 'i') return c;
+  if (c >= 0x2800 && c <= 0x28ff) return BRAILLE_SET | (c - 0x2800);
   int b = find(UNICODE, UNICODE_COUNT, c);
   if (b < 0) b = find(ALIASES, ALIAS_COUNT, c);
   return b < 0 ? FALLBACK : b;

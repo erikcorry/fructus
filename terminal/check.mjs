@@ -126,6 +126,10 @@ const cases = [
   // Tatar's own letters.
   ['Yiddish and Tatar', '\u05d0\u05b7\ufb2e\u05e4\u05bf\u05f2\u05b7\u05d2\u05b7 \u0497\u04e8',
     ['\ufb2e\ufb2e\ufb4e\ufb1f\u05d2 \u0497\u04e8'], [8, 0]],
+  // Braille, a mark on it dropped, and underlined; the third set's blocks and
+  // box drawing, and mixed light and heavy as the light.
+  ['Braille, blocks and boxes', `\u2813\u2811\u2807\u2807\u2815 \u28ff\u0301\u2800${CSI}4m\u2841${CSI}0m \u258f\u2595\u254c\u2506\u2574 \u251d\u2542\u257c`,
+    ['\u2813\u2811\u2807\u2807\u2815 \u28ff\u2800\u2841 \u258f\u2595\u254c\u2506\u2574 \u251c\u253c\u2500'], [19, 0]],
   ['strings and CAN', `${E}]0;title\x07A${E}]2;t${E}\\B${CSI}3\x18C`, ['ABC'], [3, 0]],
   ['alignment', `x${E}#8`, ['E'.repeat(80), 'E'.repeat(80)], [0, 0]],
 ];

@@ -84,6 +84,10 @@ static void cell(const Row &r, int i, uint8_t base) {
     utf8(unicode(((r.mark[i] & MARK) == SECOND ? SECOND_SET : THIRD_SET) | base));
     return;
   }
+  if ((r.mark[i] & MARK) == BRAILLE) {
+    utf8(0x2800 + base);
+    return;
+  }
   // ı and its dot are i again, to read.
   bool i_dot = base == DOTLESS_I && mark == 0x307;
   utf8(i_dot ? 'i' : unicode(base));

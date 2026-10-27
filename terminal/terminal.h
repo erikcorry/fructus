@@ -10,7 +10,8 @@
 //                      U+0301 - as its code in the font, font.h
 //     mark    7 bits   that accent, U+0300-U+036F as its code point less
 //                      0x2ff, so 0 is none; or font.h's SECOND or THIRD,
-//                      for a base from the font's second or third set
+//                      for a base from the font's second or third set, or
+//                      BRAILLE, for a base that is Braille's dots
 //     under   1 bit    underlined, the mark byte's top bit
 //     fg, bg  8 bits   each a colour in the display's 8-bit pixel format,
 //                      reverse video and bold already applied

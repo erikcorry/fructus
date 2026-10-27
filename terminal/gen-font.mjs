@@ -82,6 +82,13 @@
 // Mohawk's ʌ Ʌ.  Last the left eighths, ▔ ▕, dashed box drawing and the half
 // lines; box drawing mixing light and heavy is an alias of the light.
 //
+// BRAILLE, U+2800-U+28FF, is the mark BRAILLE, 0x7c, with the dots as the
+// base: bit n is dot n + 1, as Unicode has them.  Its four rows are a pixel
+// a dot, in columns 2 and 5 and on lines 2, 5, 8 and 11, shifted up so that
+// each row is in a zone of its own: EDGE, RISER, X_MIDDLE, X_BOTTOM.  A
+// zone has 4 slices, none, left, right and both, BRAILLE_GLYPH, and the
+// dots are those of ¨, so EDGE's and RISER's are ¨'s and its halves.
+//
 // ACCENTS are 9x15's spacing ones, ´ ` ˆ and so on, never its precomposed
 // letters, whose capitals are squashed to make room.  An accent above goes in
 // the riser if the base leaves it blank, a small letter, and above the
@@ -127,6 +134,7 @@ const EDGE = 0, RISER = 1;
 const SECOND = 0x7f;           // the mark of a base from the second set
 const TONOS = 0x7e;            // Greek capitals' accent, font.h says how
 const THIRD = 0x7d;            // the mark of a base from the third set
+const BRAILLE = 0x7c;          // the mark of Braille, its dots the base
 const zoneOf = Array(H);
 ZONES.forEach((z, i) => z.lines.forEach((l) => { zoneOf[l] = i; }));
 
@@ -498,6 +506,7 @@ for (const [m, gs] of markSlices) gs.forEach((g, z) => { if (g) MARK_GLYPH[z][m 
 function rule(base, mark, overrides) {
   if (mark === SECOND) return second[base].codes.slice();
   if (mark === THIRD) return third[base].codes.slice();
+  if (mark === BRAILLE) return ZONES.map((_, z) => BRAILLE_GLYPH[z][brailleRow(base, z)]);
   const c = ZONES.map((_, z) => GLYPH[z][base]);
   if (!mark) return c;
   const os = overrides.filter((o) => o.base === base && o.mark === mark);
@@ -613,6 +622,17 @@ const POINTED = third.flatMap((s, i) => {
   return [[l, point.codePointAt(0) - 0x500, i]];
 });
 
+// --- braille ------------------------------------------------------------------
+
+// Each zone's dot row, as [line, left dot's bit, right dot's], or null.
+const BRAILLE_ROWS = [[2, 0x01, 0x08], [5, 0x02, 0x10], null, [8, 0x04, 0x20], [11, 0x40, 0x80]];
+const brailleRow = (dots, z) => (BRAILLE_ROWS[z] ? (dots & BRAILLE_ROWS[z][1] ? 1 : 0) | (dots & BRAILLE_ROWS[z][2] ? 2 : 0) : 0);
+const BRAILLE_GLYPH = ZONES.map((_, z) => [0, 1, 2, 3].map((dots) => {
+  const g = blank();
+  if (BRAILLE_ROWS[z]) g[BRAILLE_ROWS[z][0]] = (dots & 1 ? 0x20 : 0) | (dots & 2 ? 0x04 : 0);
+  return code(z, g);
+}));
+
 // --- bidi ---------------------------------------------------------------------
 
 // As font.h's enum has them.
@@ -689,6 +709,7 @@ if (rules) {
   });
   second.forEach((_, i) => out.push(line(i, SECOND)));
   third.forEach((_, i) => out.push(line(i, THIRD)));
+  for (let dots = 0; dots < 256; dots++) out.push(line(dots, BRAILLE));
   process.stdout.write(out.join('\n') + '\n');
   process.exit(0);
 }
@@ -793,6 +814,10 @@ ${MARK_GLYPH.map((g, z) => `  { /* ${ZONES[z].name} */\n${table(g, '    ')}\n  }
 extern const int SECOND_COUNT = ${second.length};
 const uint8_t SECOND_GLYPH[${second.length}][ZONES] = {
 ${second.map((s) => `  { ${s.codes.map(hex).join(', ')} },  // ${s.ch}`).join('\n')}
+};
+
+const uint8_t BRAILLE_GLYPH[ZONES][4] = {
+${BRAILLE_GLYPH.map((g, z) => `  { ${g.map(hex).join(', ')} },  // ${ZONES[z].name}`).join('\n')}
 };
 
 extern const int THIRD_COUNT = ${third.length};

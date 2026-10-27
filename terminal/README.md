@@ -80,10 +80,11 @@ letters that share tops or bottoms share codes. Codes in use:
 
 | | EDGE | RISER | X_TOP | X_MIDDLE | X_BOTTOM |
 |---|---|---|---|---|---|
-| Used, of 256 | 250 | 241 | 255 | 252 | 249 |
+| Used, of 256 | 250 | 241 | 255 | 255 | 252 |
 
 A cell holds a base and a mark. The mark is one combining accent
-(U+0300–U+036F), or one of three special values: TONOS, SECOND or THIRD.
+(U+0300–U+036F), or one of four special values: TONOS, SECOND, THIRD or
+BRAILLE.
 SECOND and THIRD choose the second and third sets of bases. That gives three
 sets:
 
@@ -92,6 +93,14 @@ sets:
 | First | 253 of 256 | ASCII; Latin-1's symbols and its letters of their own (Æ Ð Ø Þ ß æ ð ø þ); Latin Extended-A's (Đ Ħ Ĳ Ł Ŋ Œ Ŧ ...); quotes, dashes, €, arrows, ≤ ≥ ≠ π; box drawing (light, heavy, double, rounded); blocks, shades, quadrants, lower eighths |
 | Second | 251 of 256 | symbols (✓ ✗ ■ □ ▲ ▼ ► ◄ ○ ⇐ ⇒ ⇔ ™ † ‡ ‰ ′ ″ №), maths (∞ √ ≈ ≡ ∑ ∂ ∫ ∀ ∃ ∈ ∅ ∧ ∨ ∩ ∪ ⌈⌉ ⌊⌋ and the rest of Markus Kuhn's SECS), ⁿ ⁰ ₀–₃, ℕ ℤ ℝ ℚ ℂ, Claude Code's symbols, ĸ Ə ə ƒ, Greek and Cyrillic letters that look like no Latin letter, Skolt Sámi's Ʒ ʒ Ǯ ǯ Ǥ ǥ |
 | Third | 88 of 256 | Hebrew: the 22 letters, the 5 final forms, ׳ ״ ־ (the maqaf, redrawn at the top of the letters), ׀ ׃ and ₪; Yiddish's ligatures װ ױ ײ and pointed letters אַ אָ בֿ וּ יִ ײַ כּ פּ פֿ שׂ תּ; Tatar's җ Җ ң Ң ө Ө ү Һ; then letters that take no accent: Catalan's ŀ Ŀ, the long ſ, Mohawk's ʌ Ʌ; the left eighths ▏▎▍▋▊▉ and ▔ ▕; dashed box drawing ╌╍╎╏┄┅┆┇┈┉┊┋ and the half lines ╴╵╶╷╸╹╺╻ |
+
+**Braille** (U+2800–U+28FF) is the mark BRAILLE, and the base is the dots
+themselves, bit n for dot n + 1, so it takes no bases. A dot is a pixel, in
+columns 2 and 5 and on lines 2, 5, 8 and 11. The rows are shifted up so
+that each one is in a zone of its own (EDGE, RISER, X_MIDDLE, X_BOTTOM),
+and each zone needs only four slices: none, left, right and both. In EDGE
+and the riser those are the diaeresis's (¨) and its halves, so Braille costs
+just 3 codes in X_MIDDLE and 3 in X_BOTTOM.
 
 **Accented letters** are a base and a mark, from 405 decompositions:
 
@@ -168,8 +177,8 @@ some that CLDR lacks: `node terminal/coverage.mjs` with
 - Box drawing's diagonals ╱ ╲ ╳.
 
 **Room left:** 3 bases in the first set, 5 in the second, and 168 in the
-third. X_TOP has 1 code left, X_MIDDLE 4, and EDGE 6, which counts each
-slice's underlined twin. Splitting a
+third. X_TOP and X_MIDDLE have 1 code left each, X_BOTTOM 4, and EDGE 6,
+which counts each slice's underlined twin. Splitting a
 zone costs 2,240 bytes of frame buffer, 80 bytes for each of the 28 rows.
 
 ## The frame buffer

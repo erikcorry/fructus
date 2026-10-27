@@ -8,6 +8,7 @@ namespace {
 // The cell's entry in its set's table: its class and mirror flags.
 uint8_t bidi_of(const Row &r, int c) {
   uint8_t mark = r.mark[c] & MARK, base = r.base[c];
+  if (mark == BRAILLE) return BIDI_L;
   return mark == SECOND ? SECOND_BIDI[base] : mark == THIRD ? THIRD_BIDI[base] : BIDI_CLASS[base];
 }
 

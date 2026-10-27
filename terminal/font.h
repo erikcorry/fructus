@@ -32,7 +32,10 @@
 // THIRD, before TONOS, likewise says the third set, THIRD_GLYPH: Hebrew,
 // Yiddish's, Tatar's and a few letters more.
 // So a base is in all 10 bits, and base_of gives them as 0x100 | the base
-// and 0x200 | the base.
+// and 0x200 | the base.  BRAILLE, before THIRD, says the base is Braille's
+// dots, U+2800 + base, bit n dot n + 1: a dot row in each zone but X_TOP,
+// BRAILLE_GLYPH[zone][row's left dot | right dot << 1].  base_of gives
+// them as 0x400 | the dots.
 //
 // THE UNDERLINE is in the font, on line 14 with a line's gap under the
 // baseline, in the text's colour: an underlined cell's EDGE code is
@@ -51,8 +54,10 @@ constexpr uint8_t BLANK = 0x20;         // the blank slice, in every zone
 constexpr uint8_t SECOND = 0x7f;        // the mark of the second set's bases
 constexpr uint8_t TONOS = 0x7e;         // Greek capitals' accent, at their left
 constexpr uint8_t THIRD = 0x7d;         // the mark of the third set's bases
+constexpr uint8_t BRAILLE = 0x7c;       // the mark of Braille, its dots the base
 constexpr uint16_t SECOND_SET = 0x100;  // base_of's flags for them
 constexpr uint16_t THIRD_SET = 0x200;
+constexpr uint16_t BRAILLE_SET = 0x400;
 constexpr uint8_t DOTLESS_I = 0x69;
 extern const uint8_t DOTTED_I, DOTLESS_J, FALLBACK;  // i for į, ȷ, and �
 
@@ -65,6 +70,7 @@ extern const uint8_t SECOND_GLYPH[][ZONES];
 extern const int SECOND_COUNT;
 extern const uint8_t THIRD_GLYPH[][ZONES];
 extern const int THIRD_COUNT;
+extern const uint8_t BRAILLE_GLYPH[ZONES][4];
 
 // The pairs whose letter has ink where the mark goes: a code of their own
 // in each zone that differs.  Sorted by base and mark.
@@ -112,7 +118,7 @@ extern const Unicode ALIASES[];
 extern const int ALIAS_COUNT;
 
 // The base for a code point, SECOND_SET or THIRD_SET | base for those sets,
-// FALLBACK if the font has none.
+// BRAILLE_SET | the dots for Braille, FALLBACK if the font has none.
 uint16_t base_of(uint32_t c);
 
 // The codes a cell puts in each zone.  A mark goes in the first of its two
@@ -124,6 +130,14 @@ inline void glyphs(uint8_t base, uint8_t mark, bool below, uint8_t out[ZONES]) {
   if (mark == SECOND || mark == THIRD) {
     const uint8_t *set = mark == SECOND ? SECOND_GLYPH[base] : THIRD_GLYPH[base];
     for (int z = 0; z < ZONES; z++) out[z] = set[z];
+    return;
+  }
+  if (mark == BRAILLE) {            // dots 1 4, 2 5, 3 6 and 7 8
+    out[EDGE] = BRAILLE_GLYPH[EDGE][(base & 1) | (base >> 2 & 2)];
+    out[RISER] = BRAILLE_GLYPH[RISER][(base >> 1 & 1) | (base >> 3 & 2)];
+    out[X_TOP] = BLANK;
+    out[X_MIDDLE] = BRAILLE_GLYPH[X_MIDDLE][(base >> 2 & 1) | (base >> 4 & 2)];
+    out[X_BOTTOM] = BRAILLE_GLYPH[X_BOTTOM][base >> 6];
     return;
   }
   for (int z = 0; z < ZONES; z++) out[z] = GLYPH[z][base];
