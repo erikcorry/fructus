@@ -80,7 +80,7 @@ letters that share tops or bottoms share codes. Codes in use:
 
 | | EDGE | RISER | X_TOP | X_MIDDLE | X_BOTTOM |
 |---|---|---|---|---|---|
-| Used, of 256 | 227 | 227 | 243 | 229 | 235 |
+| Used, of 256 | 231 | 232 | 246 | 237 | 240 |
 
 A cell holds a base and a mark. The mark is one combining accent
 (U+0300–U+036F), or one of three special values: TONOS, SECOND or THIRD.
@@ -91,7 +91,7 @@ sets:
 |---|---|---|
 | First | 253 of 256 | ASCII; Latin-1's symbols and its letters of their own (Æ Ð Ø Þ ß æ ð ø þ); Latin Extended-A's (Đ Ħ Ĳ Ł Ŋ Œ Ŧ ...); quotes, dashes, €, arrows, ≤ ≥ ≠ π; box drawing (light, heavy, double, rounded); blocks, shades, quadrants, eighths |
 | Second | 251 of 256 | symbols (✓ ✗ ■ □ ▲ ▼ ► ◄ ○ ⇐ ⇒ ⇔ ™ † ‡ ‰ ′ ″ №), maths (∞ √ ≈ ≡ ∑ ∂ ∫ ∀ ∃ ∈ ∅ ∧ ∨ ∩ ∪ ⌈⌉ ⌊⌋ and the rest of Markus Kuhn's SECS), ⁿ ⁰ ₀–₃, ℕ ℤ ℝ ℚ ℂ, Claude Code's symbols, ĸ Ə ə ƒ, Greek and Cyrillic letters that look like no Latin letter, Skolt Sámi's Ʒ ʒ Ǯ ǯ Ǥ ǥ |
-| Third | 36 of 256 | Hebrew: the 22 letters, the 5 final forms, ׳ ״ ־ (the maqaf, redrawn at the top of the letters) and ₪; then letters that take no accent: Catalan's ŀ Ŀ, the long ſ, Mohawk's ʌ Ʌ |
+| Third | 58 of 256 | Hebrew: the 22 letters, the 5 final forms, ׳ ״ ־ (the maqaf, redrawn at the top of the letters) and ₪; Yiddish's ligatures װ ױ ײ and pointed letters אַ אָ בֿ וּ יִ ײַ כּ פּ פֿ שׂ תּ; Tatar's җ Җ ң Ң ө Ө ү Һ; then letters that take no accent: Catalan's ŀ Ŀ, the long ſ, Mohawk's ʌ Ʌ |
 
 **Accented letters** are a base and a mark, from 405 decompositions:
 
@@ -111,8 +111,12 @@ Serbian, Macedonian and Bulgarian:
 - Letters that look like Latin letters (Α, а, і, Ё ...) are drawn as the
   Latin letter, with an accent where they have one. So are a few of
   Cyrillic's extensions: һ as h, Ү as Y, the palochka Ӏ ӏ as I, ӕ Ӕ as æ Æ,
-  ҫ Ҫ as ç Ç, and ә Ә as ə Ə. That covers Chechen, Kabardian, Adyghe and
-  Ossetian.
+  ҫ Ҫ as ç Ç, and ә Ә as ə Ə. With Tatar's own letters in the third set,
+  that covers Tatar, Chechen, Kabardian, Adyghe and Ossetian.
+
+**Yiddish's pointed letters** come either as their presentation forms or as
+a letter and a point. `POINTED` turns the letter and point into the pointed
+letter. Other Hebrew points are dropped.
 - A Greek capital's tonos (Ά Έ Ή ...) is a mark of its own, placed at the
   letter's left.
 
@@ -132,9 +136,9 @@ some that CLDR lacks: `node terminal/coverage.mjs` with
   Frisian, Friulian, Galician, Irish and Scottish Gaelic, Karelian,
   Kashubian, Komi, Latgalian, Latin, Ligurian, Low German, Luxembourgish,
   Manx, Occitan, Romansh, Rusyn, the Sámi languages (Northern, Inari, Skolt,
-  Lule, Southern), Sardinian, Sicilian, Silesian, Sorbian, Venetian,
-  Walloon and Welsh; and in the Caucasus, Chechen, Kabardian, Adyghe and
-  Ossetian.
+  Lule, Southern), Sardinian, Sicilian, Silesian, Sorbian, Tatar, Venetian,
+  Walloon, Welsh and Yiddish; and in the Caucasus, Chechen, Kabardian, Adyghe
+  and Ossetian.
 - **The Americas:** English, Spanish, Portuguese and French, and in Latin
   script Aymara, Greenlandic, Guaraní, Haitian, Hawaiian, Inuktitut, K'iche',
   Kaingang, Lakota, Mapudungun, Mohawk, Nahuatl, Nheengatu, Ojibwe,
@@ -149,21 +153,20 @@ some that CLDR lacks: `node terminal/coverage.mjs` with
   all, so even one is dropped.
 
 **Missing:**
-- Cyrillic extensions with no Latin lookalike: Tatar's җ ң ө ү, Bashkir's ғ
-  ҙ ҡ ң ө ү, Chuvash's Ӳ, Mari's ҥ Ӱ, Udmurt's ӝ ӟ ӥ ӵ, Yakut's ҕ ҥ ө ү, and
-  the capital Һ. They show as �.
-- Yiddish's ligatures ײ װ ױ, and its points, which are dropped.
+- Cyrillic extensions with no Latin lookalike: Bashkir's ғ ҙ ҡ, Chuvash's
+  Ӳ, Mari's ҥ Ӱ, Udmurt's ӝ ӟ ӥ ӵ, Yakut's ҕ ҥ, and Kazakh's ғ қ in Tatar
+  loanwords. They show as �.
 - Polytonic Greek.
 - Armenian, Georgian, Cherokee and Canadian syllabics.
 - Vietnamese's stacked accents, ỵ's dot (there is no room under the
   descender), and any letter with two marks that Unicode encodes
   precomposed (ǖ ...), which shows as �.
 - Arabic, and every script further east.
-- Hebrew points and cantillation, which are dropped.
+- Hebrew points other than Yiddish's, and cantillation, which are dropped.
 - Hebrew presentation forms (U+FB1D–U+FB4F), which show as �.
 
-**Room left:** 3 bases in the first set, 5 in the second, and 220 in the
-third. X_TOP has 13 codes left and is the zone that fills first. Splitting a
+**Room left:** 3 bases in the first set, 5 in the second, and 198 in the
+third. X_TOP has 10 codes left and is the zone that fills first. Splitting a
 zone costs 2,240 bytes of frame buffer, 80 bytes for each of the 28 rows.
 
 ## The frame buffer

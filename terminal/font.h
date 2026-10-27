@@ -29,7 +29,8 @@
 // the riser beside it, or above it where a stem would meet the tick - Ά Έ Ή
 // Ί Ό Ύ, from decompose.cc, by OVERRIDES.  The mark SECOND, past them, says the base is from the
 // second set, SECOND_GLYPH: symbols and a few letters that take no accent.
-// THIRD, before TONOS, likewise says the third set, THIRD_GLYPH: Hebrew.
+// THIRD, before TONOS, likewise says the third set, THIRD_GLYPH: Hebrew,
+// Yiddish's, Tatar's and a few letters more.
 // So a base is in all 10 bits, and base_of gives them as 0x100 | the base
 // and 0x200 | the base.
 //
@@ -97,6 +98,14 @@ struct Pair {
 };
 extern const Pair MIRRORS[], BOX_MIRRORS[];
 extern const int MIRROR_COUNT, BOX_MIRROR_COUNT;
+
+// A third-set letter and a Hebrew point, less 0x500, that make a pointed
+// letter of the third set: Yiddish's.
+struct Pointed {
+  uint8_t letter, point, pointed;
+};
+extern const Pointed POINTED[];
+extern const int POINTED_COUNT;
 
 // Code points drawn as another's base - ʼ as ’, − as - - sorted likewise.
 extern const Unicode ALIASES[];

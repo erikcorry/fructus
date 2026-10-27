@@ -72,9 +72,14 @@
 //
 // THE THIRD SET is the same again, under the mark THIRD, 0x7d: Hebrew, its
 // 27 letters with the final forms, geresh and gershayim, the maqaf and ₪.
-// Their points and cantillation are zero width in terminal.cc, dropped.  And
-// letters that take no accent, which would fill the first two sets' last
-// codes: Catalan's ŀ Ŀ, the long ſ, and Mohawk's ʌ Ʌ.
+// Their points and cantillation are zero width in terminal.cc, dropped, but
+// for Yiddish's: its ligatures װ ױ ײ and its pointed letters are bases of
+// their own, drawn as 9x15 draws their presentation forms, U+FB1D-U+FB4E,
+// and POINTED says which letter and point make each, for terminal.cc to put
+// a point onto its letter.  Then Tatar's Cyrillic letters that look like no
+// other: җ ң ө ү and their capitals.  And letters that take no accent, which
+// would fill the first two sets' last codes: Catalan's ŀ Ŀ, the long ſ, and
+// Mohawk's ʌ Ʌ.
 //
 // ACCENTS are 9x15's spacing ones, ´ ` ˆ and so on, never its precomposed
 // letters, whose capitals are squashed to make room.  An accent above goes in
@@ -160,6 +165,11 @@ const SECOND_REPERTOIRE = [
 const THIRD_REPERTOIRE = [
   'אבגדהוזחטיךכלםמןנסעףפץצקרשת',
   '׳״־₪',
+  // Yiddish: the ligatures, and the pointed letters as presentation forms
+  // - אַ אָ בֿ וּ יִ ײַ כּ פּ פֿ שׂ תּ.
+  'װױײ',
+  '\ufb2e\ufb2f\ufb4c\ufb35\ufb1d\ufb1f\ufb3b\ufb44\ufb4e\ufb2b\ufb4a',
+  'җҖңҢөӨүҺ',          // Tatar
   'ŀĿſʌɅ',
 ].join('');
 
@@ -535,6 +545,15 @@ const ofSets = (ch) => {
 };
 const SET_FLAG = { [SECOND]: 0x100, [THIRD]: 0x200 };
 
+// Each pointed letter of the third set: its letter and point, both its NFD.
+const POINTED = third.flatMap((s, i) => {
+  const [letter, point] = [...s.ch.normalize('NFD')];
+  if (!point || !/[\u0591-\u05c7]/u.test(point)) return [];
+  const l = third.findIndex((t) => t.ch === letter);
+  if (l < 0) throw new Error(`${s.ch}'s letter ${letter} is not in the third set`);
+  return [[l, point.codePointAt(0) - 0x500, i]];
+});
+
 // --- bidi ---------------------------------------------------------------------
 
 // As font.h's enum has them.
@@ -741,6 +760,11 @@ ${pairTable(MIRRORS)}
 };
 const Pair BOX_MIRRORS[${BOX_MIRRORS.length}] = {
 ${pairTable(BOX_MIRRORS)}
+};
+
+extern const int POINTED_COUNT = ${POINTED.length};
+const Pointed POINTED[${POINTED.length}] = {
+${POINTED.map(([l, p, i]) => `  { ${hex(l)}, ${hex(p)}, ${hex(i)} },  // ${third[i].ch}`).join('\n')}
 };
 
 extern const int OVERRIDE_COUNT = ${OVERRIDES.length};

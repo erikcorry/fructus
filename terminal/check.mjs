@@ -121,6 +121,11 @@ const cases = [
   // letters that take no accent, and Cyrillic's lookalikes as Latin.
   ['marks below, lookalikes', 'Hawai\u02bbi \u1e0d\u1e25\u1e37 \u1e3b\u1e49\u1e6f \u0140\u013f\u017f\u028c\u0245 \u04bb\u04ae\u04c0\u04d5\u04ab\u04d9',
     ['Hawai\u2018i d\u0323h\u0323l\u0323 l\u0331n\u0331t\u0331 \u0140\u013f\u017f\u028c\u0245 hYI\u00e6c\u0327\u0259'], [28, 0]],
+  // Yiddish's points make a pointed letter of the third set, as its
+  // presentation form does; a point the font has no letter for is dropped.
+  // Tatar's own letters.
+  ['Yiddish and Tatar', '\u05d0\u05b7\ufb2e\u05e4\u05bf\u05f2\u05b7\u05d2\u05b7 \u0497\u04e8',
+    ['\ufb2e\ufb2e\ufb4e\ufb1f\u05d2 \u0497\u04e8'], [8, 0]],
   ['strings and CAN', `${E}]0;title\x07A${E}]2;t${E}\\B${CSI}3\x18C`, ['ABC'], [3, 0]],
   ['alignment', `x${E}#8`, ['E'.repeat(80), 'E'.repeat(80)], [0, 0]],
 ];

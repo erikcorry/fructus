@@ -349,9 +349,25 @@ void combine(uint32_t c) {
   touch(y);
 }
 
+// A Hebrew point onto the letter before the cursor: the pointed letter, if
+// the font has it, and otherwise nothing.
+void point(uint32_t c) {
+  if (!pending && x == 0) return;
+  int col = pending ? x : x - 1;
+  Row &r = row(y);
+  if ((r.mark[col] & MARK) != THIRD) return;
+  for (int i = 0; i < POINTED_COUNT; i++)
+    if (POINTED[i].letter == r.base[col] && POINTED[i].point == c - 0x500) {
+      r.base[col] = POINTED[i].pointed;
+      touch(y);
+      return;
+    }
+}
+
 void print(uint32_t c) {
   if (charset[shift] && c >= 0x5f && c <= 0x7e) c = GRAPHICS[c - 0x5f];
   if (c >= 0x300 && c <= 0x36f) return combine(c);
+  if (c >= 0x591 && c <= 0x5c7 && in(c, ZERO_WIDTH)) return point(c);
   if (in(c, ZERO_WIDTH)) return;
   int width = in(c, WIDE) ? 2 : 1;
   uint8_t mark = 0;
