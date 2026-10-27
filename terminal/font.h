@@ -29,7 +29,9 @@
 // the riser beside it, or above it where a stem would meet the tick - Ά Έ Ή
 // Ί Ό Ύ, from decompose.cc, by OVERRIDES.  The mark SECOND, past them, says the base is from the
 // second set, SECOND_GLYPH: symbols and a few letters that take no accent.
-// So a base is in all 9 bits, and base_of gives them as 0x100 | the base.
+// THIRD, before TONOS, likewise says the third set, THIRD_GLYPH: Hebrew.
+// So a base is in all 10 bits, and base_of gives them as 0x100 | the base
+// and 0x200 | the base.
 //
 // THE UNDERLINE is in the font, on line 14 with a line's gap under the
 // baseline, in the text's colour: an underlined cell's EDGE code is
@@ -47,7 +49,9 @@ enum : uint8_t { EDGE, RISER, X_TOP, X_MIDDLE, X_BOTTOM };
 constexpr uint8_t BLANK = 0x20;         // the blank slice, in every zone
 constexpr uint8_t SECOND = 0x7f;        // the mark of the second set's bases
 constexpr uint8_t TONOS = 0x7e;         // Greek capitals' accent, at their left
-constexpr uint16_t SECOND_SET = 0x100;  // base_of's flag for them
+constexpr uint8_t THIRD = 0x7d;         // the mark of the third set's bases
+constexpr uint16_t SECOND_SET = 0x100;  // base_of's flags for them
+constexpr uint16_t THIRD_SET = 0x200;
 constexpr uint8_t DOTLESS_I = 0x69;
 extern const uint8_t DOTTED_I, DOTLESS_J, FALLBACK;  // i for į, ȷ, and �
 
@@ -58,6 +62,8 @@ extern const uint8_t MARK_GLYPH[2][TONOS + 1];   // EDGE and RISER, BLANK for no
 extern const uint8_t UNDERLINED[256];      // an EDGE code underlined
 extern const uint8_t SECOND_GLYPH[][ZONES];
 extern const int SECOND_COUNT;
+extern const uint8_t THIRD_GLYPH[][ZONES];
+extern const int THIRD_COUNT;
 
 // The pairs whose letter has ink where the mark goes: a code of their own
 // in each zone that differs.  Sorted by base and mark.
@@ -70,7 +76,8 @@ extern const int OVERRIDE_COUNT;
 // The bases that are not their own ASCII code, sorted by code point.
 struct Unicode {
   uint16_t code;
-  uint16_t base;                        // SECOND_SET | base for the second set
+  uint16_t base;                        // SECOND_SET | base for the second set,
+                                        // THIRD_SET | base for the third
 };
 extern const Unicode UNICODE[];
 extern const int UNICODE_COUNT;
@@ -79,8 +86,8 @@ extern const int UNICODE_COUNT;
 extern const Unicode ALIASES[];
 extern const int ALIAS_COUNT;
 
-// The base for a code point, SECOND_SET | base for the second set, FALLBACK
-// if the font has none.
+// The base for a code point, SECOND_SET or THIRD_SET | base for those sets,
+// FALLBACK if the font has none.
 uint16_t base_of(uint32_t c);
 
 // The codes a cell puts in each zone.  A mark goes in the first of its two
@@ -89,8 +96,9 @@ uint16_t base_of(uint32_t c);
 // only the cedilla has: ģ's turned comma - and is dropped if neither is.
 // below says which the mark is: terminal.h's MARK_BELOW.
 inline void glyphs(uint8_t base, uint8_t mark, bool below, uint8_t out[ZONES]) {
-  if (mark == SECOND) {
-    for (int z = 0; z < ZONES; z++) out[z] = SECOND_GLYPH[base][z];
+  if (mark == SECOND || mark == THIRD) {
+    const uint8_t *set = mark == SECOND ? SECOND_GLYPH[base] : THIRD_GLYPH[base];
+    for (int z = 0; z < ZONES; z++) out[z] = set[z];
     return;
   }
   for (int z = 0; z < ZONES; z++) out[z] = GLYPH[z][base];

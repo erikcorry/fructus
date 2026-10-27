@@ -82,6 +82,9 @@ constexpr Range ZERO_WIDTH[] = {
   { 0x1ab0, 0x1aff }, { 0x1dc0, 0x1dff }, { 0x200b, 0x200f }, { 0x2028, 0x202e },
   { 0x2060, 0x2064 }, { 0x20d0, 0x20ff }, { 0xfe00, 0xfe0f }, { 0xfe20, 0xfe2f },
   { 0xfeff, 0xfeff }, { 0xe0000, 0xe01ef },
+  // Hebrew's points and cantillation: the font has letters, unpointed.
+  { 0x0591, 0x05bd }, { 0x05bf, 0x05bf }, { 0x05c1, 0x05c2 }, { 0x05c4, 0x05c5 },
+  { 0x05c7, 0x05c7 },
 };
 
 template <int N>
@@ -331,6 +334,7 @@ void print(uint32_t c) {
   uint16_t b = width == 2 || c > 0xffff ? FALLBACK : base_of(decompose(c, mark));
   uint8_t base = b;
   if (b & SECOND_SET) mark = SECOND;
+  else if (b & THIRD_SET) mark = THIRD;
 
   if (pending) {
     x = 0;
