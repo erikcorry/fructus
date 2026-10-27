@@ -15,7 +15,30 @@
 //     fg, bg  8 bits   each a colour in the display's 8-bit pixel format,
 //                      reverse video and bold already applied
 //
-// kept as a row's four arrays: 320 bytes a row, 8,960 a screen.
+// kept as a row's four arrays, and a byte of the row's bidi properties: 321
+// bytes a row, 8,988 a screen.
+//
+// RIGHT TO LEFT is Egmont Koblinger's "BiDi in Terminal Emulators"
+// (terminal-wg.pages.freedesktop.org/bidi), level 1, with each row its own
+// paragraph: a row that autowrapped takes the properties of the one before.
+// The cells stay in logical order, as received; terminal/bidi.cc orders them
+// for the display.  Each row has the four properties, all off at reset:
+//
+//     BIDI_EXPLICIT   CSI 8 l, and CSI 8 h for implicit, the default: in
+//                     explicit mode the cells show as they are, and the
+//                     host orders them
+//     BIDI_RTL        CSI 2 SP k, and CSI 1 SP k or CSI 0 SP k for left to
+//                     right: the paragraph's direction
+//     BIDI_AUTO       CSI ? 2501 h: the direction from the first strong
+//                     letter, implicit mode's only
+//     BIDI_BOX        CSI ? 2500 h: box drawing mirrored in right-to-left
+//                     runs
+//
+// The sequences set the terminal's current properties, and the row the
+// cursor is on takes the one changed when the cursor is at its start.  Rows
+// take all of them when a line feed lands on them, and when they come in
+// blank: a scroll's, an erasure of the display's, the alternate screen's.
+// Arrow keys are the host's, not ours, so mode 1243 is not here.
 // ideas/vt100.md had a 16-bit Unicode base; the font's 256 bases are a byte.
 //
 // DECOMPOSITION, terminal/gen-decompose.mjs's table: a precomposed Latin
@@ -37,9 +60,9 @@
 //   C0     BS HT LF VT FF CR SO SI, and CAN SUB to abandon a sequence
 //   ESC    7 8 D E H M c = >, ( ) with 0 or B, #8
 //   CSI    @ A B C D E F G H I J K L M P S T X Z ` a b c d e f g h l m n r s u,
-//          and ! p
-//   modes  4 insert; ?6 origin, ?7 autowrap, ?25 cursor, ?47 ?1047 ?1049
-//          the alternate screen
+//          and ! p, SP k
+//   modes  4 insert, 8 bidi; ?6 origin, ?7 autowrap, ?25 cursor, ?47 ?1047
+//          ?1049 the alternate screen, ?2500 ?2501 bidi
 //   SGR    0 1 4 7 8 22 24 27 28, 30-37 39 40-47 49 90-97 100-107,
 //          38/48 with 5;n or 2;r;g;b or their colon forms, 4:0-4:5 as
 //          underline off or on; 58 and 59, the underline's colour, ignored:
@@ -57,11 +80,13 @@ namespace terminal {
 
 constexpr int COLUMNS = 80, ROWS = 28;
 constexpr uint8_t MARK = 0x7f, UNDERLINE = 0x80;
+enum : uint8_t { BIDI_EXPLICIT = 1, BIDI_RTL = 2, BIDI_AUTO = 4, BIDI_BOX = 8 };
 
 struct Row {
   uint8_t base[COLUMNS];        // font.h's codes
   uint8_t mark[COLUMNS];        // MARK and UNDERLINE
   uint8_t fg[COLUMNS], bg[COLUMNS];
+  uint8_t bidi;                 // BIDI_EXPLICIT and the rest
 };
 
 struct Screen {

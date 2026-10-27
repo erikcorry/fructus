@@ -15,8 +15,8 @@
 // draws on the host from the same bytes, pixel for pixel.
 //
 // Each case is bytes in and what terminal/dump.cc should say: the first lines
-// of the screen, the cursor, the answers sent, and for some a line of colour
-// runs.  Every case runs on the host, built with g++, and on Fructus under
+// of the screen, the cursor, the answers sent, and for some lines of colour
+// runs and lines as terminal/bidi.cc orders them for the display.  Every case runs on the host, built with g++, and on Fructus under
 // tools/fcc-run.mjs, which is skipped when the compiler is not built.
 // =============================================================================
 
@@ -24,11 +24,16 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { inflateSync } from 'node:zlib';
 
-const SOURCES = ['terminal/dump.cc', 'terminal/terminal.cc', 'terminal/decompose.cc', 'terminal/font.cc'];
+const SOURCES = ['terminal/dump.cc', 'terminal/terminal.cc', 'terminal/decompose.cc', 'terminal/font.cc',
+                 'terminal/bidi.cc'];
 const E = '\x1b', CSI = E + '[';
 const a80 = 'a'.repeat(80);
+const right = (s) => s.padStart(80);   // a right-to-left row as shown
+const SCP_RTL = `${CSI}2 k`;
+const [SHALOM, OLAM, ABC] = ['\u05e9\u05dc\u05d5\u05dd', '\u05e2\u05d5\u05dc\u05dd', '\u05d0\u05d1\u05d2'];
+const rev = (s) => [...s].reverse().join('');
 
-// [name, input, lines from the top, [x, y], sends, { line: runs }]
+// [name, input, lines from the top, [x, y], sends, { line: runs }, { line: as shown }]
 const cases = [
   ['pending wrap', a80 + 'b', [a80, 'b'], [1, 1]],
   ['no wrap after CR', a80 + '\rX', ['X' + 'a'.repeat(79), ''], [1, 0]],
@@ -93,6 +98,25 @@ const cases = [
   // it takes no accent.
   ['third set', '\u05e9\u05c1\u05b8\u05dc\u05d5\u05b9\u05dd \u05ea\u05dc\u05be\u05d0\u05d1\u05d9\u05d1\u0301 \u20aa5\u05f3',
     ['\u05e9\u05dc\u05d5\u05dd \u05ea\u05dc\u05be\u05d0\u05d1\u05d9\u05d1 \u20aa5\u05f3'], [16, 0]],
+  // Right to left, terminal.h and bidi.h.  A left-to-right paragraph turns
+  // its Hebrew round, numbers and all, but not the brackets about it.
+  ['bidi in a left-to-right row', `abc ${SHALOM} def\r\n${SHALOM} 123 ${OLAM}\r\nabc (${SHALOM}) def`,
+    [`abc ${SHALOM} def`, `${SHALOM} 123 ${OLAM}`, `abc (${SHALOM}) def`], [14, 2], [], {},
+    { 0: `abc ${rev(SHALOM)} def`, 1: `${rev(OLAM)} 123 ${rev(SHALOM)}`, 2: `abc (${rev(SHALOM)}) def` }],
+  // ₪ beside a number is part of it; the brackets in a right-to-left run are
+  // mirrored.
+  ['bidi in a right-to-left row', `${SCP_RTL}${SHALOM}, world\r\n\u05de\u05d7\u05d9\u05e8 \u20aa5\r\n\u05d0(\u05d1)`,
+    [`${SHALOM}, world`, '\u05de\u05d7\u05d9\u05e8 \u20aa5', '\u05d0(\u05d1)'], [4, 2], [], {},
+    { 0: right(`world ,${rev(SHALOM)}`), 1: right('\u20aa5 \u05e8\u05d9\u05d7\u05de'), 2: right('(\u05d1)\u05d0') }],
+  // SCP mid-line waits for the next line; explicit mode is the cells as they
+  // are, from the right.
+  ['bidi properties', `ab${SCP_RTL}cd\r\nef\r\n${CSI}8l${CSI}1 kxy${CSI}2 k\r\nxyz`,
+    ['abcd', 'ef', 'xy', 'xyz'], [3, 3], [], {}, { 1: right('ef'), 3: right('zyx') }],
+  // Autodetection from the first strong letter, and box drawing mirrored in
+  // 2500's mode.
+  ['bidi autodetection and boxes', `${CSI}?2501h${SHALOM} abc\r\nabc ${ABC}\r\n${CSI}?2500h${SCP_RTL}\u250c\u2500\u05d0\u2500\u2510`,
+    [`${SHALOM} abc`, `abc ${ABC}`, '\u250c\u2500\u05d0\u2500\u2510'], [5, 2], [], {},
+    { 0: right(`abc ${rev(SHALOM)}`), 1: `abc ${rev(ABC)}`, 2: right('\u250c\u2500\u05d0\u2500\u2510') }],
   ['strings and CAN', `${E}]0;title\x07A${E}]2;t${E}\\B${CSI}3\x18C`, ['ABC'], [3, 0]],
   ['alignment', `x${E}#8`, ['E'.repeat(80), 'E'.repeat(80)], [0, 0]],
 ];
@@ -103,9 +127,11 @@ function parse(out) {
   while (lines[0].startsWith('send ')) sends.push(lines.shift().slice(5).replaceAll('\\e', E));
   const [, x, y] = lines.shift().split(' ');
   const screen = lines.slice(0, 28).map((l) => l.slice(1));
-  const runs = {};
-  for (const l of lines.slice(28)) if (l) runs[parseInt(l)] = l.slice(4);
-  return { sends, cursor: [+x, +y], screen, runs };
+  const runs = {}, shown = {};
+  for (const l of lines.slice(28))
+    if (l.startsWith('>')) shown[parseInt(l.slice(1))] = l.slice(5);
+    else if (l) runs[parseInt(l)] = l.slice(4);
+  return { sends, cursor: [+x, +y], screen, runs, shown };
 }
 
 mkdirSync('build', { recursive: true });
@@ -164,15 +190,20 @@ function pngPixels(file) {
 
 if (runners.length > 1) {
   const MAIN = ['terminal/main.cc', 'terminal/terminal.cc', 'terminal/decompose.cc', 'terminal/font.cc',
-                'terminal/row.cc', 'terminal/vectors.s'];
+                'terminal/row.cc', 'terminal/bidi.cc', 'terminal/vectors.s'];
   execFileSync('tools/fcc', ['-Os', '-T', 'ld/fructus-writethru.ld', '-Iterminal', ...MAIN, '-o', 'build/_terminal-main'],
                { stdio: 'inherit' });
-  execFileSync('g++', ['-std=c++17', '-O2', '-Wall', '-Iterminal', 'terminal/preview.cc', ...MAIN.slice(1, 5),
+  execFileSync('g++', ['-std=c++17', '-O2', '-Wall', '-Iterminal', 'terminal/preview.cc', ...MAIN.slice(1, 6),
                        '-o', 'build/_terminal-preview']);
   let scroll = '';
   for (let i = 0; i < 100; i++) scroll += `${String(i).padStart(3)} ${'the quick brown fox '.repeat(4)}\r\n`;
+  // Right to left, every row through all of bidi.cc: Hebrew, numbers,
+  // brackets and Latin in right-to-left paragraphs.
+  let rtl = `${SCP_RTL}${CSI}?2500h`;
+  for (let i = 0; i < 100; i++) rtl += `${String(i).padStart(3)} ${SHALOM} (${OLAM}) world \u20aa${i} `.repeat(2) + '\r\n';
   const inputs = [['the demo', execFileSync('node', ['terminal/demo.mjs'])],
-                  ['100 lines scrolled', Buffer.from(scroll)]];
+                  ['100 lines scrolled', Buffer.from(scroll)],
+                  ['100 right-to-left lines scrolled', Buffer.from(rtl)]];
   for (const [name, data] of inputs) {
     writeFileSync('build/_terminal-main.in', data);
     rmSync('build/_terminal-frames', { recursive: true, force: true });
@@ -197,7 +228,7 @@ if (runners.length > 1) {
   rmSync('build/_terminal-frames', { recursive: true, force: true });
 }
 
-for (const [name, input, lines, cursor, sends = [], runs = {}] of cases) {
+for (const [name, input, lines, cursor, sends = [], runs = {}, shown = {}] of cases) {
   const data = Buffer.isBuffer(input) ? input : Buffer.from(input, 'utf8');
   const path = 'build/_terminal.in';
   writeFileSync(path, data);
@@ -208,6 +239,7 @@ for (const [name, input, lines, cursor, sends = [], runs = {}] of cases) {
     if (got.cursor.join() !== cursor.join()) wrong.push(`cursor ${got.cursor}, not ${cursor}`);
     if (JSON.stringify(got.sends) !== JSON.stringify(sends)) wrong.push(`sent ${JSON.stringify(got.sends)}, not ${JSON.stringify(sends)}`);
     for (const l in runs) if (got.runs[l] !== runs[l]) wrong.push(`runs of ${l} ${JSON.stringify(got.runs[l])}, not ${JSON.stringify(runs[l])}`);
+    for (const l in shown) if (got.shown[l] !== shown[l]) wrong.push(`line ${l} shown ${JSON.stringify(got.shown[l])}, not ${JSON.stringify(shown[l])}`);
     if (wrong.length) {
       fails++;
       console.log(`  FAIL ${name} (${where}): ${wrong.join('; ')}`);

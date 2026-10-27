@@ -11,7 +11,8 @@
 //
 // The underline is in the font (font.h), so it needs no array of its own.
 //
-// draw_row fills them from a Row.  The pointers are plain stores, so in
+// draw_row fills them from a Row, its cells in bidi_order's order, and says
+// where cell x shows, for the cursor.  The pointers are plain stores, so in
 // WRITETHRU they may be the frame buffer's addresses.
 #ifndef TERMINAL_ROW_H
 #define TERMINAL_ROW_H
@@ -26,7 +27,7 @@ struct RowArrays {
   uint8_t *fg, *bg;
 };
 
-void draw_row(const Row &r, const RowArrays &out);
+int draw_row(const Row &r, const RowArrays &out, int x);
 
 }  // namespace terminal
 

@@ -76,11 +76,12 @@ constexpr Range WIDE[] = {
   { 0x1f680, 0x1f6ff }, { 0x1f900, 0x1f9ff }, { 0x20000, 0x3fffd },
 };
 
-// Zero width: the joiners and marks, variation selectors and tags, and the
-// combining blocks other than U+0300-U+036F, whose marks are dropped.
+// Zero width: the joiners, bidi controls and marks, variation selectors and
+// tags, and the combining blocks other than U+0300-U+036F, whose marks are
+// dropped.
 constexpr Range ZERO_WIDTH[] = {
   { 0x1ab0, 0x1aff }, { 0x1dc0, 0x1dff }, { 0x200b, 0x200f }, { 0x2028, 0x202e },
-  { 0x2060, 0x2064 }, { 0x20d0, 0x20ff }, { 0xfe00, 0xfe0f }, { 0xfe20, 0xfe2f },
+  { 0x2060, 0x2069 }, { 0x20d0, 0x20ff }, { 0xfe00, 0xfe0f }, { 0xfe20, 0xfe2f },
   { 0xfeff, 0xfeff }, { 0xe0000, 0xe01ef },
   // Hebrew's points and cantillation: the font has letters, unpointed.
   { 0x0591, 0x05bd }, { 0x05bf, 0x05bf }, { 0x05c1, 0x05c2 }, { 0x05c4, 0x05c5 },
@@ -150,6 +151,7 @@ bool origin, autowrap, insert;
 uint8_t charset[2], shift;              // G0 and G1: 1 for line drawing
 uint8_t tabs[COLUMNS / 8];
 uint32_t last;                          // the last character printed, for REP
+uint8_t bidi;                           // the current bidi properties, terminal.h's
 
 struct Saved {
   uint8_t x, y;
@@ -201,8 +203,14 @@ void erase(int line, int from, int to) {
   touch(line);
 }
 
+// A line blank, and a paragraph of its own with the current properties.
+void blank(int line) {
+  erase(line, 0, COLUMNS);
+  row(line).bidi = bidi;
+}
+
 void erase_lines(int from, int to) {
-  for (int l = from; l < to; l++) erase(l, 0, COLUMNS);
+  for (int l = from; l < to; l++) blank(l);
 }
 
 // Lines first to last, n times by one: up, the top line going round to the
@@ -215,12 +223,12 @@ void scroll(int first, int last, int n, bool up) {
       uint8_t r = l[first];
       for (int i = first; i < last; i++) l[i] = l[i + 1];
       l[last] = r;
-      erase(last, 0, COLUMNS);
+      blank(last);
     } else {
       uint8_t r = l[last];
       for (int i = last; i > first; i--) l[i] = l[i - 1];
       l[first] = r;
-      erase(first, 0, COLUMNS);
+      blank(first);
     }
   }
   moved = true;
@@ -263,6 +271,22 @@ void index() {
   pending = false;
   if (y == bottom) scroll(top, bottom, 1, true);
   else if (y < ROWS - 1) y++;
+}
+
+// A line feed's: the line it lands on takes the current bidi properties.
+void new_line() {
+  index();
+  row(y).bidi = bidi;
+  touch(y);
+}
+
+// An autowrap's: the line it lands on goes on with the paragraph.
+void wrap() {
+  uint8_t p = row(y).bidi;
+  x = 0;
+  index();
+  row(y).bidi = p;
+  touch(y);
 }
 
 void reverse_index() {
@@ -336,15 +360,11 @@ void print(uint32_t c) {
   if (b & SECOND_SET) mark = SECOND;
   else if (b & THIRD_SET) mark = THIRD;
 
-  if (pending) {
-    x = 0;
-    index();
-  }
+  if (pending) wrap();
   if (x + width > COLUMNS) {
     if (autowrap) {
       erase(y, x, COLUMNS);
-      x = 0;
-      index();
+      wrap();
     } else {
       x = COLUMNS - width;
     }
@@ -388,6 +408,16 @@ void alternate(bool on, bool keep_cursor) {
   moved = true;
 }
 
+// One of the current bidi properties, and the cursor's line's too at its
+// start.
+void set_bidi(uint8_t p, bool on) {
+  bidi = on ? bidi | p : bidi & ~p;
+  if (x == 0 && !pending) {
+    row(y).bidi = (row(y).bidi & ~p) | (bidi & p);
+    touch(y);
+  }
+}
+
 void set_mode(unsigned m, bool on) {
   switch (m) {
   case 6: origin = on; place(0, 0); break;
@@ -395,6 +425,8 @@ void set_mode(unsigned m, bool on) {
   case 25: cursor_shown = on; break;
   case 47: case 1047: alternate(on, false); break;
   case 1049: alternate(on, true); break;
+  case 2500: set_bidi(BIDI_BOX, on); break;
+  case 2501: set_bidi(BIDI_AUTO, on); break;
   }
 }
 
@@ -479,6 +511,12 @@ void csi(uint8_t f) {
   }
   if (priv) return;
   if (inter == '!' && f == 'p') return soft_reset();
+  // SCP: 0 or 1 left to right, 2 right to left; its second parameter's 1
+  // and 2 move the cursor, and are not here.
+  if (inter == ' ' && f == 'k') {
+    if (params[0] <= 2 && (param == 0 || params[1] == 0)) set_bidi(BIDI_RTL, params[0] == 2);
+    return;
+  }
   if (inter) return;
   int up_to = y >= top ? top : 0, down_to = y <= bottom ? bottom : ROWS - 1;
   switch (f) {
@@ -520,7 +558,11 @@ void csi(uint8_t f) {
     if (params[0] == 0) tabs[x >> 3] &= ~(1 << (x & 7));
     else if (params[0] == 3) for (uint8_t &t : tabs) t = 0;
     break;
-  case 'h': case 'l': if (params[0] == 4) insert = f == 'h'; break;
+  case 'h': case 'l':
+    for (int i = 0; i <= param; i++)
+      if (params[i] == 4) insert = f == 'h';
+      else if (params[i] == 8) set_bidi(BIDI_EXPLICIT, f == 'l');
+    break;
   case 'm': sgr(); break;
   case 'n':
     if (params[0] == 5) send("\033[0n");
@@ -567,8 +609,8 @@ void escape(uint8_t c) {
   case ']': case 'P': case 'X': case '^': case '_': state = STRING; break;
   case '7': save(); break;
   case '8': restore(); break;
-  case 'D': index(); break;
-  case 'E': x = 0; index(); break;
+  case 'D': new_line(); break;
+  case 'E': x = 0; new_line(); break;
   case 'H': tabs[x >> 3] |= 1 << (x & 7); break;
   case 'M': reverse_index(); break;
   case 'c': reset(); break;
@@ -609,7 +651,7 @@ void control(uint8_t c) {
   } else switch (c) {
   case 0x08: if (x > 0) x--; pending = false; break;
   case 0x09: tab_forward(); break;
-  case 0x0a: case 0x0b: case 0x0c: index(); break;
+  case 0x0a: case 0x0b: case 0x0c: new_line(); break;
   case 0x0d: x = 0; pending = false; break;
   case 0x0e: shift = 1; break;
   case 0x0f: shift = 0; break;
@@ -660,6 +702,7 @@ void reset() {
   top = 0, bottom = ROWS - 1;
   charset[0] = charset[1] = shift = 0;
   for (uint8_t &t : tabs) t = 0x01;
+  bidi = 0;
   for (Screen &k : screens) {
     s = &k;
     for (int l = 0; l < ROWS; l++) s->line[l] = l;

@@ -85,6 +85,13 @@
 // the stem.  Latvian's cedilla, under Ģ Ķ Ļ Ņ Ŗ and ķ ļ ņ ŗ, is a comma below,
 // as Latvian type has it.  ď is a base of its own: its stem is at the right
 // edge, so the whole letter moves a column left.  See font.h for the rule as C.
+//
+// BIDI CLASSES, for terminal/bidi.cc: each base's Unicode bidirectional
+// class, of the ones a row of our bases can have.  JavaScript's regular
+// expressions know no Bidi_Class, so bidiClass() says which from scripts,
+// categories and lists, for what the repertoires hold.  MIRRORS are the
+// pairs a right-to-left run shows as each other, ( as ), all Bidi_Mirrored;
+// BOX_MIRRORS box drawing's, for the private mode 2500.
 // =============================================================================
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -515,6 +522,45 @@ const ofSets = (ch) => {
 };
 const SET_FLAG = { [SECOND]: 0x100, [THIRD]: 0x200 };
 
+// --- bidi ---------------------------------------------------------------------
+
+// As font.h's enum has them.
+const BIDI = ['L', 'R', 'EN', 'ES', 'ET', 'CS', 'ON', 'WS'];
+function bidiClass(ch) {
+  if (ch === ' ') return 'WS';
+  if (/\p{Script=Hebrew}/u.test(ch)) return 'R';
+  if (/[0-9\u00b2\u00b3\u00b9\u2070\u2074-\u2079\u2080-\u2089]/u.test(ch)) return 'EN';
+  if ('+-\u207a\u208a'.includes(ch)) return 'ES';
+  if (/\p{Sc}/u.test(ch) || '#%°±‰‱′″‴∓℮'.includes(ch)) return 'ET';
+  if (',./:'.includes(ch)) return 'CS';
+  if (/\p{L}/u.test(ch)) return 'L';
+  return 'ON';
+}
+
+// A base as base_of gives it: SECOND_SET or THIRD_SET | base for those sets.
+const baseOf = (ch) => {
+  if (codeOf.has(ch)) return codeOf.get(ch);
+  const s = ofSets(ch);
+  if (!s) throw new Error(`${ch} is not a base`);
+  return SET_FLAG[s[0]] | s[1];
+};
+const mirrorPairs = (pairs, mirrored) => pairs.flatMap((p) => {
+  const [a, b] = [...p];
+  if (mirrored && !/\p{Bidi_M}/u.test(a + b)) throw new Error(`${p} is not Bidi_Mirrored`);
+  return [[baseOf(a), baseOf(b)], [baseOf(b), baseOf(a)]];
+}).sort((x, y) => x[0] - y[0]);
+const MIRRORS = mirrorPairs(['()', '<>', '[]', '{}', '«»', '‹›', '≤≥', '≪≫', '⌈⌉', '⌊⌋',
+                             '⊂⊃', '⊆⊇', '⊄⊅', '⊈⊉', '⊊⊋', '∈∋', '∉∌'], true);
+const BOX_MIRRORS = mirrorPairs(['┌┐', '└┘', '├┤', '┏┓', '┗┛', '┣┫', '╒╕', '╓╖', '╔╗', '╘╛',
+                                 '╙╜', '╚╝', '╞╡', '╟╢', '╠╣', '╭╮', '╰╯'], false);
+
+// Each base's class, and font.h's BIDI_MIRRORED and BIDI_BOX_MIRRORED if it
+// has a pair, so that bidi.cc looks for one only then.
+const inPairs = (ps, b) => ps.some(([from]) => from === b);
+const classes = (set, flag) => set.map((b, i) => BIDI.indexOf(bidiClass(b ? b.ch : '\ufffd')) |
+  (b && inPairs(MIRRORS, flag | i) ? 0x08 : 0) | (b && inPairs(BOX_MIRRORS, flag | i) ? 0x10 : 0));
+const BIDI_CLASS = classes(bases, 0), SECOND_BIDI = classes(second, 0x100), THIRD_BIDI = classes(third, 0x200);
+
 const UNDER_LINE = 14;
 const UNDERLINED = [...Array(256).keys()];
 for (const c of slices[EDGE].map((g, c) => (g ? c : -1)).filter((c) => c >= 0)) {
@@ -617,6 +663,9 @@ const table = (a, indent) => {
   for (let i = 0; i < a.length; i += 16) out.push(indent + a.slice(i, i + 16).map(hex).join(', ') + ',');
   return out.join('\n');
 };
+const named = (c) => (c & 0x100 ? second[c & 0xff] : c & 0x200 ? third[c & 0xff] : bases[c]).ch;
+const big = (c) => (c > 0xff ? `0x${c.toString(16)}` : hex(c));
+const pairTable = (ps) => ps.map(([a, b]) => `  { ${big(a)}, ${big(b)} },  // ${named(a)} ${named(b)}`).join('\n');
 const unicode = bases.map((b, c) => [b && b.ch.codePointAt(0), c])
   .filter(([u, c]) => u !== undefined && u !== null && !(u === c && c !== 0x69))
   .concat(second.map((s, i) => [s.ch.codePointAt(0), 0x100 | i]))
@@ -661,6 +710,24 @@ ${second.map((s) => `  { ${s.codes.map(hex).join(', ')} },  // ${s.ch}`).join('\
 extern const int THIRD_COUNT = ${third.length};
 const uint8_t THIRD_GLYPH[${third.length}][ZONES] = {
 ${third.map((s) => `  { ${s.codes.map(hex).join(', ')} },  // ${s.ch}`).join('\n')}
+};
+
+const uint8_t BIDI_CLASS[256] = {
+${table(BIDI_CLASS, '  ')}
+};
+const uint8_t SECOND_BIDI[${second.length}] = {
+${table(SECOND_BIDI, '  ')}
+};
+const uint8_t THIRD_BIDI[${third.length}] = {
+${table(THIRD_BIDI, '  ')}
+};
+
+extern const int MIRROR_COUNT = ${MIRRORS.length}, BOX_MIRROR_COUNT = ${BOX_MIRRORS.length};
+const Pair MIRRORS[${MIRRORS.length}] = {
+${pairTable(MIRRORS)}
+};
+const Pair BOX_MIRRORS[${BOX_MIRRORS.length}] = {
+${pairTable(BOX_MIRRORS)}
 };
 
 extern const int OVERRIDE_COUNT = ${OVERRIDES.length};

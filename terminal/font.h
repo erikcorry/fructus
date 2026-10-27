@@ -82,6 +82,22 @@ struct Unicode {
 extern const Unicode UNICODE[];
 extern const int UNICODE_COUNT;
 
+// Each base's bidirectional class, as Unicode's, of those our bases have:
+// gen-font.mjs's bidiClass, in BIDI_CLASS_BITS, and whether it has a pair
+// in MIRRORS or BOX_MIRRORS.  Indexed by base, for each set.
+enum : uint8_t { BIDI_L, BIDI_R, BIDI_EN, BIDI_ES, BIDI_ET, BIDI_CS, BIDI_ON, BIDI_WS };
+constexpr uint8_t BIDI_CLASS_BITS = 0x07, BIDI_MIRRORED = 0x08, BIDI_BOX_MIRRORED = 0x10;
+extern const uint8_t BIDI_CLASS[256], SECOND_BIDI[], THIRD_BIDI[];
+
+// Bases that a right-to-left run shows as each other's - ( as ) - both
+// ways, sorted, as base_of gives them: MIRRORS always, BOX_MIRRORS box
+// drawing's, in the private mode 2500.
+struct Pair {
+  uint16_t from, to;
+};
+extern const Pair MIRRORS[], BOX_MIRRORS[];
+extern const int MIRROR_COUNT, BOX_MIRROR_COUNT;
+
 // Code points drawn as another's base - ʼ as ’, − as - - sorted likewise.
 extern const Unicode ALIASES[];
 extern const int ALIAS_COUNT;

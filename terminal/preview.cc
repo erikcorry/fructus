@@ -1,7 +1,7 @@
 // preview.cc - the screen as the display will draw it, as a PPM picture.
 //
 //   g++ -O2 -Iterminal terminal/preview.cc terminal/terminal.cc
-//       terminal/decompose.cc terminal/font.cc terminal/row.cc
+//       terminal/decompose.cc terminal/font.cc terminal/row.cc terminal/bidi.cc
 //       -o build/terminal-preview
 //   build/terminal-preview < bytes > screen.ppm
 //
@@ -41,17 +41,19 @@ int main() {
   for (int c; (c = getchar()) != EOF;) put(c);
 
   static uint8_t code[ROWS][ZONES][COLUMNS], fg[ROWS][COLUMNS], bg[ROWS][COLUMNS];
+  int at = cursor_x;
   for (int y = 0; y < ROWS; y++) {
     RowArrays out = { {}, fg[y], bg[y] };
     for (int z = 0; z < ZONES; z++) out.code[z] = code[y][z];
-    draw_row(screen->rows[screen->line[y]], out);
+    int v = draw_row(screen->rows[screen->line[y]], out, cursor_x);
+    if (y == cursor_y) at = v;
   }
 
   if (cursor_shown) {
     int y = cursor_y, x = cursor_x;
     const Row &row = screen->rows[screen->line[y]];
-    fg[y][x] = row.bg[x];
-    bg[y][x] = row.fg[x];
+    fg[y][at] = row.bg[x];
+    bg[y][at] = row.fg[x];
   }
 
   constexpr int TOP = 2, HEIGHT = 480;   // main.cc's

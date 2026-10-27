@@ -2,7 +2,7 @@
 //
 //   tools/fcc -Os -T ld/fructus-writethru.ld -Iterminal terminal/main.cc
 //     terminal/terminal.cc terminal/decompose.cc terminal/font.cc
-//     terminal/row.cc terminal/vectors.s -o build/terminal
+//     terminal/row.cc terminal/bidi.cc terminal/vectors.s -o build/terminal
 //   node tools/fcc-run.mjs build/terminal.bin --input bytes --paced --x11 --scale 2
 //
 // THE BUFFER, as the processor addresses it in WRITETHRU (docs/vga.md):
@@ -31,7 +31,8 @@
 // (vectors.s's shim calls rx_interrupt), and each pass empties it.  The UART
 // holds one byte, and at 115200 baud the next comes 2,180 cycles later, but a
 // pass - drawing every row and waiting for the flip's vertical sync - takes
-// up to 830,000.  The ring holds what comes meanwhile: a frame's worth, 193
+// up to 830,000, and about 1,500,000 when every row is right to left: a row
+// through bidi.cc is some 38,000.  The ring holds what comes meanwhile: a frame's worth, 193
 // bytes, at most in terminal/check.mjs's runs, and two frames' is 386.  The handler alone moves the head and the pass
 // alone the tail, each a word stored at once, so neither stops the other.
 #include "row.h"
@@ -93,17 +94,18 @@ void line_tables() {
   }
 }
 
-void draw(int r) {
+// A row, and where its cell x shows.
+int draw(int r, int x = 0) {
   RowArrays out = { {}, FG + r * COLUMNS, BG + r * COLUMNS };
   for (int z = 0; z < ZONES; z++) out.code[z] = CODES + (z * ROWS + r) * COLUMNS;
-  draw_row(screen->rows[r], out);
+  return draw_row(screen->rows[r], out, x);
 }
 
-// The cursor's cell with its colours swapped.
-void draw_cursor(int r, int x) {
+// The cursor's cell, x, with its colours swapped where it shows, at.
+void draw_cursor(int r, int at, int x) {
   const Row &row = screen->rows[r];
-  FG[r * COLUMNS + x] = row.bg[x];
-  BG[r * COLUMNS + x] = row.fg[x];
+  FG[r * COLUMNS + at] = row.bg[x];
+  BG[r * COLUMNS + at] = row.fg[x];
 }
 
 // The parts that never change: the font, the modes, the black outside the
@@ -189,9 +191,13 @@ int main() {
     }
     if (!b.rows && !b.tables) continue;
     if (b.tables) line_tables();
+    int at = cursor_x;
     for (int r = 0; r < ROWS; r++)
-      if (b.rows >> r & 1) draw(r);
-    if (cursor >= 0 && b.rows >> cursor & 1) draw_cursor(cursor, cursor_x);
+      if (b.rows >> r & 1) {
+        int v = draw(r, cursor_x);
+        if (r == cursor) at = v;
+      }
+    if (cursor >= 0 && b.rows >> cursor & 1) draw_cursor(cursor, at, cursor_x);
     b.rows = 0;
     b.tables = false;
     b.cursor_row = cursor;
