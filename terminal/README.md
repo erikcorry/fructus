@@ -79,7 +79,7 @@ letters that share tops or bottoms share codes. Codes in use:
 
 | | EDGE | RISER | X_TOP | X_MIDDLE | X_BOTTOM |
 |---|---|---|---|---|---|
-| Used, of 256 | 224 | 227 | 242 | 229 | 234 |
+| Used, of 256 | 227 | 227 | 243 | 229 | 235 |
 
 A cell holds a base and a mark. The mark is one combining accent
 (U+0300–U+036F), or one of three special values: TONOS, SECOND or THIRD.
@@ -90,40 +90,77 @@ sets:
 |---|---|---|
 | First | 253 of 256 | ASCII; Latin-1's symbols and its letters of their own (Æ Ð Ø Þ ß æ ð ø þ); Latin Extended-A's (Đ Ħ Ĳ Ł Ŋ Œ Ŧ ...); quotes, dashes, €, arrows, ≤ ≥ ≠ π; box drawing (light, heavy, double, rounded); blocks, shades, quadrants, eighths |
 | Second | 251 of 256 | symbols (✓ ✗ ■ □ ▲ ▼ ► ◄ ○ ⇐ ⇒ ⇔ ™ † ‡ ‰ ′ ″ №), maths (∞ √ ≈ ≡ ∑ ∂ ∫ ∀ ∃ ∈ ∅ ∧ ∨ ∩ ∪ ⌈⌉ ⌊⌋ and the rest of Markus Kuhn's SECS), ⁿ ⁰ ₀–₃, ℕ ℤ ℝ ℚ ℂ, Claude Code's symbols, ĸ Ə ə ƒ, Greek and Cyrillic letters that look like no Latin letter, Skolt Sámi's Ʒ ʒ Ǯ ǯ Ǥ ǥ |
-| Third | 31 of 256 | Hebrew: the 22 letters, the 5 final forms, ׳ ״ ־ (the maqaf, redrawn at the top of the letters) and ₪ |
+| Third | 36 of 256 | Hebrew: the 22 letters, the 5 final forms, ׳ ״ ־ (the maqaf, redrawn at the top of the letters) and ₪; then letters that take no accent: Catalan's ŀ Ŀ, the long ſ, Mohawk's ʌ Ʌ |
 
-**Accented letters** are a base and a mark, from 342 decompositions:
+**Accented letters** are a base and a mark, from 405 decompositions:
 
 - **Latin:** all of Latin-1 Supplement and Latin Extended-A, plus the letters
   from Latin Extended-B and Latin Extended Additional that are a Latin-1 base
-  with one of the same accents. Romanian's ș ț and Latvian's comma below are
-  included.
+  with one of the same accents. The marks below the letter are the cedilla,
+  the ogonek, and the comma, dot and macron below: Romanian's ș ț, Latvian's
+  ģ ķ ļ ņ, Asturian's ḥ ḷ, Sicilian's ḍ, Mapudungun's ḻ ṉ ṯ.
 - **i and j:** i is always a dotless ı with a dot, so an accent replaces the
   dot. j does the same with ȷ.
-- **Overrides:** 23 of the 267 accented letters are letters that have ink
+- **Overrides:** 23 of the 322 accented letters are letters that have ink
   where their accent goes, so they get codes of their own.
 
 **Greek and Cyrillic** cover modern Greek, Russian, Ukrainian, Belarusian,
 Serbian, Macedonian and Bulgarian:
 
 - Letters that look like Latin letters (Α, а, і, Ё ...) are drawn as the
-  Latin letter, with an accent where they have one.
+  Latin letter, with an accent where they have one. So are a few of
+  Cyrillic's extensions: һ as h, Ү as Y, the palochka Ӏ ӏ as I, ӕ Ӕ as æ Æ,
+  ҫ Ҫ as ç Ç, and ә Ә as ə Ə. That covers Chechen, Kabardian, Adyghe and
+  Ossetian.
 - A Greek capital's tonos (Ά Έ Ή ...) is a mark of its own, placed at the
   letter's left.
 
-**Aliases** draw 31 other code points as an existing base: ʼ as ’, − as -,
-the typographic spaces as a space, Claude Code's spinner stars as *, and so
-on.
+**Aliases** draw 34 other code points as an existing base: ʼ as ’, − as -,
+Hawaiian's ʻokina as ‘, the typographic spaces as a space, Claude Code's
+spinner stars as *, and so on.
+
+### Languages
+
+Checked against the exemplar letters of CLDR 49's locales, and by hand for
+some that CLDR lacks.
+
+- **Europe:** the alphabet of every national language, in Latin, Greek and
+  Cyrillic script. Also Asturian, Breton, Catalan, Cornish, Corsican, Faroese,
+  Frisian, Friulian, Galician, Irish and Scottish Gaelic, Karelian,
+  Kashubian, Komi, Latgalian, Latin, Ligurian, Low German, Luxembourgish,
+  Manx, Occitan, Romansh, Rusyn, the Sámi languages (Northern, Inari, Skolt,
+  Lule, Southern), Sardinian, Sicilian, Silesian, Sorbian, Venetian,
+  Walloon and Welsh; and in the Caucasus, Chechen, Kabardian, Adyghe and
+  Ossetian.
+- **The Americas:** English, Spanish, Portuguese and French, and in Latin
+  script Aymara, Greenlandic, Guaraní, Haitian, Hawaiian, Inuktitut, K'iche',
+  Kaingang, Lakota, Mapudungun, Mohawk, Nahuatl, Nheengatu, Ojibwe,
+  Papiamentu, Quechua and Yupik.
+
+**A letter takes one accent.** A letter with two loses the second:
+
+- Navajo's high-toned nasal vowels ą́ ę́ į́ ǫ́.
+- Lithuanian's accented ą̃ ė́ ų́ ... (dictionaries only).
+- Stress marks on Cyrillic letters from the second set, such as и́ ы́ э́ ю́
+  я́ є́ (dictionaries and learners' texts). These letters take no accent at
+  all, so even one is dropped.
 
 **Missing:**
-- Vietnamese's stacked accents, and any letter with two marks (ǖ ...), which
-  shows as �.
+- Cyrillic extensions with no Latin lookalike: Tatar's җ ң ө ү, Bashkir's ғ
+  ҙ ҡ ң ө ү, Chuvash's Ӳ, Mari's ҥ Ӱ, Udmurt's ӝ ӟ ӥ ӵ, Yakut's ҕ ҥ ө ү, and
+  the capital Һ. They show as �.
+- Yiddish's ligatures ײ װ ױ, and its points, which are dropped.
+- Polytonic Greek.
+- Armenian, Georgian, Cherokee and Canadian syllabics.
+- Vietnamese's stacked accents, ỵ's dot (there is no room under the
+  descender), and any letter with two marks that Unicode encodes
+  precomposed (ǖ ...), which shows as �.
 - Arabic, and every script further east.
 - Hebrew points and cantillation, which are dropped.
 - Hebrew presentation forms (U+FB1D–U+FB4F), which show as �.
 
-**Room left:** 3 bases in the first set, 5 in the second, and 225 in the
-third. X_TOP has 14 codes left and is the zone that fills first. Splitting a
+**Room left:** 3 bases in the first set, 5 in the second, and 220 in the
+third. X_TOP has 13 codes left and is the zone that fills first. Splitting a
 zone costs 2,240 bytes of frame buffer, 80 bytes for each of the 28 rows.
 
 ## The frame buffer

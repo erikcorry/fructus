@@ -117,6 +117,10 @@ const cases = [
   ['bidi autodetection and boxes', `${CSI}?2501h${SHALOM} abc\r\nabc ${ABC}\r\n${CSI}?2500h${SCP_RTL}\u250c\u2500\u05d0\u2500\u2510`,
     [`${SHALOM} abc`, `abc ${ABC}`, '\u250c\u2500\u05d0\u2500\u2510'], [5, 2], [], {},
     { 0: right(`abc ${rev(SHALOM)}`), 1: `abc ${rev(ABC)}`, 2: right('\u250c\u2500\u05d0\u2500\u2510') }],
+  // Hawaiian's ʻokina as ‘, the dot and macron below, the third set's
+  // letters that take no accent, and Cyrillic's lookalikes as Latin.
+  ['marks below, lookalikes', 'Hawai\u02bbi \u1e0d\u1e25\u1e37 \u1e3b\u1e49\u1e6f \u0140\u013f\u017f\u028c\u0245 \u04bb\u04ae\u04c0\u04d5\u04ab\u04d9',
+    ['Hawai\u2018i d\u0323h\u0323l\u0323 l\u0331n\u0331t\u0331 \u0140\u013f\u017f\u028c\u0245 hYI\u00e6c\u0327\u0259'], [28, 0]],
   ['strings and CAN', `${E}]0;title\x07A${E}]2;t${E}\\B${CSI}3\x18C`, ['ABC'], [3, 0]],
   ['alignment', `x${E}#8`, ['E'.repeat(80), 'E'.repeat(80)], [0, 0]],
 ];

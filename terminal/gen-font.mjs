@@ -72,7 +72,9 @@
 //
 // THE THIRD SET is the same again, under the mark THIRD, 0x7d: Hebrew, its
 // 27 letters with the final forms, geresh and gershayim, the maqaf and ₪.
-// Their points and cantillation are zero width in terminal.cc, dropped.
+// Their points and cantillation are zero width in terminal.cc, dropped.  And
+// letters that take no accent, which would fill the first two sets' last
+// codes: Catalan's ŀ Ŀ, the long ſ, and Mohawk's ʌ Ʌ.
 //
 // ACCENTS are 9x15's spacing ones, ´ ` ˆ and so on, never its precomposed
 // letters, whose capitals are squashed to make room.  An accent above goes in
@@ -158,6 +160,7 @@ const SECOND_REPERTOIRE = [
 const THIRD_REPERTOIRE = [
   'אבגדהוזחטיךכלםמןנסעףפץצקרשת',
   '׳״־₪',
+  'ŀĿſʌɅ',
 ].join('');
 
 // Characters drawn as a base that is another's, of either set: the same
@@ -168,6 +171,8 @@ const ALIASES = {
   'ʼ': '’', 'ʽ': '‘', '―': '—', '‐': '-', '‑': '-', '−': '-', '∙': '·', '⋅': '·', '∼': '~',
   '\u2329': '‹', '\u232a': '›',   // 〈 〉, the technical ones
   '⋯': '…', 'ʹ': '′',   // Skolt Sámi's palatalisation mark
+  'ʻ': '‘',              // Hawaiian's ʻokina
+  'ә': 'ə', 'Ә': 'Ə',    // Tatar's and Bashkir's schwa, Azerbaijani's
   '⏺': '●', '⏵': '►', '✔': '✓', '✘': '✗',
   // Stars, as Claude Code's spinner turns through them with · between.
   '✢': '*', '✳': '*', '✶': '*', '✻': '*', '✽': '*',
@@ -339,6 +344,11 @@ function glyphOf(ch) {
   // 9x15's maqaf is over the letters, on line 2; Hebrew's hyphen joins
   // them at the top of the x-height, where their bars are.
   case '־': return drawn(6, ['.######.']);
+  // 9x15 has ʌ but not Ʌ: V upside down.
+  case 'Ʌ': {
+    const g = x11(0x56), ink = g.map((r, l) => (r ? l : -1)).filter((l) => l >= 0);
+    return g.map((r, l) => (l >= ink[0] && l <= ink.at(-1) ? g[ink[0] + ink.at(-1) - l] : r));
+  }
   case '◆': return pattern((x, y) => Math.abs(x - CX) + Math.abs(y - CY) <= 3);
   // Triangles 7 wide, about the middle as ◆ is: ▲ ▼ 8 lines of 1, 1, 3, 3,
   // 5, 5, 7, 7, and ► ◄ 7 columns of 7, 7, 5, 5, 3, 3, 1 lines.
@@ -375,6 +385,9 @@ const SPACING = {
 const accents = new Map();
 for (const [m, s] of Object.entries(SPACING)) accents.set(+m, { above: +m < 0x320, rows: inked(s) });
 accents.set(0x326, { above: false, rows: [0x0c, 0x04, 0x08] });   // comma below
+// The dot and the macron below a line under the baseline, as ˙ and ¯ are drawn.
+accents.set(0x323, { above: false, rows: [0, ...inked(0x2d9)] });
+accents.set(0x331, { above: false, rows: [0, ...inked(0xaf)] });
 const TURNED_COMMA = [0x08, 0x0c];                                  // ģ's
 
 // In three lines from first: one line's gap below an accent of less.

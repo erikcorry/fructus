@@ -12,7 +12,7 @@
 //
 // WHAT IS IN IT.  Latin-1 Supplement and Latin Extended-A whole: every letter
 // there whose NFD is a Latin-1 base and one mark.  The marks those use, and
-// the comma below for Romanian's ș and ț, are "our" marks; from Latin
+// the comma, dot and macron below, are "our" marks; from Latin
 // Extended-B and Latin Extended Additional come only letters that are a
 // Latin-1 base and one of our marks - not the Vietnamese stacks, not the
 // double grave.  A letter with two marks, ǖ say, is not in the table and
@@ -26,7 +26,11 @@
 //
 // GREEK AND CYRILLIC LOOKALIKES are the Latin letter they look like, with
 // no mark: those 9x15 draws pixel for pixel the same, and Β, μ, і, ј, у,
-// which are the same letter drawn a little differently.  And a letter of
+// which are the same letter drawn a little differently.  So are a few from
+// Cyrillic's extensions - Tatar's, Bashkir's, Chechen's, Ossetian's, Chuvash's:
+// һ as h, Ү as Y, the palochka Ӏ ӏ as I, ӕ Ӕ as æ Æ, and ҫ Ҫ as ç Ç, a
+// letter and a cedilla.  Һ is a capital h, like no Latin letter.  ә and Ә are
+// gen-font.mjs's aliases of ə and Ə, which are not Latin-1.  And a letter of
 // either that is a lookalike and one of our marks is the Latin letter and
 // the mark: Ё as Ë, ї as ï, Ќ as Ḱ.  But a Greek capital's tonos, Ά and the
 // rest, is font.h's TONOS, not the acute: it goes at the letter's left.  The
@@ -69,6 +73,7 @@ const LOOKALIKES = {
   'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C',
   'Т': 'T', 'Х': 'X', 'Ѕ': 'S', 'І': 'I', 'Ј': 'J',
   'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'у': 'y', 'х': 'x', 'ѕ': 's', 'і': 'i', 'ј': 'j',
+  'һ': 'h', 'Ү': 'Y', 'Ӏ': 'I', 'ӏ': 'I', 'ӕ': 'æ', 'Ӕ': 'Æ', 'ҫ': 'ç', 'Ҫ': 'Ç',
 };
 const TONOS = 0x7e;     // font.h's
 const latin = (c) => LOOKALIKES[String.fromCodePoint(c)]?.codePointAt(0) ?? c;
@@ -77,15 +82,19 @@ const latin = (c) => LOOKALIKES[String.fromCodePoint(c)]?.codePointAt(0) ?? c;
 function split(cp) {
   if (SPACING[cp]) return SPACING[cp];
   if (OWN.has(cp)) return null;
-  if (LOOKALIKES[String.fromCodePoint(cp)]) return [latin(cp), 0];
+  const look = LOOKALIKES[String.fromCodePoint(cp)];
+  if (look) return split(look.codePointAt(0)) ?? [latin(cp), 0];
   const d = [...String.fromCodePoint(cp).normalize('NFD')].map((c) => c.codePointAt(0));
   if (d.length !== 2 || latin(d[0]) > 0xff || !isMark(d[1])) return null;
   if (d[1] === 0x301 && cp >= 0x386 && cp <= 0x38f) return [latin(d[0]), 0x2ff + TONOS];
   return [latin(d[0]), d[1]];
 }
 
+// The comma below for Romanian's ș and ț; the dot below for Asturian's ḥ ḷ
+// and Sicilian's ḍ; the macron below for Mapudungun's ḻ ṉ ṯ.  Each brings
+// in Latin Extended Additional's letters with it.
 const entries = [];
-const ours = new Set([0x326]);
+const ours = new Set([0x323, 0x326, 0x331]);
 for (let cp = 0xa0; cp < 0x180; cp++) {
   const s = split(cp);
   if (!s) continue;
