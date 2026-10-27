@@ -32,6 +32,7 @@ lost and that the last frame matches `preview.cc`'s, pixel for pixel.
 | `main.cc` | the program: the UART's ring, two buffers, the line tables |
 | `dump.cc`, `preview.cc`, `rules-check.cc` | for the checks: the screen as text, as a picture, and the C glyph rule against the generator's |
 | `demo.mjs` | a screen of colours, accents, symbols and boxes |
+| `coverage.mjs`, `coverage.cc`, `coverage-extra.json` | each language's letters through the terminal, from CLDR's exemplars and alphabets by hand: what it can't show |
 
 ## What it understands
 
@@ -122,7 +123,9 @@ spinner stars as *, and so on.
 ### Languages
 
 Checked against the exemplar letters of CLDR 49's locales, and by hand for
-some that CLDR lacks.
+some that CLDR lacks: `node terminal/coverage.mjs` with
+[cldr-json](https://github.com/unicode-org/cldr-json) checked out in
+`~/github`.
 
 - **Europe:** the alphabet of every national language, in Latin, Greek and
   Cyrillic script. Also Asturian, Breton, Catalan, Cornish, Corsican, Faroese,
