@@ -8,7 +8,8 @@
  *   0x0400 - 0x04ff   the I/O page, [cpu.io]
  *   0x0500 - top      the stack, growing down towards the I/O page
  *   top    - 0x7fff   .data and .bss: EVERYTHING THE PROGRAM WRITES
- *   0x8000 - 0xffcb   .font, then code and constants: read only
+ *   0x8000 - 0xffcb   .font, then code and constants: read only; then
+ *                     .upper, written only in DISPLAY_CPU
  *   0xffcc - 0xffff   the vectors, thirteen four-byte slots
  *
  * WRITETHRU SENDS EVERY STORE ABOVE 0x8000 TO THE BUFFER NOT SHOWN, and not
@@ -103,7 +104,11 @@ SECTIONS
     KEEP(*(.init_array)) KEEP(*(.init_array.*)) KEEP(*(.ctors)) KEEP(*(.ctors.*))
   }
   ASSERT(SIZEOF(.init_array) == 0, "a static constructor, which crt0 would never run: make the object constexpr")
-  ASSERT(. <= 0xffcc, "code and constants run into the vectors at 0xffcc")
+
+  /* What the program writes only in DISPLAY_CPU, when stores above 0x8000
+     are its own: in the image as zeros, like .bss.  */
+  .upper (NOLOAD) : { *(.upper) *(.upper.*) }
+  ASSERT(. <= 0xffcc, "code, constants and .upper run into the vectors at 0xffcc")
 
   /* KEEP, because nothing refers to the table and --gc-sections would drop it. */
   .vectors 0xffcc : { KEEP(*(.vectors)) }

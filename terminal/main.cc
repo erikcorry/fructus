@@ -27,6 +27,24 @@
 // of rows to draw, of whether its line tables are out of date, and of where
 // it drew the cursor, which is the cell's colours swapped.
 //
+// THE DENSE TERMINAL, -DTERMINAL_DENSE (terminal.h), is 128x60 cells of 5x8,
+// all 480 lines, in the display's 5-pixel cells:
+//
+//   tools/fcc -Os -DTERMINAL_DENSE -T ld/fructus-writethru.ld -Iterminal
+//     terminal/main.cc terminal/terminal.cc terminal/font5.cc
+//     terminal/vectors.s -o build/terminal-dense
+//
+//     0x8000   the font, font5.cc's FONT, 8 font rows of 128
+//     0x8400   the codes, 128 a text row, 60 rows: a cell's base is its code
+//     0xa200   the foreground colours
+//     0xc000   the background, a byte a cell: 8 bits a pixel, 5 wide
+//     0xde00   128 bytes of black, for lines 480-511
+//     0xf000   the line tables
+//
+// Its one screen is 23K of the 28K below 0x8000, so the primary screen,
+// while the alternate one is shown, is kept above the code, in .upper: the
+// processor's own RAM there, which it stores to only in DISPLAY_CPU.
+//
 // THE SERIAL LINE FILLS A RING, from the UART's receive interrupt
 // (vectors.s's shim calls rx_interrupt), and each pass empties it.  The UART
 // holds one byte, and at 115200 baud the next comes 2,180 cycles later, but a
@@ -35,7 +53,12 @@
 // through bidi.cc is some 38,000.  The ring holds what comes meanwhile: a frame's worth, 193
 // bytes, at most in terminal/check.mjs's runs, and two frames' is 386.  The handler alone moves the head and the pass
 // alone the tail, each a word stored at once, so neither stops the other.
+#ifdef TERMINAL_DENSE
+#include "font5.h"
+#include "terminal.h"
+#else
 #include "row.h"
+#endif
 
 #include <fructus/display.h>
 #include <fructus/uart.h>
@@ -44,16 +67,24 @@ using namespace terminal;
 
 namespace {
 
-constexpr int TOP = 2, TEXT_LINES = LINES * ROWS;
-constexpr uint16_t MODE = DISPLAY_8BPP | DISPLAY_WIDTH(8);
-
 // The buffer's arrays, from the end of the font at the linker's 0x8000.
 // Addresses, not pointers: a pointer computed from another is initialised
 // at run time, and ld/fructus-writethru.ld runs no constructors.
+constexpr int TEXT_LINES = LINES * ROWS;
 constexpr uint16_t ROW_BYTES = ROWS * COLUMNS;
+#ifdef TERMINAL_DENSE
+constexpr int TOP = 0;
+constexpr uint16_t MODE = DISPLAY_8BPP | DISPLAY_WIDTH(5) | DISPLAY_NARROW_FONT;
+constexpr uint16_t CODES_AT = 0x8000 + LINES * 128, FG_AT = CODES_AT + ROW_BYTES;
+constexpr uint16_t BG_AT = FG_AT + ROW_BYTES, BLACK_AT = BG_AT + ROW_BYTES;
+static_assert(FG_AT == 0xa200 && BLACK_AT == 0xde00, "the map above is out of date");
+#else
+constexpr int TOP = 2;
+constexpr uint16_t MODE = DISPLAY_8BPP | DISPLAY_WIDTH(8);
 constexpr uint16_t CODES_AT = 0x8000 + LINES * 256, FG_AT = CODES_AT + ZONES * ROW_BYTES;
 constexpr uint16_t BG_AT = FG_AT + ROW_BYTES, BLACK_AT = BG_AT + ROW_BYTES;
 static_assert(FG_AT == 0xbcc0 && BLACK_AT == 0xce40, "the map above is out of date");
+#endif
 static_assert(BLACK_AT + COLUMNS <= 0xf000, "the arrays run into the line tables");
 
 #define CODES ((uint8_t *) CODES_AT)
@@ -81,6 +112,48 @@ void flip() {
   display_sync();
 }
 
+#ifdef TERMINAL_DENSE
+
+// The pointers of the text's lines, for the rows the screen shows now.
+void line_tables() {
+  for (int y = 0; y < ROWS; y++) {
+    int r = screen->line[y];
+    uint16_t code = address(CODES + r * COLUMNS), fg = address(FG + r * COLUMNS);
+    uint16_t bg = address(BG + r * COLUMNS);
+    for (int line = TOP + LINES * y; line < TOP + LINES * (y + 1); line++) {
+      DISPLAY_CHARS[line] = code;
+      DISPLAY_COLOURS[line] = fg;
+      DISPLAY_BACKGROUND[line] = bg;
+    }
+  }
+}
+
+// A row, as it is: no bidi, so cell x shows at x.
+int draw(int r, int x = 0) {
+  const Row &row = screen->rows[r];
+  uint8_t *code = CODES + r * COLUMNS, *fg = FG + r * COLUMNS, *bg = BG + r * COLUMNS;
+  for (int i = 0; i < COLUMNS; i++) {
+    code[i] = row.base[i];
+    fg[i] = row.fg[i];
+    bg[i] = row.bg[i];
+  }
+  return x;
+}
+
+// The primary screen while the alternate is shown: above the code, where
+// WRITETHRU's stores would go to the buffer, so it is written in
+// DISPLAY_CPU.  A store sees a mode write from the third instruction after
+// it, as a load does (fructus/io.h), hence the nops; the barrier keeps the
+// compiler's stores on their side of the mode.
+__attribute__((section(".upper"))) Screen kept;
+
+void set_mode(uint16_t mode) {
+  DISPLAY_MODE = (show_a ? DISPLAY_SHOW_A : 0) | mode;
+  __asm__ volatile("nop\n\tnop" ::: "memory");
+}
+
+#else
+
 // The pointers of the text's lines, for the rows the screen shows now.
 void line_tables() {
   for (int y = 0; y < ROWS; y++) {
@@ -101,6 +174,8 @@ int draw(int r, int x = 0) {
   return draw_row(screen->rows[r], out, x);
 }
 
+#endif
+
 // The cursor's cell, x, with its colours swapped where it shows, at.
 void draw_cursor(int r, int at, int x) {
   const Row &row = screen->rows[r];
@@ -112,7 +187,7 @@ void draw_cursor(int r, int at, int x) {
 // text.  Then every row.
 void setup_buffer() {
   volatile uint8_t *font = (volatile uint8_t *) FONT;
-  for (int i = 0; i < LINES * 256; i++) font[i] = FONT[i];
+  for (unsigned i = 0; i < sizeof FONT; i++) font[i] = FONT[i];
   for (int i = 0; i < COLUMNS; i++) BLACK[i] = DISPLAY_RGB(0, 0, 0);
   for (int line = 0; line < 512; line++) {
     int l = line - TOP;
@@ -120,7 +195,7 @@ void setup_buffer() {
       DISPLAY_CHARS[line] = DISPLAY_COLOURS[line] = DISPLAY_BACKGROUND[line] = address(BLACK);
       DISPLAY_LINEMODE[line] = MODE | DISPLAY_NO_TEXT;
     } else {
-      DISPLAY_LINEMODE[line] = MODE | DISPLAY_FONT_LINE(4 * (l % LINES));
+      DISPLAY_LINEMODE[line] = MODE | DISPLAY_FONT_LINE(sizeof FONT / LINES / 64 * (l % LINES));
     }
   }
   line_tables();
@@ -129,7 +204,7 @@ void setup_buffer() {
 
 // What each buffer has yet to catch up on.
 struct Behind {
-  uint32_t rows;
+  Rows rows;
   bool tables;
   int8_t cursor_row, cursor_x;   // where it drew the cursor, -1 for nowhere
 };
@@ -157,6 +232,16 @@ extern "C" void rx_interrupt() {
 void terminal::send(const char *s) {
   while (*s) fructus_uart_putc(*s++);
 }
+
+#ifdef TERMINAL_DENSE
+void terminal::stash(const Screen &s) {
+  set_mode(DISPLAY_CPU);
+  kept = s;
+  set_mode(DISPLAY_WRITETHRU);
+}
+
+void terminal::unstash(Screen &s) { s = kept; }
+#endif
 
 int main() {
   reset();
@@ -186,8 +271,8 @@ int main() {
     Behind &b = behind[show_a];      // A shown: B is written, behind[1]
     int cursor = cursor_shown ? screen->line[cursor_y] : -1;
     if (cursor != b.cursor_row || cursor_x != b.cursor_x) {
-      if (b.cursor_row >= 0) b.rows |= (uint32_t) 1 << b.cursor_row;
-      if (cursor >= 0) b.rows |= (uint32_t) 1 << cursor;
+      if (b.cursor_row >= 0) b.rows |= (Rows) 1 << b.cursor_row;
+      if (cursor >= 0) b.rows |= (Rows) 1 << cursor;
     }
     if (!b.rows && !b.tables) continue;
     if (b.tables) line_tables();

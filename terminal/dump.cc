@@ -21,14 +21,28 @@
 //
 // and the terminal's answers to the host first, each as "send" and its
 // bytes with ESC as \e.
+//
+// With -DTERMINAL_DENSE, and terminal/font5.cc for font.cc and bidi.cc, the
+// dense terminal's: 128 cells of 60 lines, FALLBACK as �, and neither
+// underlines nor lines as shown.
+#include "terminal.h"
+
+#ifdef TERMINAL_DENSE
+#include "font5.h"
+#else
 #include "bidi.h"
 #include "font.h"
-#include "terminal.h"
+#endif
 
 #ifdef __fructus__
 #include <fructus/uart.h>
-// Its two screens are 18K, and the program has no heap: 36K for it.
+// Its two screens are 18K, or the dense one and its stash 46K, and the
+// program has no heap: 36K for it, or 59K.
+#ifdef TERMINAL_DENSE
+asm(".globl __heap_end\n.set __heap_end, 0x1600");
+#else
 asm(".globl __heap_end\n.set __heap_end, 0x7000");
+#endif
 static void out(char c) { fructus_uart_putc(c); }
 static int in() { return fructus_uart_ready() ? fructus_uart_getc() : -1; }
 #else
@@ -50,6 +64,8 @@ static void number(unsigned v, int base = 10, int digits = 1) {
   while (n) out(d[--n]);
 }
 
+#ifndef TERMINAL_DENSE
+
 // A base's code point: the font's code, unless the font moved it.  base is
 // 10 bits, SECOND_SET and THIRD_SET for the second and third sets.
 static unsigned unicode(uint16_t base) {
@@ -58,6 +74,8 @@ static unsigned unicode(uint16_t base) {
     if (UNICODE[i].base == base) return UNICODE[i].code;
   return base;
 }
+
+#endif
 
 static void utf8(unsigned c) {
   if (c < 0x80) {
@@ -77,6 +95,21 @@ void terminal::send(const char *s) {
   out('\n');
 }
 
+#ifdef TERMINAL_DENSE
+
+static Screen kept;
+void terminal::stash(const Screen &s) { kept = s; }
+void terminal::unstash(Screen &s) { s = kept; }
+
+static void cell(const Row &, int, uint8_t base) { utf8(base == FALLBACK ? 0xfffd : base); }
+static bool marked(const Row &, int) { return false; }
+static bool underlined(const Row &, int) { return false; }
+
+#else
+
+static bool marked(const Row &r, int i) { return r.mark[i] & MARK; }
+static bool underlined(const Row &r, int i) { return r.mark[i] & UNDERLINE; }
+
 // Cell i of a row as UTF-8, its base as base.
 static void cell(const Row &r, int i, uint8_t base) {
   unsigned mark = (r.mark[i] & MARK) == TONOS ? 0x301 : r.mark[i] & MARK ? 0x2ff + (r.mark[i] & MARK) : 0;
@@ -94,6 +127,8 @@ static void cell(const Row &r, int i, uint8_t base) {
   if (mark && !i_dot) utf8(mark);
 }
 
+#endif
+
 int main() {
   reset();
   const uint8_t WHITE = screen->rows[0].fg[0], BLACK = screen->rows[0].bg[0];
@@ -107,14 +142,14 @@ int main() {
   for (int l = 0; l < ROWS; l++) {
     const Row &r = screen->rows[screen->line[l]];
     int end = COLUMNS;
-    while (end > 0 && r.base[end - 1] == ' ' && !(r.mark[end - 1] & MARK)) end--;
+    while (end > 0 && r.base[end - 1] == ' ' && !marked(r, end - 1)) end--;
     out(' ');
     for (int i = 0; i < end; i++) cell(r, i, r.base[i]);
     out('\n');
   }
   for (int l = 0; l < ROWS; l++) {
     const Row &r = screen->rows[screen->line[l]];
-    auto look = [&](int i) { return (uint32_t) r.fg[i] << 9 | r.bg[i] << 1 | r.mark[i] >> 7; };
+    auto look = [&](int i) { return (uint32_t) r.fg[i] << 9 | r.bg[i] << 1 | underlined(r, i); };
     bool any = false;
     for (int i = 0; i < COLUMNS; i++)
       any |= look(i) != ((uint32_t) WHITE << 9 | BLACK << 1);
@@ -131,10 +166,11 @@ int main() {
       number(r.fg[i], 16, 2);
       text(" bg ");
       number(r.bg[i], 16, 2);
-      if (r.mark[i] & UNDERLINE) text(" u");
+      if (underlined(r, i)) text(" u");
     }
     out('\n');
   }
+#ifndef TERMINAL_DENSE
   for (int l = 0; l < ROWS; l++) {
     const Row &r = screen->rows[screen->line[l]];
     uint8_t order[COLUMNS];
@@ -150,4 +186,5 @@ int main() {
     }
     out('\n');
   }
+#endif
 }

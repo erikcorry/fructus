@@ -1,20 +1,23 @@
 // terminal.cc - bytes to cells: see terminal.h.
 #include "terminal.h"
 
+#ifdef TERMINAL_DENSE
+#include "font5.h"
+#else
 #include "font.h"
+#endif
 
 namespace terminal {
 
 const Screen *screen;
 uint8_t cursor_x, cursor_y;
 bool cursor_shown;
-uint32_t dirty;
+Rows dirty;
 bool moved;
 
 namespace {
 
-constexpr uint32_t ALL_ROWS = ((uint32_t) 1 << ROWS) - 1;
-constexpr uint8_t DOT = 0x307 - 0x2ff;
+constexpr Rows ALL_ROWS = ((Rows) 1 << ROWS) - 1;
 
 // --- colours ------------------------------------------------------------------
 
@@ -103,6 +106,24 @@ constexpr uint16_t GRAPHICS[32] = {
   0x252c, 0x2502, 0x2264, 0x2265, 0x03c0, 0x2260, 0x00a3, 0x00b7,
 };
 
+#ifdef TERMINAL_DENSE
+
+// c as the dense font has it: ASCII, box drawing as + - and |, and the rest
+// FALLBACK.  The lines run in pairs, light and heavy, then dashed: two
+// across, two down.
+uint8_t ascii(uint32_t c) {
+  if (c >= 0x20 && c < 0x7f) return c;
+  if (c < 0x2500 || c > 0x257f) return FALLBACK;
+  if (c < 0x250c || (c >= 0x254c && c <= 0x254f)) return c >> 1 & 1 ? '|' : '-';
+  if (c == 0x2550 || c == 0x2551 || c >= 0x2574) return c & 1 ? '|' : '-';   // ═ ║, ╴ ╵ ...
+  if (c >= 0x2571 && c <= 0x2573) return "/\\X"[c - 0x2571];
+  return '+';
+}
+
+#else
+
+constexpr uint8_t DOT = 0x307 - 0x2ff;
+
 bool below(uint8_t mark) { return MARK_BELOW[mark >> 3] >> (mark & 7) & 1; }
 
 // i and j under an accent above lose their dots: as code points, and as
@@ -135,10 +156,17 @@ uint32_t decompose(uint32_t c, uint8_t &mark) {
   return c;
 }
 
+#endif
+
 // --- the state ----------------------------------------------------------------
 
+#ifdef TERMINAL_DENSE
+Screen screens[1];                      // the alternate screen is this one
+#else
 Screen screens[2];
+#endif
 Screen *s = &screens[0];
+bool alt;                               // the alternate screen is shown
 
 Pen pen;
 uint8_t ink, paper, under, erase_bg;    // the pen as cells take it
@@ -159,7 +187,7 @@ struct Saved {
   Pen pen;
   uint8_t charset[2], shift;
 };
-Saved saved[2];                         // DECSC's, one for each screen
+Saved saved[2];                         // DECSC's, one for each screen: saved[alt]
 
 enum : uint8_t { GROUND, ESCAPE, ESCAPE_INTER, CSI, STRING };
 uint8_t state, inter, priv;
@@ -174,7 +202,18 @@ uint8_t need;                           // the bytes still to come
 // --- cells --------------------------------------------------------------------
 
 Row &row(int line) { return s->rows[s->line[line]]; }
-void touch(int line) { dirty |= (uint32_t) 1 << s->line[line]; }
+void touch(int line) { dirty |= (Rows) 1 << s->line[line]; }
+
+// A cell's mark and a row's bidi properties.  The dense terminal has
+// neither: what is stored goes nowhere, and it reads as 0.
+#ifdef TERMINAL_DENSE
+uint8_t nowhere;
+uint8_t &mark_at(Row &, int) { return nowhere = 0; }
+uint8_t &paragraph(Row &) { return nowhere = 0; }
+#else
+uint8_t &mark_at(Row &r, int i) { return r.mark[i]; }
+uint8_t &paragraph(Row &r) { return r.bidi; }
+#endif
 
 void resolve() {
   bool bold = pen.flags & BOLD;
@@ -196,7 +235,7 @@ void erase(int line, int from, int to) {
   Row &r = row(line);
   for (int i = from; i < to; i++) {
     r.base[i] = ' ';
-    r.mark[i] = 0;
+    mark_at(r, i) = 0;
     r.fg[i] = ANSI[7];
     r.bg[i] = erase_bg;
   }
@@ -206,7 +245,7 @@ void erase(int line, int from, int to) {
 // A line blank, and a paragraph of its own with the current properties.
 void blank(int line) {
   erase(line, 0, COLUMNS);
-  row(line).bidi = bidi;
+  paragraph(row(line)) = bidi;
 }
 
 void erase_lines(int from, int to) {
@@ -243,7 +282,7 @@ void slide(int from, int n, bool right) {
   for (int k = 0; k < keep; k++) {
     int to = right ? COLUMNS - 1 - k : from + k, at = right ? to - n : to + n;
     r.base[to] = r.base[at];
-    r.mark[to] = r.mark[at];
+    mark_at(r, to) = mark_at(r, at);
     r.fg[to] = r.fg[at];
     r.bg[to] = r.bg[at];
   }
@@ -276,16 +315,16 @@ void index() {
 // A line feed's: the line it lands on takes the current bidi properties.
 void new_line() {
   index();
-  row(y).bidi = bidi;
+  paragraph(row(y)) = bidi;
   touch(y);
 }
 
 // An autowrap's: the line it lands on goes on with the paragraph.
 void wrap() {
-  uint8_t p = row(y).bidi;
+  uint8_t p = paragraph(row(y));
   x = 0;
   index();
-  row(y).bidi = p;
+  paragraph(row(y)) = p;
   touch(y);
 }
 
@@ -308,13 +347,13 @@ void tab_back() {
 }
 
 void save() {
-  Saved &v = saved[s - screens];
+  Saved &v = saved[alt];
   v.x = x, v.y = y, v.pending = pending, v.origin = origin, v.pen = pen;
   v.charset[0] = charset[0], v.charset[1] = charset[1], v.shift = shift;
 }
 
 void restore() {
-  const Saved &v = saved[s - screens];
+  const Saved &v = saved[alt];
   x = v.x, y = v.y, pending = v.pending, origin = v.origin, pen = v.pen;
   charset[0] = v.charset[0], charset[1] = v.charset[1], shift = v.shift;
   resolve();
@@ -325,11 +364,13 @@ void restore() {
 void cell(int col, uint8_t base, uint8_t mark) {
   Row &r = row(y);
   r.base[col] = base;
-  r.mark[col] = mark | under;
+  mark_at(r, col) = mark | under;
   r.fg[col] = ink;
   r.bg[col] = paper;
   touch(y);
 }
+
+#ifndef TERMINAL_DENSE
 
 // A combining mark onto the cell before the cursor: in its place if the
 // cell's only accent is ı's dot, else only if it has none.
@@ -364,8 +405,15 @@ void point(uint32_t c) {
     }
 }
 
+#endif
+
 void print(uint32_t c) {
   if (charset[shift] && c >= 0x5f && c <= 0x7e) c = GRAPHICS[c - 0x5f];
+#ifdef TERMINAL_DENSE
+  if ((c >= 0x300 && c <= 0x36f) || in(c, ZERO_WIDTH)) return;
+  int width = in(c, WIDE) ? 2 : 1;
+  uint8_t base = ascii(c), mark = 0;
+#else
   if (c >= 0x300 && c <= 0x36f) return combine(c);
   if (c >= 0x591 && c <= 0x5c7 && in(c, ZERO_WIDTH)) return point(c);
   if (in(c, ZERO_WIDTH)) return;
@@ -376,6 +424,7 @@ void print(uint32_t c) {
   if (b & SECOND_SET) mark = SECOND;
   else if (b & THIRD_SET) mark = THIRD;
   else if (b & BRAILLE_SET) mark = BRAILLE;
+#endif
 
   if (pending) wrap();
   if (x + width > COLUMNS) {
@@ -415,10 +464,16 @@ void report_cursor() {
 }
 
 void alternate(bool on, bool keep_cursor) {
-  if ((s == &screens[1]) == on) return;
+  if (alt == on) return;
   if (on && keep_cursor) save();
+  alt = on;
+#ifdef TERMINAL_DENSE
+  if (on) stash(*s);
+  else unstash(*s);
+#else
   s = &screens[on];
   screen = s;
+#endif
   if (on) erase_lines(0, ROWS);
   else if (keep_cursor) restore();
   dirty = ALL_ROWS;
@@ -430,7 +485,7 @@ void alternate(bool on, bool keep_cursor) {
 void set_bidi(uint8_t p, bool on) {
   bidi = on ? bidi | p : bidi & ~p;
   if (x == 0 && !pending) {
-    row(y).bidi = (row(y).bidi & ~p) | (bidi & p);
+    paragraph(row(y)) = (paragraph(row(y)) & ~p) | (bidi & p);
     touch(y);
   }
 }
@@ -507,7 +562,7 @@ void soft_reset() {
   autowrap = cursor_shown = true;
   top = 0, bottom = ROWS - 1;
   charset[0] = charset[1] = shift = 0;
-  Saved &v = saved[s - screens];
+  Saved &v = saved[alt];
   v = Saved{};
   v.pen = pen;
 }
@@ -688,6 +743,8 @@ void codepoint(uint32_t c) {
 
 }  // namespace
 
+#ifndef TERMINAL_DENSE
+
 namespace {
 
 // The base for c in a sorted table, or -1.
@@ -712,6 +769,8 @@ uint16_t base_of(uint32_t c) {
   return b < 0 ? FALLBACK : b;
 }
 
+#endif
+
 void reset() {
   pen = { DEFAULT, DEFAULT, 0 };
   resolve();
@@ -728,6 +787,7 @@ void reset() {
   }
   s = &screens[0];
   screen = s;
+  alt = false;
   x = y = 0;
   saved[0] = saved[1] = Saved{};
   saved[0].pen = saved[1].pen = pen;

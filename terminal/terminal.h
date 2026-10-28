@@ -72,6 +72,19 @@
 //
 // Bold is a brighter colour: ideas/vt100.md keeps the brightest levels back
 // for it.  Italic, dim, blink, double width and height are not shown.
+//
+// THE DENSE TERMINAL, built with -DTERMINAL_DENSE, is 128x60 cells of 5x8,
+// the display's 5-pixel cells, in font5.h's Spleentt.  The same sequences,
+// but a cell is ASCII and its colours: 3 bytes, 23,100 a screen.
+//
+//   - A base is ASCII, or FALLBACK for the rest.  Box drawing, the DEC
+//     line drawing among it, is + - and |.  Combining marks are dropped.
+//   - No underline, so SGR 4 does nothing, and no bidi, so the sequences
+//     that set its properties do nothing either.
+//   - ONE SCREEN.  Two would not fit in the 28K below 0x8000, so the
+//     alternate screen is the primary's cells, and the program keeps a copy
+//     of the primary while it is shown: stash() when the alternate screen
+//     comes, unstash() when it goes.
 #ifndef TERMINAL_TERMINAL_H
 #define TERMINAL_TERMINAL_H
 
@@ -79,9 +92,20 @@
 
 namespace terminal {
 
-constexpr int COLUMNS = 80, ROWS = 28;
 constexpr uint8_t MARK = 0x7f, UNDERLINE = 0x80;
 enum : uint8_t { BIDI_EXPLICIT = 1, BIDI_RTL = 2, BIDI_AUTO = 4, BIDI_BOX = 8 };
+
+#ifdef TERMINAL_DENSE
+constexpr int COLUMNS = 128, ROWS = 60;
+using Rows = uint64_t;          // a bit a row
+
+struct Row {
+  uint8_t base[COLUMNS];        // ASCII, or font5.h's FALLBACK
+  uint8_t fg[COLUMNS], bg[COLUMNS];
+};
+#else
+constexpr int COLUMNS = 80, ROWS = 28;
+using Rows = uint32_t;
 
 struct Row {
   uint8_t base[COLUMNS];        // font.h's codes
@@ -89,6 +113,7 @@ struct Row {
   uint8_t fg[COLUMNS], bg[COLUMNS];
   uint8_t bidi;                 // BIDI_EXPLICIT and the rest
 };
+#endif
 
 struct Screen {
   Row rows[ROWS];
@@ -100,8 +125,15 @@ struct Screen {
 extern const Screen *screen;
 extern uint8_t cursor_x, cursor_y;
 extern bool cursor_shown;
-extern uint32_t dirty;          // bit r: rows[r] changed
+extern Rows dirty;              // bit r: rows[r] changed
 extern bool moved;              // line[] changed, or the screen did
+
+#ifdef TERMINAL_DENSE
+// The program's: a copy of the primary screen, kept while the alternate one
+// is shown, and given back.
+void stash(const Screen &s);
+void unstash(Screen &s);
+#endif
 
 // Everything to how it is at power on: both screens blank, the pen white on
 // black, tab stops every 8.

@@ -18,16 +18,21 @@
 // of the screen, the cursor, the answers sent, and for some lines of colour
 // runs and lines as terminal/bidi.cc orders them for the display.  Every case runs on the host, built with g++, and on Fructus under
 // tools/fcc-run.mjs, which is skipped when the compiler is not built.
+//
+// The dense terminal, -DTERMINAL_DENSE, has cases of its own, and main.cc
+// built dense is held to its preview in the same way.
 // =============================================================================
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { inflateSync } from 'node:zlib';
 
 const SOURCES = ['terminal/dump.cc', 'terminal/terminal.cc', 'terminal/decompose.cc', 'terminal/font.cc',
                  'terminal/bidi.cc'];
+const DENSE = ['-DTERMINAL_DENSE'], DENSE_SOURCES = ['terminal/dump.cc', 'terminal/terminal.cc', 'terminal/font5.cc'];
 const E = '\x1b', CSI = E + '[';
-const a80 = 'a'.repeat(80);
+const ROWS = 28, a80 = 'a'.repeat(80);
 const right = (s) => s.padStart(80);   // a right-to-left row as shown
 const SCP_RTL = `${CSI}2 k`;
 const [SHALOM, OLAM, ABC] = ['\u05e9\u05dc\u05d5\u05dd', '\u05e2\u05d5\u05dc\u05dd', '\u05d0\u05d1\u05d2'];
@@ -134,39 +139,70 @@ const cases = [
   ['alignment', `x${E}#8`, ['E'.repeat(80), 'E'.repeat(80)], [0, 0]],
 ];
 
-function parse(out) {
+// The dense terminal's, as cases above.
+const a128 = 'a'.repeat(128);
+const denseCases = [
+  ['pending wrap', a128 + 'b', [a128, 'b'], [1, 1]],
+  ['region scroll', `0\r\n1\r\n2\r\n3\r\n4${CSI}2;4r${CSI}4;1H\n`, ['0', '2', '3', '', '4'], [0, 3]],
+  ['scrolled off the bottom', [...Array(70).keys()].join('\r\n'), ['10', '11'], [2, 59]],
+  ['tabs', `a\tb${CSI}3g\tc`, ['a       b' + ' '.repeat(118) + 'c'], [127, 0]],
+  // Wide is still two cells; marks and joiners are dropped.
+  ['not ASCII', 'é中x\u0301\u200dy', ['\ufffd\ufffd xy'], [5, 0]],
+  ['box drawing', `${E}(0lqkx${E}(B \u2550\u2551\u256d\u254c\u254e\u2573\u2580`, ['+-+| -|+-|X\ufffd'], [12, 0]],
+  // Neither does anything, nor leaves a mark.
+  ['underline and bidi', `${CSI}4mA${CSI}0m${CSI}2 k\u05d0B${CSI}?2501h`, ['A\ufffdB'], [3, 0], [], { 0: undefined }],
+  ['bold is brighter', `${CSI}1mA${CSI}22;31mB${CSI}1mC${CSI}0;7mD`, ['ABCD'], [4, 0], [],
+    { 0: '0-0 fg fe bg 20 1-1 fg 30 bg 20 2-2 fg 7b bg 20 3-3 fg 20 bg b3 4-127 fg b3 bg 20' }],
+  ['alternate screen', `main${CSI}?1049halt`, ['    alt'], [7, 0]],
+  // The primary comes back with its lines in their order, after the
+  // alternate scrolled.
+  ['back from it', `main\r\nline${CSI}?1049halt${'\r\n'.repeat(70)}x${CSI}?1049l`, ['main', 'line'], [4, 1]],
+  ['alignment', `x${E}#8`, ['E'.repeat(128), 'E'.repeat(128)], [0, 0]],
+];
+
+function parse(out, rows) {
   const lines = out.split('\n');
   const sends = [];
   while (lines[0].startsWith('send ')) sends.push(lines.shift().slice(5).replaceAll('\\e', E));
   const [, x, y] = lines.shift().split(' ');
-  const screen = lines.slice(0, 28).map((l) => l.slice(1));
+  const screen = lines.slice(0, rows).map((l) => l.slice(1));
   const runs = {}, shown = {};
-  for (const l of lines.slice(28))
+  for (const l of lines.slice(rows))
     if (l.startsWith('>')) shown[parseInt(l.slice(1))] = l.slice(5);
     else if (l) runs[parseInt(l)] = l.slice(4);
   return { sends, cursor: [+x, +y], screen, runs, shown };
 }
 
 mkdirSync('build', { recursive: true });
-const runners = [];
-execFileSync('g++', ['-std=c++17', '-O2', '-Wall', '-Iterminal', ...SOURCES, '-o', 'build/_terminal-host']);
-runners.push(['host', (file) => execFileSync('build/_terminal-host', { input: file.data })]);
-if (existsSync('build/gcc/gcc/xgcc') && existsSync('build/cross-bin/fructus-elf-as')) {
-  execFileSync('tools/fcc', ['-Os', '-Iterminal', ...SOURCES, '-o', 'build/_terminal'], { stdio: 'inherit' });
-  // fcc-run prints each byte the UART sends as one Latin-1 character.
-  runners.push(['fructus', (file) => Buffer.from(execFileSync('node', ['tools/fcc-run.mjs',
-    'build/_terminal.bin', '--input', file.path, '--max', '20000000'], { encoding: 'utf8' }), 'latin1')]);
-} else {
-  console.log('skip  terminal/check.mjs on Fructus: the compiler is not built');
+const FRUCTUS = existsSync('build/gcc/gcc/xgcc') && existsSync('build/cross-bin/fructus-elf-as');
+if (!FRUCTUS) console.log('skip  terminal/check.mjs on Fructus: the compiler is not built');
+
+// dump.cc from sources, as build/NAME, on the host and on Fructus.
+function dumpers(name, flags, sources) {
+  const runners = [];
+  execFileSync('g++', ['-std=c++17', '-O2', '-Wall', '-Iterminal', ...flags, ...sources, '-o', `build/${name}-host`]);
+  runners.push(['host', (file) => execFileSync(`build/${name}-host`, { input: file.data })]);
+  if (FRUCTUS) {
+    execFileSync('tools/fcc', ['-Os', '-Iterminal', ...flags, ...sources, '-o', `build/${name}`], { stdio: 'inherit' });
+    // fcc-run prints each byte the UART sends as one Latin-1 character.
+    runners.push(['fructus', (file) => Buffer.from(execFileSync('node', ['tools/fcc-run.mjs',
+      `build/${name}.bin`, '--input', file.path, '--max', '20000000'], { encoding: 'utf8' }), 'latin1')]);
+  }
+  return runners;
 }
+const runners = dumpers('_terminal', [], SOURCES);
+const denseRunners = dumpers('_terminal-dense', DENSE, DENSE_SOURCES);
 
 let fails = 0;
 
 // The generated tables are what their generators make now, if 9x15 is here.
 const NINE = '/usr/share/fonts/X11/misc/9x15.pcf.gz';
+const SPLEENTT = `${homedir()}/github/spleentt-5x8-font/SpleenttMedium-8.bdf`;
 const generated = [['terminal/gen-decompose.mjs', 'terminal/decompose.cc']];
 if (existsSync(NINE)) generated.push(['terminal/gen-font.mjs', 'terminal/font.cc']);
 else console.log(`skip  terminal/check.mjs's font.cc: no ${NINE}`);
+if (existsSync(SPLEENTT)) generated.push(['terminal/gen-font5.mjs', 'terminal/font5.cc']);
+else console.log(`skip  terminal/check.mjs's font5.cc: no ${SPLEENTT}`);
 for (const [gen, file] of generated)
   if (execFileSync('node', [gen], { stdio: ['ignore', 'pipe', 'ignore'] }).toString() !== readFileSync(file, 'utf8')) {
     fails++;
@@ -201,32 +237,24 @@ function pngPixels(file) {
   return out;
 }
 
-if (runners.length > 1) {
-  const MAIN = ['terminal/main.cc', 'terminal/terminal.cc', 'terminal/decompose.cc', 'terminal/font.cc',
-                'terminal/row.cc', 'terminal/bidi.cc', 'terminal/vectors.s'];
-  execFileSync('tools/fcc', ['-Os', '-T', 'ld/fructus-writethru.ld', '-Iterminal', ...MAIN, '-o', 'build/_terminal-main'],
-               { stdio: 'inherit' });
-  execFileSync('g++', ['-std=c++17', '-O2', '-Wall', '-Iterminal', 'terminal/preview.cc', ...MAIN.slice(1, 6),
-                       '-o', 'build/_terminal-preview']);
-  let scroll = '';
-  for (let i = 0; i < 100; i++) scroll += `${String(i).padStart(3)} ${'the quick brown fox '.repeat(4)}\r\n`;
-  // Right to left, every row through all of bidi.cc: Hebrew, numbers,
-  // brackets and Latin in right-to-left paragraphs.
-  let rtl = `${SCP_RTL}${CSI}?2500h`;
-  for (let i = 0; i < 100; i++) rtl += `${String(i).padStart(3)} ${SHALOM} (${OLAM}) world \u20aa${i} `.repeat(2) + '\r\n';
-  const inputs = [['the demo', execFileSync('node', ['terminal/demo.mjs'])],
-                  ['100 lines scrolled', Buffer.from(scroll)],
-                  ['100 right-to-left lines scrolled', Buffer.from(rtl)]];
-  for (const [name, data] of inputs) {
-    writeFileSync('build/_terminal-main.in', data);
-    rmSync('build/_terminal-frames', { recursive: true, force: true });
-    const run = spawnSync('node', ['tools/fcc-run.mjs', 'build/_terminal-main.bin', '--input', 'build/_terminal-main.in',
-                                   '--paced', '--stats', '--frames', 'build/_terminal-frames',
+// main.cc, from the sources, played each input at 115200 baud: none of it
+// lost, and its last frame preview.cc's.  The sources' first is main.cc and
+// their last vectors.s.
+function paced(name, flags, sources, inputs) {
+  execFileSync('tools/fcc', ['-Os', '-T', 'ld/fructus-writethru.ld', '-Iterminal', ...flags, ...sources,
+                             '-o', `build/${name}`], { stdio: 'inherit' });
+  execFileSync('g++', ['-std=c++17', '-O2', '-Wall', '-Iterminal', ...flags, 'terminal/preview.cc',
+                       ...sources.slice(1, -1), '-o', `build/${name}-preview`]);
+  for (const [input, data] of inputs) {
+    writeFileSync(`build/${name}.in`, data);
+    rmSync(`build/${name}-frames`, { recursive: true, force: true });
+    const run = spawnSync('node', ['tools/fcc-run.mjs', `build/${name}.bin`, '--input', `build/${name}.in`,
+                                   '--paced', '--stats', '--frames', `build/${name}-frames`,
                                    '--max', String(data.length * 2500 + 3e6)], { encoding: 'utf8' });
     const sent = run.stderr.match(/(\d+) of (\d+) bytes of input sent, (\d+) lost/);
-    const last = readdirSync('build/_terminal-frames').sort().at(-1);
-    const want = execFileSync('build/_terminal-preview', { input: data, maxBuffer: 1 << 21 });
-    const got = pngPixels(`build/_terminal-frames/${last}`);
+    const last = readdirSync(`build/${name}-frames`).sort().at(-1);
+    const want = execFileSync(`build/${name}-preview`, { input: data, maxBuffer: 1 << 21 });
+    const got = pngPixels(`build/${name}-frames/${last}`);
     const wrong = [];
     if (!sent || sent[1] !== sent[2] || sent[3] !== '0') wrong.push(`the line: ${sent ? sent[0] : run.stderr.trim()}`);
     const px = want.subarray(want.length - got.length);
@@ -235,18 +263,45 @@ if (runners.length > 1) {
     if (px.length !== got.length || differ) wrong.push(`${differ} pixels of the last frame differ from the preview's`);
     if (wrong.length) {
       fails++;
-      console.log(`  FAIL main.cc, ${name}: ${wrong.join('; ')}`);
+      console.log(`  FAIL ${flags.length ? 'dense ' : ''}main.cc, ${input}: ${wrong.join('; ')}`);
     }
   }
-  rmSync('build/_terminal-frames', { recursive: true, force: true });
+  rmSync(`build/${name}-frames`, { recursive: true, force: true });
 }
 
-for (const [name, input, lines, cursor, sends = [], runs = {}, shown = {}] of cases) {
+if (FRUCTUS) {
+  let scroll = '';
+  for (let i = 0; i < 100; i++) scroll += `${String(i).padStart(3)} ${'the quick brown fox '.repeat(4)}\r\n`;
+  // Right to left, every row through all of bidi.cc: Hebrew, numbers,
+  // brackets and Latin in right-to-left paragraphs.
+  let rtl = `${SCP_RTL}${CSI}?2500h`;
+  for (let i = 0; i < 100; i++) rtl += `${String(i).padStart(3)} ${SHALOM} (${OLAM}) world \u20aa${i} `.repeat(2) + '\r\n';
+  paced('_terminal-main', [], ['terminal/main.cc', 'terminal/terminal.cc', 'terminal/decompose.cc',
+                                'terminal/font.cc', 'terminal/row.cc', 'terminal/bidi.cc', 'terminal/vectors.s'],
+        [['the demo', execFileSync('node', ['terminal/demo.mjs'])],
+         ['100 lines scrolled', Buffer.from(scroll)],
+         ['100 right-to-left lines scrolled', Buffer.from(rtl)]]);
+
+  // Dense: 200 wide lines scrolled, and a full screen on the alternate one
+  // and back, which brings the primary back from main.cc's .upper.
+  let wide = '';
+  for (let i = 0; i < 200; i++) wide += `${String(i).padStart(3)} ${'the quick brown fox '.repeat(6)}${CSI}${31 + i % 7}mcolour${CSI}0m\r\n`;
+  let alt = `${CSI}44mprimary${CSI}0m\r\n${CSI}?1049h`;
+  for (let i = 0; i < 70; i++) alt += `${CSI}1;${31 + i % 7}m${String(i).padStart(3)}${CSI}0m ${'jumps over the lazy dog '.repeat(5)}\r\n`;
+  alt += `${CSI}?1049lback`;
+  paced('_terminal-dense-main', DENSE, ['terminal/main.cc', 'terminal/terminal.cc', 'terminal/font5.cc', 'terminal/vectors.s'],
+        [['the demo', execFileSync('node', ['terminal/demo.mjs', '--dense'])],
+         ['200 lines scrolled', Buffer.from(wide)],
+         ['the alternate screen and back', Buffer.from(alt)]]);
+}
+
+for (const [variant, list, rows, run_with] of [['', cases, ROWS, runners], ['dense ', denseCases, 60, denseRunners]])
+for (const [name, input, lines, cursor, sends = [], runs = {}, shown = {}] of list) {
   const data = Buffer.isBuffer(input) ? input : Buffer.from(input, 'utf8');
   const path = 'build/_terminal.in';
   writeFileSync(path, data);
-  for (const [where, run] of runners) {
-    const got = parse(run({ data, path }).toString('utf8'));
+  for (const [where, run] of run_with) {
+    const got = parse(run({ data, path }).toString('utf8'), rows);
     const wrong = [];
     lines.forEach((l, i) => { if (got.screen[i] !== l) wrong.push(`line ${i} ${JSON.stringify(got.screen[i])}, not ${JSON.stringify(l)}`); });
     if (got.cursor.join() !== cursor.join()) wrong.push(`cursor ${got.cursor}, not ${cursor}`);
@@ -255,10 +310,11 @@ for (const [name, input, lines, cursor, sends = [], runs = {}, shown = {}] of ca
     for (const l in shown) if (got.shown[l] !== shown[l]) wrong.push(`line ${l} shown ${JSON.stringify(got.shown[l])}, not ${JSON.stringify(shown[l])}`);
     if (wrong.length) {
       fails++;
-      console.log(`  FAIL ${name} (${where}): ${wrong.join('; ')}`);
+      console.log(`  FAIL ${variant}${name} (${where}): ${wrong.join('; ')}`);
     }
   }
 }
-console.log(`${fails ? 'FAIL' : 'ok  '}  terminal/check.mjs: ${cases.length} cases on ${runners.map((r) => r[0]).join(' and ')}` +
-            (runners.length > 1 ? ', main.cc paced at 115200 against the preview' : ''));
+console.log(`${fails ? 'FAIL' : 'ok  '}  terminal/check.mjs: ${cases.length} cases and ${denseCases.length} dense on ` +
+            runners.map((r) => r[0]).join(' and ') +
+            (FRUCTUS ? ', main.cc and dense main.cc paced at 115200 against the preview' : ''));
 process.exit(fails ? 1 : 0);
