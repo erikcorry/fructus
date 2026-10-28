@@ -22,7 +22,8 @@
 //           BOX_MIRRORS with BIDI_BOX
 //
 // A row with no right-to-left letter in a left-to-right paragraph is as it
-// is, and bidi_order says so without the rest.
+// is, and bidi_order says so without the rest: by the marks alone, when no
+// cell is from the third set, the only one with right-to-left letters.
 #ifndef TERMINAL_BIDI_H
 #define TERMINAL_BIDI_H
 

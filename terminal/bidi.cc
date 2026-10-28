@@ -50,6 +50,15 @@ bool bidi_order(const Row &r, uint8_t order[COLUMNS]) {
     return true;
   }
 
+  // Left to right with no right-to-left letter is as it is, whatever
+  // BIDI_AUTO finds first.  Only the third set has any, Hebrew's, so a row
+  // with none of its cells is found by its marks alone.
+  if (!rtl) {
+    int c = 0;
+    while (c < COLUMNS && (r.mark[c] & MARK) != THIRD) c++;
+    if (c == COLUMNS) return false;
+  }
+
   // The classes, the first strong letter, whether any is right to left,
   // and where the spaces at the end start.  MIRROR in level says the cell
   // has a pair, and the bits under it are its level.
