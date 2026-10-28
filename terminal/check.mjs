@@ -148,7 +148,9 @@ const denseCases = [
   ['tabs', `a\tb${CSI}3g\tc`, ['a       b' + ' '.repeat(118) + 'c'], [127, 0]],
   // Wide is still two cells; marks and joiners are dropped.
   ['not ASCII', 'é中x\u0301\u200dy', ['\ufffd\ufffd xy'], [5, 0]],
-  ['box drawing', `${E}(0lqkx${E}(B \u2550\u2551\u256d\u254c\u254e\u2573\u2580`, ['+-+| -|+-|X\ufffd'], [12, 0]],
+  // One weight: heavy, double, mixed, dashed and rounded as the light.
+  ['box drawing', `${E}(0lqkx${E}(B \u2550\u2551\u256d\u254c\u254e\u254b\u2542\u2578\u2577\u2573\u2580`,
+    ['\u250c\u2500\u2510\u2502 \u2500\u2502\u250c\u2500\u2502\u253c\u253c\u2574\u2577X\ufffd'], [16, 0]],
   // Neither does anything, nor leaves a mark.
   ['underline and bidi', `${CSI}4mA${CSI}0m${CSI}2 k\u05d0B${CSI}?2501h`, ['A\ufffdB'], [3, 0], [], { 0: undefined }],
   ['bold is brighter', `${CSI}1mA${CSI}22;31mB${CSI}1mC${CSI}0;7mD`, ['ABCD'], [4, 0], [],

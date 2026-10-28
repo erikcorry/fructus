@@ -77,8 +77,10 @@
 // the display's 5-pixel cells, in font5.h's Spleentt.  The same sequences,
 // but a cell is ASCII and its colours: 3 bytes, 23,100 a screen.
 //
-//   - A base is ASCII, or FALLBACK for the rest.  Box drawing, the DEC
-//     line drawing among it, is + - and |.  Combining marks are dropped.
+//   - A base is ASCII, box drawing, or FALLBACK for the rest.  Box drawing,
+//     the DEC line drawing among it, is light lines: heavy, double, dashed
+//     and rounded are drawn as the light with the same arms, and the
+//     diagonals are / \ X.  Combining marks are dropped.
 //   - No underline, so SGR 4 does nothing, and no bidi, so the sequences
 //     that set its properties do nothing either.
 //   - ONE SCREEN.  Two would not fit in the 28K below 0x8000, so the

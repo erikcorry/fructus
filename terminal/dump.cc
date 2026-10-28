@@ -101,7 +101,11 @@ static Screen kept;
 void terminal::stash(const Screen &s) { kept = s; }
 void terminal::unstash(Screen &s) { s = kept; }
 
-static void cell(const Row &, int, uint8_t base) { utf8(base == FALLBACK ? 0xfffd : base); }
+// Box drawing's codes are its arms, font5.h's UP | DOWN | LEFT | RIGHT.
+static const char16_t BOXES[] = u" ╵╷│╴┘┐┤╶└┌├─┴┬┼";
+static void cell(const Row &, int, uint8_t base) {
+  utf8(base == FALLBACK ? 0xfffd : base < 16 ? BOXES[base] : base);
+}
 static bool marked(const Row &, int) { return false; }
 static bool underlined(const Row &, int) { return false; }
 

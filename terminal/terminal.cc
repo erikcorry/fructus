@@ -108,16 +108,13 @@ constexpr uint16_t GRAPHICS[32] = {
 
 #ifdef TERMINAL_DENSE
 
-// c as the dense font has it: ASCII, box drawing as + - and |, and the rest
-// FALLBACK.  The lines run in pairs, light and heavy, then dashed: two
-// across, two down.
-uint8_t ascii(uint32_t c) {
+// c's base in the dense font: ASCII, box drawing's arms, the diagonals as
+// / \ X, and the rest FALLBACK.
+uint8_t base_of(uint32_t c) {
   if (c >= 0x20 && c < 0x7f) return c;
-  if (c < 0x2500 || c > 0x257f) return FALLBACK;
-  if (c < 0x250c || (c >= 0x254c && c <= 0x254f)) return c >> 1 & 1 ? '|' : '-';
-  if (c == 0x2550 || c == 0x2551 || c >= 0x2574) return c & 1 ? '|' : '-';   // ═ ║, ╴ ╵ ...
   if (c >= 0x2571 && c <= 0x2573) return "/\\X"[c - 0x2571];
-  return '+';
+  if (c >= 0x2500 && c <= 0x257f) return BOX[c - 0x2500];
+  return FALLBACK;
 }
 
 #else
@@ -412,7 +409,7 @@ void print(uint32_t c) {
 #ifdef TERMINAL_DENSE
   if ((c >= 0x300 && c <= 0x36f) || in(c, ZERO_WIDTH)) return;
   int width = in(c, WIDE) ? 2 : 1;
-  uint8_t base = ascii(c), mark = 0;
+  uint8_t base = base_of(c), mark = 0;
 #else
   if (c >= 0x300 && c <= 0x36f) return combine(c);
   if (c >= 0x591 && c <= 0x5c7 && in(c, ZERO_WIDTH)) return point(c);
