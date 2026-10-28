@@ -6,7 +6,8 @@
 //   node tests/video-check.mjs
 //
 // A frame buffer with random line tables - every depth code, width, text
-// 16-pixel fonts and text disable, mixed line by line - over random memory, a
+// 8-, 16- and 5-column cells and text disable, mixed line by line, 5 columns
+// with the backgrounds that leave it room - over random memory, a
 // random palette, and sixteen random sprites, half transparent, overlapping and
 // partly off the screen's edges.  The reference computes every cycle of a frame from
 // docs/vga.md: the syncs from the timing, and for each visible column the
@@ -52,10 +53,13 @@ const table = [];
 // The font register, the font's address, at random but even.
 const FONT = rand(16384) * 2;
 for (let n = 0; n < LINES; n++) {
-  const code = rand(8);
+  const code = rand(8), text = n % 4;
   let wm1 = rand(8);
   if (DEPTH[code][0] === 3) wm1 |= 1;          // 3 bpp: even widths only
-  const mode = rand(2) << 15 | rand(2) << 14 | wm1 << 11 | code << 8 | rand(256);
+  // 5-column text: the background's reads every pixels-per-word × width
+  // columns must be a multiple of 10, so width 5 but at 3 bpp.
+  else if (text === 2) wm1 = 4;
+  const mode = text << 14 | wm1 << 11 | code << 8 | rand(256);
   // Every pointer with a random bit 15, which the display must ignore, so that
   // a pointer can be the processor's own address of the buffer above 0x8000.
   const t = { bg: (rand(32768 - 1024) & ~1) | rand(2) << 15, mode, ch: rand(65536), co: rand(65536) };
@@ -272,9 +276,10 @@ endmodule
 `;
 
 // A line must be at least 705 cycles for the sprite engine, so the smallest
-// porches go with a wider picture.
+// porches go with a wider picture - a whole number of cells at 5, 8 and 16
+// columns, since a cell's reads need its last columns active.
 const TIMINGS = [
-  ['minimum porches', [6, 3, 2, 704], [2, 2, 3, LINES]],
+  ['minimum porches', [6, 3, 2, 720], [2, 2, 3, LINES]],
   ['standard porches', [16, 96, 48, 640], [10, 2, 33, LINES]],
 ];
 

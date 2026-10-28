@@ -127,8 +127,7 @@ Each `graphics_mode` entry is 16 bits, all of them spoken for:
 | 7–0 | `font_line` | the font window, see [Fonts](#fonts) |
 | 10–8 | depth | the background's depth and palette range, see [Background](#background) |
 | 13–11 | pixel width − 1 | background pixels 1 to 8 columns wide |
-| 14 | 16-pixel font | 40 columns of 16-pixel cells, a 16-bit word per glyph row |
-| 15 | text disable | the fg/bg mux always takes the background |
+| 15–14 | text | `00` 80 columns of 8-pixel cells; `01` 40 columns of 16-pixel cells, a 16-bit word per glyph row; `10` 128 columns of 5-pixel cells, the top five bits of an 8-pixel font; `11` text disable: the fg/bg mux always takes the background |
 
 `font_line` is the low byte, so the CPU can change it with a byte store.
 
@@ -273,7 +272,8 @@ supported width against a reference built from this section.
 ### Memory cycles
 
 Counting x from column 0, even cycles belong to the text generator and odd
-cycles to the background generator.
+cycles to the background generator - except with 5-pixel cells, see [Text
+generator](#text-generator).
 
 The text generator reads bytes: a character code, a foreground colour and a
 glyph byte per 8-pixel cell, 3 of its 4 cycles. So `character_data` and
@@ -321,7 +321,36 @@ a 16-pixel row arrives whole and an 8-pixel one arrives as its byte and eight
 bits never shown. The one mux the 16-pixel font adds is the code's place in
 the address.
 
-**Both cell widths move at phase 6**, the first cycle after the colour
+**5-pixel cells** (mode bits 15–14 `10`) show the top five bits of each
+row of an ordinary 8-pixel font, at the 8-pixel font's addresses, so 128
+columns: 5×8 fonts such as Tommy Thorn's smol are stored with their glyphs
+left-aligned in the byte. Three reads do not fit in a cell's even cycles, so
+these cells read on odd ones too, at x mod 5:
+
+| phase | |
+|---|---|
+| 1 | read the character code, `character_data`++ |
+| 2 | the glyph row's address, as for 8-pixel cells |
+| 3 | read the glyph row |
+| 4 | read the foreground colour, `character_color`++ |
+| 6 (the next cell's 1) | glyph and colour move to the output stage |
+
+That is x mod 10 = 1, 3, 4, 6, 8 and 9, leaving the background 5 and 7. The
+background reads a word every pixels-per-word × width columns, first at
+column 5 (column 1 of its own count, which runs 4 late at `LATENCY` 8), so
+its reads miss the text's only when that period is a multiple of 10:
+
+| background | widths with 5-pixel text |
+|---|---|
+| 1, 2, 4, 8 bpp | 5 only |
+| 3 bpp | 2, 4, 6, 8 - all of its widths |
+
+8 bpp at width 5 is one background byte per cell. With any other background
+the two share cycles, the text gets the port, and the background's pixels
+are undefined. Moving the code read to phase 1 rather than 0 is what leaves
+column 5 free, and costs no latency: the colour still arrives at phase 5.
+
+**Every cell width moves at phase 6**, the first cycle after the colour
 arrives, so a cell is shown from 7 cycles after its first column either way
 and the latency does not depend on the mode: a 16-pixel cell is still showing
 its last columns while the next cell's reads happen, so the next glyph and
@@ -336,8 +365,10 @@ colour before the glyph would give the add more time but gain nothing, and
 adding into the address mux instead would lengthen that slowest path.
 
 That mux is now chosen by the schedule rather than by the reads: the pointer
-by the phase's bits 2:1, and the generator by an even column in the visible
-part, the tables in the blanking, and the background otherwise. Choosing it
+by two flops, `sel`, and the generator by `active` and a flop, `own`, both set
+a cycle ahead from the next column's phase - for 8 and 16 pixels its bits 2:1
+and its even-ness - with the tables in the blanking and the background
+otherwise. Choosing it
 by which read was happening gave the same address, but it put the width
 mux, the phase compares and the background's `bits_left` compares in front of
 the SPRAM, about ten LUTs from the timing counters. In the whole system, with
@@ -345,9 +376,21 @@ the CPU's 64 KB and write-only frame buffers, that path sometimes set the
 clock. After the change, no seed out of eight put the display on the critical
 path.
 
-135 LUT4s, 37 carry cells and 109 flops by yosys. `tests/foreground-check.mjs`
-checks every column at both widths, with text on and off and pointers of
-either parity, against a reference built from this section.
+187 LUT4s, 51 carry cells and 142 flops by yosys 0.70+176 `synth_ice40`;
+5-pixel cells cost 8 LUT4s, 1 carry and 11 flops of that, 32 logic cells in
+the whole system, and no measurable clock (29.52 MHz median over 8 seeds
+against 29.50, the display never on the critical path). After a read, the
+next step - the glyph address, taking the glyph and colour, the move - is
+timed by a flop of that read, not by a phase compare, which is what makes the
+three widths share one datapath.
+
+A line's visible width must be a whole number of cells: a cell's colour is
+read in its fifth column at 5 pixels, its fifth at 8. So 640 suits all three,
+and `tests/video-check.mjs` widens its smallest-porch picture to 720.
+
+`tests/foreground-check.mjs` checks every column at all three widths and with
+text off, pointers of either parity, and that no read lands on the
+background's cycles, against a reference built from this section.
 
 ### Pixel path
 

@@ -7,19 +7,21 @@
 //
 // The reference computes every column's glyph bit and foreground colour
 // straight from the documented layout - a cell's code at char_ptr + cell, its
-// glyph row at font + (font_line << 6) + code - a byte, bit 7 leftmost - or in
-// the wide mode font + (font_line << 7) + 2 code - a little-endian word, bit
-// 15 leftmost - its colour at
+// glyph row at font + (font_line << 6) + code - a byte, bit 7 leftmost, of
+// which 5-column cells show the top five - or in the wide mode font +
+// (font_line << 7) + 2 code - a little-endian word, bit 15 leftmost - its
+// colour at
 // color_ptr + cell, all little-endian bytes of 16-bit words - and not from
 // anything the circuit does.
 //
-// WHAT IS SWEPT.  8- and 16-column cells, text on and off, over random memory
+// WHAT IS SWEPT.  8-, 16- and 5-column cells and text off, over random memory
 // with random pointers of either parity - and a random bit 15, which the
 // generator must ignore, so that a pointer can be the processor's own address
 // of the buffer above 0x8000 - and a random font_line, 24 lines of
-// each.  The testbench counts x from column 0 and fails a read on an odd x,
-// which belongs to the background generator.  Run at LATENCY 8, the least, and
-// 10.
+// each, 48 of 5 columns.  The testbench counts x from column 0 and fails a
+// read on an odd x, which belongs to the background generator - or at 5
+// columns, a read at x mod 5 = 0 or 2, x mod 10 = 0, 2, 5 or 7.  Run at
+// LATENCY 8, the least, and 10.
 //
 // Needs iverilog.  Skips with a message rather than failing when it is absent.
 // =============================================================================
@@ -58,11 +60,14 @@ const rowAt = (fl, code, wide) => {
 };
 
 // --- the reference ----------------------------------------------------------
-const expected = ({ cp, kp, fl, wide, off }) => {
+// m is the mode word's bits 15-14: 0 8 columns, 1 16, 2 5, 3 text off.  Text
+// off keeps the 16-column cells' colours.
+const expected = ({ cp, kp, fl, m }) => {
   const out = [];
+  const wide = m & 1, w = [8, 16, 5, 16][m], off = m === 3;
   for (let x = 0; x < 640; x++) {
-    const cell = wide ? x >> 4 : x >> 3;
-    const bit  = wide ? x & 15 : x & 7;
+    const cell = Math.floor(x / w);
+    const bit  = x % w;
     const row = rowAt(fl, byte(cp + cell), wide);
     const on = off ? 0 : (row >> (15 - bit)) & 1;
     out.push(on << 8 | byte(kp + cell));
@@ -72,20 +77,19 @@ const expected = ({ cp, kp, fl, wide, off }) => {
 
 // --- the lines --------------------------------------------------------------
 const lines = [];
-for (const wide of [0, 1])
-  for (const off of [0, 1])
-    for (let n = 0; n < 24; n++)
-      lines.push({ cp: rand(32768 - 128), kp: rand(32768 - 128), fl: rand(256),
-                   cp15: rand(2), kp15: rand(2), wide, off, gap: 3 + rand(158) });
+for (const m of [0, 1, 2, 2, 3])
+  for (let n = 0; n < 24; n++)
+    lines.push({ cp: rand(32768 - 128), kp: rand(32768 - 128), fl: rand(256),
+                 cp15: rand(2), kp15: rand(2), m, gap: 3 + rand(158) });
 
 const dir = 'build/foreground-check';
 mkdirSync(dir, { recursive: true });
 const hex = (v, n) => v.toString(16).padStart(n, '0');
 writeFileSync(`${dir}/mem.hex`, mem.map((w) => hex(w, 4)).join('\n') + '\n');
-// Bits: 55-48 gap, 43 color_ptr's bit 15, 42 char_ptr's, 41 off, 40 wide,
-// 37-30 font_line, 29-15 color_ptr, 14-0 char_ptr.
+// Bits: 55-48 gap, 43 color_ptr's bit 15, 42 char_ptr's, 41-40 the mode
+// word's bits 15-14, 37-30 font_line, 29-15 color_ptr, 14-0 char_ptr.
 const pack = (l) => BigInt(l.gap) << 48n | BigInt(l.kp15) << 43n | BigInt(l.cp15) << 42n |
-                    BigInt(l.off) << 41n | BigInt(l.wide) << 40n |
+                    BigInt(l.m) << 40n |
                     BigInt(l.fl) << 30n | BigInt(l.kp) << 15n | BigInt(l.cp);
 writeFileSync(`${dir}/cfg.hex`, lines.map((l) => pack(l).toString(16).padStart(14, '0')).join('\n') + '\n');
 
@@ -114,8 +118,9 @@ module tb;
     always @(posedge clk) begin
         x = active && !act_prev ? 0 : x + 1;
         act_prev = active;
-        if (mem_rd === 1'b1 && x % 2 == 1) begin
-            $display("FAIL read on odd x %0d, line %0d", x, i);
+        if (mem_rd === 1'b1 && (cfg[i][41:40] == 2'b10 ? x % 5 == 0 || x % 5 == 2
+                                                       : x % 2 == 1)) begin
+            $display("FAIL read on x %0d, line %0d", x, i);
             $finish;
         end
         mem_rdata <= mem_rd === 1'b1 ? mem[mem_addr] : 16'hxxxx;
@@ -173,7 +178,7 @@ for (const latency of [8, 10]) {
     const x = e.findIndex((v, j) => parseInt(g[j], 16) !== v);
     if (g.length !== 640 || x >= 0) {
       if (fail++ < 10)
-        console.log(`FAIL latency ${latency} wide ${l.wide} off ${l.off} char 0x${hex(l.cp, 4)}` +
+        console.log(`FAIL latency ${latency} mode ${l.m} char 0x${hex(l.cp, 4)}` +
           ` color 0x${hex(l.kp, 4)} font_line ${l.fl}: column ${x}, got ${g[x]},` +
           ` want ${hex(e[x] ?? 0, 3)} (${g.length} columns)`);
     }

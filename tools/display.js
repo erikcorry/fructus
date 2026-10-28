@@ -56,10 +56,12 @@ export const bgPixel = (st, t, x) => {
 
 // The text generator at column x: whether the glyph's bit is set, and the
 // cell's foreground byte.  docs/vga.md, "Fonts" and "Text generator".
+// The mode word's bits 15-14: 00 8-column cells, 01 16, 10 5 - the 8-column
+// font's top five bits - and 11 text off.
 export const fgPixel = (st, t, x) => {
-  const wide = (t.mode >> 14) & 1, off = t.mode >> 15;
-  const cell = wide ? x >> 4 : x >> 3;
-  const bit = wide ? x & 15 : x & 7;
+  const m = t.mode >> 14, wide = m & 1, off = m === 3, w = [8, 16, 5, 16][m];
+  const cell = Math.floor(x / w);
+  const bit = x % w;
   const base = st.font + ((t.mode & 0xff) << (wide ? 7 : 6)), code = byteOf(st, t.ch + cell);
   const row = wide ? byteOf(st, base + 2 * code) | byteOf(st, base + 2 * code + 1) << 8
                    : byteOf(st, base + code) << 8;
