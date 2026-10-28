@@ -10,7 +10,11 @@
    all there.
 
    The reference moves one bit at a time with a CONSTANT shift, which shares
-   no code with a shift by a variable count.  */
+   no code with a shift by a variable count.
+
+   1 << n is checked on its own, since fructus_expand_one_bit expands it for
+   long and long long without the helpers: a 16-bit shift, and the count's
+   bits 4 and 5 as masks choosing the word.  */
 
 volatile unsigned vn;
 
@@ -38,11 +42,25 @@ volatile unsigned vn;
       }									\
   }
 
+#define CHECK_BIT(T, W, NUM)						\
+  {									\
+    unsigned T b = 1;							\
+    for (unsigned n = 0; n < 128; n++)					\
+      {									\
+	vn = n;								\
+	if (((unsigned T) 1 << (vn & (W - 1))) != b)			\
+	  return NUM;							\
+	b = n % W == W - 1 ? 1 : b << 1;				\
+      }									\
+  }
+
 int
 main (void)
 {
   CHECK (int, 16, 1)
   CHECK (long, 32, 4)
   CHECK (long long, 64, 7)
+  CHECK_BIT (long, 32, 10)
+  CHECK_BIT (long long, 64, 11)
   return 0;
 }
