@@ -10,7 +10,7 @@
 // every mark.
 //
 // And main.cc itself, on the simulator with its display: bytes sent at
-// 115200 baud into its receive interrupt, the demo and a screenful scrolled
+// 230400 baud, main.cc's rate, into its receive interrupt, the demo and a screenful scrolled
 // many times over, none lost, and its last frame what terminal/preview.cc
 // draws on the host from the same bytes, pixel for pixel.
 //
@@ -239,7 +239,7 @@ function pngPixels(file) {
   return out;
 }
 
-// main.cc, from the sources, played each input at 115200 baud: none of it
+// main.cc, from the sources, played each input at its 230400 baud: none of it
 // lost, and its last frame preview.cc's.  The sources' first is main.cc and
 // their last vectors.s.
 function paced(name, flags, sources, inputs) {
@@ -273,7 +273,7 @@ function paced(name, flags, sources, inputs) {
 
 if (FRUCTUS) {
   let scroll = '';
-  for (let i = 0; i < 100; i++) scroll += `${String(i).padStart(3)} ${'the quick brown fox '.repeat(4)}\r\n`;
+  for (let i = 0; i < 300; i++) scroll += `${String(i).padStart(3)} ${'the quick brown fox '.repeat(4)}\r\n`;
   // Right to left, every row through all of bidi.cc: Hebrew, numbers,
   // brackets and Latin in right-to-left paragraphs.
   let rtl = `${SCP_RTL}${CSI}?2500h`;
@@ -281,7 +281,7 @@ if (FRUCTUS) {
   paced('_terminal-main', [], ['terminal/main.cc', 'terminal/terminal.cc', 'terminal/decompose.cc',
                                 'terminal/font.cc', 'terminal/row.cc', 'terminal/bidi.cc', 'terminal/vectors.s'],
         [['the demo', execFileSync('node', ['terminal/demo.mjs'])],
-         ['100 lines scrolled', Buffer.from(scroll)],
+         ['300 lines scrolled', Buffer.from(scroll)],
          ['100 right-to-left lines scrolled', Buffer.from(rtl)]]);
 
   // Dense: 200 wide lines scrolled, and a full screen on the alternate one
@@ -318,5 +318,5 @@ for (const [name, input, lines, cursor, sends = [], runs = {}, shown = {}] of li
 }
 console.log(`${fails ? 'FAIL' : 'ok  '}  terminal/check.mjs: ${cases.length} cases and ${denseCases.length} dense on ` +
             runners.map((r) => r[0]).join(' and ') +
-            (FRUCTUS ? ', main.cc and dense main.cc paced at 115200 against the preview' : ''));
+            (FRUCTUS ? ', main.cc and dense main.cc paced at 230400 against the preview' : ''));
 process.exit(fails ? 1 : 0);

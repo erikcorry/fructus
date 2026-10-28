@@ -1,7 +1,7 @@
 # The Fructus terminal
 
 An ANSI terminal on the Fructus VGA display: 80 columns by 28 rows of 8×17
-cells, in 640×480, fed from the UART at 115200 baud. Close enough to xterm
+cells, in 640×480, fed from the UART at 230400 baud. Close enough to xterm
 for vim, less and the shells with `TERM=xterm-256color`.
 
 The source comments are the full description; this page is the overview.
@@ -27,7 +27,7 @@ node tools/fcc-run.mjs build/terminal-dense.bin --input build/dense.in --paced -
 ```
 
 `node terminal/check.mjs` runs the cases on the host and on Fructus. It also
-plays three inputs into `main.cc` at 115200 baud, and checks that no byte is
+plays three inputs into `main.cc` at its 230400 baud, and checks that no byte is
 lost and that the last frame matches `preview.cc`'s, pixel for pixel.
 
 ## The pieces
@@ -206,6 +206,21 @@ Each of the two 32 KB buffers, at the CPU's WRITETHRU addresses:
 | 0xce40 | a row of black, for the lines outside the text | 80 |
 | 0xce90 | free | 8,560 |
 | 0xf000 | line tables | 4,096 |
+
+## Drawing
+
+B is shown. A pass draws the rows changed since the last into A, then shows
+A for one frame in COPY, which copies it into B as the display reads it
+(docs/vga.md, "Double buffering"), and shows B again. So each change is drawn
+once. The ring is emptied into the screen before each row drawn and all
+through the two waits for a vertical sync, so the line is limited by
+`put()`, some 550 cycles a byte, and not by drawing: 345600 baud loses
+nothing on the scrolling input, and 460800 would take every cycle.
+
+The 80×28 terminal draws from a copy of the screen in `.upper`, taken before
+each pass from the rows changed, so that bytes can go on arriving between its
+rows. The dense one has no room for a copy and draws from the screen itself:
+a row changed after it was drawn is drawn again next pass.
 
 ## The dense terminal
 

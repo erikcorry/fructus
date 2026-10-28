@@ -21,11 +21,11 @@
 // So a scroll changes the line tables' pointers and draws only the row that
 // came in.  The text is lines 2-477 of 480.
 //
-// TWO BUFFERS.  Each pass reads what has come, draws into the buffer not
-// shown the rows changed since that buffer was last drawn, and shows it; the
-// other buffer catches up on the next pass.  Each buffer has its own record
-// of rows to draw, of whether its line tables are out of date, and of where
-// it drew the cursor, which is the cell's colours swapped.
+// TWO BUFFERS, AND COPY (docs/vga.md, "Double buffering").  B is shown, and
+// each pass draws into A the rows changed since the last, then shows A for
+// a frame in COPY, which copies it into B, and shows B again.  So a change
+// is drawn once, and A always has the latest.  The record of where A has
+// the cursor drawn, the cell's colours swapped, is the only one.
 //
 // THE DENSE TERMINAL, -DTERMINAL_DENSE (terminal.h), is 128x60 cells of 5x8,
 // all 480 lines, in the display's 5-pixel cells:
@@ -46,13 +46,15 @@
 // processor's own RAM there, which it stores to only in DISPLAY_CPU.
 //
 // THE SERIAL LINE FILLS A RING, from the UART's receive interrupt
-// (vectors.s's shim calls rx_interrupt), and each pass empties it.  The UART
-// holds one byte, and at 115200 baud the next comes 2,180 cycles later, but a
-// pass - drawing every row and waiting for the flip's vertical sync - takes
-// up to 830,000, and about 1,500,000 when every row is right to left: a row
-// through bidi.cc is some 38,000.  The ring holds what comes meanwhile: a frame's worth, 193
-// bytes, at most in terminal/check.mjs's runs, and two frames' is 386.  The handler alone moves the head and the pass
-// alone the tail, each a word stored at once, so neither stops the other.
+// (vectors.s's shim calls rx_interrupt), and drain() empties it into the
+// screen: before each row a pass draws, and all through the waits for the
+// vertical syncs.  The line runs at 230400 baud.  The UART holds one byte,
+// and the next comes 1,090 cycles later; a row is some 30,000 cycles, or
+// 38,000 right to left through bidi.cc, so the ring holds what comes during
+// one row and a drain.  put() is some 550 cycles a byte, and at 460800 baud
+// it would be all of them.
+// The handler alone moves the head and drain() alone the tail, each a word
+// stored at once, so neither stops the other.
 #ifdef TERMINAL_DENSE
 #include "font5.h"
 #include "terminal.h"
@@ -60,6 +62,7 @@
 #include "row.h"
 #endif
 
+#include <fructus/cycles.h>
 #include <fructus/display.h>
 #include <fructus/uart.h>
 
@@ -102,22 +105,37 @@ uint16_t ring_tail;             // the pass's
 volatile uint16_t ring_lost;
 uint8_t interrupt_stack[128];
 
-bool show_a;   // which buffer is shown; WRITETHRU writes the other
+// The mode last written.  A store sees a mode write from the third
+// instruction after it, as a load does (fructus/io.h), hence the nops; the
+// barrier keeps the compiler's stores on their side of the mode.
+uint16_t mode;
 
-// Show the other buffer, and write to the one that was shown, once the
-// change has taken effect: until then, stores above 0x8000 go nowhere.
-void flip() {
-  show_a = !show_a;
-  DISPLAY_MODE = (show_a ? DISPLAY_SHOW_A : 0) | DISPLAY_WRITETHRU;
-  display_sync();
+void set_mode(uint16_t m) {
+  mode = m;
+  DISPLAY_MODE = m;
+  __asm__ volatile("nop\n\tnop" ::: "memory");
 }
+
+// What the pass draws from.  The normal terminal draws from a copy, taken
+// while nothing is drawn, so that put() can go on between its rows: in
+// .upper, which WRITETHRU's loads see and its stores do not reach, so it is
+// written in DISPLAY_CPU.  The dense terminal has no room for one and
+// draws from the screen itself: a row put() changes after it was drawn is
+// drawn again on the next pass, and until then the line tables may be a
+// pass ahead of a row or behind it.
+#ifdef TERMINAL_DENSE
+const Screen &view() { return *screen; }
+#else
+__attribute__((section(".upper"))) Screen copy;
+const Screen &view() { return copy; }
+#endif
 
 #ifdef TERMINAL_DENSE
 
 // The pointers of the text's lines, for the rows the screen shows now.
 void line_tables() {
   for (int y = 0; y < ROWS; y++) {
-    int r = screen->line[y];
+    int r = view().line[y];
     uint16_t code = address(CODES + r * COLUMNS), fg = address(FG + r * COLUMNS);
     uint16_t bg = address(BG + r * COLUMNS);
     for (int line = TOP + LINES * y; line < TOP + LINES * (y + 1); line++) {
@@ -130,7 +148,7 @@ void line_tables() {
 
 // A row, as it is: no bidi, so cell x shows at x.
 int draw(int r, int x = 0) {
-  const Row &row = screen->rows[r];
+  const Row &row = view().rows[r];
   uint8_t *code = CODES + r * COLUMNS, *fg = FG + r * COLUMNS, *bg = BG + r * COLUMNS;
   for (int i = 0; i < COLUMNS; i++) {
     code[i] = row.base[i];
@@ -142,22 +160,15 @@ int draw(int r, int x = 0) {
 
 // The primary screen while the alternate is shown: above the code, where
 // WRITETHRU's stores would go to the buffer, so it is written in
-// DISPLAY_CPU.  A store sees a mode write from the third instruction after
-// it, as a load does (fructus/io.h), hence the nops; the barrier keeps the
-// compiler's stores on their side of the mode.
+// DISPLAY_CPU.
 __attribute__((section(".upper"))) Screen kept;
-
-void set_mode(uint16_t mode) {
-  DISPLAY_MODE = (show_a ? DISPLAY_SHOW_A : 0) | mode;
-  __asm__ volatile("nop\n\tnop" ::: "memory");
-}
 
 #else
 
 // The pointers of the text's lines, for the rows the screen shows now.
 void line_tables() {
   for (int y = 0; y < ROWS; y++) {
-    int r = screen->line[y];
+    int r = view().line[y];
     for (int l = 0; l < LINES; l++) {
       int line = TOP + LINES * y + l;
       DISPLAY_CHARS[line] = address(CODES + (ZONE_OF_LINE[l] * ROWS + r) * COLUMNS);
@@ -171,14 +182,14 @@ void line_tables() {
 int draw(int r, int x = 0) {
   RowArrays out = { {}, FG + r * COLUMNS, BG + r * COLUMNS };
   for (int z = 0; z < ZONES; z++) out.code[z] = CODES + (z * ROWS + r) * COLUMNS;
-  return draw_row(screen->rows[r], out, x);
+  return draw_row(view().rows[r], out, x);
 }
 
 #endif
 
 // The cursor's cell, x, with its colours swapped where it shows, at.
 void draw_cursor(int r, int at, int x) {
-  const Row &row = screen->rows[r];
+  const Row &row = view().rows[r];
   FG[r * COLUMNS + at] = row.bg[x];
   BG[r * COLUMNS + at] = row.fg[x];
 }
@@ -202,13 +213,27 @@ void setup_buffer() {
   for (int r = 0; r < ROWS; r++) draw(r);
 }
 
-// What each buffer has yet to catch up on.
-struct Behind {
-  Rows rows;
-  bool tables;
-  int8_t cursor_row, cursor_x;   // where it drew the cursor, -1 for nowhere
-};
-Behind behind[2] = { { 0, false, -1, 0 }, { 0, false, -1, 0 } };
+// Where A has the cursor drawn: its row, -1 for nowhere, and its cell.
+int8_t cursor_row = -1, cursor_cell;
+
+// What has come from the line, into the screen.
+void drain() {
+  uint16_t head = ring_head;
+  __asm__ volatile("" ::: "memory");
+  for (; ring_tail != head; ring_tail++) put(ring[ring_tail % RING]);
+}
+
+// Drain until a vertical sync has passed since the call, and so the mode
+// written before it has taken effect.  The status says only the visible
+// line, so the wait is timed from the first one seen: the sync starts 490 -
+// v lines after line v begins, and lasts two (fructus/display.h).  The
+// cycles are read after the line, so the time is if anything late.
+void wait_sync() {
+  int v;
+  while ((v = display_line()) < 0) drain();
+  uint32_t end = fructus_cycles() + (uint32_t) (492 - v) * 800;
+  do drain(); while ((int32_t) (fructus_cycles() - end) < 0);
+}
 
 }  // namespace
 
@@ -234,10 +259,13 @@ void terminal::send(const char *s) {
 }
 
 #ifdef TERMINAL_DENSE
+// In COPY the processor's stores are its own already, and writing another
+// mode then could drop the copy.
 void terminal::stash(const Screen &s) {
-  set_mode(DISPLAY_CPU);
+  uint16_t m = mode;
+  if ((m & 3) != DISPLAY_COPY) set_mode((m & DISPLAY_SHOW_A) | DISPLAY_CPU);
   kept = s;
-  set_mode(DISPLAY_WRITETHRU);
+  set_mode(m);
 }
 
 void terminal::unstash(Screen &s) { s = kept; }
@@ -245,48 +273,67 @@ void terminal::unstash(Screen &s) { s = kept; }
 
 int main() {
   reset();
+  DISPLAY_FONT = address(FONT);
+  set_mode(DISPLAY_CPU);
+#ifndef TERMINAL_DENSE
+  copy = *screen;
+#endif
+  set_mode(DISPLAY_SHOW_A | DISPLAY_WRITETHRU);
+  display_sync();
+  setup_buffer();     // B
+  set_mode(DISPLAY_WRITETHRU);
+  display_sync();
+  setup_buffer();     // A, and B shown
   dirty = 0;
   moved = false;
-  DISPLAY_FONT = address(FONT);
-  flip();             // A shown, B written
-  setup_buffer();
-  flip();             // B shown, A written
-  setup_buffer();
 
   __shadow_isp = address(interrupt_stack + sizeof interrupt_stack);
+  __uart_divisor = FRUCTUS_UART_DIV_230400;
   __uart_status = FRUCTUS_UART_RX_INTERRUPT;
   __asm__ volatile("sei" ::: "memory");
 
+  // B is shown and A drawn, from view(), with a drain between rows.  Then A
+  // is shown for a frame in COPY, which copies it into B, and B is shown
+  // again.  Every change is drawn once, into A, and put() goes on all the
+  // while but for the copy into view().
   for (;;) {
-    uint16_t head = ring_head;
-    __asm__ volatile("" ::: "memory");
-    for (; ring_tail != head; ring_tail++) put(ring[ring_tail % RING]);
-    for (Behind &b : behind) {
-      b.rows |= dirty;
-      b.tables |= moved;
-    }
+    drain();
+    Rows rows = dirty;
+    bool tables = moved;
     dirty = 0;
     moved = false;
-
-    Behind &b = behind[show_a];      // A shown: B is written, behind[1]
-    int cursor = cursor_shown ? screen->line[cursor_y] : -1;
-    if (cursor != b.cursor_row || cursor_x != b.cursor_x) {
-      if (b.cursor_row >= 0) b.rows |= (Rows) 1 << b.cursor_row;
-      if (cursor >= 0) b.rows |= (Rows) 1 << cursor;
+#ifndef TERMINAL_DENSE
+    if (rows || tables) {
+      set_mode(DISPLAY_CPU);
+      for (int r = 0; r < ROWS; r++)
+        if (rows >> r & 1) copy.rows[r] = screen->rows[r];
+      for (int y = 0; y < ROWS; y++) copy.line[y] = screen->line[y];
+      set_mode(DISPLAY_WRITETHRU);
     }
-    if (!b.rows && !b.tables) continue;
-    if (b.tables) line_tables();
-    int at = cursor_x;
+#endif
+    int x = cursor_x;
+    int cursor = cursor_shown ? view().line[cursor_y] : -1;
+    if (cursor != cursor_row || x != cursor_cell) {
+      if (cursor_row >= 0) rows |= (Rows) 1 << cursor_row;
+      if (cursor >= 0) rows |= (Rows) 1 << cursor;
+    }
+    if (!rows && !tables) continue;
+
+    if (tables) line_tables();
+    int at = x;
     for (int r = 0; r < ROWS; r++)
-      if (b.rows >> r & 1) {
-        int v = draw(r, cursor_x);
+      if (rows >> r & 1) {
+        drain();
+        int v = draw(r, x);
         if (r == cursor) at = v;
       }
-    if (cursor >= 0 && b.rows >> cursor & 1) draw_cursor(cursor, at, cursor_x);
-    b.rows = 0;
-    b.tables = false;
-    b.cursor_row = cursor;
-    b.cursor_x = cursor_x;
-    flip();
+    if (cursor >= 0 && rows >> cursor & 1) draw_cursor(cursor, at, x);
+    cursor_row = cursor;
+    cursor_cell = x;
+
+    set_mode(DISPLAY_SHOW_A | DISPLAY_COPY);
+    wait_sync();                      // the copy's frame has begun
+    set_mode(DISPLAY_WRITETHRU);
+    wait_sync();                      // and ended, with B shown
   }
 }
