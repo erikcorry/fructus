@@ -83,18 +83,22 @@ constexpr Range WIDE[] = {
 // tags, and the combining blocks other than U+0300-U+036F, whose marks are
 // dropped.
 constexpr Range ZERO_WIDTH[] = {
-  { 0x1ab0, 0x1aff }, { 0x1dc0, 0x1dff }, { 0x200b, 0x200f }, { 0x2028, 0x202e },
-  { 0x2060, 0x2069 }, { 0x20d0, 0x20ff }, { 0xfe00, 0xfe0f }, { 0xfe20, 0xfe2f },
-  { 0xfeff, 0xfeff }, { 0xe0000, 0xe01ef },
   // Hebrew's points and cantillation: the font has letters, unpointed.
   { 0x0591, 0x05bd }, { 0x05bf, 0x05bf }, { 0x05c1, 0x05c2 }, { 0x05c4, 0x05c5 },
   { 0x05c7, 0x05c7 },
+  { 0x1ab0, 0x1aff }, { 0x1dc0, 0x1dff }, { 0x200b, 0x200f }, { 0x2028, 0x202e },
+  { 0x2060, 0x2069 }, { 0x20d0, 0x20ff }, { 0xfe00, 0xfe0f }, { 0xfe20, 0xfe2f },
+  { 0xfeff, 0xfeff }, { 0xe0000, 0xe01ef },
 };
 
+// The tables are in order, so a character below a range is in none after it:
+// ASCII is out at the first.
 template <int N>
 bool in(uint32_t c, const Range (&ranges)[N]) {
-  for (const Range &r : ranges)
-    if (c >= r.first && c <= r.last) return true;
+  for (const Range &r : ranges) {
+    if (c < r.first) return false;
+    if (c <= r.last) return true;
+  }
   return false;
 }
 
