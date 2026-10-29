@@ -7,9 +7,9 @@
 //
 // The reference computes every column's glyph bit and foreground colour
 // straight from the documented layout - a cell's code at char_ptr + cell, its
-// glyph row at font + (font_line << 6) + code - a byte, bit 7 leftmost, of
-// which 5-column cells show the top five - or in the wide mode font +
-// (font_line << 7) + 2 code - a little-endian word, bit 15 leftmost - its
+// glyph row at font + (font_line << 6) + code - a byte, bit 0 leftmost, of
+// which 5-column cells show the low five - or in the wide mode font +
+// (font_line << 7) + 2 code - a little-endian word, bit 0 leftmost - its
 // colour at
 // color_ptr + cell, all little-endian bytes of 16-bit words - and not from
 // anything the circuit does.
@@ -52,11 +52,11 @@ const mem = Array.from({ length: WORDS }, () => rand(0x10000));
 const byte = (a) => (mem[(a & 0x7fff) >> 1] >> ((a & 1) * 8)) & 0xff;
 // The font register, the font's address, at random but even, as a 16-pixel
 // font's must be; the address wraps at fifteen bits.  A glyph row, leftmost
-// pixel in bit 15: a byte-wide row in the top half, a wide one a whole word.
+// pixel in bit 0: a byte-wide row in the low half, a wide one a whole word.
 const FONT = rand(16384) * 2;
 const rowAt = (fl, code, wide) => {
   const base = FONT + (fl << (wide ? 7 : 6));
-  return wide ? byte(base + 2 * code) | byte(base + 2 * code + 1) << 8 : byte(base + code) << 8;
+  return wide ? byte(base + 2 * code) | byte(base + 2 * code + 1) << 8 : byte(base + code);
 };
 
 // --- the reference ----------------------------------------------------------
@@ -69,7 +69,7 @@ const expected = ({ cp, kp, fl, m }) => {
     const cell = Math.floor(x / w);
     const bit  = x % w;
     const row = rowAt(fl, byte(cp + cell), wide);
-    const on = off ? 0 : (row >> (15 - bit)) & 1;
+    const on = off ? 0 : (row >> bit) & 1;
     out.push(on << 8 | byte(kp + cell));
   }
   return out;

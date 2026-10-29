@@ -45,7 +45,8 @@
 //
 // The rest are blank.  Mosaic blocks are rows of 6, 7 and 6 lines and columns
 // of 8 pixels, the background's pixels at width 8: the SAA5050's 3, 4 and 3
-// dots.  A glyph row is a 16-bit word, bit 15 the leftmost pixel.
+// dots.  A glyph row is a 16-bit word, drawn here with bit 15 the leftmost
+// pixel and reversed in font.cc, bit 0 leftmost, as the display takes it.
 // =============================================================================
 
 import { readFileSync } from 'node:fs';
@@ -161,7 +162,8 @@ if (text !== null) {
   process.exit(0);
 }
 
-const hex = (v) => `0x${v.toString(16).padStart(4, '0')}`;
+const reversed = (w) => [...Array(16)].reduce((v, _, x) => v | ((w >> x) & 1) << (15 - x), 0);
+const hex = (v) => `0x${reversed(v).toString(16).padStart(4, '0')}`;
 const body = [];
 for (let r = 0; r < ROWS; r++) {
   body.push(`  /* font row ${r} */`);

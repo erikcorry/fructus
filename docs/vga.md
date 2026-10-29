@@ -127,7 +127,7 @@ Each `graphics_mode` entry is 16 bits, all of them spoken for:
 | 7–0 | `font_line` | the font window, see [Fonts](#fonts) |
 | 10–8 | depth | the background's depth and palette range, see [Background](#background) |
 | 13–11 | pixel width − 1 | background pixels 1 to 8 columns wide |
-| 15–14 | text | `00` 80 columns of 8-pixel cells; `01` 40 columns of 16-pixel cells, a 16-bit word per glyph row; `10` 128 columns of 5-pixel cells, the top five bits of an 8-pixel font; `11` text disable: the fg/bg mux always takes the background |
+| 15–14 | text | `00` 80 columns of 8-pixel cells; `01` 40 columns of 16-pixel cells, a 16-bit word per glyph row; `10` 128 columns of 5-pixel cells, the low five bits of an 8-pixel font; `11` text disable: the fg/bg mux always takes the background |
 
 `font_line` is the low byte, so the CPU can change it with a byte store.
 
@@ -139,8 +139,11 @@ wants a plain background, in palette entry 28 (or 30).
 
 Glyphs are 8 pixels wide, one byte per glyph row, or with the mode word's
 16-pixel font 16 pixels wide, one aligned 16-bit word per glyph row. A row's
-top bit - bit 7 of a byte, bit 15 of a word - is its leftmost pixel, and a
-word is stored little-endian, as the CPU stores it. The font area starts at
+bit 0 is its leftmost pixel, as it is for background pixels and sprite
+patterns, and a word is stored little-endian, as the CPU stores it, so pixel
+n of a 16-pixel row is bit n of the word and bit n mod 8 of byte n / 8. Font
+files such as BDF put the leftmost pixel in the top bit, so a font converted
+from one has each row's bits reversed. The font area starts at
 the address in the `font` [register](#registers), whose bit 15 is ignored
 like every pointer's, so the CPU's own address of the buffer works there too.
 A 16-pixel font must start at an even address, since its rows are aligned
@@ -308,23 +311,23 @@ phase, x mod 8 (x mod 16 with the 16-pixel font):
 | phase | |
 |---|---|
 | 0 | read the character code, `character_data`++ |
-| 1 | the glyph row's address: `font` + (`font_line` << 6) + code, or `font` + (`font_line` << 7) + 2 code + 1 with the 16-pixel font |
+| 1 | the glyph row's address: `font` + (`font_line` << 6) + code, or `font` + (`font_line` << 7) + 2 code with the 16-pixel font |
 | 2 | read the glyph row |
 | 4 | read the foreground colour, `character_color`++ |
 | 6 | glyph and colour move to the output stage |
 
 Phase 6's memory cycle is spare. A 16-pixel row is one aligned word, read in
-the same slot as a byte: its address is 2 code + 1 past the font base, which
-is the word at 2 code with the byte lane set to its high byte. The glyph
-registers are 16 bits and always take that byte above the word's low byte, so
-a 16-pixel row arrives whole and an 8-pixel one arrives as its byte and eight
-bits never shown. The one mux the 16-pixel font adds is the code's place in
+the same slot as a byte: its address is 2 code past the font base, so the
+byte lane hands over its low byte. The glyph registers are 16 bits and always
+take the word's high byte above the lane's byte, so a 16-pixel row arrives
+whole and an 8-pixel one arrives as its byte with eight bits above it never
+shown. The one mux the 16-pixel font adds is the code's place in
 the address.
 
-**5-pixel cells** (mode bits 15–14 `10`) show the top five bits of each
+**5-pixel cells** (mode bits 15–14 `10`) show the low five bits of each
 row of an ordinary 8-pixel font, at the 8-pixel font's addresses, so 128
-columns: 5×8 fonts such as Tommy Thorn's smol are stored with their glyphs
-left-aligned in the byte. Three reads do not fit in a cell's even cycles, so
+columns: 5×8 fonts such as Tommy Thorn's smol are stored with their
+glyphs left-aligned, in bits 0–4 of the byte. Three reads do not fit in a cell's even cycles, so
 these cells read on odd ones too, at x mod 5:
 
 | phase | |

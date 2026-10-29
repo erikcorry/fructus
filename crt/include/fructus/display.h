@@ -105,7 +105,7 @@ extern volatile struct display_registers __display;
 #define DISPLAY_8BPP       (6 << 8)    /* the byte itself, see DISPLAY_RGB */
 #define DISPLAY_WIDTH(w)   (((w) - 1) << 11)   /* each pixel 1-8 columns wide */
 #define DISPLAY_WIDE_FONT  0x4000      /* 40 cells of 16 pixels, a word a glyph row */
-#define DISPLAY_NARROW_FONT 0x8000     /* 128 cells of 5 pixels, a byte's top five bits */
+#define DISPLAY_NARROW_FONT 0x8000     /* 128 cells of 5 pixels, a byte's low five bits */
 #define DISPLAY_NO_TEXT    0xc000      /* background only */
 
 /* A colour in the 8-bit pixel format: red 0-5, green 0-6, blue 0-4.  A byte

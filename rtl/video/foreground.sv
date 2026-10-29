@@ -7,7 +7,7 @@
 //
 // One scan line of text: 80 cells of 8 columns from a font a byte wide, or
 // with `wide` 40 cells of 16 from a font a 16-bit word wide, or with `five`
-// 128 cells of 5 from the byte-wide font's top five bits.  For every column
+// 128 cells of 5 from the byte-wide font's low five bits.  For every column
 // the output is the glyph bit,
 // `fg_on`, and the cell's foreground colour, `fg_color`, a byte in the 8-bit
 // pixel format; the fg/bg mux shows `fg_color` where `fg_on` is set and the
@@ -22,7 +22,7 @@
 //
 //     0  read the character code at char_ptr++
 //     1  its glyph row's address:   font + (font_line << 6) + code, or with
-//                                   `wide` font + (font_line << 7) + 2 code + 1
+//                                   `wide` font + (font_line << 7) + 2 code
 //     2  read the glyph row
 //     4  read the foreground colour at color_ptr++
 //     6  glyph and colour move to the output stage
@@ -52,17 +52,16 @@
 // colour wait in their own registers until phase 6.
 //
 // A WIDE GLYPH ROW IS ONE ALIGNED 16-BIT WORD, read in the same slot as a
-// byte-wide one.  Its address is 2 code + 1 past the font base: the word at
-// 2 code, and the + 1 sets the byte lane so that the existing lane select
-// hands over its HIGH byte.  The glyph registers are 16 bits and always take
-// that byte above the word's low byte, so a wide row arrives whole, high byte
-// leftmost, and a byte-wide row arrives as its byte followed by eight bits
-// that are never shown.  So the one mux the wide font costs is the code's
-// place in the address add; the glyph shifts once a column in either mode,
-// where the doubling it replaces had to shift every other.
+// byte-wide one, at 2 code past the font base, so the lane select hands over
+// its LOW byte.  The glyph registers are 16 bits and always take the word's
+// high byte above the lane's byte, so a wide row arrives whole, and a
+// byte-wide row arrives as its byte with eight bits above it that are never
+// shown.  So the one mux the wide font costs is the code's place in the
+// address add; the glyph shifts once a column in either mode, where the
+// doubling it replaces had to shift every other.
 //
-// A glyph row's top bit - bit 7 of a byte, bit 15 of a word - is its leftmost
-// pixel.
+// A glyph row's bit 0 is its leftmost pixel, as a background word's and a
+// sprite pattern's low bits are theirs.
 //
 // THE LINE'S FIELDS COME STRAIGHT FROM ITS TABLE WORDS as they arrive on
 // `word`: font_line, width and disable on `ld_mode`, the character pointer
@@ -140,7 +139,7 @@ module foreground #(
     wire [7:0]  byte_in = lane ? mem_rdata[15:8] : mem_rdata[7:0];
 
     // --- the cell waiting, and the cell showing ------------------------------------
-    logic [15:0] glyph_next, glyph;  // the row, leftmost pixel in bit 15
+    logic [15:0] glyph_next, glyph;  // the row, leftmost pixel in bit 0
     logic [7:0]  color_next, color;
 
     // WHAT FOLLOWS A READ IS TIMED BY THE READ: the glyph address the cycle
@@ -182,22 +181,22 @@ module foreground #(
         else if (rd_color) kp <= kp + 15'd1;
 
         if (got_char)
-            gaddr <= font_base + (wide_q ? {6'b0, byte_in, 1'b1} : {7'b0, byte_in});
-        if (got_glyph) glyph_next <= {byte_in, mem_rdata[7:0]};
+            gaddr <= font_base + (wide_q ? {6'b0, byte_in, 1'b0} : {7'b0, byte_in});
+        if (got_glyph) glyph_next <= {mem_rdata[15:8], byte_in};
         if (got_color) color_next <= byte_in;
 
         if (move) begin
             glyph <= glyph_next;
             color <= color_next;
         end else
-            glyph <= glyph << 1;
+            glyph <= glyph >> 1;
     end
 
     // --- out -----------------------------------------------------------------
     localparam int D = LATENCY - 7;
     logic [9 * D - 1:0] pipe;
     always_ff @(posedge clk)
-        pipe <= (9 * D)'({pipe, show && !off_q && glyph[15], color});
+        pipe <= (9 * D)'({pipe, show && !off_q && glyph[0], color});
     assign {fg_on, fg_color} = pipe[9 * D - 1 -: 9];
 
 endmodule

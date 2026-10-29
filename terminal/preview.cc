@@ -97,7 +97,7 @@ int main() {
       uint8_t bits = glyph(row, line, c);
       for (int x = 0; x < WIDTH; x++) {
         uint8_t p[3];
-        rgb(bits & 0x80 >> x ? fg[row][c] : bg[row][c], p);
+        rgb(bits >> x & 1 ? fg[row][c] : bg[row][c], p);
         fwrite(p, 1, 3, stdout);
       }
     }
