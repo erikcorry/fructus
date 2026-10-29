@@ -326,9 +326,9 @@ the address.
 
 **5-pixel cells** (mode bits 15–14 `10`) show the low five bits of each
 row of an ordinary 8-pixel font, at the 8-pixel font's addresses, so 128
-columns: 5×8 fonts such as Tommy Thorn's smol are stored with their
-glyphs left-aligned, in bits 0–4 of the byte. Three reads do not fit in a cell's even cycles, so
-these cells read on odd ones too, at x mod 5:
+columns: 5×8 fonts such as Tommy Thorn's Spleentt are stored with their
+glyphs left-aligned, in bits 0–4 of the byte. Three reads do not fit in a
+cell's even cycles, so these cells read on odd ones too, at x mod 5:
 
 | phase | |
 |---|---|
