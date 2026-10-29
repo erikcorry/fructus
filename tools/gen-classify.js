@@ -152,6 +152,7 @@ const W = 42 + ENTRY_BITS;
 const late1 = [], late0 = [];          // the rows with a routine, by ulate
 const counts = [0, 0, 0, 0];
 let memRows = 0, excRows = 0;
+const fieldsOf = new Map();            // op -> its row's columns, for the ROM below
 const cases = rows.map((r) => {
   const k = kindOf(r);
   counts[k]++;
@@ -221,6 +222,7 @@ const cases = rows.map((r) => {
              bits(mem ? X : f(lselOf(r.v.alu), writes), 3),
              bits(skp ? 1 : 0, 1), bits(stp ? 1 : 0, 1)];
   if (useq) (mem?.late ? late1 : late0).push(r.op);
+  fieldsOf.set(r.op, t);
   return `        8'h${r.op.toString(16).padStart(2, '0')}: t = ${W}'b${t.join('_')};    // ${r.who}`;
 }).join('\n');
 
@@ -249,9 +251,10 @@ for (const r of rows)
   if (lenRule(r.op) !== r.nbytes) throw new Error(`opcode ${r.op.toString(16)}: ${r.nbytes} bytes, and the length rule says ${lenRule(r.op)}`);
 // An empty row is microcoded without a routine - not a memory instruction,
 // no sequencer - and the rest is the mapper's, its length aside.
-const emptyRow = (len) => [bits(KIND.ucode, 2), bits(len, 2), bits(X, 1), bits(X, 4), bits(X, 4), bits(X, 4),
+const emptyFields = (len) => [bits(KIND.ucode, 2), bits(len, 2), bits(X, 1), bits(X, 4), bits(X, 4), bits(X, 4),
   bits(X, 4), bits(X, 2), bits(X, 2), '0', bits(X, 1), bits(X, 1), bits(X, 2), bits(X, 1), bits(X, 1),
-  '0', bits(X, ENTRY_BITS), bits(X, 3), bits(X, 1), bits(X, 3), '0', '1'].join('_');
+  '0', bits(X, ENTRY_BITS), bits(X, 3), bits(X, 1), bits(X, 3), '0', '1'];
+const emptyRow = (len) => emptyFields(len).join('_');
 const used = new Set(rows.map((r) => r.op));
 const empties = [...Array(256).keys()].filter((op) => !used.has(op));
 const emptyCases = empties.map((op) =>
@@ -264,6 +267,17 @@ for (const line of [...cases.split('\n'), ...emptyCases.split('\n')]) {
   if (n !== W) throw new Error(`a row of ${n} bits, not ${W}: ${line.trim()}`);
 }
 
+// THE ROM: the columns only decode reads - wen through lsel, which rtl/cpu.sv
+// took into a flop of its own, unchanged, every cycle - with halt beside
+// them.  kind, len, skp and stp are dispatch's, and stay above; useq is both.
+const RW = W - 6 + 1;
+const romRows = [...Array(256).keys()].map((op) => {
+  const t = fieldsOf.get(op) ?? emptyFields(lenRule(op));
+  const v = [op === HALT ? '1' : '0', ...t.slice(2, 20)].join('_');
+  const who = rows.find((r) => r.op === op)?.who;
+  return `        rom[8'h${op.toString(16).padStart(2, '0')}] = ${RW}'b${v};${who ? `    // ${who}` : ''}`;
+}).join('\n');
+
 process.stdout.write(`// =============================================================================
 // classify.sv - the processor's predecode: what the opcode is
 // =============================================================================
@@ -272,7 +286,8 @@ process.stdout.write(`// =======================================================
 //
 // Combinational, over the opcode byte as it arrives in the dispatch cycle.
 // rtl/cpu.sv decides from kind, length and \`two\` whether the next dispatch
-// can follow at once, and latches the rest for the decode stage.
+// can follow at once.  The rest is decode's, and it reads it from
+// classify_rom, the same table in a block RAM, below.
 //
 // ${rows.length} opcodes: ${counts[0]} ALU, ${counts[1]} microcoded - ${memRows} of them memory instructions and
 // ${excRows} exception instructions or mul - ${counts[2]} conditional branches, ${counts[3]} jumps.
@@ -355,6 +370,68 @@ ${emptyCases}
         default: ulate = 1'bx;
         endcase
 \`endif
+
+endmodule
+
+// =============================================================================
+// classify_rom - the same table's decode columns, in a block RAM
+// =============================================================================
+//
+// THE DECODE STAGE'S COLUMNS ARE READ FROM A ROM, addressed by the opcode as
+// it dispatches.  Its output register is decode's: the value is there the
+// cycle after, as the d_ flops it replaced had it, and nothing loads those
+// but the opcode every cycle - no enable, no reset.  ${RW} bits, three
+// SB_RAM40_4Ks of 256 x 16.  What dispatch reads itself stays in logic in
+// classify above, of which yosys keeps only those outputs.
+//
+// MEASURED, yosys + nextpnr-ice40 on the UP5K, 2026-10-28, against the
+// table in logic the same day:
+//
+//                                   LUT4   cells   median MHz   best
+//     core, logic                   2560    3024     30.41      31.26   32 seeds
+//     core, this ROM                2427    2882     30.52      31.59
+//     system + UART + USB, logic      -     5104     29.13      30.35   16 seeds
+//     system + UART + USB, ROM        -     4946     29.62      31.07
+//
+// No seed's critical path starts at the ROM, lhs and rhs - the register
+// numbers' selects - included: kept in flops, a trial tree bought no speed.  abc's
+// delay target goes from 4949 to 5012 with any of the columns in the RAM,
+// but held at 5012 the logic is 2572 LUT4: the saving is the table's.
+// =============================================================================
+
+module classify_rom (
+    input  logic       clk,
+    input  logic [7:0] op,        // dispatch: the opcode, masked as d_op takes it
+    output logic       halt,      // decode: the columns of classify's names
+    output logic       wen,
+    output logic [3:0] alu_op,
+    output logic [3:0] lhs_src,
+    output logic [3:0] rhs_src,
+    output logic [3:0] dest_src,
+    output logic [1:0] cond_src,
+    output logic [1:0] pc_src,
+    output logic       mem,
+    output logic       mst,
+    output logic       mw2,
+    output logic [1:0] mn,
+    output logic       mblk,
+    output logic       mpush,
+    output logic       useq,
+    output logic [${ENTRY_BITS - 1}:0] uent,
+    output logic [2:0] ext,
+    output logic       urs,
+    output logic [2:0] lsel
+);
+
+    logic [${RW - 1}:0] rom [0:255];
+    initial begin
+${romRows}
+    end
+
+    logic [${RW - 1}:0] q;
+    always_ff @(posedge clk) q <= rom[op];
+    assign {halt, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src,
+            mem, mst, mw2, mn, mblk, mpush, useq, uent, ext, urs, lsel} = q;
 
 endmodule
 `);

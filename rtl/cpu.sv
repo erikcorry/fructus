@@ -604,26 +604,20 @@ module cpu (
     wire       take = slot & (nw != 3'd0) & ((ieq & irq) | gq);
     wire [7:0] op = ib0 & {8{~take}};
 
-    wire [1:0] kind, len, c_cond, c_pcsrc, c_mn;
-    wire       c_skp, c_stp;
-    wire       c_wen, c_halt, c_mem, c_mst, c_mw2, c_mblk, c_mpush, c_useq, c_urs;
-    wire [2:0] c_ext;                  // extra cycles in the ALU stage
+    // Only what dispatch reads itself: the rest of the table is decode's, and
+    // it comes from classify_rom, a block RAM read at this edge - see decode.
+    wire [1:0] kind, len;
+    wire       c_skp, c_stp, c_useq;
 `ifdef FRUCTUS_BLIT
     wire       c_ulate;
     logic      d_ulate;
 `endif
-    wire [3:0] c_alu, c_lhs, c_rhs, c_dest;
-    wire  [2:0] c_lsel;                // which of the ALU's fast group, with code 4
-    logic [2:0] d_lsel, e_lsel;
-    wire [4:0] c_uent;
-    classify c (.op(op), .kind(kind), .len(len), .wen(c_wen), .halt(c_halt),
-                .alu_op(c_alu), .lhs_src(c_lhs), .rhs_src(c_rhs), .dest_src(c_dest),
-                .cond_src(c_cond), .pc_src(c_pcsrc), .mem(c_mem), .mst(c_mst), .mw2(c_mw2),
-                .mn(c_mn), .mblk(c_mblk), .mpush(c_mpush), .useq(c_useq), .uent(c_uent),
+    logic [2:0] d_lsel, e_lsel;        // which of the ALU's fast group, with code 4
+    classify c (.op(op), .kind(kind), .len(len), .useq(c_useq),
 `ifdef FRUCTUS_BLIT
                 .ulate(c_ulate),
 `endif
-                .ext(c_ext), .urs(c_urs), .lsel(c_lsel), .skp(c_skp), .stp(c_stp));
+                .skp(c_skp), .stp(c_stp));
     // THE BUFFER'S LENGTH IS ib0's OWN, not the masked opcode's: an interrupt
     // moves nothing out, so the length need not wait for `take`.  And it is
     // classified from the flops, both bytes that could be the opcode, by two
@@ -1032,11 +1026,6 @@ module cpu (
         d_bp    <= pbok;
         {d_bhit, d_bway, d_bctr} <= {bhq, bwq, bcq};
         d_jb    <= pjb;
-        {d_mem, d_mst, d_mw2, d_mn, d_mblk, d_mpush} <= {c_mem, c_mst, c_mw2, c_mn, c_mblk, c_mpush};
-        d_uent  <= c_uent;
-        d_useq  <= c_useq;
-        {d_ext, d_urs} <= {c_ext, c_urs};
-        d_lsel  <= c_lsel;
 `ifdef FRUCTUS_BLIT
         // The mode as the load dispatches, which `stop` above took too.  A
         // second sample in decode, a cycle on, could see a mode write land
@@ -1045,15 +1034,20 @@ module cpu (
         // pointer and never wrote the load's.
         d_ulate <= c_ulate & blit;
 `endif
-        d_pcsrc <= c_pcsrc;
-        d_halt  <= c_halt;
         d_op    <= op;
         d_b1    <= ib1;
         d_b2    <= ib2;
-        d_wen   <= c_wen;
-        {d_alu, d_lhs, d_rhs, d_dest, d_cond} <= {c_alu, c_lhs, c_rhs, c_dest, c_cond};
         d_pc    <= pc;
     end
+    // PREDECODE'S DECODE COLUMNS, FROM A BLOCK RAM.  Each was a flop loaded
+    // from rtl/classify.sv every cycle; the RAM's output register is the same
+    // thing, its address the same masked opcode.  142 cells on the core, 158 on
+    // the system: rtl/classify.sv has the figures.
+    classify_rom cr (.clk(clk), .op(op), .halt(d_halt), .wen(d_wen), .alu_op(d_alu),
+                     .lhs_src(d_lhs), .rhs_src(d_rhs), .dest_src(d_dest), .cond_src(d_cond),
+                     .pc_src(d_pcsrc), .mem(d_mem), .mst(d_mst), .mw2(d_mw2), .mn(d_mn),
+                     .mblk(d_mblk), .mpush(d_mpush), .useq(d_useq), .uent(d_uent),
+                     .ext(d_ext), .urs(d_urs), .lsel(d_lsel));
 
     // THE NEXT PC IS THE pc REGISTER.  Dispatch moved it on at the edge that
     // began this cycle, and nothing moves it again before this instruction

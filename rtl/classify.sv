@@ -6,7 +6,8 @@
 //
 // Combinational, over the opcode byte as it arrives in the dispatch cycle.
 // rtl/cpu.sv decides from kind, length and `two` whether the next dispatch
-// can follow at once, and latches the rest for the decode stage.
+// can follow at once.  The rest is decode's, and it reads it from
+// classify_rom, the same table in a block RAM, below.
 //
 // 169 opcodes: 106 ALU, 49 microcoded - 44 of them memory instructions and
 // 4 exception instructions or mul - 7 conditional branches, 7 jumps.
@@ -343,5 +344,322 @@ module classify (
         default: ulate = 1'bx;
         endcase
 `endif
+
+endmodule
+
+// =============================================================================
+// classify_rom - the same table's decode columns, in a block RAM
+// =============================================================================
+//
+// THE DECODE STAGE'S COLUMNS ARE READ FROM A ROM, addressed by the opcode as
+// it dispatches.  Its output register is decode's: the value is there the
+// cycle after, as the d_ flops it replaced had it, and nothing loads those
+// but the opcode every cycle - no enable, no reset.  42 bits, three
+// SB_RAM40_4Ks of 256 x 16.  What dispatch reads itself stays in logic in
+// classify above, of which yosys keeps only those outputs.
+//
+// MEASURED, yosys + nextpnr-ice40 on the UP5K, 2026-10-28, against the
+// table in logic the same day:
+//
+//                                   LUT4   cells   median MHz   best
+//     core, logic                   2560    3024     30.41      31.26   32 seeds
+//     core, this ROM                2427    2882     30.52      31.59
+//     system + UART + USB, logic      -     5104     29.13      30.35   16 seeds
+//     system + UART + USB, ROM        -     4946     29.62      31.07
+//
+// No seed's critical path starts at the ROM, lhs and rhs - the register
+// numbers' selects - included: kept in flops, a trial tree bought no speed.  abc's
+// delay target goes from 4949 to 5012 with any of the columns in the RAM,
+// but held at 5012 the logic is 2572 LUT4: the saving is the table's.
+// =============================================================================
+
+module classify_rom (
+    input  logic       clk,
+    input  logic [7:0] op,        // dispatch: the opcode, masked as d_op takes it
+    output logic       halt,      // decode: the columns of classify's names
+    output logic       wen,
+    output logic [3:0] alu_op,
+    output logic [3:0] lhs_src,
+    output logic [3:0] rhs_src,
+    output logic [3:0] dest_src,
+    output logic [1:0] cond_src,
+    output logic [1:0] pc_src,
+    output logic       mem,
+    output logic       mst,
+    output logic       mw2,
+    output logic [1:0] mn,
+    output logic       mblk,
+    output logic       mpush,
+    output logic       useq,
+    output logic [4:0] uent,
+    output logic [2:0] ext,
+    output logic       urs,
+    output logic [2:0] lsel
+);
+
+    logic [41:0] rom [0:255];
+    initial begin
+        rom[8'h00] = 42'b0_0_xxxx_xxxx_xxxx_0111_xx_xx_0_0_0_00_0_0_1_01101_000_0_xxx;    // brk
+        rom[8'h01] = 42'b1_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;    // halt
+        rom[8'h02] = 42'b0_0_xxxx_0101_0101_xxxx_xx_11_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // jmp
+        rom[8'h03] = 42'b0_1_0100_0101_0010_0111_xx_11_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // call
+        rom[8'h04] = 42'b0_0_0000_0000_1000_0000_xx_xx_1_0_1_01_0_0_1_00001_000_0_xxx;    // ld
+        rom[8'h05] = 42'b0_0_0000_0000_1000_0000_xx_xx_1_0_0_01_0_0_1_00101_000_0_xxx;    // ld8
+        rom[8'h06] = 42'b0_0_0000_0110_1000_0000_xx_xx_1_0_1_01_0_0_1_00001_000_0_xxx;    // ld
+        rom[8'h07] = 42'b0_0_0000_0110_1000_0000_xx_xx_1_1_1_01_0_0_1_00110_000_0_xxx;    // st
+        rom[8'h08] = 42'b0_0_xxxx_0111_0111_xxxx_xx_11_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // ret
+        rom[8'h09] = 42'b0_0_xxxx_0111_xxxx_0111_xx_xx_0_0_0_00_0_0_1_10111_000_0_xxx;    // rti
+        rom[8'h0a] = 42'b0_0_xxxx_xxxx_xxxx_xxxx_xx_xx_0_0_0_00_0_0_1_11101_000_0_xxx;    // sei
+        rom[8'h0b] = 42'b0_0_xxxx_xxxx_xxxx_xxxx_xx_xx_0_0_0_00_0_0_1_11111_000_0_xxx;    // cli
+        rom[8'h0c] = 42'b0_0_0000_0110_0011_0111_xx_xx_1_1_1_01_1_1_1_00111_000_0_xxx;    // push
+        rom[8'h0d] = 42'b0_0_0000_0110_0011_0111_xx_xx_1_0_1_01_1_0_1_00010_000_1_xxx;    // pop
+        rom[8'h0e] = 42'b0_0_0000_0110_0011_0000_xx_xx_1_1_1_01_1_1_1_00111_000_0_xxx;    // push
+        rom[8'h0f] = 42'b0_0_0000_0110_0011_0010_xx_xx_1_0_1_01_1_0_1_00010_000_1_xxx;    // pop
+        rom[8'h10] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h11] = 42'b0_0_0000_1001_1011_1000_xx_xx_1_1_1_01_0_0_1_00110_000_0_xxx;    // st
+        rom[8'h12] = 42'b0_0_0000_1001_1011_1000_xx_xx_1_1_1_01_0_0_1_00110_000_0_xxx;    // st
+        rom[8'h13] = 42'b0_0_0000_1001_1011_1000_xx_xx_1_1_1_01_0_0_1_00110_000_0_xxx;    // st
+        rom[8'h14] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h15] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h16] = 42'b0_0_0000_1001_1101_1000_xx_xx_1_1_1_01_0_0_1_00110_000_0_xxx;    // st
+        rom[8'h17] = 42'b0_0_0000_1001_1101_1000_xx_xx_1_1_1_01_0_0_1_00110_000_0_xxx;    // st
+        rom[8'h18] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h19] = 42'b0_0_0000_1001_1011_1000_xx_xx_1_1_0_01_0_0_1_01000_000_0_xxx;    // st8
+        rom[8'h1a] = 42'b0_0_0000_1001_1011_1000_xx_xx_1_1_0_01_0_0_1_01000_000_0_xxx;    // st8
+        rom[8'h1b] = 42'b0_0_0000_1001_1011_1000_xx_xx_1_1_0_01_0_0_1_01000_000_0_xxx;    // st8
+        rom[8'h1c] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h1d] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h1e] = 42'b0_0_0000_1001_1101_1000_xx_xx_1_1_0_01_0_0_1_01000_000_0_xxx;    // st8
+        rom[8'h1f] = 42'b0_0_0000_1001_1101_1000_xx_xx_1_1_0_01_0_0_1_01000_000_0_xxx;    // st8
+        rom[8'h20] = 42'b0_0_0000_1000_1011_1000_xx_xx_1_0_1_01_0_0_1_00001_000_0_xxx;    // ld
+        rom[8'h21] = 42'b0_0_0000_1001_1011_1000_xx_xx_1_0_1_01_0_0_1_00001_000_0_xxx;    // ld
+        rom[8'h22] = 42'b0_0_0000_1001_1011_1000_xx_xx_1_0_1_01_0_0_1_00001_000_0_xxx;    // ld
+        rom[8'h23] = 42'b0_0_0000_1001_1011_1000_xx_xx_1_0_1_01_0_0_1_00001_000_0_xxx;    // ld
+        rom[8'h24] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h25] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h26] = 42'b0_0_0000_1001_1101_1000_xx_xx_1_0_1_01_0_0_1_00001_000_0_xxx;    // ld
+        rom[8'h27] = 42'b0_0_0000_1001_1101_1000_xx_xx_1_0_1_01_0_0_1_00001_000_0_xxx;    // ld
+        rom[8'h28] = 42'b0_0_0000_1000_1011_1000_xx_xx_1_0_0_01_0_0_1_00101_000_0_xxx;    // ld8
+        rom[8'h29] = 42'b0_0_0000_1001_1011_1000_xx_xx_1_0_0_01_0_0_1_00101_000_0_xxx;    // ld8
+        rom[8'h2a] = 42'b0_0_0000_1001_1011_1000_xx_xx_1_0_0_01_0_0_1_00101_000_0_xxx;    // ld8
+        rom[8'h2b] = 42'b0_0_0000_1001_1011_1000_xx_xx_1_0_0_01_0_0_1_00101_000_0_xxx;    // ld8
+        rom[8'h2c] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h2d] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h2e] = 42'b0_0_0000_1001_1101_1000_xx_xx_1_0_0_01_0_0_1_00101_000_0_xxx;    // ld8
+        rom[8'h2f] = 42'b0_0_0000_1001_1101_1000_xx_xx_1_0_0_01_0_0_1_00101_000_0_xxx;    // ld8
+        rom[8'h30] = 42'b0_1_0100_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h31] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_100;    // movhi
+        rom[8'h32] = 42'b0_1_1100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // bitrev sxt8
+        rom[8'h33] = 42'b0_1_1100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_xxx;    // clz popcount
+        rom[8'h34] = 42'b0_1_0100_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h35] = 42'b0_1_0100_xxxx_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h36] = 42'b0_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_100;    // movhi
+        rom[8'h37] = 42'b0_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_100;    // movhi
+        rom[8'h38] = 42'b0_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h39] = 42'b0_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h3a] = 42'b0_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h3b] = 42'b0_1_0000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h3c] = 42'b0_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h3d] = 42'b0_1_0000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h3e] = 42'b0_1_0000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h3f] = 42'b0_1_0000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h40] = 42'b0_1_0001_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // rsb
+        rom[8'h41] = 42'b0_1_0001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // rsb
+        rom[8'h42] = 42'b0_1_0001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // rsb
+        rom[8'h43] = 42'b0_1_0001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // rsb
+        rom[8'h44] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h45] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h46] = 42'b0_1_0001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // rsb
+        rom[8'h47] = 42'b0_1_0001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // rsb
+        rom[8'h48] = 42'b0_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // xor
+        rom[8'h49] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // xor
+        rom[8'h4a] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // xor
+        rom[8'h4b] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // xor
+        rom[8'h4c] = 42'b0_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // xor
+        rom[8'h4d] = 42'b0_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // xor
+        rom[8'h4e] = 42'b0_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // xor
+        rom[8'h4f] = 42'b0_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // xor
+        rom[8'h50] = 42'b0_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // or
+        rom[8'h51] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // or
+        rom[8'h52] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // or
+        rom[8'h53] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // or
+        rom[8'h54] = 42'b0_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // or
+        rom[8'h55] = 42'b0_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // or
+        rom[8'h56] = 42'b0_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // or
+        rom[8'h57] = 42'b0_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // or
+        rom[8'h58] = 42'b0_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_010;    // and
+        rom[8'h59] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_010;    // and
+        rom[8'h5a] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_010;    // and
+        rom[8'h5b] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_010;    // and
+        rom[8'h5c] = 42'b0_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_010;    // and
+        rom[8'h5d] = 42'b0_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_010;    // and
+        rom[8'h5e] = 42'b0_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_010;    // and
+        rom[8'h5f] = 42'b0_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_010;    // and
+        rom[8'h60] = 42'b0_1_1000_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
+        rom[8'h61] = 42'b0_1_1000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
+        rom[8'h62] = 42'b0_1_1000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
+        rom[8'h63] = 42'b0_1_1000_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
+        rom[8'h64] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h65] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h66] = 42'b0_1_1000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
+        rom[8'h67] = 42'b0_1_1000_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
+        rom[8'h68] = 42'b0_1_1011_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // asr
+        rom[8'h69] = 42'b0_1_1011_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // asr
+        rom[8'h6a] = 42'b0_1_1011_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // asr
+        rom[8'h6b] = 42'b0_1_1011_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // asr
+        rom[8'h6c] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h6d] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h6e] = 42'b0_1_1011_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // asr
+        rom[8'h6f] = 42'b0_1_1011_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // asr
+        rom[8'h70] = 42'b0_1_1001_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // lsr
+        rom[8'h71] = 42'b0_1_1001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // lsr
+        rom[8'h72] = 42'b0_1_1001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // lsr
+        rom[8'h73] = 42'b0_1_1001_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // lsr
+        rom[8'h74] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h75] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h76] = 42'b0_1_1001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // lsr
+        rom[8'h77] = 42'b0_1_1001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // lsr
+        rom[8'h78] = 42'b0_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_110;    // iseq
+        rom[8'h79] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_110;    // iseq
+        rom[8'h7a] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_110;    // iseq
+        rom[8'h7b] = 42'b0_1_0100_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_110;    // iseq
+        rom[8'h7c] = 42'b0_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_111;    // isset
+        rom[8'h7d] = 42'b0_1_0100_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_111;    // isset
+        rom[8'h7e] = 42'b0_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_110;    // iseq
+        rom[8'h7f] = 42'b0_1_0100_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_110;    // iseq
+        rom[8'h80] = 42'b0_1_0000_0000_0001_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h81] = 42'b0_1_0000_0000_0001_0001_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h82] = 42'b0_0_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // nop
+        rom[8'h83] = 42'b0_1_0100_0000_1001_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_000;    // xor
+        rom[8'h84] = 42'b0_1_0100_0001_1000_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // or
+        rom[8'h85] = 42'b0_1_0100_0000_1000_0001_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // or
+        rom[8'h86] = 42'b0_1_0100_0000_1000_0010_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // or
+        rom[8'h87] = 42'b0_1_0100_xxxx_1001_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h88] = 42'b0_1_0100_xxxx_1000_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h89] = 42'b0_1_0100_xxxx_1000_0001_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h8a] = 42'b0_1_0100_xxxx_1000_0010_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h8b] = 42'b0_1_0100_xxxx_1000_0011_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h8c] = 42'b0_1_0000_0000_1001_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h8d] = 42'b0_1_0000_0000_1111_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h8e] = 42'b0_1_0000_0000_1010_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // add
+        rom[8'h8f] = 42'b0_1_1000_0000_1001_0000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // shl
+        rom[8'h90] = 42'b0_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h91] = 42'b0_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h92] = 42'b0_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h93] = 42'b0_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h94] = 42'b0_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h95] = 42'b0_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h96] = 42'b0_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h97] = 42'b0_1_0100_xxxx_0100_1010_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // mov
+        rom[8'h98] = 42'b0_0_0000_0110_0011_1000_xx_xx_1_1_1_01_1_1_1_00111_000_0_xxx;    // push
+        rom[8'h99] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'h9a] = 42'b0_0_0000_0110_0011_1000_xx_xx_1_1_1_10_1_1_1_10000_000_1_xxx;    // push
+        rom[8'h9b] = 42'b0_0_0000_0101_0011_1000_xx_xx_1_1_1_10_1_0_1_10000_000_1_xxx;    // stm
+        rom[8'h9c] = 42'b0_0_0000_0101_0011_1000_xx_xx_1_1_1_11_1_0_1_10110_000_0_xxx;    // stm
+        rom[8'h9d] = 42'b0_0_0000_0101_0011_1000_xx_xx_1_1_1_11_1_0_1_10110_000_0_xxx;    // stm
+        rom[8'h9e] = 42'b0_0_0000_0110_0011_1000_xx_xx_1_1_1_11_1_1_1_10110_000_0_xxx;    // push
+        rom[8'h9f] = 42'b0_0_0000_0110_0011_1000_xx_xx_1_1_1_11_1_1_1_10110_000_0_xxx;    // push
+        rom[8'ha0] = 42'b0_0_0000_0110_0011_1000_xx_xx_1_0_1_01_1_0_1_00010_000_1_xxx;    // pop
+        rom[8'ha1] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'ha2] = 42'b0_0_0000_0110_0011_1000_xx_xx_1_0_1_10_1_0_1_00011_000_0_xxx;    // pop
+        rom[8'ha3] = 42'b0_0_0000_0001_0011_1000_xx_xx_1_0_1_10_1_0_1_00011_000_0_xxx;    // ldm
+        rom[8'ha4] = 42'b0_0_0000_0001_0011_1000_xx_xx_1_0_1_11_1_0_1_00100_000_0_xxx;    // ldm
+        rom[8'ha5] = 42'b0_0_0000_0001_0011_1000_xx_xx_1_0_1_11_1_0_1_00100_000_0_xxx;    // ldm
+        rom[8'ha6] = 42'b0_0_0000_0110_0011_1000_xx_xx_1_0_1_11_1_0_1_00100_000_0_xxx;    // pop
+        rom[8'ha7] = 42'b0_0_0000_0110_0011_1000_xx_xx_1_0_1_11_1_0_1_00100_000_0_xxx;    // pop
+        rom[8'ha8] = 42'b0_0_xxxx_1000_1100_xxxx_01_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // br
+        rom[8'ha9] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'haa] = 42'b0_0_xxxx_xxxx_xxxx_xxxx_xx_10_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // jmp
+        rom[8'hab] = 42'b0_1_0100_xxxx_0010_0111_xx_10_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // call
+        rom[8'hac] = 42'b0_0_xxxx_1000_1011_xxxx_10_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // brclr
+        rom[8'had] = 42'b0_0_xxxx_1000_1011_xxxx_10_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // brclr
+        rom[8'hae] = 42'b0_0_xxxx_1001_1101_xxxx_00_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // br
+        rom[8'haf] = 42'b0_0_xxxx_1001_1101_xxxx_00_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // br
+        rom[8'hb0] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hb1] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hb2] = 42'b0_0_xxxx_1000_xxxx_xxxx_xx_11_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // jmp
+        rom[8'hb3] = 42'b0_1_0100_1000_0010_0111_xx_11_0_x_x_xx_x_x_0_xxxxx_000_x_011;    // call
+        rom[8'hb4] = 42'b0_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // brset
+        rom[8'hb5] = 42'b0_0_xxxx_1000_1011_xxxx_11_01_0_x_x_xx_x_x_0_xxxxx_000_x_xxx;    // brset
+        rom[8'hb6] = 42'b0_1_0001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // ishi
+        rom[8'hb7] = 42'b0_1_0001_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_000_x_001;    // ishi
+        rom[8'hb8] = 42'b0_1_1110_1000_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_110;    // mul
+        rom[8'hb9] = 42'b0_1_1110_1001_1011_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_110;    // mul
+        rom[8'hba] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hbb] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hbc] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hbd] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hbe] = 42'b0_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_110;    // mul
+        rom[8'hbf] = 42'b0_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_110;    // mul
+        rom[8'hc0] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hc1] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hc2] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hc3] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hc4] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hc5] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hc6] = 42'b0_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_101;    // mulhu
+        rom[8'hc7] = 42'b0_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_101;    // mulhu
+        rom[8'hc8] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hc9] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hca] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hcb] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hcc] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hcd] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hce] = 42'b0_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_011;    // mulhs
+        rom[8'hcf] = 42'b0_1_1110_1001_1101_1000_xx_xx_0_x_x_xx_x_x_0_xxxxx_001_x_011;    // mulhs
+        rom[8'hd0] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hd1] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hd2] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hd3] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hd4] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hd5] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hd6] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hd7] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hd8] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hd9] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hda] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hdb] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hdc] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hdd] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hde] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hdf] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'he0] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'he1] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'he2] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'he3] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'he4] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'he5] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'he6] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'he7] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'he8] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'he9] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hea] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'heb] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hec] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hed] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hee] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hef] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hf0] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hf1] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hf2] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hf3] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hf4] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hf5] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hf6] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hf7] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hf8] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hf9] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hfa] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hfb] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hfc] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hfd] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hfe] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+        rom[8'hff] = 42'b0_x_xxxx_xxxx_xxxx_xxxx_xx_xx_0_x_x_xx_x_x_0_xxxxx_xxx_x_xxx;
+    end
+
+    logic [41:0] q;
+    always_ff @(posedge clk) q <= rom[op];
+    assign {halt, wen, alu_op, lhs_src, rhs_src, dest_src, cond_src, pc_src,
+            mem, mst, mw2, mn, mblk, mpush, useq, uent, ext, urs, lsel} = q;
 
 endmodule
