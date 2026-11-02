@@ -16,7 +16,10 @@
 // tools/fpga-system.py.  Its floor is the pixel clock, 25.175 MHz, which is
 // also the processor's clock in that system.  --uart builds it with
 // FRUCTUS_UART as well: rtl/uart.sv, its serial line; --usb with FRUCTUS_USB,
-// rtl/usb.sv, its low-speed USB host port.
+// rtl/usb.sv, its low-speed USB host port.  --hdmi with FRUCTUS_HDMI: the
+// display on rtl/video/tmds.sv, the pins in tools/fpga-hdmi.pcf and the serial
+// clock held to 126 MHz.  Then the median is of the pixel clock, the
+// processor's, and the serial clock is reported beside it: it must pass 126.
 //
 // --jobs N places N seeds at a time, rather than one a core.  A placement of
 // the system takes the better part of a gigabyte, so one a core fits only
@@ -35,7 +38,7 @@
 // =============================================================================
 
 import { execFile } from 'node:child_process';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { promisify } from 'node:util';
 
@@ -44,13 +47,15 @@ const args = process.argv.slice(2);
 const SYSTEM = args.includes('--system');
 const UART = SYSTEM && args.includes('--uart');
 const USB = SYSTEM && args.includes('--usb');
+const HDMI = SYSTEM && args.includes('--hdmi');
 const PLAN = SYSTEM ? 'tools/fpga-system.py' : args.includes('--floorplan') ? 'tools/fpga-top.py' : null;
 const JOBS = args.includes('--jobs') ? Number(args[args.indexOf('--jobs') + 1]) : Infinity;
 const SEEDS = Number(args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--jobs') ?? 16);
-const OUT = SYSTEM && (UART || USB) ? `build/speed${UART ? '-uart' : ''}${USB ? '-usb' : ''}`
+const OUT = SYSTEM && (UART || USB || HDMI) ? `build/speed${UART ? '-uart' : ''}${USB ? '-usb' : ''}${HDMI ? '-hdmi' : ''}`
   : SYSTEM ? 'build/speed-system' : 'build/speed';
 const MODULES = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare',
   ...(UART ? ['uart'] : []), ...(USB ? ['usb'] : []),
+  ...(HDMI ? ['video/tmds', 'video/tmds_rom'] : []),
   ...(SYSTEM ? ['spiboot', 'video/video', 'video/timing', 'video/background', 'video/foreground', 'video/sprites'] : [])];
 
 const have = async (cmd) => {
@@ -63,6 +68,9 @@ for (const tool of ['yosys', 'nextpnr-ice40'])
   }
 
 mkdirSync(OUT, { recursive: true });
+if (HDMI) writeFileSync(`${OUT}/pins.pcf`, readFileSync('tools/fpga-hdmi.pcf', 'utf8')
+  + readFileSync('tools/fpga-hdmi-usb.pcf', 'utf8').split('\n')
+    .filter((l) => (UART && l.includes(' uart_')) || (USB && l.includes(' usb_'))).join('\n') + '\n');
 const files = [...MODULES.map((m) => `rtl/${m}.sv`), SYSTEM ? 'tools/fpga-system.sv' : 'tools/fpga-top.sv'];
 
 // --- synthesise once; every seed places the same netlist -----------------------
@@ -77,7 +85,7 @@ const files = [...MODULES.map((m) => `rtl/${m}.sv`), SYSTEM ? 'tools/fpga-system
 const ABC9 = '&scorr;&sweep;&dc2;&dch,-r;&ps;&if,-W,250,-v;&mfs';
 process.stdout.write('synthesising ... ');
 await run('yosys', ['-q', '-p',
-  `read_verilog -sv ${SYSTEM ? '-DFRUCTUS_BLIT ' : ''}${UART ? '-DFRUCTUS_UART ' : ''}${USB ? '-DFRUCTUS_USB ' : ''}${files.join(' ')}; `
+  `read_verilog -sv ${SYSTEM ? '-DFRUCTUS_BLIT ' : ''}${UART ? '-DFRUCTUS_UART ' : ''}${USB ? '-DFRUCTUS_USB ' : ''}${HDMI ? '-DFRUCTUS_HDMI ' : ''}${files.join(' ')}; `
   + `synth_ice40 -top top -run :map_luts; `
   + `read_verilog -D ICE40_HX -icells -lib -specify +/ice40/abc9_model.v; abc9 -W 250 -script +${ABC9}; `
   + `ice40_wrapcarry -unwrap; techmap -map +/ice40/ff_map.v; clean; opt_lut -tech ice40; `
@@ -100,9 +108,14 @@ const place = async (seed) => {
     `nextpnr-ice40 --up5k --package sg48 --pcf-allow-unconstrained `
     + `--json ${OUT}/top.json --seed ${seed} --freq 50 `
     + (PLAN ? `--pre-place ${PLAN} ` : '')
+    + (HDMI ? `--pcf ${OUT}/pins.pcf --pre-pack tools/fpga-hdmi-clocks.py ` : '')
     + `> ${log} 2>&1 || true`]);
   const text = readFileSync(log, 'utf8');
-  const mhz = text.match(/Max frequency for clock '[^']*': ([\d.]+) MHz/g)?.pop();
+  const found = text.match(/Max frequency for clock +'[^']*': ([\d.]+) MHz/g) ?? [];
+  // The last report of each clock.  Without --hdmi there is one clock.
+  const of = (name) => found.filter((f) => f.includes(`${name}'`)).pop();
+  const mhz = HDMI ? of("'clk") : found.pop();
+  const ser = HDMI ? Number(/([\d.]+) MHz/.exec(of('clk5') ?? '')?.[1] ?? 0) : 0;
   if (!mhz) throw new Error(`seed ${seed}: nextpnr reported no frequency, see ${log}`);
   const crit = text.split('Critical path report for clock')[1]?.split('ns logic')[0] ?? '';
   const cells = /Source (\S+)/g, sinks = /Sink (\S+)/g;
@@ -111,6 +124,7 @@ const place = async (seed) => {
   return {
     seed,
     mhz: Number(/([\d.]+) MHz/.exec(mhz)[1]),
+    ser,
     lc: Number(/ICESTORM_LC:\s+(\d+)\//.exec(text)?.[1] ?? 0),
     depth: Math.max(src.length - 1, 0),
     from: src[0] ?? '?',
@@ -132,9 +146,16 @@ const short = (s) => s.replace(/_SB_.*$/, '').replace(/^u\./, '');
 console.log();
 for (const r of results)
   console.log(`  seed ${String(r.seed).padStart(2)}  ${r.mhz.toFixed(2).padStart(6)} MHz  `
+            + (HDMI ? `ser ${r.ser.toFixed(2).padStart(6)}  ` : '')
             + `${String(r.depth).padStart(2)} cells  ${short(r.from).slice(0, 22).padEnd(22)}`
             + ` -> ${short(r.to).slice(0, 26)}`);
 console.log();
 console.log(`  ${results[0].lc} logic cells, ${count('SB_RAM40_4K')} block RAMs`);
 console.log(`  MEDIAN ${median.toFixed(2)} MHz   spread ${mhz[0].toFixed(1)} .. `
           + `${mhz[mhz.length - 1].toFixed(1)}   over ${SEEDS} seeds`);
+if (HDMI) {
+  const ser = results.map((r) => r.ser).sort((a, b) => a - b);
+  console.log(`  serial clock: median ${((ser[(ser.length - 1) >> 1] + ser[ser.length >> 1]) / 2).toFixed(2)} MHz   spread `
+            + `${ser[0].toFixed(1)} .. ${ser[ser.length - 1].toFixed(1)}   `
+            + `${ser.filter((m) => m >= 126).length} of ${SEEDS} pass 126`);
+}

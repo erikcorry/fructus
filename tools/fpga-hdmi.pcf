@@ -1,0 +1,20 @@
+# The pins for tools/fpga-system.sv built with FRUCTUS_HDMI, with --hdmi in
+# tools/speed.mjs.  The eight are package neighbours in pairs, for the board's
+# traces, and are all on the die's top edge, which rtl/video/tmds.sv needs.
+set_io tmds_p[0] 31
+set_io tmds_n[0] 32
+set_io tmds_p[1] 34
+set_io tmds_n[1] 35
+set_io tmds_p[2] 36
+set_io tmds_n[2] 37
+set_io tmds_p[3] 42
+set_io tmds_n[3] 43
+set_io clk12 20
+# The rest as board/fructus.pcf has them.
+set_io flash_mosi 14
+set_io flash_sck 15
+set_io flash_cs_n 16
+set_io flash_miso 17
+set_io din 6
+set_io irq 9
+set_io dout 11

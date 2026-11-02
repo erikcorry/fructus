@@ -176,7 +176,8 @@ static inline void display_sync (void)
    first is 0-31, and the entries wrap from 31 to 0, so n of 32 sets the
    whole palette.  Each byte is a colour in the 8-bit pixel format, as
    DISPLAY_RGB makes from levels or DISPLAY_RGB888 from 0-255; a byte of 0-31
-   there shows black.  The entries are used by sprite colours (1-15) and by
+   there shows black, but must not be 4-7, which on HDMI is blanking.  The
+   entries are used by sprite colours (1-15) and by
    background pixels of fewer than 8 bits: 4 bpp 0-15, 2 bpp 8-11 or 24-27,
    3 bpp 16-23, 1 bpp 28-29 or 30-31.  A foreground or 8 bpp byte of 0-31 is
    an entry too.

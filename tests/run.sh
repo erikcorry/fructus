@@ -137,6 +137,7 @@ if node tests/dontcare-check.mjs; then :; else fail=1; fi
 if node tests/background-check.mjs; then :; else fail=1; fi
 if node tests/foreground-check.mjs; then :; else fail=1; fi
 if node tests/video-check.mjs; then :; else fail=1; fi
+if node tests/hdmi-check.mjs; then :; else fail=1; fi
 # tools/gpu.js, the simulator's display around tools/display.js; skips
 # without the compiler.
 if node tests/display-check.mjs; then :; else fail=1; fi

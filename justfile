@@ -209,3 +209,7 @@ speed seeds='16':
 # 64 KB, the display and blit mode - whose floor is the 25.175 MHz pixel clock.
 speed-system seeds='16':
     @node tools/speed.mjs {{seeds}} --system
+
+# The same with the display on HDMI, rtl/video/tmds.sv, and the serial clock too.
+speed-hdmi seeds='16':
+    @node tools/speed.mjs {{seeds}} --system --hdmi

@@ -1,0 +1,5 @@
+# With FRUCTUS_UART and FRUCTUS_USB as well, after tools/fpga-hdmi.pcf.
+set_io uart_rx 12
+set_io uart_tx 13
+set_io usb_dp 18
+set_io usb_dm 19

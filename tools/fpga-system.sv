@@ -123,11 +123,21 @@
 // WITH FRUCTUS_USB, A LOW-SPEED USB HOST PORT: rtl/usb.sv, on ports usb_dp and
 // usb_dm, which want 22 ohms in series and 15k to ground each; its words at
 // 0x0430 - 0x0435.  With either option or both.
+//
+// WITH FRUCTUS_HDMI, THE DISPLAY LEAVES ON HDMI AND NOT THE DACS: rtl/video/tmds.sv
+// and its ROM, on ports tmds_p and tmds_n, with a PLL on clk12 making every clock;
+// tools/fpga-hdmi.pcf has the pins.  A palette entry may no longer be 4 - 7.
 // =============================================================================
 
 module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests do
-           (input logic clk, input logic din, input logic irq, output wire dout,
+           (
+`ifdef FRUCTUS_HDMI
+            input logic clk12, output wire [3:0] tmds_p, tmds_n,
+`else
+            input logic clk,
             output logic hsync_n, vsync_n, output logic [2:0] red, green, blue,
+`endif
+            input logic din, input logic irq, output wire dout,
             output wire flash_sck, flash_cs_n, flash_mosi, input logic flash_miso
 `ifdef FRUCTUS_UART
             , input logic uart_rx, output logic uart_tx
@@ -136,6 +146,19 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
             , inout wire usb_dp, usb_dm
 `endif
            );
+
+`ifdef FRUCTUS_HDMI
+    // THE ONE PLL MAKES THE SERIAL CLOCK, 12 x 84 / 8 = 126 MHz, and rtl/video/tmds.sv
+    // divides that by 5 for the pixel clock, which is everything else's: 25.2 MHz,
+    // 0.1% over the 25.175 of 640x480.
+    wire clk5, clk;
+    SB_PLL40_CORE #(.FEEDBACK_PATH("SIMPLE"), .DIVR(4'd0), .DIVF(7'd83), .DIVQ(3'd3),
+                    .FILTER_RANGE(3'd1))
+        pll (.REFERENCECLK(clk12), .PLLOUTGLOBAL(clk5), .RESETB(1'b1), .BYPASS(1'b0));
+    wire [7:0] tmds_addr;
+    tmds hdmi (.ser(clk5), .pclk(clk), .addr(tmds_addr), .tmds_p, .tmds_n);
+    wire hsync_n, vsync_n;
+`endif
 
     // THE PROCESSOR'S MEMORY IS FILLED FROM THE FLASH AT POWER-UP, and again
     // whenever din is held: rtl/spiboot.sv.  While `boot` is set the
@@ -455,5 +478,10 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
                .spr_pat_we(pat_we), .spr_pat_addr(pat_i), .spr_pat_data(wword_w),
                .spr_attr_we(attr_we), .spr_attr_addr(attr_i), .spr_attr_data(wword_w),
                .mem_rd(vrd), .mem_addr(vaddr), .mem_rdata(vdata),
-               .hsync_n, .vsync_n, .red, .green, .blue, .line, .vblank);
+`ifdef FRUCTUS_HDMI
+               .tmds_addr,
+`else
+               .red, .green, .blue,
+`endif
+               .hsync_n, .vsync_n, .line, .vblank);
 endmodule

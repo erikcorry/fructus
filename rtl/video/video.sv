@@ -74,9 +74,13 @@ module video #(
 
     output logic        hsync_n,
     output logic        vsync_n,
+`ifdef FRUCTUS_HDMI
+    output logic [7:0]  tmds_addr,   // rtl/video/tmds.sv's: a byte, or blanking at 4 - 7
+`else
     output logic [2:0]  red,
     output logic [2:0]  green,
     output logic [2:0]  blue,
+`endif
 
     output logic [9:0]  line,        // for the status register
     output logic        vblank
@@ -166,6 +170,7 @@ module video #(
 
     wire [7:0] px = sel_q[7:5] == 3'b000 ? pal_q : sel_q;
 
+`ifndef FRUCTUS_HDMI
     // --- decode ----------------------------------------------------------------
     logic [2:0] g_pins, r_pins, b_pins;
     logic [1:0] rdiv;                // c[3:0] div 5
@@ -201,6 +206,7 @@ module video #(
     end
 
     wire black = px[7:5] == 3'b000 || px[3:0] == 4'b1111;
+`endif
 
     // --- syncs and blanking, delayed to the pixels ----------------------------------
     // Column x's pixel is registered into the pins at the end of cycle
@@ -217,7 +223,13 @@ module video #(
     always_ff @(posedge clk) begin
         hsync_n <= !hs;
         vsync_n <= !vs;
+`ifndef FRUCTUS_HDMI
         {red, green, blue} <= vis && !black ? {r_pins, g_pins, b_pins} : 9'd0;
+`endif
     end
+`ifdef FRUCTUS_HDMI
+    // The ROM's register is where the pins' flops were, so it lines up the same.
+    assign tmds_addr = vis ? px : {6'b000001, vs, hs};
+`endif
 
 endmodule
