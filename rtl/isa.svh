@@ -38,6 +38,10 @@
 `define FRUCTUS_IO_USB_STATUS  16'h0432
 `define FRUCTUS_IO_USB_CTRL    16'h0434
 
+// [cpu.io]: the SPI port's - tools/fpga-system.sv's, with FRUCTUS_SPI.
+`define FRUCTUS_IO_SPI_DATA    16'h0438
+`define FRUCTUS_IO_SPI_CTRL    16'h043a
+
 // The registers the exception routines and the block moves name.
 `define FRUCTUS_REG_SP 3'd6
 `define FRUCTUS_REG_LR 3'd7

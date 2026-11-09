@@ -124,6 +124,10 @@
 // usb_dm, which want 22 ohms in series and 15k to ground each; its words at
 // 0x0430 - 0x0435.  With either option or both.
 //
+// WITH FRUCTUS_SPI, AN SPI PORT: rtl/spi.sv, on the flash's pins, which
+// rtl/spiboot.sv has while it boots, and with ports spi_cs0_n and spi_cs1_n
+// for a header's devices; its words at 0x0438 - 0x043b.
+//
 // WITH FRUCTUS_HDMI, THE DISPLAY LEAVES ON HDMI AND NOT THE DACS: rtl/video/tmds.sv
 // and its ROM, on ports tmds_p and tmds_n, with a PLL on clk12 making every clock;
 // tools/fpga-hdmi.pcf has the pins.  A palette entry may no longer be 4 - 7.
@@ -144,6 +148,9 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
 `endif
 `ifdef FRUCTUS_USB
             , inout wire usb_dp, usb_dm
+`endif
+`ifdef FRUCTUS_SPI
+            , output wire spi_cs0_n, spi_cs1_n
 `endif
            );
 
@@ -169,6 +176,9 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     logic rst = 1'b0, boot = 1'b0;
     always_ff @(posedge clk) begin rst_q <= din; start <= rst_q; end
     wire [7:0] boot_byte; wire spi_on;
+`ifdef FRUCTUS_SPI
+    wire sb_mosi;                        // spiboot's, which the pin has while it reads
+`endif
     if (BOOT) begin : g_boot
         // rst AND boot AGAIN, A CYCLE LATER, FROM FLOPS THAT START AT 0.
         // spiboot's start at 1, which an iCE40 flop cannot: yosys keeps them
@@ -182,17 +192,29 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
         // 29.63 MHz (28.0 .. 30.6) against 29.70, and 4464 cells against 4489,
         // medians of sixteen, and no seed's critical path starts at the reset.
         wire sb_rst, sb_boot;
+`ifdef FRUCTUS_SPI
+        spiboot sb (.clk, .start, .rst(sb_rst), .boot(sb_boot), .on(spi_on), .mosi(sb_mosi),
+                    .miso(flash_miso), .byte_q(boot_byte));
+`else
         spiboot sb (.clk, .start, .rst(sb_rst), .boot(sb_boot), .on(spi_on), .mosi(flash_mosi),
                     .miso(flash_miso), .byte_q(boot_byte));
+`endif
         always_ff @(posedge clk) begin rst <= sb_rst; boot <= sb_boot; end
     end else begin : g_noboot
         always_ff @(posedge clk) rst <= start;
+`ifdef FRUCTUS_SPI
+        assign spi_on = 1'b0, boot_byte = 8'h00, sb_mosi = 1'b0;
+`else
         assign spi_on = 1'b0, boot_byte = 8'h00, flash_mosi = 1'b0;
+`endif
     end
+`ifndef FRUCTUS_SPI
     // The flash's clock, high in the low half of each cycle the read is on.
+    // With FRUCTUS_SPI it is the SPI port's too, below.
     SB_IO #(.PIN_TYPE(6'b0100_01)) sck_pad (.PACKAGE_PIN(flash_sck), .OUTPUT_CLK(clk),
                                              .D_OUT_0(1'b0), .D_OUT_1(spi_on));
     assign flash_cs_n = ~spi_on;
+`endif
     logic irq_q, irq_s;
 `ifdef FRUCTUS_USB
     // The USB port's request joins the others in the same flop.  (Its own
@@ -427,6 +449,28 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
                                            .D_OUT_0(b_dm_out), .D_IN_0(b_dm_in));
 `endif
 
+    // --- the SPI port, with FRUCTUS_SPI: rtl/spi.sv ---------------------------------
+    // The flash's three pins are spiboot's while it reads - `spi_on' - and
+    // the port's otherwise; reset, at the start of a boot, clears the port's
+    // selects, and the boot loop's stores write no register, so the two never
+    // drive the flash at once.  The clock's DDR output is either's.
+`ifdef FRUCTUS_SPI
+    localparam [15:0] S_DATA = `FRUCTUS_IO_SPI_DATA, S_CTRL = `FRUCTUS_IO_SPI_CTRL;
+    wire sw = we_w && mask_w[0];
+    wire [7:0] s_byte; wire s_busy, s_on, s_mosi; wire [2:0] s_sel;
+    wire s_rd = rld && late_m && ra[15:1] == S_DATA[15:1];   // only in the window
+    spi sport (.clk, .rst, .wr_data(sw && addr_w[15:1] == S_DATA[15:1]),
+               .wr_ctrl(sw && addr_w[15:1] == S_CTRL[15:1]), .wword(wword_w),
+               .rd_data(s_rd), .rx_byte(s_byte), .busy(s_busy), .sel(s_sel),
+               .sck_on(s_on), .mosi(s_mosi), .miso(flash_miso));
+    SB_IO #(.PIN_TYPE(6'b0100_01)) sck_pad (.PACKAGE_PIN(flash_sck), .OUTPUT_CLK(clk),
+                                             .D_OUT_0(1'b0), .D_OUT_1(spi_on | s_on));
+    assign flash_cs_n = ~(spi_on | s_sel[0]);
+    assign flash_mosi = spi_on ? sb_mosi : s_mosi;
+    assign spi_cs0_n  = ~s_sel[1];
+    assign spi_cs1_n  = ~s_sel[2];
+`endif
+
     // --- the registers the hardware changes, read -------------------------------
     // 0x0484 status: bit 15 vertical blank, bits 9:0 the line.  0x04a0, 0x04a4
     // and 0x04a8 the palette's, the patterns' and the attributes' addresses.
@@ -434,7 +478,35 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     // With FRUCTUS_UART, the received byte at the data register and the
     // UART's status too.
     wire [15:0] status = {vblank, 5'd0, line};
-`ifdef FRUCTUS_USB
+`ifdef FRUCTUS_SPI
+    // The SPI port's data is the word at S_DATA, the USB port's with bit 3
+    // set, which picks it from the UART's and the USB port's.
+    wire [15:0] spi_word = {s_busy, 7'd0, s_byte};
+    `ifdef FRUCTUS_USB
+    wire [15:0] usb_word = ra[1] ? b_status : {8'd0, b_byte};
+        `ifdef FRUCTUS_UART
+    wire [15:0] dev_word = ra[4] ? usb_word : ra[1] ? u_status : {8'd0, u_byte};
+    wire        dev_hit  = ra[15:5] == B_DATA[15:5] && ra[3:2] == B_DATA[3:2]
+                        || ra[15:1] == S_DATA[15:1];
+        `else
+    wire [15:0] dev_word = usb_word;
+    wire        dev_hit  = ra[15:2] == B_DATA[15:2] || ra[15:1] == S_DATA[15:1];
+        `endif
+    `elsif FRUCTUS_UART
+    wire [15:0] dev_word = ra[1] ? u_status : {8'd0, u_byte};
+    wire        dev_hit  = ra[15:2] == U_DATA[15:2] || ra[15:1] == S_DATA[15:1];
+    `else
+    wire [15:0] dev_word = 16'd0;
+    wire        dev_hit  = ra[15:1] == S_DATA[15:1];
+    `endif
+    wire [15:0] cpu_word = ra[3] ? spi_word : dev_word;
+    assign io_q    = (ra[15:7] == 9'h009 && (ra[6:1] == 6'h02 || ra[6:1] == 6'h10
+                                         || ra[6:1] == 6'h12 || ra[6:1] == 6'h14)
+                   || dev_hit);
+    assign io_word = !ra[7] ? cpu_word
+                 : !ra[5] ? status : ra[3] ? {10'd0, attr_i}
+                 : ra[2] ? {6'd0, pat_i} : {11'd0, pal_i};
+`elsif FRUCTUS_USB
     // The USB port's are the four bytes at B_DATA, the UART's with bit 4
     // set, so bit 4 picks between the two.
     wire [15:0] usb_word = ra[1] ? b_status : {8'd0, b_byte};

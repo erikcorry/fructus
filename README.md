@@ -676,6 +676,23 @@ as before. With it the system is 4385 logic cells of the UP5K's 5280,
 against 4229, and places at 28.13 MHz against 28.31 (medians of sixteen); two
 pins, and no block RAM, DSP or SPRAM.
 
+**The SPI port** is another option, `FRUCTUS_SPI` and `rtl/spi.sv`: a byte at
+a time on the flash's own pins, which `rtl/spiboot.sv` has only while it
+boots, so a running program can read and program the flash beyond its 64 KB
+image, with two more chip selects, ports `spi_cs0_n` and `spi_cs1_n`, for a
+header. Mode 0 at the system's clock, eight cycles a byte. A byte stored at
+0x0438 is sent and the byte received kept; a load, through the late bit's
+window, reads it with bit 15 `busy`. The control word at 0x043a has the three
+selects and `stream`, with which a load that finds the port idle sends the
+next byte, so a block is read at a load a byte; writing it ends any byte under
+way. `crt/include/fructus/spi.h` has `fructus_flash_read()`, the JEDEC ID,
+erase and program. `tools/fcc-run.mjs --flash FILE` puts `tools/flash.js`, a
+model of the board's W25Q32JV, behind the flash's select, and
+`tests/spi-check.mjs` runs `tests/spi.c` on it and on the RTL and holds the
+two alike. With the UART and USB, the system is 4966 logic cells against 4921,
+29.45 MHz median against 30.01 (30.32 best against 30.45), sixteen seeds; two
+pins and no block RAM.
+
 `tools/sim.js` implements all of this for a machine made with `io`, which is
 `tools/fcc-run.mjs`'s. A program that touches a guard there exits 124, naming
 the instruction after the one that did. `tests/stack-guard.c` recurses into

@@ -3,7 +3,7 @@
 // fcc-run.mjs - run a compiled C program on the simulator
 // =============================================================================
 //
-//   node tools/fcc-run.mjs prog.bin [--max N] [--stats] [--input FILE [--paced]] [--frames DIR] [--x11 [--scale N]]
+//   node tools/fcc-run.mjs prog.bin [--max N] [--stats] [--input FILE [--paced]] [--flash FILE [--flash-save FILE]] [--frames DIR] [--x11 [--scale N]]
 //
 // prog.bin is the flat image tools/fcc writes: ld/fructus-sim.ld linked at 0,
 // objcopied to binary.  The program starts at 0, where crt/crt0.s has put a
@@ -38,6 +38,13 @@
 // bit 5, is not.  Without --paced a byte waits whenever input is left, so a
 // handler is entered again and again until it is all taken.
 //
+// THE SPI PORT, tools/spi.js as rtl/spi.sv has it, at 0x0438: with --flash
+// FILE a model of the board's 4 MB flash, tools/flash.js, is behind its flash
+// select, FILE's bytes from address 0 and 0xff past them - a whole image as
+// icemulti and iceprog would lay it out.  An erase or a program changes the
+// model only; --flash-save FILE writes it out at the end if one did.  Without
+// --flash, or behind the header's selects, every byte reads 0xff.
+//
 // The cycle counter at 0x0424 (`__cycles') is the I/O page's own, in
 // tools/sim.js and rtl/cpu.sv alike; crt/include/fructus/cycles.h reads it.
 //
@@ -56,21 +63,26 @@ import { Machine } from './sim.js';
 import { Gpu } from './gpu.js';
 import { png } from './png.js';
 import { openWindow } from './x11.js';
+import { Flash } from './flash.js';
+import { attachSpi } from './spi.js';
 
 const args = process.argv.slice(2);
+let flashFile = null, flashSave = null;
 let file = null, max = 5e7, stats = false, frames = null, x11 = false, scale = 1, input = null, paced = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--max') max = Number(args[++i]);
   else if (args[i] === '--stats') stats = true;
   else if (args[i] === '--input') input = readFileSync(args[++i]);
   else if (args[i] === '--paced') paced = true;
+  else if (args[i] === '--flash') flashFile = args[++i];
+  else if (args[i] === '--flash-save') flashSave = args[++i];
   else if (args[i] === '--frames') frames = args[++i];
   else if (args[i] === '--x11') x11 = true;
   else if (args[i] === '--scale') scale = Number(args[++i]);
   else file = args[i];
 }
 if (!file) {
-  console.error('usage: node tools/fcc-run.mjs prog.bin [--max N] [--stats] [--input FILE [--paced]] [--frames DIR] [--x11 [--scale N]]');
+  console.error('usage: node tools/fcc-run.mjs prog.bin [--max N] [--stats] [--input FILE [--paced]] [--flash FILE [--flash-save FILE]] [--frames DIR] [--x11 [--scale N]]');
   process.exit(2);
 }
 
@@ -132,6 +144,9 @@ m.irq = () => {
   return held >= 0;
 };
 
+const flash = new Flash(flashFile ? readFileSync(flashFile) : undefined);
+attachSpi(m, { late: () => gpu.late(), flash, io: spec.cpu.io });
+
 const win = x11 ? await openWindow({ title: file, scale }) : null;
 if (frames) mkdirSync(frames, { recursive: true });
 const gpu = new Gpu(m, {
@@ -152,6 +167,7 @@ for (;;) {
   await new Promise((r) => setImmediate(r));
 }
 gpu.finish();
+if (flashSave && flash.dirty) writeFileSync(flashSave, flash.mem);
 if (win && !win.isClosed) {
   console.error('fcc-run: the program has stopped; close the window or press a key in it');
   await win.closed;

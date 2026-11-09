@@ -527,6 +527,23 @@ io_guard     = 0xffcc
 #                    bit 8  flush: drop the byte waiting and disarm
 #                    Reads as the value last written
 #
+# THE SPI PORT, an option of the system's (FRUCTUS_SPI, tools/fpga-system.sv
+# and rtl/spi.sv): a byte at a time on the flash's own pins, which
+# rtl/spiboot.sv has only while it boots, with two more chip selects for a
+# header.  The clock is the system's, a bit a cycle, mode 0.  rtl/spi.sv's
+# header has the whole of it:
+#
+#     spi_data       a byte stored is sent, and the byte the device sends
+#                    meanwhile kept; one stored while `busy' is dropped.  A
+#                    load takes {busy, 7 zeros, the byte}; with `stream' set,
+#                    one that finds `busy' clear sends 0xff
+#     spi_ctrl       bit 0  the flash's chip select    } 1 selects; while
+#                    bit 1  the header's CS0, pin 38   } spiboot reads, the
+#                    bit 2  the header's CS1, pin 11   } flash is its
+#                    bit 3  stream: a load sends the next byte
+#                    A write ends any byte under way.  Reads as the value
+#                    last written
+#
 # A STATUS OF ZERO IS IDLE, so that on a machine without the UART - its words
 # plain memory, zero unless written - a program waiting for `busy' to clear
 # never waits.  Eight data bits, no parity, one stop bit; a byte whose stop
@@ -548,6 +565,8 @@ uart_divisor = 0x0428  # the UART's, above
 usb_data    = 0x0430   # the USB port's, below
 usb_status  = 0x0432
 usb_ctrl    = 0x0434
+spi_data    = 0x0438   # the SPI port's, above
+spi_ctrl    = 0x043a
 
 
 # =============================================================================

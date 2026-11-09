@@ -82,6 +82,13 @@ if (usbWords.some((a) => typeof a !== 'number' || a & 1 || a < io.page + 0x10 ||
   fail('[cpu.io]: usb_data, usb_status and usb_ctrl must be distinct even words beside the UART\'s');
 if (io.usb_status !== io.usb_data + 2 || (io.usb_data ^ io.console) !== 0x10)
   fail('[cpu.io]: usb_status must follow usb_data, which must be console with bit 4 flipped');
+// The SPI port's two: its data the word that differs from the USB port's in
+// bit 3 alone, which picks it from the UART's and the USB port's words.
+const spiWords = ['spi_data', 'spi_ctrl'].map((n) => io[n]);
+if (spiWords.some((a) => typeof a !== 'number' || a & 1 || shadowWords.includes(a) || (a & ~3) === io.cycles
+                         || uartWords.includes(a) || usbWords.includes(a))
+    || io.spi_data !== (io.usb_data | 8) || io.spi_ctrl !== io.spi_data + 2)
+  fail('[cpu.io]: spi_data must be usb_data with bit 3 set, and spi_ctrl the word after it');
 const ioGuard = spec.cpu.vectors.io_guard;
 if (typeof ioGuard !== 'number') fail('[cpu.vectors] has no io_guard');
 if ((sp ^ lr) !== 1 || (sp & 1) !== 0)
@@ -150,6 +157,10 @@ process.stdout.write(`// =======================================================
 \`define FRUCTUS_IO_USB_DATA    16'h${hex(io.usb_data, 4)}
 \`define FRUCTUS_IO_USB_STATUS  16'h${hex(io.usb_status, 4)}
 \`define FRUCTUS_IO_USB_CTRL    16'h${hex(io.usb_ctrl, 4)}
+
+// [cpu.io]: the SPI port's - tools/fpga-system.sv's, with FRUCTUS_SPI.
+\`define FRUCTUS_IO_SPI_DATA    16'h${hex(io.spi_data, 4)}
+\`define FRUCTUS_IO_SPI_CTRL    16'h${hex(io.spi_ctrl, 4)}
 
 // The registers the exception routines and the block moves name.
 \`define FRUCTUS_REG_SP 3'd${sp}

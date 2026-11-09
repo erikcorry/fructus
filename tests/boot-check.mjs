@@ -3,7 +3,10 @@
 // boot-check.mjs - tools/fpga-system.sv from power-up, with a flash behind it
 // =============================================================================
 //
-//   node tests/boot-check.mjs
+//   node tests/boot-check.mjs [--spi]
+//
+// With --spi the system is built with FRUCTUS_SPI, whose port, rtl/spi.sv,
+// shares the flash's pins with spiboot: tests/spi-check.mjs runs it so.
 //
 // The whole system, with yosys's models of the SPRAMs and of the SB_IO that
 // makes the flash's clock, comes up with its memory empty, as a UP5K's does,
@@ -144,10 +147,12 @@ endmodule
 `);
 
 const DIR = process.env.FRUCTUS_RTL ?? 'rtl';
-const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare', 'spiboot']
-  .map((m) => `${DIR}/${m}.sv`);
+const SPI = process.argv.includes('--spi');
+const RTL = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare', 'spiboot',
+  ...(SPI ? ['spi'] : [])].map((m) => `${DIR}/${m}.sv`);
 const VIDEO = ['video', 'timing', 'background', 'foreground', 'sprites'].map((m) => `${DIR}/video/${m}.sv`);
-execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', '-DNO_ICE40_DEFAULT_ASSIGNMENTS', '-o', 'build/boot-tb.vvp',
+execFileSync('iverilog', ['-g2012', '-DFRUCTUS_BLIT', ...(SPI ? ['-DFRUCTUS_SPI'] : []),
+  '-DNO_ICE40_DEFAULT_ASSIGNMENTS', '-o', 'build/boot-tb.vvp',
   ...RTL, ...VIDEO, CELLS, 'tools/fpga-system.sv', 'build/boot-tb.sv'], { stdio: ['ignore', 'ignore', 'inherit'] });
 const out = execFileSync('vvp', ['-n', 'build/boot-tb.vvp'], { encoding: 'utf8' });
 for (const f of ['build/boot-tb.vvp', 'build/boot-tb.sv', 'build/boot-flash.hex']) rmSync(f, { force: true });
@@ -172,5 +177,5 @@ if (fails.length) {
   for (const f of fails) console.log(`FAIL  tests/boot-check.mjs: ${f}`);
   process.exit(1);
 }
-console.log(`ok    tests/boot-check.mjs: 64 KB from the flash in ${booted[0]} cycles, every byte in place, `
+console.log(`ok    tests/boot-check.mjs${SPI ? ' --spi' : ''}: 64 KB from the flash in ${booted[0]} cycles, every byte in place, `
           + `no mode set from the I/O page, and the program at 0 ran: ${end[2]} cycles to halt`);

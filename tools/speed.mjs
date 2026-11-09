@@ -16,7 +16,8 @@
 // tools/fpga-system.py.  Its floor is the pixel clock, 25.175 MHz, which is
 // also the processor's clock in that system.  --uart builds it with
 // FRUCTUS_UART as well: rtl/uart.sv, its serial line; --usb with FRUCTUS_USB,
-// rtl/usb.sv, its low-speed USB host port.  --hdmi with FRUCTUS_HDMI: the
+// rtl/usb.sv, its low-speed USB host port; --spi with FRUCTUS_SPI, rtl/spi.sv,
+// its SPI port on the flash's pins.  --hdmi with FRUCTUS_HDMI: the
 // display on rtl/video/tmds.sv, the pins in tools/fpga-hdmi.pcf and the serial
 // clock held to 126 MHz.  Then the median is of the pixel clock, the
 // processor's, and the serial clock is reported beside it: it must pass 126.
@@ -47,14 +48,16 @@ const args = process.argv.slice(2);
 const SYSTEM = args.includes('--system');
 const UART = SYSTEM && args.includes('--uart');
 const USB = SYSTEM && args.includes('--usb');
+const SPI = SYSTEM && args.includes('--spi');
 const HDMI = SYSTEM && args.includes('--hdmi');
 const PLAN = SYSTEM ? 'tools/fpga-system.py' : args.includes('--floorplan') ? 'tools/fpga-top.py' : null;
 const JOBS = args.includes('--jobs') ? Number(args[args.indexOf('--jobs') + 1]) : Infinity;
 const SEEDS = Number(args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--jobs') ?? 16);
-const OUT = SYSTEM && (UART || USB || HDMI) ? `build/speed${UART ? '-uart' : ''}${USB ? '-usb' : ''}${HDMI ? '-hdmi' : ''}`
+const OUT = SYSTEM && (UART || USB || SPI || HDMI)
+  ? `build/speed${UART ? '-uart' : ''}${USB ? '-usb' : ''}${SPI ? '-spi' : ''}${HDMI ? '-hdmi' : ''}`
   : SYSTEM ? 'build/speed-system' : 'build/speed';
 const MODULES = ['cpu', 'classify', 'alu', 'ucode', 'lhs', 'dest', 'immgen', 'cond', 'compare',
-  ...(UART ? ['uart'] : []), ...(USB ? ['usb'] : []),
+  ...(UART ? ['uart'] : []), ...(USB ? ['usb'] : []), ...(SPI ? ['spi'] : []),
   ...(HDMI ? ['video/tmds', 'video/tmds_rom'] : []),
   ...(SYSTEM ? ['spiboot', 'video/video', 'video/timing', 'video/background', 'video/foreground', 'video/sprites'] : [])];
 
@@ -70,7 +73,8 @@ for (const tool of ['yosys', 'nextpnr-ice40'])
 mkdirSync(OUT, { recursive: true });
 if (HDMI) writeFileSync(`${OUT}/pins.pcf`, readFileSync('tools/fpga-hdmi.pcf', 'utf8')
   + readFileSync('tools/fpga-hdmi-usb.pcf', 'utf8').split('\n')
-    .filter((l) => (UART && l.includes(' uart_')) || (USB && l.includes(' usb_'))).join('\n') + '\n');
+    .filter((l) => (UART && l.includes(' uart_')) || (USB && l.includes(' usb_'))
+                || (SPI && l.includes(' spi_'))).join('\n') + '\n');
 const files = [...MODULES.map((m) => `rtl/${m}.sv`), SYSTEM ? 'tools/fpga-system.sv' : 'tools/fpga-top.sv'];
 
 // --- synthesise once; every seed places the same netlist -----------------------
@@ -85,7 +89,7 @@ const files = [...MODULES.map((m) => `rtl/${m}.sv`), SYSTEM ? 'tools/fpga-system
 const ABC9 = '&scorr;&sweep;&dc2;&dch,-r;&ps;&if,-W,250,-v;&mfs';
 process.stdout.write('synthesising ... ');
 await run('yosys', ['-q', '-p',
-  `read_verilog -sv ${SYSTEM ? '-DFRUCTUS_BLIT ' : ''}${UART ? '-DFRUCTUS_UART ' : ''}${USB ? '-DFRUCTUS_USB ' : ''}${HDMI ? '-DFRUCTUS_HDMI ' : ''}${files.join(' ')}; `
+  `read_verilog -sv ${SYSTEM ? '-DFRUCTUS_BLIT ' : ''}${UART ? '-DFRUCTUS_UART ' : ''}${USB ? '-DFRUCTUS_USB ' : ''}${SPI ? '-DFRUCTUS_SPI ' : ''}${HDMI ? '-DFRUCTUS_HDMI ' : ''}${files.join(' ')}; `
   + `synth_ice40 -top top -run :map_luts; `
   + `read_verilog -D ICE40_HX -icells -lib -specify +/ice40/abc9_model.v; abc9 -W 250 -script +${ABC9}; `
   + `ice40_wrapcarry -unwrap; techmap -map +/ice40/ff_map.v; clean; opt_lut -tech ice40; `
