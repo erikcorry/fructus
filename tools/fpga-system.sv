@@ -137,7 +137,7 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
             input logic clk,
             output logic hsync_n, vsync_n, output logic [2:0] red, green, blue,
 `endif
-            input logic din, input logic irq, output wire dout,
+            input logic din, input logic irq,
             output wire flash_sck, flash_cs_n, flash_mosi, input logic flash_miso
 `ifdef FRUCTUS_UART
             , input logic uart_rx, output logic uart_tx
@@ -273,7 +273,7 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
     end
     wire [15:0] late = (hi2 & fbq) ? fb_cpu_word : held;
 
-    wire halted, trapped; wire [15:0] result;
+    wire halted, trapped;               // nothing reads them but the tests
     // THE PROCESSOR IS SYNTHESISED AS A HIERARCHY OF ITS OWN.  Flattened into
     // the system, abc mapped its decode and register read deeper - ten and
     // eleven cells from the SPRAM to an operand flop, against seven for the
@@ -287,11 +287,8 @@ module top #(parameter bit BOOT = 1)    // 0: memory is preloaded, as the tests 
                 .mem_rdata(rdata),
                 .mem_wdata(wdata), .mem_we(lanes), .blit(late_m), .mem_late(late), .mem_data(dword),
                 .irq(irq_s),
-                .halted(halted), .trapped(trapped), .result(result),
+                .halted(halted), .trapped(trapped), .result(),
                 .retire(), .retire_pc());
-    logic [15:0] so;
-    always_ff @(posedge clk) so <= rst ? result : {so[14:0], 1'b0};
-    assign dout = so[15] ^ halted ^ trapped;
 
     // --- the registers, a cycle after the processor's write ----------------------
     // `to_a_w`: the processor's buffer, the one not to be shown, is A - with

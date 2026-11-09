@@ -430,7 +430,7 @@ writeFileSync('build/usb-hi.hex', hex(hiWords));
 writeFileSync('build/usb-sys.sv', `\`timescale 1ns/10ps
 module tb;
     logic clk = 0, din = 1;
-    wire dout, hsync_n, vsync_n; wire [2:0] red, green, blue;
+    wire hsync_n, vsync_n; wire [2:0] red, green, blue;
     logic d_oe = 0, d_dp = 0, d_dm = 1;
     wire usb_dp, usb_dm;
     // The device drives, or its pull-up holds D- high; the host's pads drive
@@ -440,7 +440,7 @@ module tb;
     pulldown (weak0) (usb_dp);
     pullup (weak1) (usb_dm);
     wire dp = usb_dp, dm = usb_dm, h_oe = dut.b_oe;
-    top #(.BOOT(0)) dut (.clk, .din, .irq(1'b0), .dout, .hsync_n, .vsync_n, .red, .green, .blue,
+    top #(.BOOT(0)) dut (.clk, .din, .irq(1'b0), .hsync_n, .vsync_n, .red, .green, .blue,
                          .flash_sck(), .flash_cs_n(), .flash_mosi(), .flash_miso(1'b0),
                          .uart_rx(1'b1), .uart_tx(), .usb_dp, .usb_dm);
 ${DEVICE.replace('DEVF', '1.01')}

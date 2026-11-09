@@ -80,10 +80,10 @@ writeFileSync('build/boot-flash.hex', image.map((b) => b.toString(16).padStart(2
 
 writeFileSync('build/boot-tb.sv', `module tb;
     logic clk = 0, din = 0;
-    wire dout, hsync_n, vsync_n; wire [2:0] red, green, blue;
+    wire hsync_n, vsync_n; wire [2:0] red, green, blue;
     wire flash_sck, flash_cs_n, flash_mosi;
     logic flash_miso = 0;
-    top dut (.clk, .din, .irq(1'b0), .dout, .hsync_n, .vsync_n, .red, .green, .blue,
+    top dut (.clk, .din, .irq(1'b0), .hsync_n, .vsync_n, .red, .green, .blue,
              .flash_sck, .flash_cs_n, .flash_mosi, .flash_miso);
 
     // THE FLASH: a command's 32 bits in on the rising clock, then its bytes

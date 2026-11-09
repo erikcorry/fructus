@@ -391,11 +391,11 @@ const words = [
 
 writeFileSync('build/blit-tb.sv', `module tb;
     logic clk = 0, din = 1;
-    wire dout, hsync_n, vsync_n; wire [2:0] red, green, blue;
+    wire hsync_n, vsync_n; wire [2:0] red, green, blue;
     // The interrupt line: raised once the program says it is waiting, and
     // held until the handler has counted two entries - brk's and its own.
     wire irq = dut.ram_lo.mem[${(RESULT + 44) >> 1}] == 16'd1 && dut.ram_lo.mem[${(RESULT + 40) >> 1}] < 16'd2;
-    top #(.BOOT(0)) dut (.clk, .din, .irq, .dout, .hsync_n, .vsync_n, .red, .green, .blue,
+    top #(.BOOT(0)) dut (.clk, .din, .irq, .hsync_n, .vsync_n, .red, .green, .blue,
                          .flash_sck(), .flash_cs_n(), .flash_mosi(), .flash_miso(1'b0));
     integer cyc, k;
     initial begin

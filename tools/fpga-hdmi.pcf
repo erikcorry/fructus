@@ -17,4 +17,3 @@ set_io flash_cs_n 16
 set_io flash_miso 17
 set_io din 6
 set_io irq 9
-set_io dout 11

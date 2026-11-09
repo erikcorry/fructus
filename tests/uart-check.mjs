@@ -198,8 +198,8 @@ writeFileSync('build/uart-hi.hex', hex(hiWords));
 const MBW = (RESULT + MB) >> 1;
 writeFileSync('build/uart-tb.sv', `module tb;
     logic clk = 0, din = 1, host_tx = 1;
-    wire dout, hsync_n, vsync_n, host_rx; wire [2:0] red, green, blue;
-    top #(.BOOT(0)) dut (.clk, .din, .irq(1'b0), .dout, .hsync_n, .vsync_n, .red, .green, .blue,
+    wire hsync_n, vsync_n, host_rx; wire [2:0] red, green, blue;
+    top #(.BOOT(0)) dut (.clk, .din, .irq(1'b0), .hsync_n, .vsync_n, .red, .green, .blue,
                          .flash_sck(), .flash_cs_n(), .flash_mosi(), .flash_miso(1'b0),
                          .uart_rx(host_tx), .uart_tx(host_rx));
     integer cyc, k, div0 = -1;
